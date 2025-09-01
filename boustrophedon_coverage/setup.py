@@ -15,7 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'map'), glob(os.path.join('map', '*'))),
-        (os.path.join('share', package_name, 'extra'), glob(os.path.join('extra', '*')))
+        # (os.path.join('share', package_name, 'extra'), glob(os.path.join('extra', '*')))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,8 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'boustrophedon_coverage = boustrophedon_coverage.boustrophedon_coverage:main',
-            'clean_robot = boustrophedon_coverage.clean_robot_coverage_path_planning:main',
-            'test_clean_robot = boustrophedon_coverage.clean_robot_coverage_path_planning:clean_robot:main',
+            'path_record = boustrophedon_coverage.path_record:main',
         ],
     },
 )

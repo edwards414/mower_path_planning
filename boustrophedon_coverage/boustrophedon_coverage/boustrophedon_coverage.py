@@ -20,9 +20,8 @@ from geometry_msgs.msg import Point
 
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from nav2_simple_commander.robot_navigator import BasicNavigator
 
-nav = BasicNavigator()
+
 class CoveragePlanner(Node):
     def __init__(self):
         super().__init__('boustrophedon_coverage')        
@@ -47,11 +46,13 @@ class CoveragePlanner(Node):
         self.map_sub2 = self.create_subscription(
             OccupancyGrid, '/map', self.on_map, qos
         )
+        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
 
         #發布區
         self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
         self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
         self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
+
     def getCellMatAndFreeSpace(self,map_msg: OccupancyGrid):
         size_of_cell = 5
         row, col = map_msg.info.height, map_msg.info.width
@@ -69,8 +70,6 @@ class CoveragePlanner(Node):
             i += 1
             j = 0
         self.publish_split_lines(map_msg, rows=size_of_cell, cols=size_of_cell, line_width=0.03)
-
-    def get_CellMat_and_FreeSpace(self,map_msg  : ) 
 
 
     def on_map(self, map_msg: OccupancyGrid):

@@ -191,7 +191,7 @@ class CleanRobotCoveragePathPlanning(Node):
         v_1 = 0.0
         deltaTheta = 0.0
         lasttheta = initTheta
-        PI = 3.14159;
+        PI = 3.14159
 
 
         loop = 9000

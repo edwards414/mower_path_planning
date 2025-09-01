@@ -1,2 +1,4 @@
 turtlebot3_gazebo_gps/
 .vscode/
+**/__pycache__/
+
