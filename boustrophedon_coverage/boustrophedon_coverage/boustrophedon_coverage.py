@@ -19,13 +19,13 @@ from std_msgs.msg import ColorRGBA
 from geometry_msgs.msg import Point
 
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
 
-
+from std_srvs.srv import Trigger
 class CoveragePlanner(Node):
     def __init__(self):
         super().__init__('boustrophedon_coverage')        
         # 參數
+        self.get_logger().info("boustrophedon_coverage 初始化")
         self.declare_parameter('strip_width_m', 0.15)          # 割草機有效割幅
         self.declare_parameter('waypoint_spacing_m', 0.15)     # 路徑點間距
         self.declare_parameter('free_threshold', 25)           # 佔據格 <= 此值視為可行
@@ -40,125 +40,149 @@ class CoveragePlanner(Node):
         qos.reliability = QoSReliabilityPolicy.RELIABLE
 
         #訂閱區
-        self.map_sub = self.create_subscription(
-            OccupancyGrid, '/map', self.getCellMatAndFreeSpace, qos
-        )
-        self.map_sub2 = self.create_subscription(
-            OccupancyGrid, '/map', self.on_map, qos
-        )
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        # self.map_sub = self.create_subscription(
+        #     OccupancyGrid, '/map', self.getCellMatAndFreeSpace, qos
+        # )
+        # self.map_sub2 = self.create_subscription(
+        #     OccupancyGrid, '/map', self.on_map, qos
+        # )   
+        # self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
 
+        self.free_space_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
+
+        self.polygon_point_sub = self.create_subscription(Marker, '/recorded_path_polygon', self.polygon_point_callback, 10)
+        self.polygon_points = None
+
+        # 建立服務 client
+        self.create_service(Trigger, '/generate_polygon_mask', self.handle_generate_polygon_mask)
+
+        self.latest_map = None
+        
         #發布區
-        self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
-        self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
-        self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
+        # self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
+        # self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
+        # self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
+    def map_callback(self, msg: OccupancyGrid):
+        self.latest_map = msg
+        self.get_logger().info("收到 map")
 
-    def getCellMatAndFreeSpace(self,map_msg: OccupancyGrid):
-        size_of_cell = 5
-        row, col = map_msg.info.height, map_msg.info.width
-        print(row, col)
-        occ = np.asarray(map_msg.data, dtype=np.int16).reshape(row, col)
-        sub_map = [[0 for i in range(size_of_cell)] for j in range(size_of_cell)]
-        # map = np.array(map_msg.data)
-        # map_r , map_l = np.array_split(map, size_of_cell,axis=0)
-        # print(map_r)
-        i, j = 0, 0
-        for sub_map_row in np.array_split(occ, size_of_cell, axis=0):
-            for sub_map_col in np.array_split(sub_map_row, size_of_cell, axis=1):
-                sub_map[i][j] = sub_map_col
-                j += 1
-            i += 1
-            j = 0
-        self.publish_split_lines(map_msg, rows=size_of_cell, cols=size_of_cell, line_width=0.03)
+    def polygon_point_callback(self, msg: Marker):
+        self.polygon_points = msg.points
+        self.get_logger().info("收到 polygon points")
 
-
-    def on_map(self, map_msg: OccupancyGrid):
+    def handle_generate_polygon_mask(self, request, response):
+        if self.polygon_points is None:
+            response.success = False
+            response.message = "尚未收到 polygon points"
+            return response
+        
+        if self.latest_map is None:
+            response.success = False
+            response.message = "尚未收到 map"
+            return response
+    
+        self.get_logger().info("收到 polygon points")
+        # 將 polygon 轉換為地圖遮罩
+        map_msg = self.latest_map
         info = map_msg.info
         H, W = info.height, info.width
         res = info.resolution
         ox, oy = info.origin.position.x, info.origin.position.y
 
+        # 將 polygon 的點轉換為像素座標
+        poly_px = []
+        for pt in self.polygon_points:
+            x = int((pt.x - ox) / res)
+            y = int((pt.y - oy) / res)
+            poly_px.append([x, y])
+        poly_px = np.array([poly_px], dtype=np.int32)
+
+        # 建立遮罩
+        mask = np.zeros((H, W), dtype=np.uint8)
+        cv2.fillPoly(mask, [poly_px], 1)
+
+        # 將遮罩應用到地圖
         occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
-        free_th = int(self.get_parameter('free_threshold').value)
-        unknown_as_obstacle = bool(self.get_parameter('unknown_as_obstacle').value)
+        occ_masked = np.where(mask == 1, occ, 100)  # 遮罩外設為障礙
 
-        # 建立可行遮罩
-        free_mask = (occ >= 0) & (occ <= free_th)
-        # 障礙膨脹
-        inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
-        r_cells = max(0, int(math.ceil(inflate_r_m / res)))
-        if r_cells > 0:
-            occ_mask = (~free_mask).astype(np.uint8)
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
-            occ_mask = cv2.dilate(occ_mask, k)
-            free_mask = (occ_mask == 0)
+        # 發布遮罩後的地圖
+        masked_map = OccupancyGrid()
+        masked_map.header = map_msg.header
+        masked_map.header.frame_id = 'map'
+        masked_map.info = map_msg.info
+        masked_map.data = occ_masked.flatten().tolist()
+        self.free_space_pub.publish(masked_map)
 
-        # plt.imshow(free_mask)
-        # plt.show()
-        # 條帶設定：以 X 方向切直條(沿 Y 掃描)
-        strip_w_m = float(self.get_parameter('strip_width_m').value)
-        strip_cols = max(1, int(round(strip_w_m / res)))
-        midcols = list(range(strip_cols // 2, W, strip_cols))
+        response.success = True
+        response.message = "已根據 polygon 生成地圖遮罩"
+        return response
 
-        # 視覺化條帶分割線
-        cols_for_viz = max(1, int(math.ceil(W / strip_cols)))
-        # self.publish_split_lines(map_msg, rows=1, cols=cols_for_viz, line_width=0.03)
+        # map_msg = self.latest_map
+        # info = map_msg.info
+        # H, W = info.height, info.width
+        # res = info.resolution
+        # ox, oy = info.origin.position.x, info.origin.position.y
 
-        # 產生往返路徑
-        spacing = float(self.get_parameter('waypoint_spacing_m').value)
-        points = []
-        reverse = False
+        # # 將 polygon 轉換為像素座標
+        # poly_px = []
+        # for pt in self.polygon_points:
+        #     x = int((pt.x - ox) / res)
+        #     y = int((pt.y - oy) / res)
+        #     poly_px.append([x, y])
+        # poly_px = np.array([poly_px], dtype=np.int32)
 
-        for mc in midcols:
-            # 沿條帶中心列，找連續可行段
-            segments = []
-            start = None
-            for i in range(H):
-                ok = bool(free_mask[i, mc])
-                is_last = (i == H - 1)
-                if ok and start is None:
-                    start = i
-                if (not ok or is_last) and start is not None:
-                    end = i if (not ok) else i
-                    segments.append((start, end))
-                    start = None
+        # # 建立遮罩
+        # mask = np.zeros((H, W), dtype=np.uint8)
+        # cv2.fillPoly(mask, poly_px, 1)
 
-            # 交替方向，形成牛耕(往返)
-            segs = segments[::-1] if reverse else segments
-            for (s, e) in segs:
-                y0 = oy + (s + 0.5) * res
-                y1 = oy + (e + 0.5) * res
-                x  = ox + (mc + 0.5) * res
-                # densify
-                if y1 >= y0:
-                    ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
-                else:
-                    ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
-                ys = ys[::-1] if reverse else ys
-                points.extend([(x, y) for y in ys])
-                
-            reverse = not reverse
-        # 發布 Path
-        path = Path()
-        path.header = map_msg.header
-        path.header.frame_id = map_msg.header.frame_id or 'map'
-        for (x, y) in points:
-            ps = PoseStamped()
-            ps.header = path.header
-            ps.pose.position.x = float(x)
-            ps.pose.position.y = float(y)
-            ps.pose.orientation.w = 1.0
-            path.poses.append(ps)
-        
-        self.path_pub.publish(path)
-    # def mask_map(self,submap:np.ndarray):
-    #     free_mask = submap
-    #     free_th = int(free_threshold.value)
-    #     free_mask = (free_mask >= 0) & (free_mask <= free_th)
-    #     if unknow_as_obstacle.value:
-    #         free_mask &= (occ >= 0)
+        # # 將遮罩應用到地圖
+        # occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
+        # occ_masked = np.where(mask == 1, occ, 100)  # 遮罩外設為障礙
 
-    #     #膨脹
+        # # 發布遮罩後的地圖
+        # masked_map = OccupancyGrid()
+        # masked_map.header = map_msg.header
+        # masked_map.info = map_msg.info
+        # masked_map.data = occ_masked.flatten().tolist()
+        # self.free_pub.publish(masked_map)
+
+        # response.success = True
+        # response.message = "已根據 polygon 生成地圖遮罩"
+        # return response
+
+    # def getCellMatAndFreeSpace(self,map_msg: OccupancyGrid):
+    #     size_of_cell = 5
+    #     row, col = map_msg.info.height, map_msg.info.width
+    #     print(row, col)
+    #     occ = np.asarray(map_msg.data, dtype=np.int16).reshape(row, col)
+    #     sub_map = [[0 for i in range(size_of_cell)] for j in range(size_of_cell)]
+    #     # map = np.array(map_msg.data)
+    #     # map_r , map_l = np.array_split(map, size_of_cell,axis=0)
+    #     # print(map_r)
+    #     i, j = 0, 0
+    #     for sub_map_row in np.array_split(occ, size_of_cell, axis=0):
+    #         for sub_map_col in np.array_split(sub_map_row, size_of_cell, axis=1):
+    #             sub_map[i][j] = sub_map_col
+    #             j += 1
+    #         i += 1
+    #         j = 0
+    #     self.publish_split_lines(map_msg, rows=size_of_cell, cols=size_of_cell, line_width=0.03)
+
+
+    # def on_map(self, map_msg: OccupancyGrid):
+    #     info = map_msg.info
+    #     H, W = info.height, info.width
+    #     res = info.resolution
+    #     ox, oy = info.origin.position.x, info.origin.position.y
+
+    #     occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
+    #     free_th = int(self.get_parameter('free_threshold').value)
+    #     unknown_as_obstacle = bool(self.get_parameter('unknown_as_obstacle').value)
+
+    #     # 建立可行遮罩
+    #     free_mask = (occ >= 0) & (occ <= free_th)
+    #     # 障礙膨脹
     #     inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
     #     r_cells = max(0, int(math.ceil(inflate_r_m / res)))
     #     if r_cells > 0:
@@ -166,110 +190,180 @@ class CoveragePlanner(Node):
     #         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
     #         occ_mask = cv2.dilate(occ_mask, k)
     #         free_mask = (occ_mask == 0)
-    #     return free_mask
 
-    def generate_turn_points(self, current_x: float, current_y: float, 
-                           next_x: float, turn_radius: float, reverse: bool):
-        """
-        生成圓角轉彎的路徑點
+    #     # plt.imshow(free_mask)
+    #     # plt.show()
+    #     # 條帶設定：以 X 方向切直條(沿 Y 掃描)
+    #     strip_w_m = float(self.get_parameter('strip_width_m').value)
+    #     strip_cols = max(1, int(round(strip_w_m / res)))
+    #     midcols = list(range(strip_cols // 2, W, strip_cols))
+
+    #     # 視覺化條帶分割線
+    #     cols_for_viz = max(1, int(math.ceil(W / strip_cols)))
+    #     # self.publish_split_lines(map_msg, rows=1, cols=cols_for_viz, line_width=0.03)
+
+    #     # 產生往返路徑
+    #     spacing = float(self.get_parameter('waypoint_spacing_m').value)
+    #     points = []
+    #     reverse = False
+
+    #     for mc in midcols:
+    #         # 沿條帶中心列，找連續可行段
+    #         segments = []
+    #         start = None
+    #         for i in range(H):
+    #             ok = bool(free_mask[i, mc])
+    #             is_last = (i == H - 1)
+    #             if ok and start is None:
+    #                 start = i
+    #             if (not ok or is_last) and start is not None:
+    #                 end = i if (not ok) else i
+    #                 segments.append((start, end))
+    #                 start = None
+
+    #         # 交替方向，形成牛耕(往返)
+    #         segs = segments[::-1] if reverse else segments
+    #         for (s, e) in segs:
+    #             y0 = oy + (s + 0.5) * res
+    #             y1 = oy + (e + 0.5) * res
+    #             x  = ox + (mc + 0.5) * res
+    #             # densify
+    #             if y1 >= y0:
+    #                 ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
+    #             else:
+    #                 ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
+    #             ys = ys[::-1] if reverse else ys
+    #             points.extend([(x, y) for y in ys])
+                
+    #         reverse = not reverse
+    #     # 發布 Path
+    #     path = Path()
+    #     path.header = map_msg.header
+    #     path.header.frame_id = map_msg.header.frame_id or 'map'
+    #     for (x, y) in points:
+    #         ps = PoseStamped()
+    #         ps.header = path.header
+    #         ps.pose.position.x = float(x)
+    #         ps.pose.position.y = float(y)
+    #         ps.pose.orientation.w = 1.0
+    #         path.poses.append(ps)
         
-        Args:
-            current_x, current_y: 當前段結束點
-            next_x: 下一條帶的x座標
-            turn_radius: 轉彎半徑
-            reverse: 是否反向
+    #     self.path_pub.publish(path)
+    # # def mask_map(self,submap:np.ndarray):
+    # #     free_mask = submap
+    # #     free_th = int(free_threshold.value)
+    # #     free_mask = (free_mask >= 0) & (free_mask <= free_th)
+    # #     if unknow_as_obstacle.value:
+    # #         free_mask &= (occ >= 0)
+
+    # #     #膨脹
+    # #     inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
+    # #     r_cells = max(0, int(math.ceil(inflate_r_m / res)))
+    # #     if r_cells > 0:
+    # #         occ_mask = (~free_mask).astype(np.uint8)
+    # #         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+    # #         occ_mask = cv2.dilate(occ_mask, k)
+    # #         free_mask = (occ_mask == 0)
+    # #     return free_mask
+
+    # def generate_turn_points(self, current_x: float, current_y: float, 
+    #                        next_x: float, turn_radius: float, reverse: bool):
+    #     """
+    #     生成圓角轉彎的路徑點
         
-        Returns:
-            轉彎路徑點列表
-        """
-        turn_points = []
+    #     Args:
+    #         current_x, current_y: 當前段結束點
+    #         next_x: 下一條帶的x座標
+    #         turn_radius: 轉彎半徑
+    #         reverse: 是否反向
         
-        # 計算轉彎中心點
-        if reverse:
-            # 反向時，轉彎中心在左側
-            turn_center_x = current_x - turn_radius
-            turn_center_y = current_y
-        else:
-            # 正向時，轉彎中心在右側
-            turn_center_x = current_x + turn_radius
-            turn_center_y = current_y
+    #     Returns:
+    #         轉彎路徑點列表
+    #     """
+    #     turn_points = []
         
-        # 計算轉彎角度範圍
-        if reverse:
-            start_angle = 0  # 從右側開始
-            end_angle = np.pi  # 轉到左側
-            angle_step = np.pi / 8  # 分8段
-        else:
-            start_angle = np.pi  # 從左側開始
-            end_angle = 0  # 轉到右側
-            angle_step = -np.pi / 8  # 分8段
+    #     # 計算轉彎中心點
+    #     if reverse:
+    #         # 反向時，轉彎中心在左側
+    #         turn_center_x = current_x - turn_radius
+    #         turn_center_y = current_y
+    #     else:
+    #         # 正向時，轉彎中心在右側
+    #         turn_center_x = current_x + turn_radius
+    #         turn_center_y = current_y
         
-        # 生成圓弧點
-        angles = np.arange(start_angle, end_angle, angle_step)
-        for angle in angles:
-            x = turn_center_x + turn_radius * np.cos(angle)
-            y = turn_center_y + turn_radius * np.sin(angle)
-            turn_points.append((x, y))
+    #     # 計算轉彎角度範圍
+    #     if reverse:
+    #         start_angle = 0  # 從右側開始
+    #         end_angle = np.pi  # 轉到左側
+    #         angle_step = np.pi / 8  # 分8段
+    #     else:
+    #         start_angle = np.pi  # 從左側開始
+    #         end_angle = 0  # 轉到右側
+    #         angle_step = -np.pi / 8  # 分8段
         
-        # 添加轉彎結束點（連接到下一條帶）
-        if reverse:
-            final_x = next_x + turn_radius
-        else:
-            final_x = next_x - turn_radius
+    #     # 生成圓弧點
+    #     angles = np.arange(start_angle, end_angle, angle_step)
+    #     for angle in angles:
+    #         x = turn_center_x + turn_radius * np.cos(angle)
+    #         y = turn_center_y + turn_radius * np.sin(angle)
+    #         turn_points.append((x, y))
         
-        turn_points.append((final_x, current_y))
+    #     # 添加轉彎結束點（連接到下一條帶）
+    #     if reverse:
+    #         final_x = next_x + turn_radius
+    #     else:
+    #         final_x = next_x - turn_radius
         
-        return turn_points
+    #     turn_points.append((final_x, current_y))
+        
+    #     return turn_points
 
 
 
-    def publish_split_lines(self, map_msg: OccupancyGrid, rows: int, cols: int, line_width: float = 0.03):
-        info = map_msg.info
-        w, h = info.width, info.height
-        res = info.resolution
-        ox, oy = info.origin.position.x, info.origin.position.y
+    # def publish_split_lines(self, map_msg: OccupancyGrid, rows: int, cols: int, line_width: float = 0.03):
+    #     info = map_msg.info
+    #     w, h = info.width, info.height
+    #     res = info.resolution
+    #     ox, oy = info.origin.position.x, info.origin.position.y
 
-        marker = Marker()
-        marker.header.frame_id = map_msg.header.frame_id or 'map'
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = 'split'
-        marker.id = 0
-        marker.type = Marker.LINE_LIST
-        marker.action = Marker.ADD
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = line_width
-        marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+    #     marker = Marker()
+    #     marker.header.frame_id = map_msg.header.frame_id or 'map'
+    #     marker.header.stamp = self.get_clock().now().to_msg()
+    #     marker.ns = 'split'
+    #     marker.id = 0
+    #     marker.type = Marker.LINE_LIST
+    #     marker.action = Marker.ADD
+    #     marker.pose.orientation.w = 1.0
+    #     marker.scale.x = line_width
+    #     marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
 
-        def add_line(x0, y0, x1, y1):
-            p0 = Point(x=float(x0), y=float(y0), z=0.0)
-            p1 = Point(x=float(x1), y=float(y1), z=0.0)
-            marker.points.append(p0)
-            marker.points.append(p1)
+    #     def add_line(x0, y0, x1, y1):
+    #         p0 = Point(x=float(x0), y=float(y0), z=0.0)
+    #         p1 = Point(x=float(x1), y=float(y1), z=0.0)
+    #         marker.points.append(p0)
+    #         marker.points.append(p1)
 
-        # 垂直分割線（忽略邊界，只畫內部分割）
-        for k in range(1, cols):
-            j = (w * k) // cols
-            x = ox + j * res
-            add_line(x, oy, x, oy + h * res)
+    #     # 垂直分割線（忽略邊界，只畫內部分割）
+    #     for k in range(1, cols):
+    #         j = (w * k) // cols
+    #         x = ox + j * res
+    #         add_line(x, oy, x, oy + h * res)
 
-        # 水平分割線
-        for k in range(1, rows):
-            i = (h * k) // rows
-            y = oy + i * res
-            add_line(ox, y, ox + w * res, y)
+    #     # 水平分割線
+    #     for k in range(1, rows):
+    #         i = (h * k) // rows
+    #         y = oy + i * res
+    #         add_line(ox, y, ox + w * res, y)
 
-        self.map_split_line.publish(marker)
-        self.get_logger().info('split lines published')
+    #     self.map_split_line.publish(marker)
+    #     self.get_logger().info('split lines published')
         
 
 def main(args=None):
     rclpy.init(args=args)
     node = CoveragePlanner()
-    executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(node)
-    executor.spin()
-    
-    # rclpy.spin(node)
+    rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 
