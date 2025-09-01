@@ -26,11 +26,11 @@ class CoveragePlanner(Node):
         super().__init__('boustrophedon_coverage')        
         # 參數
         self.get_logger().info("boustrophedon_coverage 初始化")
-        self.declare_parameter('strip_width_m', 0.15)          # 割草機有效割幅
-        self.declare_parameter('waypoint_spacing_m', 0.15)     # 路徑點間距
+        self.declare_parameter('strip_width_m', 0.1)          # 割草機有效割幅
+        self.declare_parameter('waypoint_spacing_m', 0.1)     # 路徑點間距
         self.declare_parameter('free_threshold', 25)           # 佔據格 <= 此值視為可行
         self.declare_parameter('unknown_as_obstacle', True)    # 未知(-1)是否當作障礙
-        self.declare_parameter('inflate_radius_m', 0.1)       # 安全膨脹半徑(機身+裕度)
+        self.declare_parameter('inflate_radius_m', 0.08)       # 安全膨脹半徑(機身+裕度)
 
 
 
@@ -43,14 +43,11 @@ class CoveragePlanner(Node):
         # self.map_sub = self.create_subscription(
         #     OccupancyGrid, '/map', self.getCellMatAndFreeSpace, qos
         # )
-        # self.map_sub2 = self.create_subscription(
-        #     OccupancyGrid, '/map', self.on_map, qos
-        # )   
-        # self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+   
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
 
         self.free_space_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
-
+        self.free_space_inflated_pub = self.create_publisher(OccupancyGrid, '/free_space_inflated', 1)
         self.polygon_point_sub = self.create_subscription(Marker, '/recorded_path_polygon', self.polygon_point_callback, 10)
         self.polygon_points = None
 
@@ -61,7 +58,7 @@ class CoveragePlanner(Node):
         
         #發布區
         # self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
-        # self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
+        self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
         # self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
@@ -114,75 +111,122 @@ class CoveragePlanner(Node):
         masked_map.data = occ_masked.flatten().tolist()
         self.free_space_pub.publish(masked_map)
 
+        self.on_map(masked_map)
+
+
         response.success = True
         response.message = "已根據 polygon 生成地圖遮罩"
         return response
 
-        # map_msg = self.latest_map
-        # info = map_msg.info
-        # H, W = info.height, info.width
-        # res = info.resolution
-        # ox, oy = info.origin.position.x, info.origin.position.y
+    def on_map(self, map_msg: OccupancyGrid):
+        info = map_msg.info
+        H, W = info.height, info.width
+        res = info.resolution
+        ox, oy = info.origin.position.x, info.origin.position.y
 
-        # # 將 polygon 轉換為像素座標
-        # poly_px = []
-        # for pt in self.polygon_points:
-        #     x = int((pt.x - ox) / res)
-        #     y = int((pt.y - oy) / res)
-        #     poly_px.append([x, y])
-        # poly_px = np.array([poly_px], dtype=np.int32)
+        occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
+        free_th = int(self.get_parameter('free_threshold').value)
+        unknown_as_obstacle = bool(self.get_parameter('unknown_as_obstacle').value)
 
-        # # 建立遮罩
-        # mask = np.zeros((H, W), dtype=np.uint8)
-        # cv2.fillPoly(mask, poly_px, 1)
+        # 建立可行遮罩
+        free_mask = (occ >= 0) & (occ <= free_th)
+        # # 障礙膨脹
+        inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
+        r_cells = max(0, int(math.ceil(inflate_r_m / res)))
+        if r_cells > 0:
+            occ_mask = (~free_mask).astype(np.uint8)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+            occ_mask = cv2.dilate(occ_mask, k)
+            free_mask = (occ_mask == 0)
+        # 發布膨脹後的地圖（free_mask為True的為可行區，其餘為障礙）
+        inflated_map = OccupancyGrid()
+        inflated_map.header = map_msg.header
+        inflated_map.header.frame_id = 'map'
+        inflated_map.info = map_msg.info
 
-        # # 將遮罩應用到地圖
-        # occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
-        # occ_masked = np.where(mask == 1, occ, 100)  # 遮罩外設為障礙
+        # 轉成0/100格式，0為可行，100為障礙
+        inflated_data = np.where(free_mask, 0, 100).astype(np.int8)
+        inflated_map.data = inflated_data.flatten().tolist()
+        self.free_space_inflated_pub.publish(inflated_map)
 
-        # # 發布遮罩後的地圖
-        # masked_map = OccupancyGrid()
-        # masked_map.header = map_msg.header
-        # masked_map.info = map_msg.info
-        # masked_map.data = occ_masked.flatten().tolist()
-        # self.free_pub.publish(masked_map)
+        # ==========================
+        # 讓規劃路徑考慮到膨脹層的縮減
+        # ==========================
+        # 這裡我們將free_mask進一步縮減，確保路徑點不會貼近膨脹邊緣
+        # 例如再進行一次膨脹，然後取反，作為安全區域
+        if r_cells > 0:
+            # 再膨脹一次，縮減可行區
+            shrink_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+            safe_mask = cv2.erode(free_mask.astype(np.uint8), shrink_k)
+            safe_mask = (safe_mask == 1)
+        else:
+            safe_mask = free_mask
 
-        # response.success = True
-        # response.message = "已根據 polygon 生成地圖遮罩"
-        # return response
+        # 條帶設定：以 X 方向切直條(沿 Y 掃描)
+        strip_w_m = float(self.get_parameter('strip_width_m').value)
+        strip_cols = max(1, int(round(strip_w_m / res)))
+        midcols = list(range(strip_cols // 2, W, strip_cols))
 
-    # def getCellMatAndFreeSpace(self,map_msg: OccupancyGrid):
-    #     size_of_cell = 5
-    #     row, col = map_msg.info.height, map_msg.info.width
-    #     print(row, col)
-    #     occ = np.asarray(map_msg.data, dtype=np.int16).reshape(row, col)
-    #     sub_map = [[0 for i in range(size_of_cell)] for j in range(size_of_cell)]
-    #     # map = np.array(map_msg.data)
-    #     # map_r , map_l = np.array_split(map, size_of_cell,axis=0)
-    #     # print(map_r)
-    #     i, j = 0, 0
-    #     for sub_map_row in np.array_split(occ, size_of_cell, axis=0):
-    #         for sub_map_col in np.array_split(sub_map_row, size_of_cell, axis=1):
-    #             sub_map[i][j] = sub_map_col
-    #             j += 1
-    #         i += 1
-    #         j = 0
-    #     self.publish_split_lines(map_msg, rows=size_of_cell, cols=size_of_cell, line_width=0.03)
+        # 視覺化條帶分割線
+        cols_for_viz = max(1, int(math.ceil(W / strip_cols)))
+        
+        # self.publish_split_lines(map_msg, rows=1, cols=cols_for_viz, line_width=0.03)
 
+        # 產生往返路徑
+        spacing = float(self.get_parameter('waypoint_spacing_m').value)
+        points = []
+        reverse = False
 
-    # def on_map(self, map_msg: OccupancyGrid):
-    #     info = map_msg.info
-    #     H, W = info.height, info.width
-    #     res = info.resolution
-    #     ox, oy = info.origin.position.x, info.origin.position.y
+        for mc in midcols:
+            # 沿條帶中心列，找連續可行段（這裡用縮減後的safe_mask）
+            segments = []
+            start = None
+            for i in range(H):
+                ok = bool(safe_mask[i, mc])
+                is_last = (i == H - 1)
+                if ok and start is None:
+                    start = i
+                if (not ok or is_last) and start is not None:
+                    end = i if (not ok) else i
+                    segments.append((start, end))
+                    start = None
 
-    #     occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
-    #     free_th = int(self.get_parameter('free_threshold').value)
-    #     unknown_as_obstacle = bool(self.get_parameter('unknown_as_obstacle').value)
+            # 交替方向，形成牛耕(往返)
+            segs = segments[::-1] if reverse else segments
+            for (s, e) in segs:
+                y0 = oy + (s + 0.5) * res
+                y1 = oy + (e + 0.5) * res
+                x  = ox + (mc + 0.5) * res
+                # densify
+                if y1 >= y0:
+                    ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
+                else:
+                    ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
+                ys = ys[::-1] if reverse else ys
+                points.extend([(x, y) for y in ys])
+                
+            reverse = not reverse
+        # 發布 Path
+        path = Path()
+        path.header = map_msg.header
+        path.header.frame_id = map_msg.header.frame_id or 'map'
+        for (x, y) in points:
+            ps = PoseStamped()
+            ps.header = path.header
+            ps.pose.position.x = float(x)
+            ps.pose.position.y = float(y)
+            ps.pose.orientation.w = 1.0
+            path.poses.append(ps)
+        
+        self.path_pub.publish(path)
+    # def mask_map(self,submap:np.ndarray):
+    #     free_mask = submap
+    #     free_th = int(free_threshold.value)
+    #     free_mask = (free_mask >= 0) & (free_mask <= free_th)
+    #     if unknow_as_obstacle.value:
+    #         free_mask &= (occ >= 0)
 
-    #     # 建立可行遮罩
-    #     free_mask = (occ >= 0) & (occ <= free_th)
-    #     # 障礙膨脹
+    #     #膨脹
     #     inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
     #     r_cells = max(0, int(math.ceil(inflate_r_m / res)))
     #     if r_cells > 0:
@@ -190,81 +234,7 @@ class CoveragePlanner(Node):
     #         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
     #         occ_mask = cv2.dilate(occ_mask, k)
     #         free_mask = (occ_mask == 0)
-
-    #     # plt.imshow(free_mask)
-    #     # plt.show()
-    #     # 條帶設定：以 X 方向切直條(沿 Y 掃描)
-    #     strip_w_m = float(self.get_parameter('strip_width_m').value)
-    #     strip_cols = max(1, int(round(strip_w_m / res)))
-    #     midcols = list(range(strip_cols // 2, W, strip_cols))
-
-    #     # 視覺化條帶分割線
-    #     cols_for_viz = max(1, int(math.ceil(W / strip_cols)))
-    #     # self.publish_split_lines(map_msg, rows=1, cols=cols_for_viz, line_width=0.03)
-
-    #     # 產生往返路徑
-    #     spacing = float(self.get_parameter('waypoint_spacing_m').value)
-    #     points = []
-    #     reverse = False
-
-    #     for mc in midcols:
-    #         # 沿條帶中心列，找連續可行段
-    #         segments = []
-    #         start = None
-    #         for i in range(H):
-    #             ok = bool(free_mask[i, mc])
-    #             is_last = (i == H - 1)
-    #             if ok and start is None:
-    #                 start = i
-    #             if (not ok or is_last) and start is not None:
-    #                 end = i if (not ok) else i
-    #                 segments.append((start, end))
-    #                 start = None
-
-    #         # 交替方向，形成牛耕(往返)
-    #         segs = segments[::-1] if reverse else segments
-    #         for (s, e) in segs:
-    #             y0 = oy + (s + 0.5) * res
-    #             y1 = oy + (e + 0.5) * res
-    #             x  = ox + (mc + 0.5) * res
-    #             # densify
-    #             if y1 >= y0:
-    #                 ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
-    #             else:
-    #                 ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
-    #             ys = ys[::-1] if reverse else ys
-    #             points.extend([(x, y) for y in ys])
-                
-    #         reverse = not reverse
-    #     # 發布 Path
-    #     path = Path()
-    #     path.header = map_msg.header
-    #     path.header.frame_id = map_msg.header.frame_id or 'map'
-    #     for (x, y) in points:
-    #         ps = PoseStamped()
-    #         ps.header = path.header
-    #         ps.pose.position.x = float(x)
-    #         ps.pose.position.y = float(y)
-    #         ps.pose.orientation.w = 1.0
-    #         path.poses.append(ps)
-        
-    #     self.path_pub.publish(path)
-    # # def mask_map(self,submap:np.ndarray):
-    # #     free_mask = submap
-    # #     free_th = int(free_threshold.value)
-    # #     free_mask = (free_mask >= 0) & (free_mask <= free_th)
-    # #     if unknow_as_obstacle.value:
-    # #         free_mask &= (occ >= 0)
-
-    # #     #膨脹
-    # #     inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
-    # #     r_cells = max(0, int(math.ceil(inflate_r_m / res)))
-    # #     if r_cells > 0:
-    # #         occ_mask = (~free_mask).astype(np.uint8)
-    # #         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
-    # #         occ_mask = cv2.dilate(occ_mask, k)
-    # #         free_mask = (occ_mask == 0)
-    # #     return free_mask
+    #     return free_mask
 
     # def generate_turn_points(self, current_x: float, current_y: float, 
     #                        next_x: float, turn_radius: float, reverse: bool):
