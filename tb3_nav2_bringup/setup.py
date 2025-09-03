@@ -1,8 +1,7 @@
 from setuptools import find_packages, setup
-from glob import glob
+import glob
 import os
-
-package_name = 'boustrophedon_coverage'
+package_name = 'tb3_nav2_bringup'
 
 setup(
     name=package_name,
@@ -12,9 +11,14 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'config'), ['config/config.rviz']),
-        (os.path.join('share', package_name, 'map'), glob(os.path.join('map', '*'))),
+        ('share/' + package_name + '/launch', [
+            'launch/bringup.launch.py',
+            'launch/navigation_launch.py',
+            'launch/localization_launch.py',
+        ]),        
+        ('share/' + package_name + '/config', [
+            'config/nav2_params.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,8 +29,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'boustrophedon_coverage = boustrophedon_coverage.boustrophedon_coverage:main',
-            'path_record = boustrophedon_coverage.path_record:main',
         ],
     },
 )

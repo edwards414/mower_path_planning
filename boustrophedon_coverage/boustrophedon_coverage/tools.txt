@@ -1,0 +1,5 @@
+[紀錄路徑]
+ros2 run boustrophedon_coverage path_record
+
+[生成free_space mask]
+ros2 service call /plan_coverage std_srvs/srv/Trigger {}
