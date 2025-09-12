@@ -1,0 +1,63 @@
+capture_directory: "~"
+fixed_frame: map
+target_frame: map
+fix_orientation: false
+rotate_90: false
+enable_antialiasing: true
+show_displays: true
+show_status_bar: true
+show_capture_tools: true
+window_width: 1656
+window_height: 824
+view_scale: 0.0280397534
+offset_x: -14.2526064
+offset_y: -2.13799
+use_latest_transforms: true
+background: "#77767b"
+image_transport: raw
+displays:
+  - type: mapviz_plugins/tile_map
+    name: new display
+    config:
+      visible: true
+      collapsed: false
+      custom_sources:
+        - base_url: https://api.maptiler.com/tiles/satellite-v2/{level}/{x}/{y}.jpg?key=dJtPouKkjJ8nAcsd2xp4
+          max_zoom: 22
+          name: maptile
+          type: wmts
+      bing_api_key: ""
+      source: maptile
+  - type: mapviz_plugins/tf_frame
+    name: new display
+    config:
+      visible: true
+      collapsed: false
+      frame: base_link
+      color: "#2ec27e"
+      draw_style: arrows
+      position_tolerance: 0
+      buffer_size: 1
+      static_arrow_sizes: true
+      arrow_size: 84
+  - type: mapviz_plugins/navsat
+    name: new display
+    config:
+      visible: true
+      collapsed: false
+      topic: /gps/fix
+      color: "#e01b24"
+      draw_style: points
+      position_tolerance: 20
+      buffer_size: 0
+      qos_depth: 10
+      qos_history: 1
+      qos_reliability: 1
+      qos_durability: 2
+  - type: mapviz_plugins/point_click_publisher
+    name: new display
+    config:
+      visible: true
+      collapsed: false
+      topic: clicked_point
+      output_frame: wgs84

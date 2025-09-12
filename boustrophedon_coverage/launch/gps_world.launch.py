@@ -57,8 +57,8 @@ def generate_launch_description():
             os.path.join(turtlebot3_gazebo_custom_dir, 'launch', 'spawn_turtlebot3.launch.py')
         ),
         launch_arguments={
-            'x_pose': '2.0',
-            'y_pose': '-2.5'
+            'x_pose': '0.0',
+            'y_pose': '0.0'
         }.items()
     )
 
