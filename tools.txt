@@ -1,6 +1,9 @@
 [開啟地圖]
 ros2 launch boustrophedon_coverage nav2.launch.py
 
+[開啓nav2]*
+ros2 launch tb3_nav2_bringup bringup.launch.py
+
 [紀錄路徑]
 ros2 run boustrophedon_coverage path_record
 
@@ -14,13 +17,38 @@ ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
 ros2 run turtlebot3_teleop teleop_keyboard
 
 [發起gps world 跟 turtlebot]
-ros2 launch boustrophedon_coverage gps_world.launch.py
+ros2 launch nav2_gps_waypoint_follower gps_world.launch.py
 
 [mapviz]
-ros2 launch turtlebot3_mapviz mapviz.launch.py
+ros2 launch nav2_gps_waypoint_follower mapviz.launch.py
 
-[gps ekf]
-ros2 launch turtlebot3_gazebo_custom dual_ekf_navsat.launch.py
+[gps ekf]*
+ros2 launch nav2_gps_waypoint_follower dual_ekf_navsat.launch.py
+
+[rviz]
+ros2 launch nav2_gps_waypoint_follower rviz.launch.py
+
+[turtlebot nav2]*
+ros2 launch nav2_gps_waypoint_follower navigation_launch.py 
+
+ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 http://localhost:8080/wmts/gm_layer/gm_grid/{level}/{x}/{y}.png 
@@ -57,3 +85,6 @@ https://atlas.microsoft.com/map/tile?api-version=2024-04-01&tilesetId={tilesetId
 maptiler key = ok
 https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=dJtPouKkjJ8nAcsd2xp4
 https://api.maptiler.com/tiles/satellite-v2/0/0/0.jpg?key=dJtPouKkjJ8nAcsd2xp4
+
+
+https://tiles.stadiamaps.com/tiles/alidade_satellite/{level}/{x}/{y}.png?api_key=d5e55fa3-8d1b-47c4-a17f-86974d57704b

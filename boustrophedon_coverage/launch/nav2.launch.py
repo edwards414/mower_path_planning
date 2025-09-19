@@ -10,7 +10,7 @@ import os
 def generate_launch_description():
     # 聲明 gui 參數，默認為 false
     boustrophedon_coverage_dir = get_package_share_directory('boustrophedon_coverage')
-    turtlebot3_gazebo_dir = get_package_share_directory('turtlebot3_gazebo_custom')
+    turtlebot3_gazebo_dir = get_package_share_directory('turtlebot3_gazebo')
     turtlebot3_nav2_dir = get_package_share_directory('tb3_nav2_bringup')
     # turtlebot3_nav2_dir = get_package_share_directory('turtlebot3_navigation2')
     ROS_DISTRO = os.environ['ROS_DISTRO']

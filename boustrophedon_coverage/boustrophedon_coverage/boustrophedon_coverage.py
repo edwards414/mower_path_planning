@@ -73,25 +73,34 @@ class CoveragePlanner(Node):
             response.success = False
             response.message = "尚未收到 polygon points"
             return response
-        
-        if self.latest_map is None:
-            response.success = False
-            response.message = "尚未收到 map"
-            return response
     
         self.get_logger().info("收到 polygon points")
-        # 將 polygon 轉換為地圖遮罩
-        map_msg = self.latest_map
-        info = map_msg.info
-        H, W = info.height, info.width
-        res = info.resolution
-        ox, oy = info.origin.position.x, info.origin.position.y
-
+        
+        # 根據 polygon 的邊界計算地圖大小
+        min_x = min(pt.x for pt in self.polygon_points)
+        max_x = max(pt.x for pt in self.polygon_points)
+        min_y = min(pt.y for pt in self.polygon_points)
+        max_y = max(pt.y for pt in self.polygon_points)
+        
+        # 設定地圖參數
+        resolution = 0.05  # 5cm 解析度
+        margin = 1.0  # 邊界裕度
+        
+        # 計算地圖尺寸
+        map_width = max_x - min_x + 2 * margin
+        map_height = max_y - min_y + 2 * margin
+        W = int(map_width / resolution)
+        H = int(map_height / resolution)
+        
+        # 設定地圖原點（左下角）
+        ox = min_x - margin
+        oy = min_y - margin
+        
         # 將 polygon 的點轉換為像素座標
         poly_px = []
         for pt in self.polygon_points:
-            x = int((pt.x - ox) / res)
-            y = int((pt.y - oy) / res)
+            x = int((pt.x - ox) / resolution)
+            y = int((pt.y - oy) / resolution)
             poly_px.append([x, y])
         poly_px = np.array([poly_px], dtype=np.int32)
 
@@ -99,25 +108,31 @@ class CoveragePlanner(Node):
         mask = np.zeros((H, W), dtype=np.uint8)
         cv2.fillPoly(mask, [poly_px], 1)
 
-        # 將遮罩應用到地圖
-        occ = np.asarray(map_msg.data, dtype=np.int16).reshape(H, W)
-        occ_masked = np.where(mask == 1, occ, 100)  # 遮罩外設為障礙
+        # 建立地圖數據（polygon 內為自由空間，外為障礙）
+        occ_masked = np.where(mask == 1, 0, 100)  # 遮罩內為自由空間(0)，外為障礙(100)
 
         # 發布遮罩後的地圖
         masked_map = OccupancyGrid()
-        masked_map.header = map_msg.header
+        masked_map.header.stamp = self.get_clock().now().to_msg()
         masked_map.header.frame_id = 'map'
-        masked_map.info = map_msg.info
+        masked_map.info.resolution = resolution
+        masked_map.info.width = W
+        masked_map.info.height = H
+        masked_map.info.origin.position.x = ox
+        masked_map.info.origin.position.y = oy
+        masked_map.info.origin.position.z = 0.0
+        masked_map.info.origin.orientation.x = 0.0
+        masked_map.info.origin.orientation.y = 0.0
+        masked_map.info.origin.orientation.z = 0.0
+        masked_map.info.origin.orientation.w = 1.0
         masked_map.data = occ_masked.flatten().tolist()
+        
         self.free_space_pub.publish(masked_map)
-
         self.on_map(masked_map)
-
 
         response.success = True
         response.message = "已根據 polygon 生成地圖遮罩"
         return response
-
     def on_map(self, map_msg: OccupancyGrid):
         info = map_msg.info
         H, W = info.height, info.width

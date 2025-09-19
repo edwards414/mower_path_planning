@@ -9,10 +9,13 @@ import math, csv, os, time
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener
 from rclpy.duration import Duration
+from nav2_simple_commander.robot_navigator import BasicNavigator
+
 
 class PathRecorder(Node):
     def __init__(self):
         super().__init__('path_recorder')
+        self.nav = BasicNavigator()
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('min_dist', 0.05)   # 最小移動距離(公尺)才記錄
         self.declare_parameter('min_dt', 0.10)     # 最小時間間隔(秒)才記錄
@@ -23,6 +26,7 @@ class PathRecorder(Node):
 
         self.path_pub = self.create_publisher(Path, '/recorded_path', 10)
         self.srv = self.create_service(Trigger, '/save_path', self.on_save)
+        # self.waypoint_srv = self.create_service(Trigger, '/run_waypoint', self.on_run_waypoint)
         # 啟用marker發布器
         self.marker_pub = self.create_publisher(Marker, '/recorded_path_points', 1)
         # 新增多边形发布器
@@ -274,7 +278,9 @@ class PathRecorder(Node):
         res.message = f'Saved to {csv_path}'
         self.get_logger().info(res.message)
         return res
-
+def run_waypoint(self, req, res):
+    
+    self.nav.followWaypoints(self.path.poses)
 def main():
     rclpy.init()
     n = PathRecorder()
