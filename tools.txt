@@ -1,8 +1,6 @@
-[開啟地圖]
-ros2 launch boustrophedon_coverage nav2.launch.py
 
-[開啓nav2]*
-ros2 launch tb3_nav2_bringup bringup.launch.py
+[地圖 nav2 ]
+ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
 
 [紀錄路徑]
 ros2 run boustrophedon_coverage path_record
@@ -10,11 +8,25 @@ ros2 run boustrophedon_coverage path_record
 [service call 生成path]
 ros2 run boustrophedon_coverage boustrophedon_coverage
 
-[生成free_space mask]
-ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
+  [生成free_space mask]
+  ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
+
+  [waypoint pub]
+  ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
+
+  [cencel waypoint]
+  ros2 servuce call /cencel_nav2 std_srvs/srv/Trigger {}
+
+
+
+[pub 4 pose disance 30m]
+ros2 run nav2_gps_waypoint_follower waypoint_pub
 
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard
+
+#--------------------
+
 
 [發起gps world 跟 turtlebot]
 ros2 launch nav2_gps_waypoint_follower gps_world.launch.py
@@ -31,17 +43,21 @@ ros2 launch nav2_gps_waypoint_follower rviz.launch.py
 [turtlebot nav2]*
 ros2 launch nav2_gps_waypoint_follower navigation_launch.py 
 
-ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
 
 
 
 
 
+[開啟地圖]
+ros2 launch boustrophedon_coverage nav2.launch.py
+
+[開啓nav2]*
+ros2 launch tb3_nav2_bringup bringup.launch.py
 
 
 
 
-
+(-0.00, 0.00) to (-1.17, -0.71)
 
 
 

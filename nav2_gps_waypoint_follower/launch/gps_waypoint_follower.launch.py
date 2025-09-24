@@ -52,7 +52,11 @@ def generate_launch_description():
 
     gazebo_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir,"launch", 'gps_world.launch.py'))
+            os.path.join(nav2_gps_waypoint_follower_dir,"launch", 'gps_world.launch.py')),
+            # launch_arguments={
+                
+            #     "use_sim_time": "True",
+            # }.items()
     )
 
     robot_localization_cmd = IncludeLaunchDescription(

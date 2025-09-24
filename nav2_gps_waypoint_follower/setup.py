@@ -18,6 +18,7 @@ setup(
         ('share/' + package_name + '/urdf', glob(os.path.join('urdf', '*'))),
         ('share/' + package_name + '/map', glob(os.path.join('map', '*'))),
         ('share/' + package_name + '/rviz', glob(os.path.join('rviz', '*'))),
+
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,6 +29,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'waypoint_pub = nav2_gps_waypoint_follower.waypoint_pub:main',
         ],
     },
 )

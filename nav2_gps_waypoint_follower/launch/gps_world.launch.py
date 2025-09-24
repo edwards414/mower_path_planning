@@ -39,7 +39,7 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'gz_args': f'-r {world_file}'
+            'gz_args': f'-v 4 -s -r  {world_file} --headless-rendering'
         }.items()
     ) 
 

@@ -20,19 +20,19 @@ from geometry_msgs.msg import Point
 
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger,SetBool
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
 class CoveragePlanner(Node):
     def __init__(self):
         super().__init__('boustrophedon_coverage')        
         # 參數
         self.get_logger().info("boustrophedon_coverage 初始化")
-        self.declare_parameter('strip_width_m', 0.1)          # 割草機有效割幅
+        self.declare_parameter('strip_width_m', 0.2)          # 割草機有效割幅
         self.declare_parameter('waypoint_spacing_m', 0.1)     # 路徑點間距
         self.declare_parameter('free_threshold', 25)           # 佔據格 <= 此值視為可行
         self.declare_parameter('unknown_as_obstacle', True)    # 未知(-1)是否當作障礙
         self.declare_parameter('inflate_radius_m', 0.08)       # 安全膨脹半徑(機身+裕度)
-
-
 
         #qos setting
         qos = QoSProfile(depth=1)
@@ -44,21 +44,32 @@ class CoveragePlanner(Node):
         #     OccupancyGrid, '/map', self.getCellMatAndFreeSpace, qos
         # )
    
-        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
 
         self.free_space_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
         self.free_space_inflated_pub = self.create_publisher(OccupancyGrid, '/free_space_inflated', 1)
-        self.polygon_point_sub = self.create_subscription(Marker, '/recorded_path_polygon', self.polygon_point_callback, 10)
+        
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
+        self.polygon_point_sub = self.create_subscription(Marker, '/recorded_path_polygon', self.polygon_point_callback, qos)
         self.polygon_points = None
 
-        # 建立服務 client
+        # 建立服務 service
         self.create_service(Trigger, '/generate_polygon_mask', self.handle_generate_polygon_mask)
-
-        self.latest_map = None
+        self.create_service(Trigger, '/waypoint_pub', self.waypoint_pub_srv)
+        self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv)
+        self.create_service(Trigger, '/check_nav_status', self.check_nav_status_srv)
+        #建立服務 client
+        self.waypoint_active_client = self.create_client(SetBool, '/record_path_status')
         
         #發布區
-        # self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
         self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
+
+        self.waypoint_active = False
+        self.latest_map = None
+
+        self.nav = BasicNavigator()
+        self.coverage_path = Path()
+       
+        # self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
         # self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
@@ -133,7 +144,8 @@ class CoveragePlanner(Node):
         response.success = True
         response.message = "已根據 polygon 生成地圖遮罩"
         return response
-    def on_map(self, map_msg: OccupancyGrid):
+
+    def on_map(self, map_msg: OccupancyGrid): #free space and inflated free space and 
         info = map_msg.info
         H, W = info.height, info.width
         res = info.resolution
@@ -222,129 +234,52 @@ class CoveragePlanner(Node):
                 
             reverse = not reverse
         # 發布 Path
-        path = Path()
-        path.header = map_msg.header
-        path.header.frame_id = map_msg.header.frame_id or 'map'
+        self.coverage_path = Path()
+        self.coverage_path.header = map_msg.header
+        self.coverage_path.header.frame_id = 'map'
         for (x, y) in points:
-            ps = PoseStamped()
-            ps.header = path.header
-            ps.pose.position.x = float(x)
-            ps.pose.position.y = float(y)
-            ps.pose.orientation.w = 1.0
-            path.poses.append(ps)
-        
-        self.path_pub.publish(path)
-    # def mask_map(self,submap:np.ndarray):
-    #     free_mask = submap
-    #     free_th = int(free_threshold.value)
-    #     free_mask = (free_mask >= 0) & (free_mask <= free_th)
-    #     if unknow_as_obstacle.value:
-    #         free_mask &= (occ >= 0)
+            goal_pose = PoseStamped()
+            goal_pose.header = self.coverage_path.header
+            goal_pose.header.stamp = self.nav.get_clock().now().to_msg()
+            goal_pose.pose.position.x = float(x)
+            goal_pose.pose.position.y = float(y)
+            goal_pose.pose.orientation.w = 1.0
+            goal_pose.pose.orientation.z = 0.0
+            self.coverage_path.poses.append(goal_pose)
+        self.path_pub.publish(self.coverage_path)
 
-    #     #膨脹
-    #     inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
-    #     r_cells = max(0, int(math.ceil(inflate_r_m / res)))
-    #     if r_cells > 0:
-    #         occ_mask = (~free_mask).astype(np.uint8)
-    #         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
-    #         occ_mask = cv2.dilate(occ_mask, k)
-    #         free_mask = (occ_mask == 0)
-    #     return free_mask
+    def waypoint_pub_srv(self, req, res):
+        # 停止使用 self.path_pub
+        set_bool_req = SetBool.Request()
+        set_bool_req.data = True
+        self.waypoint_active_client.call_async(set_bool_req)
+        print(f"path length: {len(self.coverage_path.poses)}")
+        self.nav.followWaypoints(self.coverage_path.poses)
+        res.success = True
+        res.message = 'Waypoint published'
+        return res
 
-    # def generate_turn_points(self, current_x: float, current_y: float, 
-    #                        next_x: float, turn_radius: float, reverse: bool):
-    #     """
-    #     生成圓角轉彎的路徑點
-        
-    #     Args:
-    #         current_x, current_y: 當前段結束點
-    #         next_x: 下一條帶的x座標
-    #         turn_radius: 轉彎半徑
-    #         reverse: 是否反向
-        
-    #     Returns:
-    #         轉彎路徑點列表
-    #     """
-    #     turn_points = []
-        
-    #     # 計算轉彎中心點
-    #     if reverse:
-    #         # 反向時，轉彎中心在左側
-    #         turn_center_x = current_x - turn_radius
-    #         turn_center_y = current_y
-    #     else:
-    #         # 正向時，轉彎中心在右側
-    #         turn_center_x = current_x + turn_radius
-    #         turn_center_y = current_y
-        
-    #     # 計算轉彎角度範圍
-    #     if reverse:
-    #         start_angle = 0  # 從右側開始
-    #         end_angle = np.pi  # 轉到左側
-    #         angle_step = np.pi / 8  # 分8段
-    #     else:
-    #         start_angle = np.pi  # 從左側開始
-    #         end_angle = 0  # 轉到右側
-    #         angle_step = -np.pi / 8  # 分8段
-        
-    #     # 生成圓弧點
-    #     angles = np.arange(start_angle, end_angle, angle_step)
-    #     for angle in angles:
-    #         x = turn_center_x + turn_radius * np.cos(angle)
-    #         y = turn_center_y + turn_radius * np.sin(angle)
-    #         turn_points.append((x, y))
-        
-    #     # 添加轉彎結束點（連接到下一條帶）
-    #     if reverse:
-    #         final_x = next_x + turn_radius
-    #     else:
-    #         final_x = next_x - turn_radius
-        
-    #     turn_points.append((final_x, current_y))
-        
-    #     return turn_points
+    def cancel_nav2_srv(self, req, res):
+        # self.waypoint_active = False
+        self.nav.cancelTask()
+        res.success = True
+        res.message = 'Nav2 canceled'
+        return res
 
+    def check_nav_status_srv(self, req, res):
+        res.success = self.nav.isTaskComplete()
+        if res.success:
+            res.message = 'Navigation completed'
+        else:
+            feedback = self.nav.getFeedback()
+            res.message = f'Navigation in progress: {feedback}'
+        return res
 
-
-    # def publish_split_lines(self, map_msg: OccupancyGrid, rows: int, cols: int, line_width: float = 0.03):
-    #     info = map_msg.info
-    #     w, h = info.width, info.height
-    #     res = info.resolution
-    #     ox, oy = info.origin.position.x, info.origin.position.y
-
-    #     marker = Marker()
-    #     marker.header.frame_id = map_msg.header.frame_id or 'map'
-    #     marker.header.stamp = self.get_clock().now().to_msg()
-    #     marker.ns = 'split'
-    #     marker.id = 0
-    #     marker.type = Marker.LINE_LIST
-    #     marker.action = Marker.ADD
-    #     marker.pose.orientation.w = 1.0
-    #     marker.scale.x = line_width
-    #     marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
-
-    #     def add_line(x0, y0, x1, y1):
-    #         p0 = Point(x=float(x0), y=float(y0), z=0.0)
-    #         p1 = Point(x=float(x1), y=float(y1), z=0.0)
-    #         marker.points.append(p0)
-    #         marker.points.append(p1)
-
-    #     # 垂直分割線（忽略邊界，只畫內部分割）
-    #     for k in range(1, cols):
-    #         j = (w * k) // cols
-    #         x = ox + j * res
-    #         add_line(x, oy, x, oy + h * res)
-
-    #     # 水平分割線
-    #     for k in range(1, rows):
-    #         i = (h * k) // rows
-    #         y = oy + i * res
-    #         add_line(ox, y, ox + w * res, y)
-
-    #     self.map_split_line.publish(marker)
-    #     self.get_logger().info('split lines published')
-        
-
+    def record_path_status_srv(self, req, res):
+        self.waypoint_active = req.data  # 直接赋值
+        res.success = True
+        res.message = f'Path recording status: {self.waypoint_active}'
+        return res
 def main(args=None):
     rclpy.init(args=args)
     node = CoveragePlanner()

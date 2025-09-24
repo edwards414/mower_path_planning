@@ -1,15 +1,18 @@
 # path_recorder.py
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Odometry, Path
-from geometry_msgs.msg import PoseStamped, Point
-from std_srvs.srv import Trigger
-from builtin_interfaces.msg import Time as TimeMsg
-import math, csv, os, time
-from visualization_msgs.msg import Marker
-from tf2_ros import Buffer, TransformListener
 from rclpy.duration import Duration
-from nav2_simple_commander.robot_navigator import BasicNavigator
+from nav_msgs.msg import Odometry, Path
+from std_srvs.srv import Trigger,SetBool
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import PoseStamped, Point
+from builtin_interfaces.msg import Time as TimeMsg
+from tf2_ros import Buffer, TransformListener
+
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
+import math, csv, os, time
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 
 
 class PathRecorder(Node):
@@ -25,12 +28,20 @@ class PathRecorder(Node):
         self.declare_parameter('polygon_simplify_dist', 0.2)  # 多边形简化距离
 
         self.path_pub = self.create_publisher(Path, '/recorded_path', 10)
-        self.srv = self.create_service(Trigger, '/save_path', self.on_save)
+
+        # self.srv = self.create_service(Trigger, '/save_path', self.on_save)
+       
         # self.waypoint_srv = self.create_service(Trigger, '/run_waypoint', self.on_run_waypoint)
         # 啟用marker發布器
-        self.marker_pub = self.create_publisher(Marker, '/recorded_path_points', 1)
+        # self.marker_pub = self.create_publisher(Marker, '/recorded_path_points', 1)
         # 新增多边形发布器
-        self.polygon_pub = self.create_publisher(Marker, '/recorded_path_polygon', 1)
+        # 設置與 boustrophedon_coverage 相同的 QoS
+        polygon_qos = QoSProfile(depth=1)
+        polygon_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        polygon_qos.reliability = QoSReliabilityPolicy.RELIABLE
+        
+        # 使用 QoS 創建多邊形發布者
+        self.polygon_pub = self.create_publisher(Marker, '/recorded_path_polygon', polygon_qos)
 
         self.path = Path()
         self.path.header.frame_id = self.get_parameter('frame_id').value
@@ -43,6 +54,9 @@ class PathRecorder(Node):
         # 新增一個定時器，定時發布path，確保即使鍵盤遙控時也能看到path
         self.timer_period = 0.1  # 10Hz
         self.timer = self.create_timer(self.timer_period, self.publish_path_timer)
+
+        self.create_service(SetBool, '/record_path_status', self.record_path_status_srv)
+        self.waypoint_active = False
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -201,6 +215,8 @@ class PathRecorder(Node):
         return marker
 
     def publish_path_timer(self):
+        if self.waypoint_active:
+            return
         # 如果還沒初始化，先嘗試初始化
         if not self.initialized:
             return
@@ -211,7 +227,7 @@ class PathRecorder(Node):
         # 如果當前位置獲取失敗，跳過這次記錄
         if robot_pos is None:
             return
-        print(robot_pos.pose.position.x, robot_pos.pose.position.y)
+        # print(robot_pos.pose.position.x, robot_pos.pose.position.y)
         dt = (now - rclpy.time.Time.from_msg(self.last_robot_pos.header.stamp)).nanoseconds * 1e-9
         dx = robot_pos.pose.position.x - self.last_robot_pos.pose.position.x
         dy = robot_pos.pose.position.y - self.last_robot_pos.pose.position.y
@@ -221,6 +237,7 @@ class PathRecorder(Node):
             self.last_pt = robot_pos.pose.position
             self.last_robot_pos = robot_pos
             self.path.header.stamp = self.get_clock().now().to_msg()
+
             self.path_pub.publish(self.path)
             
             # 发布多边形
@@ -229,62 +246,53 @@ class PathRecorder(Node):
                 if polygon_marker is not None:
                     self.polygon_pub.publish(polygon_marker)
 
-    # 在rviz上標注行走紀錄的點位
-    def publish_points_marker(self, poses):
-        marker = Marker()
-        marker.header.frame_id = self.path.header.frame_id
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "recorded_points"
-        marker.id = 0
-        marker.type = Marker.POINTS
-        marker.action = Marker.ADD
-        marker.scale.x = 0.08  # 點的大小
-        marker.scale.y = 0.08
-        marker.color.a = 1.0
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.points = []
-        for p in poses:
-            pt = p.pose.position
-            marker.points.append(pt)
-        self.marker_pub.publish(marker)
-
-    def on_save(self, req, res):
-        if not self.path.poses:
-            res.success = False
-            res.message = 'No poses recorded.'
-            return res
-        ts = time.strftime('%Y%m%d_%H%M%S')
-        base = os.path.join(self.get_parameter('save_dir').value, f'run_{ts}')
-        csv_path = base + '.csv'
-        yaml_path = base + '.yaml'
-
-        # CSV: x,y,theta
-        with open(csv_path, 'w', newline='') as f:
-            w = csv.writer(f)
-            w.writerow(['x','y','qx','qy','qz','qw'])
-            for p in self.path.poses:
-                q = p.pose.orientation
-                w.writerow([p.pose.position.x, p.pose.position.y, q.x, q.y, q.z, q.w])
-
-        # YAML: 直接丟 Path 也可，這裡存簡單 meta
-        with open(yaml_path, 'w') as f:
-            f.write(f'frame_id: {self.path.header.frame_id}\n')
-            f.write(f'poses: {len(self.path.poses)}\n')
-            f.write(f'csv_path: {csv_path}\n')
-
+    def record_path_status_srv(self, req, res):
+        self.waypoint_active = req.data  # 直接赋值
         res.success = True
-        res.message = f'Saved to {csv_path}'
-        self.get_logger().info(res.message)
+        res.message = f'Path recording status: {self.waypoint_active}'
         return res
-def run_waypoint(self, req, res):
-    
-    self.nav.followWaypoints(self.path.poses)
+
+    # def on_save(self, req, res):
+    #     if not self.path.poses:
+    #         res.success = False
+    #         res.message = 'No poses recorded.'
+    #         return res
+    #     ts = time.strftime('%Y%m%d_%H%M%S')
+    #     base = os.path.join(self.get_parameter('save_dir').value, f'run_{ts}')
+    #     csv_path = base + '.csv'
+    #     yaml_path = base + '.yaml'
+
+    #     # CSV: x,y,thdef on_save(self, req, res):
+    #     if not self.path.poses:
+    #         res.success = False
+    #         res.message = 'No poses recorded.'
+    #         return res
+    #     ts = time.strftime('%Y%m%d_%H%M%S')
+    #     base = os.path.join(self.get_parameter('save_dir').value, f'run_{ts}')
+    #     csv_path = baseta
+    #     with open(csv_path, 'w', newline='') as f:
+    #         w = csv.writer(f)
+    #         w.writerow(['x','y','qx','qy','qz','qw'])
+    #         for p in self.path.poses:
+    #             q = p.pose.orientation
+    #             w.writerow([p.pose.position.x, p.pose.position.y, q.x, q.y, q.z, q.w])
+
+    #     # YAML: 直接丟 Path 也可，這裡存簡單 meta
+    #     with open(yaml_path, 'w') as f:
+    #         f.write(f'frame_id: {self.path.header.frame_id}\n')
+    #         f.write(f'poses: {len(self.path.poses)}\n')
+    #         f.write(f'csv_path: {csv_path}\n')
+
+    #     res.success = True
+    #     res.message = f'Saved to {csv_path}'
+    #     self.get_logger().info(res.message)
+    #     return res
+
+
 def main():
     rclpy.init()
-    n = PathRecorder()
-    rclpy.spin(n)
+    node = PathRecorder()
+    rclpy.spin(node)
     rclpy.shutdown()
 
 if __name__ == '__main__':
