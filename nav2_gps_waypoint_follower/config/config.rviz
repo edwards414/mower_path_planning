@@ -9,6 +9,7 @@ Panels:
         - /TF1/Tree1
         - /nav21
         - /boustrophedon1
+        - /Path1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 788
   - Class: rviz_common/Selection
@@ -373,6 +374,34 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: boustrophedon
+    - Alpha: 0.699999988079071
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 51; 209; 122
+      Enabled: true
+      Head Diameter: 0.029999999329447746
+      Head Length: 0.019999999552965164
+      Length: 0.20000000298023224
+      Line Style: Billboards
+      Line Width: 0.029999999329447746
+      Name: Path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: Arrows
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.009999999776482582
+      Shaft Length: 0.009999999776482582
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -410,7 +439,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.2458006143569946
+      Angle: -1.2408006191253662
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -420,11 +449,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: -89.03812408447266
+      Scale: -325.2630615234375
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 1.059563398361206
-      Y: -2.166304588317871
+      X: 0.2687111496925354
+      Y: 0.8875375390052795
     Saved: ~
 Window Geometry:
   Displays:

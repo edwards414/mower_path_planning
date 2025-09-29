@@ -30,6 +30,8 @@ setup(
     entry_points={
         'console_scripts': [
             'waypoint_pub = nav2_gps_waypoint_follower.waypoint_pub:main',
+            'example_follow_path = nav2_gps_waypoint_follower.example_follow_path:main',
+            'example_nav_through_poses = nav2_gps_waypoint_follower.example_nav_through_poses:main',
         ],
     },
 )

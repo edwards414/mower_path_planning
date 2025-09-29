@@ -53,6 +53,8 @@
  #include "nav2_util/robot_utils.hpp"
  #include "nav2_util/lifecycle_node.hpp"
  #include "nav2_costmap_2d/costmap_2d_ros.hpp"
+
+ #include <tf2/LinearMath/Quaternion.h>
  
  namespace nav2_straightline_planner
  {
@@ -98,6 +100,8 @@
    std::string global_frame_, name_;
  
    double interpolation_resolution_;
+
+   tf2::Quaternion q_;
  };
  
  }  // namespace nav2_straightline_planner

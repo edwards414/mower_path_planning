@@ -54,16 +54,33 @@
    std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
  {
    node_ = parent.lock();
+   if (!node_) {
+     RCLCPP_ERROR(rclcpp::get_logger("StraightLine"), "Failed to lock parent node!");
+     return;
+   }
+   RCLCPP_INFO(node_->get_logger(), "StraightLine::configure called");
+
    name_ = name;
    tf_ = tf;
+   if (!costmap_ros) {
+     RCLCPP_ERROR(node_->get_logger(), "Costmap ROS pointer is null!");
+     return;
+   }
    costmap_ = costmap_ros->getCostmap();
-   global_frame_ = costmap_ros->getGlobalFrameID();
+   global_frame_ = "map";
  
    // Parameter initialization
    nav2_util::declare_parameter_if_not_declared(
-     node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(
-       0.1));
+     node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
    node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
+  
+   // 验证参数值
+   if (interpolation_resolution_ <= 0.0) {
+     RCLCPP_WARN(node_->get_logger(), 
+       "Invalid interpolation_resolution: %f, using default 0.1", interpolation_resolution_);
+     interpolation_resolution_ = 0.1;
+   }
+   RCLCPP_INFO(node_->get_logger(), "StraightLine::configure called");
  }
  
  void StraightLine::cleanup()
@@ -94,17 +111,18 @@
  {
    nav_msgs::msg::Path global_path;
  
+
    // Checking if the goal and start state is in the global frame
    if (start.header.frame_id != global_frame_) {
      RCLCPP_ERROR(
-       node_->get_logger(), "Planner will only except start position from %s frame",
+       node_->get_logger(), "Planner will only accept start position from %s frame",
        global_frame_.c_str());
      return global_path;
    }
  
    if (goal.header.frame_id != global_frame_) {
-     RCLCPP_INFO(
-       node_->get_logger(), "Planner will only except goal position from %s frame",
+     RCLCPP_ERROR(
+       node_->get_logger(), "Planner will only accept goal position from %s frame",
        global_frame_.c_str());
      return global_path;
    }
@@ -112,26 +130,51 @@
    global_path.poses.clear();
    global_path.header.stamp = node_->now();
    global_path.header.frame_id = global_frame_;
-   // calculating the number of loops for current value of interpolation_resolution_
-   int total_number_of_loop = std::hypot(
+  
+   // 计算距离
+   double distance = std::hypot(
      goal.pose.position.x - start.pose.position.x,
-     goal.pose.position.y - start.pose.position.y) /
-     interpolation_resolution_;
-   double x_increment = (goal.pose.position.x - start.pose.position.x) / total_number_of_loop;
-   double y_increment = (goal.pose.position.y - start.pose.position.y) / total_number_of_loop;
- 
-   for (int i = 0; i < total_number_of_loop; ++i) {
-     geometry_msgs::msg::PoseStamped pose;
-     pose.pose.position.x = start.pose.position.x + x_increment * i;
-     pose.pose.position.y = start.pose.position.y + y_increment * i;
-     pose.pose.position.z = 0.0;
-     pose.pose.orientation.x = 0.0;
-     pose.pose.orientation.y = 0.0;
-     pose.pose.orientation.z = 0.0;
-     pose.pose.orientation.w = 1.0;
-     pose.header.stamp = node_->now();
-     pose.header.frame_id = global_frame_;
-     global_path.poses.push_back(pose);
+     goal.pose.position.y - start.pose.position.y);
+  
+   // 检查距离是否为零或插值分辨率是否有效
+   if (distance < 1e-6 || interpolation_resolution_ <= 0.0) {
+     RCLCPP_WARN(node_->get_logger(), 
+       "Distance too small (%f) or invalid interpolation resolution (%f), returning goal only", 
+       distance, interpolation_resolution_);
+     geometry_msgs::msg::PoseStamped goal_pose = goal;
+     goal_pose.header.stamp = node_->now();
+     goal_pose.header.frame_id = global_frame_;
+     global_path.poses.push_back(goal_pose);
+     return global_path;
+   }
+  
+   // calculating the number of loops for current value of interpolation_resolution_
+   int total_number_of_loop = static_cast<int>(distance / interpolation_resolution_);
+  
+   // 确保至少有一个循环
+   if (total_number_of_loop <= 0) {
+     total_number_of_loop = 1;
+   }
+  
+    double x_increment = (goal.pose.position.x - start.pose.position.x) / total_number_of_loop;
+    double y_increment = (goal.pose.position.y - start.pose.position.y) / total_number_of_loop;
+      // 根據起點和終點計算正確的朝向
+    double dx = goal.pose.position.x - start.pose.position.x;
+    double dy = goal.pose.position.y - start.pose.position.y;
+    double yaw = std::atan2(dy, dx);
+    q_.setRPY(0, 0, yaw);
+    for (int i = 0; i < total_number_of_loop; ++i) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.pose.position.x = start.pose.position.x + x_increment * i;
+      pose.pose.position.y = start.pose.position.y + y_increment * i;
+      pose.pose.position.z = 0.0;
+      pose.pose.orientation.x = q_.x();
+      pose.pose.orientation.y = q_.y();
+      pose.pose.orientation.z = q_.z();
+      pose.pose.orientation.w = q_.w();
+      pose.header.stamp = node_->now();
+      pose.header.frame_id = global_frame_;
+      global_path.poses.push_back(pose);
    }
  
    geometry_msgs::msg::PoseStamped goal_pose = goal;
