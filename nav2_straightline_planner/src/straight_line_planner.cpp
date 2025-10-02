@@ -162,19 +162,24 @@
     double dx = goal.pose.position.x - start.pose.position.x;
     double dy = goal.pose.position.y - start.pose.position.y;
     double yaw = std::atan2(dy, dx);
-    q_.setRPY(0, 0, yaw);
-    for (int i = 0; i < total_number_of_loop; ++i) {
-      geometry_msgs::msg::PoseStamped pose;
-      pose.pose.position.x = start.pose.position.x + x_increment * i;
-      pose.pose.position.y = start.pose.position.y + y_increment * i;
-      pose.pose.position.z = 0.0;
-      pose.pose.orientation.x = q_.x();
-      pose.pose.orientation.y = q_.y();
-      pose.pose.orientation.z = q_.z();
-      pose.pose.orientation.w = q_.w();
-      pose.header.stamp = node_->now();
-      pose.header.frame_id = global_frame_;
-      global_path.poses.push_back(pose);
+
+
+
+    //   double cos_yaw = std::cos(yaw);
+    //   double sin_yaw = std::sin(yaw);
+    // q_.setRPY(0, 0, yaw);
+   for (int i = 0; i < total_number_of_loop; ++i) {
+     geometry_msgs::msg::PoseStamped pose;
+     pose.pose.position.x = start.pose.position.x + x_increment * i;
+     pose.pose.position.y = start.pose.position.y + y_increment * i;
+     pose.pose.position.z = 0.0;
+     pose.pose.orientation.x = 0.0;
+     pose.pose.orientation.y = 0.0;
+     pose.pose.orientation.z = 0.0;
+     pose.pose.orientation.w = 1.0;
+     pose.header.stamp = node_->now();
+     pose.header.frame_id = global_frame_;
+     global_path.poses.push_back(pose);
    }
  
    geometry_msgs::msg::PoseStamped goal_pose = goal;

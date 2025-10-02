@@ -19,11 +19,16 @@ ros2 run boustrophedon_coverage boustrophedon_coverage
 
 
 
-[pub 4 pose disance 30m]
+[pub 4 pose disance 30m] #以取代
 ros2 run nav2_gps_waypoint_follower waypoint_pub
 
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard
+
+ros2 run nav2_action_interfaces nav_action_server.py 
+
+ros2 run nav2_action_interfaces nav_action_client.py 
+
 
 #--------------------
 
@@ -104,3 +109,12 @@ https://api.maptiler.com/tiles/satellite-v2/0/0/0.jpg?key=dJtPouKkjJ8nAcsd2xp4
 
 
 https://tiles.stadiamaps.com/tiles/alidade_satellite/{level}/{x}/{y}.png?api_key=d5e55fa3-8d1b-47c4-a17f-86974d57704b
+
+
+pose1: 0.0, 0.0, pose2: 4.0, 0.0
+
+pose1: 0.09873478478177844, 4.540197263853803e-10, pose2: 0.19876722619763026, 4.423781949396013e-10
+
+pose1: 3.701521892255411, 2.944937386208122e-06, pose2: 3.601443187510903, 2.8608089574077455e-06
+
+pose1: 0.5890028991240683, 0.034533192326031276, pose2: 0.6894175754036295, 0.03338218127546215

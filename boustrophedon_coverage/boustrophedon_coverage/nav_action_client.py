@@ -13,15 +13,30 @@ class NavActionClient(Node):
         super().__init__('nav_action_client')
         self._action_client = ActionClient(self, Waypoint, 'nav_action')
         self.nav = BasicNavigator()
+
     def send_goal(self, path):
         goal_msg = Waypoint.Goal()
         goal_msg.path = path
-
         self._action_client.wait_for_server()
+        self._send_goal_future = self._action_client.send_goal_async(goal_msg)
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+    
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected by server')
+            return 
 
-        return self._action_client.send_goal_async(goal_msg)
+        self.get_logger().info('Goal accepted :)')
+        # self._get_result_future = goal_handle.get_result_async()
+        # self._get_result_future.add_done_callback(self.get_result_callback)
 
-    def create_path(self):
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info('Result: {0}'.format(result.sequence))
+        rclpy.shutdown()
+
+    def _create_path(self):
         path = Path()
         width = 4.0
         points = [
@@ -48,11 +63,11 @@ def main(args=None):
     rclpy.init(args=args)
 
     action_client = NavActionClient()
+    path = action_client._create_path()
+    
+    action_client.send_goal(path)
 
-    path = action_client.create_path()
-    future = action_client.send_goal(path)
-
-    rclpy.spin_until_future_complete(action_client, future)
+    rclpy.spin(action_client)
 
 
 if __name__ == '__main__':

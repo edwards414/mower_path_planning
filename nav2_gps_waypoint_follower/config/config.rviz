@@ -379,8 +379,8 @@ Visualization Manager:
       Class: rviz_default_plugins/Path
       Color: 51; 209; 122
       Enabled: true
-      Head Diameter: 0.029999999329447746
-      Head Length: 0.019999999552965164
+      Head Diameter: 0.05999999865889549
+      Head Length: 0.03999999910593033
       Length: 0.20000000298023224
       Line Style: Billboards
       Line Width: 0.029999999329447746
@@ -392,8 +392,8 @@ Visualization Manager:
       Pose Color: 255; 85; 255
       Pose Style: Arrows
       Radius: 0.029999999329447746
-      Shaft Diameter: 0.009999999776482582
-      Shaft Length: 0.009999999776482582
+      Shaft Diameter: 0.019999999552965164
+      Shaft Length: 0.019999999552965164
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -449,11 +449,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: -325.2630615234375
+      Scale: -404.84747314453125
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 0.2687111496925354
-      Y: 0.8875375390052795
+      X: 3.577939748764038
+      Y: 3.8820385932922363
     Saved: ~
 Window Geometry:
   Displays:

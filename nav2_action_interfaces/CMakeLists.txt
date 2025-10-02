@@ -7,6 +7,8 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+
+find_package(ament_cmake_python REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -32,12 +34,18 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+ament_python_install_package(${PROJECT_NAME})
 
 install(
   PROGRAMS
-    scripts/nav_action_server.py
-    scripts/nav_action_client.py
+    scripts/nav_action_server_node.py
+    # scripts/nav_action_client.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+# install(DIRECTORY ${PROJECT_NAME}
+#   DESTINATION lib/python${PYTHON_VERSION}/site-packages/${PROJECT_NAME}
+# )
+
 ament_export_dependencies(rosidl_default_generators action_msgs nav_msgs)
 ament_package()

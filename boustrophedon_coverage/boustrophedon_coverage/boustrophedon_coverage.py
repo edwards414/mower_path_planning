@@ -22,6 +22,14 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from std_srvs.srv import Trigger,SetBool
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from rclpy.action import ActionClient
+from nav2_action_interfaces.action import Waypoint
+
+#custom action client for nav2
+from nav_action_client import NavActionClient  
+
+
+
 
 class CoveragePlanner(Node):
     def __init__(self):
@@ -57,9 +65,13 @@ class CoveragePlanner(Node):
         self.create_service(Trigger, '/waypoint_pub', self.waypoint_pub_srv)
         self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv)
         self.create_service(Trigger, '/check_nav_status', self.check_nav_status_srv)
+
         #建立服務 client
         self.waypoint_active_client = self.create_client(SetBool, '/record_path_status')
-        
+
+        #建立action client
+        self.nav_action_client = NavActionClient()
+
         #發布區
         self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
 
@@ -248,13 +260,18 @@ class CoveragePlanner(Node):
             self.coverage_path.poses.append(goal_pose)
         self.path_pub.publish(self.coverage_path)
 
+
+    #發佈coverage path to action server 
     def waypoint_pub_srv(self, req, res):
         # 停止使用 self.path_pub
         set_bool_req = SetBool.Request()
         set_bool_req.data = True
         self.waypoint_active_client.call_async(set_bool_req)
-        print(f"path length: {len(self.coverage_path.poses)}")
-        self.nav.followWaypoints(self.coverage_path.poses)
+        self.nav_action_client.send_goal(self.coverage_path)
+        
+        # print(f"path length: {len(self.coverage_path.poses)}")
+
+        # self._action_client.wait_for_server()
         res.success = True
         res.message = 'Waypoint published'
         return res
