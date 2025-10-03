@@ -2,6 +2,7 @@
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped, Point
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
@@ -13,6 +14,10 @@ class NavActionServer(Node):
     def __init__(self):
         super().__init__('nav_action_server')
         self.get_logger().info('NavActionServer initialized')
+
+        self.set_parameters([
+            Parameter('use_sim_time',Parameter.Type.BOOL,True)
+        ])
         self.navigator = BasicNavigator()
         self.action_server = ActionServer(
             self,
@@ -70,7 +75,7 @@ class NavActionServer(Node):
         split_path = Path()
         # 設置 header 信息
         split_path.header.frame_id = 'map'  # 或者使用 path.header.frame_id
-        split_path.header.stamp = self.get_clock().now().to_msg()
+        split_path.header.stamp = self.navigator.get_clock().now().to_msg()
 
         for pose in path.poses:
             x = pose.pose.position.x
@@ -86,8 +91,6 @@ class NavActionServer(Node):
                     if feedback:
                         self.get_logger().info(f"反饋: {feedback}")
                 current_split_pose_index += 1
-                # 更新 header 時間戳
-                split_path.header.stamp = self.navigator.get_clock().now().to_msg()
                 # 重新初始化新的 split_path
                 split_path = Path()
                 split_path.header.frame_id = 'map'  # 重新設置 header

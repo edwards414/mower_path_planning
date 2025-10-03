@@ -6,13 +6,14 @@ import cv2
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
+from rclpy.parameter import Parameter
 
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped, Point32, Pose
 from geometry_msgs.msg import PolygonStamped
 import matplotlib.pyplot as plt
+
 
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
@@ -33,7 +34,12 @@ from .nav_action_client import NavActionClient
 
 class CoveragePlanner(Node):
     def __init__(self):
-        super().__init__('boustrophedon_coverage')        
+        super().__init__('boustrophedon_coverage')
+
+        self.set_parameters([
+                Parameter('use_sim_time',Parameter.Type.BOOL,True)
+        ])
+        
         # 參數
         self.get_logger().info("boustrophedon_coverage 初始化")
         self.declare_parameter('strip_width_m', 0.2)          # 割草機有效割幅

@@ -2,15 +2,18 @@
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
-
+from rclpy.parameter import Parameter
 from nav2_action_interfaces.action import Waypoint
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Pose
 from nav2_simple_commander.robot_navigator import BasicNavigator
 
 class NavActionClient(Node):
-    def __init__(self,is_nav = False):
+    def __init__(self, is_nav = False):
         super().__init__('nav_action_client')
+        self.set_parameters([
+            Parameter('use_sim_time',Parameter.Type.BOOL,True)
+        ])
         self._action_client = ActionClient(self, Waypoint, 'nav_action')
         self._action_client_split_path = ActionClient(self, Waypoint, 'nav_action_follow_path')
         self.nav = BasicNavigator() if is_nav else None
