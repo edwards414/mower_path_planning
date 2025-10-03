@@ -5,22 +5,34 @@ from rclpy.node import Node
 
 from nav2_action_interfaces.action import Waypoint
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Pose
 from nav2_simple_commander.robot_navigator import BasicNavigator
 
 class NavActionClient(Node):
-    def __init__(self):
+    def __init__(self,is_nav = False):
         super().__init__('nav_action_client')
         self._action_client = ActionClient(self, Waypoint, 'nav_action')
-        self.nav = BasicNavigator()
+        self._action_client_split_path = ActionClient(self, Waypoint, 'nav_action_follow_path')
+        self.nav = BasicNavigator() if is_nav else None
 
-    def send_goal(self, path):
+    def send_goal_split_path(self, path :Path,coverage_split_points :[Pose]):
+        self.get_logger().info('send_goal_split_path')
+        goal_msg = Waypoint.Goal()
+        goal_msg.path = path
+        goal_msg.coverage_split_points=coverage_split_points
+
+        self._action_client_split_path.wait_for_server()
+        self._send_goal_future = self._action_client_split_path.send_goal_async(goal_msg)
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+    
+    def send_goal(self, path :Path):
         goal_msg = Waypoint.Goal()
         goal_msg.path = path
         self._action_client.wait_for_server()
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
-    
+
+
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
@@ -62,7 +74,7 @@ class NavActionClient(Node):
 def main(args=None):
     rclpy.init(args=args)
 
-    action_client = NavActionClient()
+    action_client = NavActionClient(is_nav=True)
     path = action_client._create_path()
     
     action_client.send_goal(path)

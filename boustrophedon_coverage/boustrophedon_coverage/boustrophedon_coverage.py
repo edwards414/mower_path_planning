@@ -10,7 +10,7 @@ from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid, Path
-from geometry_msgs.msg import PoseStamped, Point32
+from geometry_msgs.msg import PoseStamped, Point32, Pose
 from geometry_msgs.msg import PolygonStamped
 import matplotlib.pyplot as plt
 
@@ -26,7 +26,7 @@ from rclpy.action import ActionClient
 from nav2_action_interfaces.action import Waypoint
 
 #custom action client for nav2
-from nav_action_client import NavActionClient  
+from .nav_action_client import NavActionClient  
 
 
 
@@ -80,7 +80,7 @@ class CoveragePlanner(Node):
 
         self.nav = BasicNavigator()
         self.coverage_path = Path()
-       
+        self.coverage_split_points = []
         # self.map_split_line = self.create_publisher(Marker, '/coverage_split_lines', 1)
         # self.free_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
     def map_callback(self, msg: OccupancyGrid):
@@ -157,7 +157,32 @@ class CoveragePlanner(Node):
         response.message = "已根據 polygon 生成地圖遮罩"
         return response
 
-    def on_map(self, map_msg: OccupancyGrid): #free space and inflated free space and 
+    def on_map(self, map_msg: OccupancyGrid):
+        """
+        根據地圖生成牛耕式覆蓋路徑，並修正路徑點的朝向與格式
+        """
+        import math
+        import numpy as np
+
+        def euler_to_quaternion(roll, pitch, yaw):
+            """
+            將歐拉角轉換為四元數（x, y, z, w）
+            """
+            qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+            qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
+            qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
+            qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+            return (qx, qy, qz, qw)
+
+        def cal_two_point_orientation(x1, y1, x2, y2):
+            """
+            計算兩點之間的朝向（歐拉角yaw），並返回對應的四元數
+            """
+            dx = x2 - x1
+            dy = y2 - y1
+            yaw = math.atan2(dy, dx)
+            return euler_to_quaternion(0, 0, yaw)
+
         info = map_msg.info
         H, W = info.height, info.width
         res = info.resolution
@@ -169,7 +194,7 @@ class CoveragePlanner(Node):
 
         # 建立可行遮罩
         free_mask = (occ >= 0) & (occ <= free_th)
-        # # 障礙膨脹
+        # 障礙膨脹
         inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
         r_cells = max(0, int(math.ceil(inflate_r_m / res)))
         if r_cells > 0:
@@ -177,24 +202,17 @@ class CoveragePlanner(Node):
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
             occ_mask = cv2.dilate(occ_mask, k)
             free_mask = (occ_mask == 0)
-        # 發布膨脹後的地圖（free_mask為True的為可行區，其餘為障礙）
+        # 發布膨脹後的地圖
         inflated_map = OccupancyGrid()
         inflated_map.header = map_msg.header
         inflated_map.header.frame_id = 'map'
         inflated_map.info = map_msg.info
-
-        # 轉成0/100格式，0為可行，100為障礙
         inflated_data = np.where(free_mask, 0, 100).astype(np.int8)
         inflated_map.data = inflated_data.flatten().tolist()
         self.free_space_inflated_pub.publish(inflated_map)
 
-        # ==========================
-        # 讓規劃路徑考慮到膨脹層的縮減
-        # ==========================
-        # 這裡我們將free_mask進一步縮減，確保路徑點不會貼近膨脹邊緣
-        # 例如再進行一次膨脹，然後取反，作為安全區域
+        # 進一步縮減可行區，確保路徑點不會貼近膨脹邊緣
         if r_cells > 0:
-            # 再膨脹一次，縮減可行區
             shrink_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
             safe_mask = cv2.erode(free_mask.astype(np.uint8), shrink_k)
             safe_mask = (safe_mask == 1)
@@ -206,18 +224,13 @@ class CoveragePlanner(Node):
         strip_cols = max(1, int(round(strip_w_m / res)))
         midcols = list(range(strip_cols // 2, W, strip_cols))
 
-        # 視覺化條帶分割線
-        cols_for_viz = max(1, int(math.ceil(W / strip_cols)))
-        
-        # self.publish_split_lines(map_msg, rows=1, cols=cols_for_viz, line_width=0.03)
-
         # 產生往返路徑
         spacing = float(self.get_parameter('waypoint_spacing_m').value)
         points = []
         reverse = False
 
         for mc in midcols:
-            # 沿條帶中心列，找連續可行段（這裡用縮減後的safe_mask）
+            # 沿條帶中心列，找連續可行段
             segments = []
             start = None
             for i in range(H):
@@ -242,36 +255,67 @@ class CoveragePlanner(Node):
                 else:
                     ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
                 ys = ys[::-1] if reverse else ys
-                points.extend([(x, y) for y in ys])
-                
+                for y in ys:
+                    points.append((x, y))
+
+                p = Pose()
+                p.position.x = x
+                p.position.y = y0
+                p.position.z = 0.0
+                p.orientation.w = 1.0
+                p.orientation.z = 0.0
+                self.coverage_split_points.append(p)
+
+                p = Pose()
+                p.position.x = x
+                p.position.y = y1
+                p.position.z = 0.0
+                p.orientation.w = 1.0
+                p.orientation.z = 0.0
+                self.coverage_split_points.append(p)
+
+
             reverse = not reverse
-        # 發布 Path
+              
+        # 修正路徑點，確保每個點的朝向正確
         self.coverage_path = Path()
         self.coverage_path.header = map_msg.header
         self.coverage_path.header.frame_id = 'map'
-        for (x, y) in points:
+
+        for idx, (x, y) in enumerate(points):
             goal_pose = PoseStamped()
             goal_pose.header = self.coverage_path.header
             goal_pose.header.stamp = self.nav.get_clock().now().to_msg()
             goal_pose.pose.position.x = float(x)
             goal_pose.pose.position.y = float(y)
-            goal_pose.pose.orientation.w = 1.0
-            goal_pose.pose.orientation.z = 0.0
+            goal_pose.pose.position.z = 0.0
+
+            # 計算朝向
+            if idx < len(points) - 1:
+                x2, y2 = points[idx + 1]
+                qx, qy, qz, qw = cal_two_point_orientation(x, y, x2, y2)
+            elif idx > 0:
+                x2, y2 = points[idx - 1]
+                qx, qy, qz, qw = cal_two_point_orientation(x2, y2, x, y)
+            else:
+                # 只有一個點，朝向正前
+                qx, qy, qz, qw = euler_to_quaternion(0, 0, 0)
+
+            goal_pose.pose.orientation.x = qx
+            goal_pose.pose.orientation.y = qy
+            goal_pose.pose.orientation.z = qz
+            goal_pose.pose.orientation.w = qw
+
             self.coverage_path.poses.append(goal_pose)
+
         self.path_pub.publish(self.coverage_path)
 
-
     #發佈coverage path to action server 
-    def waypoint_pub_srv(self, req, res):
-        # 停止使用 self.path_pub
+    def waypoint_pub_srv(self, req, res):        # 停止使用 self.path_pub
         set_bool_req = SetBool.Request()
         set_bool_req.data = True
         self.waypoint_active_client.call_async(set_bool_req)
-        self.nav_action_client.send_goal(self.coverage_path)
-        
-        # print(f"path length: {len(self.coverage_path.poses)}")
-
-        # self._action_client.wait_for_server()
+        self.nav_action_client.send_goal_split_path(self.coverage_path,self.coverage_split_points)
         res.success = True
         res.message = 'Waypoint published'
         return res
@@ -297,6 +341,16 @@ class CoveragePlanner(Node):
         res.success = True
         res.message = f'Path recording status: {self.waypoint_active}'
         return res
+class val():
+    def __init__(self):
+        self.x = None   
+        self.y = None
+        self.qx = None
+        self.qy = None 
+        self.qz = None
+        self.qw = None
+    def is_empty(self):
+        return self.x == None and self.y == None and self.qx == None and self.qy == None and self.qz == None and self.qw == None
 def main(args=None):
     rclpy.init(args=args)
     node = CoveragePlanner()

@@ -248,6 +248,10 @@ class PathRecorder(Node):
 
     def record_path_status_srv(self, req, res):
         self.waypoint_active = req.data  # 直接赋值
+        if self.waypoint_active == True:
+            self.get_logger().info("Path recording started")
+        else:
+            self.get_logger().info("Path recording stopped")
         res.success = True
         res.message = f'Path recording status: {self.waypoint_active}'
         return res

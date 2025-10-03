@@ -8,6 +8,8 @@ ros2 run boustrophedon_coverage path_record
 [service call 生成path]
 ros2 run boustrophedon_coverage boustrophedon_coverage
 
+ros2 run boustrophedon_coverage nav_action_client
+
   [生成free_space mask]
   ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
 
@@ -25,9 +27,7 @@ ros2 run nav2_gps_waypoint_follower waypoint_pub
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard
 
-ros2 run nav2_action_interfaces nav_action_server.py 
-
-ros2 run nav2_action_interfaces nav_action_client.py 
+ros2 run nav2_action_interfaces nav_action_server_node.py 
 
 
 #--------------------
