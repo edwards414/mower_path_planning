@@ -1,24 +1,19 @@
-# path_recorder.py
+
 import rclpy
 from rclpy.node import Node
-from rclpy.duration import Duration
-from nav_msgs.msg import Odometry, Path
-from std_srvs.srv import Trigger,SetBool
-from visualization_msgs.msg import Marker
+from nav_msgs.msg import  Path
+from std_srvs.srv import Trigger
+from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import PoseStamped, Point
-from builtin_interfaces.msg import Time as TimeMsg
 from tf2_ros import Buffer, TransformListener
 
-from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-
-import math, csv, os, time
+import math, os
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
-
-
+# from boustrophedon_coverage.path_record_utils import simplify_path
+from boustrophedon_coverage.path_record_utils import *
 class PathRecorder(Node):
     def __init__(self):
         super().__init__('path_recorder')
-        self.nav = BasicNavigator()
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('min_dist', 0.05)   # 最小移動距離(公尺)才記錄
         self.declare_parameter('min_dt', 0.10)     # 最小時間間隔(秒)才記錄
@@ -26,37 +21,42 @@ class PathRecorder(Node):
         self.declare_parameter('save_dir', 'recordings')
         # 新增多边形相关参数
         self.declare_parameter('polygon_simplify_dist', 0.2)  # 多边形简化距离
+        os.makedirs(self.get_parameter('save_dir').value, exist_ok=True)  
 
         self.path_pub = self.create_publisher(Path, '/recorded_path', 10)
 
-        # self.srv = self.create_service(Trigger, '/save_path', self.on_save)
-       
-        # self.waypoint_srv = self.create_service(Trigger, '/run_waypoint', self.on_run_waypoint)
-        # 啟用marker發布器
-        # self.marker_pub = self.create_publisher(Marker, '/recorded_path_points', 1)
-        # 新增多边形发布器
         # 設置與 boustrophedon_coverage 相同的 QoS
         polygon_qos = QoSProfile(depth=1)
         polygon_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         polygon_qos.reliability = QoSReliabilityPolicy.RELIABLE
         
         # 使用 QoS 創建多邊形發布者
-        self.polygon_pub = self.create_publisher(Marker, '/recorded_path_polygon', polygon_qos)
+        # 新增區域點標記發布者
+        self.zone_marker_pub = self.create_publisher(Marker, '/zone_markers', polygon_qos)
+        self.zone_list_pub = self.create_publisher(MarkerArray,'/zone_list', polygon_qos)
 
-        self.path = Path()
-        self.path.header.frame_id = self.get_parameter('frame_id').value
-        self.last_pt = None
-        self.last_t = self.get_clock().now()
-
-        os.makedirs(self.get_parameter('save_dir').value, exist_ok=True)
         self.get_logger().info('path_recorder ready.')
 
         # 新增一個定時器，定時發布path，確保即使鍵盤遙控時也能看到path
         self.timer_period = 0.1  # 10Hz
         self.timer = self.create_timer(self.timer_period, self.publish_path_timer)
 
-        self.create_service(SetBool, '/record_path_status', self.record_path_status_srv)
-        self.waypoint_active = False
+        # 現有服務
+        # self.create_service(SetBool, '/record_path_status', self.record_path_status_srv)
+        # 新增區域記錄服務
+        self.create_service(Trigger, '/record_zone_start', self.record_zone_start_srv)
+        self.create_service(Trigger, '/record_zone_end', self.record_zone_end_srv)
+
+        self.record_zone_status = False
+        self.record_zone_id = 0
+        self.record_zone_name = "zone_" + str(self.record_zone_id)
+        self.record_zone_marker = Marker()#記錄當前的zone point
+        self.record_zone_list = MarkerArray() #全域zone list
+        
+        self.path = Path()
+        self.path.header.frame_id = self.get_parameter('frame_id').value
+        self.last_pt = None
+        self.last_t = self.get_clock().now()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -67,9 +67,11 @@ class PathRecorder(Node):
         
         # 添加初始化定時器，等待TF可用
         self.init_timer = self.create_timer(0.5, self.try_initialize)
-
+        
+    # ============================================================
+    # 嘗試初始化機器人位置
+    # ============================================================
     def try_initialize(self):
-        """嘗試初始化機器人位置"""
         if not self.initialized:
             robot_pos = self.get_robot_pos()
             if robot_pos is not None:
@@ -81,6 +83,9 @@ class PathRecorder(Node):
             else:
                 self.get_logger().warn("等待TF可用以初始化機器人位置...")
 
+    # ============================================================
+    # 獲取機器人位置
+    # ============================================================
     def get_robot_pos(self):
         """
         讀取tf，將odom座標轉換成目標map座標系下的位置
@@ -103,89 +108,28 @@ class PathRecorder(Node):
         except Exception as e:
             self.get_logger().warn(f"TF查詢失敗: {e}")
             return None
-    
-    def simplify_path(self, poses, distance_threshold):
-        """
-        使用Douglas-Peucker算法简化路径
-        """
-        if len(poses) < 3:
-            return poses
-            
-        points = [(p.pose.position.x, p.pose.position.y) for p in poses]
-        simplified_indices = self.douglas_peucker(points, distance_threshold)
-        return [poses[i] for i in simplified_indices]
-
-    def douglas_peucker(self, points, epsilon):
-        """
-        Douglas-Peucker算法实现
-        """
-        if len(points) < 3:
-            return list(range(len(points)))
-            
-        # 找到距离起点终点连线最远的点
-        start = points[0]
-        end = points[-1]
-        max_dist = 0
-        max_index = 0
-        
-        for i in range(1, len(points) - 1):
-            dist = self.point_to_line_distance(points[i], start, end)
-            if dist > max_dist:
-                max_dist = dist
-                max_index = i
-        
-        # 如果最大距离大于阈值，递归处理
-        if max_dist > epsilon:
-            # 递归处理前半段和后半段
-            left_indices = self.douglas_peucker(points[:max_index + 1], epsilon)
-            right_indices = self.douglas_peucker(points[max_index:], epsilon)
-            
-            # 合并结果，注意避免重复
-            result = left_indices + [max_index + i for i in right_indices[1:]]
-            return result
-        else:
-            # 如果最大距离小于阈值，只保留起点和终点
-            return [0, len(points) - 1]
-
-    def point_to_line_distance(self, point, line_start, line_end):
-        """
-        计算点到直线的距离
-        """
-        x0, y0 = point
-        x1, y1 = line_start
-        x2, y2 = line_end
-        
-        # 如果线段长度为0，返回点到点的距离
-        line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
-        if line_length_sq == 0:
-            return math.sqrt((x0 - x1) ** 2 + (y0 - y1) ** 2)
-        
-        # 计算点到直线的距离
-        numerator = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
-        return numerator / math.sqrt(line_length_sq)
-
+    # ============================================================
+    # 根据路径创建多边形
+    # ============================================================
     def create_polygon_from_path(self, poses):
-        """
-        根据路径创建多边形
-        """
         if len(poses) < 3:
             return None
-            
-        # 简化路径以减少多边形顶点数量
         simplify_dist = self.get_parameter('polygon_simplify_dist').value
-        simplified_poses = self.simplify_path(poses, simplify_dist)
+
+        # 简化路径以减少多边形顶点数量
+        simplified_poses = simplify_path(poses, simplify_dist)
         
         # 创建多边形marker
         marker = Marker()
         marker.header.frame_id = self.path.header.frame_id
         marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "path_polygon"
-        marker.id = 0
+        marker.ns = "zones"
+        marker.id = self.record_zone_id
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
         marker.scale.x = 0.02  # 线条宽度
-        marker.color.a = 0.8   # 透明度
-        marker.color.r = 0.0
+        marker.color.a = 0.5   # 透明度
+        marker.color.r = 0.6
         marker.color.g = 0.0
         marker.color.b = 1.0   # 蓝色
         
@@ -213,9 +157,12 @@ class PathRecorder(Node):
                 marker.points.append(point)
         
         return marker
-
+    # ============================================================
+    # 定時發布trace path
+    # 功能： 發佈機器人路徑
+    # ============================================================
     def publish_path_timer(self):
-        if self.waypoint_active:
+        if self.record_zone_status == False:
             return
         # 如果還沒初始化，先嘗試初始化
         if not self.initialized:
@@ -231,7 +178,7 @@ class PathRecorder(Node):
         dt = (now - rclpy.time.Time.from_msg(self.last_robot_pos.header.stamp)).nanoseconds * 1e-9
         dx = robot_pos.pose.position.x - self.last_robot_pos.pose.position.x
         dy = robot_pos.pose.position.y - self.last_robot_pos.pose.position.y
-        
+
         if math.hypot(dx, dy) >= self.get_parameter('min_dist').value and dt >= self.get_parameter('min_dt').value:
             self.path.poses.append(robot_pos)
             self.last_pt = robot_pos.pose.position
@@ -242,56 +189,50 @@ class PathRecorder(Node):
             
             # 发布多边形
             if len(self.path.poses) >= 3:
-                polygon_marker = self.create_polygon_from_path(self.path.poses)
-                if polygon_marker is not None:
-                    self.polygon_pub.publish(polygon_marker)
+                self.record_zone_marker = self.create_polygon_from_path(self.path.poses)
+                if self.record_zone_marker is not None:
+                    self.zone_marker_pub.publish(self.record_zone_marker)
 
-    def record_path_status_srv(self, req, res):
-        self.waypoint_active = req.data  # 直接赋值
-        if self.waypoint_active == True:
-            self.get_logger().info("Path recording started")
-        else:
-            self.get_logger().info("Path recording stopped")
+    # ============================================================
+    # 記錄區域起始點 新增zone 區域
+    # ============================================================
+    def record_zone_start_srv(self, req, res):
+        self.get_logger().info("記錄區域起始點")
+        self.record_zone_status = True
+        self.record_zone_id += 1
+        self.record_zone_name = "zone_" + str(self.record_zone_id)
+
+        # 清空路径，开始记录新的区域
+        self.path = Path()
+        self.path.header.frame_id = self.get_parameter('frame_id').value
+
+        # 重新初始化机器人位置，确保第二个zone可以正常开始记录
+        robot_pos = self.get_robot_pos()
+        if robot_pos is not None:
+            self.last_robot_pos = robot_pos
+            self.get_logger().info(f"重新初始化機器人位置: x={robot_pos.pose.position.x:.3f}, y={robot_pos.pose.position.y:.3f}")
+
+        self.record_zone_marker = Marker()
+        self.zone_marker_pub.publish(self.record_zone_marker)#刷新zone marker
+
         res.success = True
-        res.message = f'Path recording status: {self.waypoint_active}'
+        res.message = "成功記錄區域起始點"
         return res
 
-    # def on_save(self, req, res):
-    #     if not self.path.poses:
-    #         res.success = False
-    #         res.message = 'No poses recorded.'
-    #         return res
-    #     ts = time.strftime('%Y%m%d_%H%M%S')
-    #     base = os.path.join(self.get_parameter('save_dir').value, f'run_{ts}')
-    #     csv_path = base + '.csv'
-    #     yaml_path = base + '.yaml'
+    # ============================================================
+    # 記錄區域結束點
+    # ============================================================
+    def record_zone_end_srv(self, req, res):
+        self.get_logger().info("記錄區域結束點")
+        self.record_zone_status = False
+        self.record_zone_list.markers.append(self.record_zone_marker)
+        self.record_zone_marker = Marker()
 
-    #     # CSV: x,y,thdef on_save(self, req, res):
-    #     if not self.path.poses:
-    #         res.success = False
-    #         res.message = 'No poses recorded.'
-    #         return res
-    #     ts = time.strftime('%Y%m%d_%H%M%S')
-    #     base = os.path.join(self.get_parameter('save_dir').value, f'run_{ts}')
-    #     csv_path = baseta
-    #     with open(csv_path, 'w', newline='') as f:
-    #         w = csv.writer(f)
-    #         w.writerow(['x','y','qx','qy','qz','qw'])
-    #         for p in self.path.poses:
-    #             q = p.pose.orientation
-    #             w.writerow([p.pose.position.x, p.pose.position.y, q.x, q.y, q.z, q.w])
+        self.zone_list_pub.publish(self.record_zone_list) #發佈全域zone list
 
-    #     # YAML: 直接丟 Path 也可，這裡存簡單 meta
-    #     with open(yaml_path, 'w') as f:
-    #         f.write(f'frame_id: {self.path.header.frame_id}\n')
-    #         f.write(f'poses: {len(self.path.poses)}\n')
-    #         f.write(f'csv_path: {csv_path}\n')
-
-    #     res.success = True
-    #     res.message = f'Saved to {csv_path}'
-    #     self.get_logger().info(res.message)
-    #     return res
-
+        res.success = True
+        res.message = f"成功記錄區域結束點 #{len(self.record_zone_list.markers)}"
+        return res
 
 def main():
     rclpy.init()
