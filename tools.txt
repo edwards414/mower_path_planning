@@ -8,18 +8,53 @@ ros2 run boustrophedon_coverage path_record
 [service call 生成path]
 ros2 run boustrophedon_coverage boustrophedon_coverage
 
+ros2 run boustrophedon_coverage boustrophedon_coverage_new
 
 
-#new! 記錄區域起始點 
+#new! 記錄區域 起始點 
 ros2 service call /record_zone_start std_srvs/srv/Trigger
 
-#new! 記錄區域結束點  
+#new! 記錄區域 結束點  
 ros2 service call /record_zone_end std_srvs/srv/Trigger
+
+#new! 記錄risk zone 起始點
+ros2 service call /risk_zone_start std_srvs/srv/Trigger
+
+#new! 記錄risk zone 結束點
+ros2 service call /risk_zone_end std_srvs/srv/Trigger
+
+
+
+
+#new! 記錄區域 save
+ros2 service call /save_zone_list std_srvs/srv/Trigger
+
+#new! 記錄區域 risk save
+ros2 service call /risk_zone_save std_srvs/srv/Trigger
+
+#new! 記錄區域 risk load
+ros2 service call /risk_zone_load std_srvs/srv/Trigger
+
+#new! 記錄區域 load
+ros2 service call /load_zone_list std_srvs/srv/Trigger
+
+#new! path_record  info test
+ros2 service call /get_record_zone_info std_srvs/srv/Trigger
 
 
 
   [生成free_space mask]
   ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
+
+  [生成多個zone的freespace]
+  ros2 service call /create_free_space std_srvs/srv/Trigger {}
+  [生成多個zone的riskspace]
+  ros2 service call /create_risk_map std_srvs/srv/Trigger {}
+
+  ros2 service call /get_record_zone_list_srv std_srvs/srv/Trigger {}
+
+[map_hub]
+ros2 run maphub map_manage
 
   [waypoint pub]
   ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
@@ -34,7 +69,6 @@ ros2 run boustrophedon_coverage nav_action_client
 ros2 run turtlebot3_teleop teleop_keyboard
 
 ros2 run nav2_action_interfaces nav_action_server_node.py 
-
 
 #--------------------
 

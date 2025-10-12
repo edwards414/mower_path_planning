@@ -7,10 +7,9 @@ Panels:
         - /Global Options1
         - /TF1/Frames1
         - /TF1/Tree1
-        - /nav21
+        - /path_record1
         - /boustrophedon1
-        - /boustrophedon1/coverage_path1
-        - /Path1
+        - /boustrophedon1/Risk_Map1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 788
   - Class: rviz_common/Selection
@@ -281,19 +280,63 @@ Visualization Manager:
       Name: nav2
     - Class: rviz_common/Group
       Displays:
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: zone_list
+          Namespaces:
+            "": true
+            zones: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /zone_list
+          Value: true
         - Class: rviz_default_plugins/Marker
           Enabled: true
-          Name: Marker
+          Name: drawing_zone
           Namespaces:
-            path_polygon: true
+            "": true
+            zones: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /recorded_path_polygon
+            Value: /zone_markers
           Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: risk_zone_list
+          Namespaces:
+            risk_zones: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_zone_list
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Name: risk_zone
+          Namespaces:
+            "": true
+            risk_zones: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_zone_markers
+          Value: true
+      Enabled: true
+      Name: path_record
+    - Class: rviz_common/Group
+      Displays:
         - Alpha: 1
           Buffer Length: 1
           Class: rviz_default_plugins/Path
@@ -373,6 +416,29 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /recorded_path
           Value: true
+        - Alpha: 0.20000000298023224
+          Binary representation: false
+          Binary threshold: 100
+          Class: rviz_default_plugins/Map
+          Color Scheme: costmap
+          Draw Behind: false
+          Enabled: true
+          Name: Risk_Map
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_map
+          Update Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_map_updates
+          Use Timestamp: false
+          Value: true
       Enabled: true
       Name: boustrophedon
     - Alpha: 0.699999988079071
@@ -402,6 +468,34 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /plan
+      Value: true
+    - Alpha: 0.699999988079071
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 25; 255; 255
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Billboards
+      Line Width: 0.05999999865889549
+      Name: Split_path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /split_path
       Value: true
   Enabled: true
   Global Options:
@@ -440,7 +534,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.2458006143569946
+      Angle: -0.8658010363578796
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -450,11 +544,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: -437.20513916015625
+      Scale: -64.18031311035156
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 0.2755126357078552
-      Y: 2.761509656906128
+      X: -0.004276929423213005
+      Y: -0.19040238857269287
     Saved: ~
 Window Geometry:
   Displays:
