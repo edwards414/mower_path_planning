@@ -62,6 +62,7 @@ class PathRecorder(Node):
         self.create_service(Trigger, '/load_zone_list', self.load_zone_list_srv)
         
         # 新增獲取區域列表的服務
+        self.create_service(Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
         self.create_service(GetZoneList, '/get_record_zone_list', self.get_record_zone_list_srv)
         self.create_service(GetZoneList, '/get_risk_zone_list', self.get_risk_zone_list_srv)
 
@@ -512,6 +513,17 @@ class PathRecorder(Node):
             res.message = "載入風險區域失敗"
         return res
 
+    # def get_record_info(self, res):
+    def get_record_zone_info_srv(self, req, res):
+        self.get_logger().info(f"獲取普通區域列表，共 {len(self.record_zone_list.markers)} 個區域")
+        # 將 MarkerArray 轉為字符串或僅列印IDs等概要資訊，避免傳入非str對象導致log報錯
+        zone_ids = [marker.id for marker in self.record_zone_list.markers]
+        self.get_logger().info(f"record_zone_list marker ids: {zone_ids}")
+        res.success = True
+        res.message = "返回test"
+        # res.zone_list = self.record_zone_list
+        return res
+
     # ============================================================
     # 獲取普通區域列表服務
     # ============================================================
@@ -522,6 +534,7 @@ class PathRecorder(Node):
             res.success = True
             res.message = f"成功獲取普通區域列表，共 {len(self.record_zone_list.markers)} 個區域"
             res.zone_list = self.record_zone_list
+
             return res
         except Exception as e:
             self.get_logger().error(f"獲取普通區域列表失敗: {e}")
