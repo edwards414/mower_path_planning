@@ -113,52 +113,45 @@ class PathRecorder(Node):
         #===========
         def publish_empty_markerarrays():
             """清除 RViz 上的 zone_list 與 risk_zone_list"""
-            
-            # 創建 DELETEALL marker
-            deleteall_marker = Marker()
-            deleteall_marker.header.frame_id = self.get_parameter('frame_id').value
-            deleteall_marker.header.stamp = self.get_clock().now().to_msg()
-            deleteall_marker.ns = "zones"  # 確保 namespace 匹配
-            deleteall_marker.action = Marker.DELETEALL
-            
-            # 創建包含 DELETEALL marker 的 MarkerArray
-            clear_array = MarkerArray()
-            clear_array.markers = [deleteall_marker]
-            
-            # 發布清空命令
-            self.zone_list_pub.publish(clear_array)
-            
-            # 對風險區域做同樣的操作
-            deleteall_marker.ns = "risk_zones"
-            risk_clear_array = MarkerArray()
-            risk_clear_array.markers = [deleteall_marker]
-            self.risk_zone_list_pub.publish(risk_clear_array)
-            
+            frame = self.get_parameter('frame_id').value
+            now = self.get_clock().now().to_msg()
+
+            # 清除 zone_markers
+            delete_zone_marker = Marker()
+            delete_zone_marker.header.frame_id = frame
+            delete_zone_marker.header.stamp = now
+            delete_zone_marker.ns = "zones"
+            delete_zone_marker.action = Marker.DELETEALL
+            self.zone_marker_pub.publish(delete_zone_marker)
+
+            # 清除 risk_zone_markers
+            delete_risk_marker = Marker()
+            delete_risk_marker.header.frame_id = frame
+            delete_risk_marker.header.stamp = now
+            delete_risk_marker.ns = "risk_zones"
+            delete_risk_marker.action = Marker.DELETEALL
+            self.risk_zone_marker_pub.publish(delete_risk_marker)
+
             # 清空內部列表
             self.record_zone_list = MarkerArray()
             self.risk_zone_list = MarkerArray()
-            
-            self.get_logger().info("已清空 RViz zone_list 與 risk_zone_list")
+
+            self.get_logger().info("✅ 已清空 RViz zone_markers 與 risk_zone_markers")
+
 
         if not self.initialized:
             robot_pos = self.get_robot_pos()
-            self.path.header.frame_id = self.get_parameter('frame_id').value
             if robot_pos is not None:
                 self.last_robot_pos = robot_pos
                 self.initialized = True
 
                 publish_empty_markerarrays()
-                self.record_zone_marker.header.frame_id = self.get_parameter('frame_id').value
-                self.record_zone_marker.header.stamp = self.get_clock().now().to_msg()
-                self.zone_marker_pub.publish(self.record_zone_marker)
-                
-                self.risk_zone_marker.header.frame_id = self.get_parameter('frame_id').value
-                self.risk_zone_marker.header.stamp = self.get_clock().now().to_msg()
-                self.risk_zone_marker_pub.publish(self.risk_zone_marker)
 
+                # 發佈空 markerarray
+                self.zone_list_pub.publish(self.record_zone_list)
                 self.risk_zone_list_pub.publish(self.risk_zone_list)
+
                 self.get_logger().info(f"機器人位置初始化成功: x={robot_pos.pose.position.x:.3f}, y={robot_pos.pose.position.y:.3f}")
-                
                 self.path.header.frame_id = self.get_parameter('frame_id').value
                 self.path.header.stamp = self.get_clock().now().to_msg()
                 self.path_pub.publish(self.path)
@@ -427,6 +420,7 @@ class PathRecorder(Node):
         if self._load_zone_list():
             self.get_logger().info(f"成功載入區域列表: {len(self.record_zone_list.markers)} 個區域")
             self.zone_list_pub.publish(self.record_zone_list)
+
             res.success = True
             res.message = "成功載入區域列表"
         else:
@@ -706,7 +700,7 @@ class PathRecorder(Node):
         if self._load_risk_zone_list():
             self.get_logger().info(f"啟動時自動載入風險區域列表: {len(self.risk_zone_list.markers)} 個風險區域")
             self.risk_zone_list_pub.publish(self.risk_zone_list)
-
+    
 def main():
     rclpy.init()
     node = PathRecorder()
