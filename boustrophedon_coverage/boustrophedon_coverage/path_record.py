@@ -53,13 +53,11 @@ class PathRecorder(Node):
         # 新增區域記錄服務
         self.create_service(Trigger, '/risk_zone_start', self.risk_zone_start_srv)
         self.create_service(Trigger, '/risk_zone_end', self.risk_zone_end_srv)
-        self.create_service(Trigger, '/risk_zone_save', self.risk_zone_save_srv)
-        self.create_service(Trigger, '/risk_zone_load', self.risk_zone_load_srv)
+        self.create_service(Trigger, '/save_zone_list', self.save_zone_list_srv)
+        self.create_service(Trigger, '/load_zone_list', self.load_zone_list_srv)
 
         self.create_service(Trigger, '/record_zone_start', self.record_zone_start_srv)
         self.create_service(Trigger, '/record_zone_end', self.record_zone_end_srv)
-        self.create_service(Trigger, '/save_zone_list', self.save_zone_list_srv)
-        self.create_service(Trigger, '/load_zone_list', self.load_zone_list_srv)
         
         # 新增獲取區域列表的服務
         self.create_service(Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
@@ -405,27 +403,72 @@ class PathRecorder(Node):
     # 儲存區域列表服務
     # ============================================================
     def save_zone_list_srv(self, req, res):
+        """合并的区域列表保存服务 - 同时保存普通区域和风险区域"""
+        success_count = 0
+        error_messages = []
+        
+        # 保存普通区域列表
         if self._save_zone_list():
+            success_count += 1
+            self.get_logger().info("成功储存普通区域列表")
+        else:
+            error_messages.append("储存普通区域列表失败")
+        
+        # 保存风险区域列表
+        if self._save_risk_zone_list():
+            success_count += 1
+            self.get_logger().info("成功储存风险区域列表")
+        else:
+            error_messages.append("储存风险区域列表失败")
+        
+        # 根据结果设置响应
+        if success_count == 2:
             res.success = True
-            res.message = "成功儲存區域列表"
+            res.message = "成功储存所有区域列表（普通区域 + 风险区域）"
+        elif success_count == 1:
+            res.success = True
+            res.message = f"部分成功储存区域列表。错误: {'; '.join(error_messages)}"
         else:
             res.success = False
-            res.message = "儲存區域列表失敗"
+            res.message = f"储存区域列表失败: {'; '.join(error_messages)}"
+        
         return res
 
     # ============================================================
     # 載入區域列表服務
     # ============================================================
     def load_zone_list_srv(self, req, res):
+        """合并的区域列表加载服务 - 同时加载普通区域和风险区域并发布"""
+        success_count = 0
+        error_messages = []
+        
+        # 加载普通区域列表
         if self._load_zone_list():
-            self.get_logger().info(f"成功載入區域列表: {len(self.record_zone_list.markers)} 個區域")
-            self.zone_list_pub.publish(self.record_zone_list)
-
+            success_count += 1
+            self.get_logger().info(f"成功載入普通區域列表: {len(self.record_zone_list.markers)} 个区域")
+            self.zone_list_pub.publish(self.record_zone_list)  # 发布普通区域
+        else:
+            error_messages.append("載入普通區域列表失敗")
+        
+        # 加载风险区域列表
+        if self._load_risk_zone_list():
+            success_count += 1
+            self.get_logger().info(f"成功載入風險區域列表: {len(self.risk_zone_list.markers)} 个风险区域")
+            self.risk_zone_list_pub.publish(self.risk_zone_list)  # 发布风险区域
+        else:
+            error_messages.append("載入風險區域列表失敗")
+        
+        # 根据结果设置响应
+        if success_count == 2:
             res.success = True
-            res.message = "成功載入區域列表"
+            res.message = "成功載入所有區域列表（普通區域 + 風險區域）"
+        elif success_count == 1:
+            res.success = True
+            res.message = f"部分成功載入區域列表。错误: {'; '.join(error_messages)}"
         else:
             res.success = False
-            res.message = "載入區域列表失敗"
+            res.message = f"載入區域列表失敗: {'; '.join(error_messages)}"
+        
         return res
 
     # ============================================================
