@@ -9,7 +9,7 @@ from tf2_ros import Buffer, TransformListener
 import json 
 import math, os
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
-from boustrophedon_coverage.path_record_utils import *
+from .path_record_utils import *
 from boustrophedon_coverage_interfaces.srv import GetZoneList
 
 class PathRecorder(Node):
