@@ -9,23 +9,27 @@ import cv2
 from rclpy.parameter import Parameter
 from std_srvs.srv import Trigger
 from boustrophedon_coverage_interfaces.srv import GetZoneList
-
+from boustrophedon_coverage_interfaces.srv import ZoneMapList
+from boustrophedon_coverage_interfaces.msg import ZoneMap
+import math
 
 class MapManage(Node):
     def __init__(self):
         super().__init__('map_manage')
         self.get_logger().info("map_manage init")
-
+        self.declare_parameter('inflate_radius_m', 0.08)  
         self.set_parameters([
             Parameter('use_sim_time',Parameter.Type.BOOL,True)
         ])
-
         qos = QoSProfile(depth=1)
         qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         qos.reliability = QoSReliabilityPolicy.RELIABLE
 
         self.create_service(Trigger, '/create_risk_map', self.create_risk_map_srv)
         self.create_service(Trigger, '/create_free_space', self.create_free_space_srv)
+
+        # 添加新的服务
+        self.create_service(ZoneMapList, '/get_zone_map_list_srv', self.get_zone_map_list_srv)
 
         self.service_callback_group = ReentrantCallbackGroup()
         self.get_risk_zone_list_client = self.create_client(
@@ -37,11 +41,16 @@ class MapManage(Node):
             callback_group=self.service_callback_group
         )
 
+        qos = QoSProfile(depth=1)
+        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos.reliability = QoSReliabilityPolicy.RELIABLE
+
          #發布區
-        self.free_space_pub = self.create_publisher(OccupancyGrid, '/free_space', 1)
-        self.free_space_inflated_pub = self.create_publisher(OccupancyGrid, '/free_space_inflated', 1)
-        self.risk_map_pub = self.create_publisher(OccupancyGrid, '/risk_map', 1)
- 
+        self.free_space_pub = self.create_publisher(OccupancyGrid, '/free_space', qos)
+        self.free_space_inflated_pub = self.create_publisher(OccupancyGrid, '/free_space_inflated', qos)
+        self.risk_map_pub = self.create_publisher(OccupancyGrid, '/risk_map', qos)
+        self.risk_map_inflated_pub = self.create_publisher(OccupancyGrid, '/risk_map_inflated', qos)
+
         self.latest_map = None #
 
         self.zone_list = []
@@ -76,9 +85,8 @@ class MapManage(Node):
             
         except Exception as e:
             self.get_logger().error(f"啟動異步創建風險地圖時發生錯誤: {e}")
-    
     def _handle_risk_zone_list_response(self, future):
-        """處理風險區域列表服務響應"""
+        """處理風險區域列表服務響應/發布風險膨脹地圖"""
         try:
             if not future.done():
                 self.get_logger().error("獲取風險區域列表超時")
@@ -92,9 +100,10 @@ class MapManage(Node):
             
             # 生成風險地圖
             risk_map = self._generate_risk_map(risk_zone_response.zone_list)
-            
+            risk_map_inflated = self._create_risk_map_inflated(risk_map)
             if risk_map is not None:
                 self.risk_map_pub.publish(risk_map)
+                self.risk_map_inflated_pub.publish(risk_map_inflated)
                 self.get_logger().info(f"成功創建風險地圖，包含 {len(risk_zone_response.zone_list.markers)} 個風險區域")
             else:
                 self.get_logger().error("生成風險地圖失敗")
@@ -141,13 +150,38 @@ class MapManage(Node):
             
             # 將numpy數組轉換為ROS消息格式並賦值給data字段
             risk_map.data = risk_map_data.flatten().tolist()
-            
             return risk_map
             
         except Exception as e:
             self.get_logger().error(f"生成風險地圖時發生錯誤: {e}")
             return None
 
+    def _create_risk_map_inflated(self, risk_map: OccupancyGrid):
+        """
+        膨脹風險地圖，使riskmask向外膨脹 inflate_r_m。
+        """
+        inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
+        resolution = risk_map.info.resolution
+        H = risk_map.info.height
+        W = risk_map.info.width
+        risk_map_data = np.asarray(risk_map.data, dtype=np.int16).reshape(H, W)
+        r_cells = max(0, int(math.ceil(inflate_r_m / resolution)))
+        # 將風險區域(100)膨脹、外擴
+        if r_cells > 0:
+            # 將風險點二值化 (1:風險, 0:非風險)
+            risk_binary = (risk_map_data == 100).astype(np.uint8)
+            # 用形態學膨脹
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+            risk_binary_inflated = cv2.dilate(risk_binary, k)
+            # 重新構造 risk_map 結果
+            inflated_data = np.where(risk_binary_inflated == 1, 100, 0).astype(np.int8)
+            inflated_map = OccupancyGrid()
+            inflated_map.header = risk_map.header
+            inflated_map.info = risk_map.info
+            inflated_map.data = inflated_data.flatten().tolist()
+            return inflated_map
+        else:
+            return risk_map
 
     def create_free_space_srv(self, req, res):
         self.get_logger().info("(service)create_free_space_srv call")
@@ -181,32 +215,35 @@ class MapManage(Node):
     
     def _handle_zone_list_response(self, future):
         """處理區域列表服務響應"""
-        try:
-            if not future.done():
-                self.get_logger().error("獲取記錄區域列表超時")
-                return
-            
-            zone_response = future.result()
-            
-            if not zone_response.success:
-                self.get_logger().error(f"獲取記錄區域列表失敗: {zone_response.message}")
-                return
+        # try:
+        if not future.done():
+            self.get_logger().error("獲取記錄區域列表超時")
+            return
+        
+        zone_response = future.result()
+        
+        if not zone_response.success:
+            self.get_logger().error(f"獲取記錄區域列表失敗: {zone_response.message}")
+            return
 
-            # 為每個zone生成對應的mask和ZoneMap對象
-            overall_freespace_map = self._create_zone_maps_and_freespace(
-                zone_response.zone_list
-            )
-            self.base_map = overall_freespace_map
-            if overall_freespace_map is not None:
-                # 使用可靠QoS發布整體freespace地圖
-                self.free_space_pub.publish(overall_freespace_map)
-                self.get_logger().info(f"成功創建自由空間，包含 {len(self.zone_map_list)} 個區域")
-                self.get_logger().info(f"成功創建 {len(self.zone_map_list)} 個ZoneMap對象")
-            else:
-                self.get_logger().error("生成自由空間失敗")
+        # 為每個zone生成對應的mask和ZoneMap對象
+        overall_freespace_map = self._create_zone_maps_and_freespace(
+            zone_response.zone_list
+        )
+
+        overall_freespace_map_inflated = self._create_free_space_inflated(overall_freespace_map)
+        self.base_map = overall_freespace_map
+        if overall_freespace_map is not None:
+            # 使用可靠QoS發布整體freespace地圖
+            self.free_space_pub.publish(overall_freespace_map)
+            self.free_space_inflated_pub.publish(overall_freespace_map_inflated)
+            self.get_logger().info(f"成功創建自由空間，包含 {len(self.zone_map_list)} 個區域")
+            self.get_logger().info(f"成功創建 {len(self.zone_map_list)} 個ZoneMap對象")
+        else:
+            self.get_logger().error("生成自由空間失敗")
             
-        except Exception as e:
-            self.get_logger().error(f"處理區域列表響應時發生錯誤: {e}")
+        # except Exception as e:
+        #     self.get_logger().error(f"處理區域列表響應時發生錯誤: {e}")
 
 
 #===================
@@ -244,30 +281,10 @@ class MapManage(Node):
         W = int(map_width / resolution)
         H = int(map_height / resolution)
 
-
         # 設定地圖原點（左下角）
         ox = min_x - margin
         oy = min_y - margin
 
-        mask = np.zeros((H, W), dtype=np.uint8)
-        for polygon_points in zone_list.markers:
-            poly_px = []
-            for pt in polygon_points.points:
-                x = int((pt.x - ox) / resolution)
-                y = int((pt.y - oy) / resolution)
-                poly_px.append([x, y])
-            poly_px = np.array([poly_px], dtype=np.int32)
-            cv2.fillPoly(mask, [poly_px], 1)
-
-            zone_map = ZoneMap(polygon_points.id, polygon_points.points)
-            zone_map.mask = mask
-            self.zone_map_list.append(zone_map)
-            self.get_logger().info(f"成功創建zone map，包含 {len(self.zone_map_list)} 個區域")
-
-        # 建立地圖數據（polygon 內為自由空間，外為障礙）
-        occ_masked = np.where(mask == 1, 0, 100)  # 遮罩內為自由空間(0)，外為障礙(100)
-
-# 發布遮罩後的地圖
         masked_map = OccupancyGrid()
         masked_map.header.stamp = self.get_clock().now().to_msg()
         masked_map.header.frame_id = 'map'
@@ -281,31 +298,85 @@ class MapManage(Node):
         masked_map.info.origin.orientation.y = 0.0
         masked_map.info.origin.orientation.z = 0.0
         masked_map.info.origin.orientation.w = 1.0
+
+        mask = np.zeros((H, W), dtype=np.uint8)
+        for polygon_points in zone_list.markers:
+            zone_mask = np.zeros((H, W), dtype=np.uint8)
+            poly_px = []
+            for pt in polygon_points.points:
+                x = int((pt.x - ox) / resolution)
+                y = int((pt.y - oy) / resolution)
+                poly_px.append([x, y])
+            poly_px = np.array([poly_px], dtype=np.int32)
+            cv2.fillPoly(zone_mask, [poly_px], 1)
+            cv2.fillPoly(mask, [poly_px], 1) #全局的MASK
+            zone_occ_masked = np.where(zone_mask == 1, 0, 100)
+            zone_map = ZoneMap()
+            zone_map.zone_id = polygon_points.id
+            zone_map.mask_map = masked_map
+            zone_map.mask_map.data = zone_occ_masked.flatten().tolist()
+
+            zone_map.mask_map_inflated = self._create_free_space_inflated(zone_map.mask_map)
+            self.zone_map_list.append(zone_map)
+            self.get_logger().info(f"成功創建zone map，包含 {len(self.zone_map_list)} 個區域")
+
+        # 建立地圖數據（polygon 內為自由空間，外為障礙）
+        occ_masked = np.where(mask == 1, 0, 100)  # 遮罩內為自由空間(0)，外為障礙(100)
+
+# 發布遮罩後的地圖
+        
         masked_map.data = occ_masked.flatten().tolist()
                 
         return masked_map
-    def get_zone_map_list(self):
+    def _create_free_space_inflated(self, free_space_map: OccupancyGrid) -> OccupancyGrid:
+        """
+        向內膨脹自由空間地圖（將free_space_map '收縮' inflate_r_m），通常是使自由空間更為保守。
+        """
+        inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
+        resolution = free_space_map.info.resolution
+        H = free_space_map.info.height
+        W = free_space_map.info.width
+        free_space_map_data = np.asarray(free_space_map.data, dtype=np.int16).reshape(H, W)
+        # 自由空間為0，障礙為100
+        r_cells = max(0, int(math.ceil(inflate_r_m / resolution)))
+        # 只處理膨脹距離大於0情況
+        if r_cells > 0:
+            # 生成膨脹內核
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+            # 建立自由區域遮罩，free=1, 其他=0
+            free_mask = (free_space_map_data == 0).astype(np.uint8)
+            # 對自由區域做erode（向內膨脹/收縮），邊界會縮小
+            eroded_free_mask = cv2.erode(free_mask, k)
+            # 製作新地圖資料（erode後的自由區設為0，其餘設100）
+            inflated_data = np.where(eroded_free_mask == 1, 0, 100).astype(np.int8)
+            inflated_map = OccupancyGrid()
+            inflated_map.header = free_space_map.header
+            inflated_map.info = free_space_map.info
+            inflated_map.data = inflated_data.flatten().tolist()
+            return inflated_map
+        else:
+            return free_space_map
+
+    def get_zone_map_list_srv(self, req, res):
         """獲取當前的zone map列表"""
-        return self.zone_map_list
+        res.zone_map_list = self.zone_map_list
+        return res
 
-    def get_zone_map_by_id(self, zone_id):
-        """根據zone_id獲取特定的ZoneMap對象"""
-        for zone_map in self.zone_map_list:
-            if zone_map.getZoneId() == zone_id:
-                return zone_map
-        return None
 
-class ZoneMap:
-    def __init__(self,zone_id,polygon_points_list):
-        self.zone_id = zone_id
-        self.polygon_points_list = polygon_points_list
-        self.mask = OccupancyGrid()
-    def getZoneId(self):
-        return self.zone_id
-    def getPolygonPointsList(self):
-        return self.polygon_points_list
-    def getMask(self):
-        return self.mask
+# class ZoneMap:
+#     def __init__(self):
+#         self.zone_id = None
+#         # self.polygon_points_list = None
+#         self.mask_map = OccupancyGrid()
+#         self.mask_map_inflated = OccupancyGrid()
+#     def getZoneId(self):
+#         return self.zone_id
+#     def getPolygonPointsList(self):
+#         return self.polygon_points_list
+#     def getMask(self):
+#         return self.mask_map 
+#     def getMaskInflated(self):
+#         return self.mask_map_inflated
 
 def main(args=None):
     rclpy.init(args=args)
