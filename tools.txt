@@ -1,69 +1,99 @@
+node[]:
+  executable:
 
-[地圖 nav2 ]
-ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
+  launch:
 
 
-[測試get zone map]
-ros2 run boustrophedon_coverage zone_map_client
+node[nav2_gps_waypoint_follower]:
+  executable:
 
-[path record]
-  [紀錄路徑]
-  ros2 run boustrophedon_coverage path_record
+  launch:
+    [地圖 nav2]
+    ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
 
-  #new! 記錄區域 起始點 
-  ros2 service call /record_zone_start std_srvs/srv/Trigger
+node[boustrophedon_coverage]:
+  executable:
+    [測試get zone map]
+    ros2 run boustrophedon_coverage zone_map_client
 
-  #new! 記錄區域 結束點  
-  ros2 service call /record_zone_end std_srvs/srv/Trigger
+  launch:
 
-  #new! 記錄risk zone 起始點
-  ros2 service call /risk_zone_start std_srvs/srv/Trigger
+node[path record]:
+  service:
+    #new! 記錄區域 起始點 
+    ros2 service call /record_zone_start std_srvs/srv/Trigger
 
-  #new! 記錄risk zone 結束點
-  ros2 service call /risk_zone_end std_srvs/srv/Trigger
+    #new! 記錄區域 結束點  
+    ros2 service call /record_zone_end std_srvs/srv/Trigger
 
-  #new! 記錄區域 save
-  ros2 service call /save_zone_list std_srvs/srv/Trigger
+    #new! 記錄risk zone 起始點
+    ros2 service call /risk_zone_start std_srvs/srv/Trigger
 
-  #new! 記錄區域 risk save
-  ros2 service call /risk_zone_save std_srvs/srv/Trigger
+    #new! 記錄risk zone 結束點
+    ros2 service call /risk_zone_end std_srvs/srv/Trigger
 
-  #new! 記錄區域 load
-  ros2 service call /load_zone_list std_srvs/srv/Trigger
+    #new! 記錄區域 save
+    ros2 service call /save_zone_list std_srvs/srv/Trigger
 
-  #new! path_record  info test
-  ros2 service call /get_record_zone_info std_srvs/srv/Trigger
+    #new! 記錄區域 risk save
+    ros2 service call /risk_zone_save std_srvs/srv/Trigger
 
-map_manage
-  [map_hub]
-  ros2 run maphub map_manage
+    #new! 記錄區域 load
+    ros2 service call /load_zone_list std_srvs/srv/Trigger
 
-  [生成多個zone的freespace]
-  ros2 service call /create_free_space std_srvs/srv/Trigger {}
+    #new! path_record  info test
+    ros2 service call /get_record_zone_info std_srvs/srv/Trigger
 
-  [生成多個zone的riskspace]
-  ros2 service call /create_risk_map std_srvs/srv/Trigger {}
 
-  #[生成free_space mask]
-  #ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
+  executable:
+    ros2 run path_record path_record
 
-  ros2 service call /get_record_zone_list_srv std_srvs/srv/Trigger {}
+  launch:
+
+node[map_manage]:
+  sevices:
+    [生成多個zone的freespace]
+    ros2 service call /create_free_space std_srvs/srv/Trigger {}
+
+    [生成多個zone的riskspace]
+    ros2 service call /create_risk_map std_srvs/srv/Trigger {}
+
+    #[生成free_space mask]
+    #ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
+
+    ros2 service call /get_record_zone_list_srv std_srvs/srv/Trigger {}
+  
+  executable:
+    [map_hub]
+    ros2 run maphub map_manage
+
+  launch:
+
+node[boustrophedon_coverage]:
+  service:
+    [waypoint pub]
+    ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
+
+    [cencel waypoint]
+    ros2 servuce call /cencel_nav2 std_srvs/srv/Trigger {}
+
+    [coverage_planner]
+    ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
+  executable:
+    [生成路徑] 
+    ros2 run boustrophedon_coverage boustrophedon_coverage
+
+
+  launch:
+
+
+
+  
 
 
 boustrophedon_coverage node 
-ros2 run boustrophedon_coverage boustrophedon_coverage
 
-  [waypoint pub]
-  ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
-
-  [cencel waypoint]
-  ros2 servuce call /cencel_nav2 std_srvs/srv/Trigger {}
-
-  [generate_coverage_path]
-  ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
-
-  [coverage_planner]
-    ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
+  
 
 
 

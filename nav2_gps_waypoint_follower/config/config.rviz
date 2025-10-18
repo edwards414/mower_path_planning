@@ -7,9 +7,7 @@ Panels:
         - /Global Options1
         - /TF1/Frames1
         - /TF1/Tree1
-        - /path_record1
         - /boustrophedon1
-        - /boustrophedon1/Risk_Map1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 788
   - Class: rviz_common/Selection
@@ -284,7 +282,6 @@ Visualization Manager:
           Enabled: true
           Name: zone_list
           Namespaces:
-            "": true
             zones: true
           Topic:
             Depth: 5
@@ -297,8 +294,7 @@ Visualization Manager:
           Enabled: true
           Name: drawing_zone
           Namespaces:
-            "": true
-            zones: true
+            {}
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -323,8 +319,7 @@ Visualization Manager:
           Enabled: true
           Name: risk_zone
           Namespaces:
-            "": true
-            risk_zones: true
+            {}
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -365,7 +360,7 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /coverage_path
           Value: true
-        - Alpha: 0.20000000298023224
+        - Alpha: 0.5
           Binary representation: false
           Binary threshold: 100
           Class: rviz_default_plugins/Map
@@ -386,6 +381,29 @@ Visualization Manager:
             History Policy: Keep Last
             Reliability Policy: Reliable
             Value: /free_space_updates
+          Use Timestamp: false
+          Value: true
+        - Alpha: 0.10000000149011612
+          Binary representation: false
+          Binary threshold: 100
+          Class: rviz_default_plugins/Map
+          Color Scheme: costmap
+          Draw Behind: false
+          Enabled: true
+          Name: free_space_inflated
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /free_space_inflated
+          Update Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /free_space_inflated_updates
           Use Timestamp: false
           Value: true
         - Alpha: 1
@@ -416,6 +434,29 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /recorded_path
           Value: true
+        - Alpha: 0.10000000149011612
+          Binary representation: false
+          Binary threshold: 100
+          Class: rviz_default_plugins/Map
+          Color Scheme: costmap
+          Draw Behind: false
+          Enabled: true
+          Name: risk_map_inflated
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_map_inflated
+          Update Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /risk_map_inflated_updates
+          Use Timestamp: false
+          Value: true
         - Alpha: 0.20000000298023224
           Binary representation: false
           Binary threshold: 100
@@ -438,6 +479,18 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /risk_map_updates
           Use Timestamp: false
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: coverage_path_markers
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /coverage_path_markers
           Value: true
       Enabled: true
       Name: boustrophedon
@@ -534,7 +587,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -0.8658010363578796
+      Angle: -4.6458048820495605
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -544,11 +597,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: -64.18031311035156
+      Scale: 176.7748565673828
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: -0.004276929423213005
-      Y: -0.19040238857269287
+      X: 1.1030616760253906
+      Y: 2.421142816543579
     Saved: ~
 Window Geometry:
   Displays:
