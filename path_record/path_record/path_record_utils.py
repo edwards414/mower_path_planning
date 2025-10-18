@@ -62,3 +62,39 @@ def point_to_line_distance(point, line_start, line_end):
     numerator = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
     return numerator / math.sqrt(line_length_sq)
 #定時器發佈機器人路徑
+def path_to_marker(path, ns="chennal_path", marker_id=0, color=(0.0, 1.0, 0.0), scale=0.1):
+    """
+    將 Path 轉換為 visualization_msgs/Marker
+    Args:
+        path: nav_msgs/Path (ROS2 物件)
+        ns: marker 命名空間
+        marker_id: marker 編號
+        color: (r, g, b) 顏色元組，數值範圍[0,1]
+        scale: 線寬
+    Returns:
+        visualization_msgs/Marker
+    """
+    from visualization_msgs.msg import Marker
+    from geometry_msgs.msg import Point
+
+    marker = Marker()
+    marker.header = path.header
+    marker.ns = ns
+    marker.id = marker_id
+    marker.type = Marker.LINE_STRIP
+    marker.action = Marker.ADD
+    marker.scale.x = scale
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 0.8
+
+    marker.points = []
+    for pose in path.poses:
+        p = Point()
+        p.x = pose.pose.position.x
+        p.y = pose.pose.position.y
+        p.z = pose.pose.position.z if hasattr(pose.pose.position, 'z') else 0.0
+        marker.points.append(p)
+
+    return marker
