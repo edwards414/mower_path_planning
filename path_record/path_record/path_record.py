@@ -11,7 +11,7 @@ import math, os
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from .path_record_utils import *
 from boustrophedon_coverage_interfaces.srv import GetZoneList
-
+from path_record_interface.srv import ChennalPathList
 class PathRecorder(Node):
     def __init__(self):
         super().__init__('path_recorder')
@@ -43,6 +43,10 @@ class PathRecorder(Node):
         self.risk_zone_marker_pub = self.create_publisher(Marker, '/risk_zone_markers', polygon_qos)
         self.risk_zone_list_pub = self.create_publisher(MarkerArray, '/risk_zone_list', polygon_qos)
 
+        # 新增 chennal 路徑發布者
+        self.chennal_path_pub = self.create_publisher(Path, '/chennal_path', 10)
+        self.chennal_path_array_pub = self.create_publisher(MarkerArray, '/chennal_path_array', polygon_qos)
+
 
         # 新增一個定時器，定時發布path，確保即使鍵盤遙控時也能看到path
         self.timer_period = 0.1  # 10Hz
@@ -59,11 +63,14 @@ class PathRecorder(Node):
         self.create_service(Trigger, '/record_zone_start', self.record_zone_start_srv)
         self.create_service(Trigger, '/record_zone_end', self.record_zone_end_srv)
         
+        self.create_service(Trigger, '/chennal_record_start', self.chennal_record_start_srv)
+        self.create_service(Trigger, '/chennal_record_end', self.chennal_record_end_srv)
+
         # 新增獲取區域列表的服務
         self.create_service(Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
         self.create_service(GetZoneList, '/get_record_zone_list', self.get_record_zone_list_srv)
         self.create_service(GetZoneList, '/get_risk_zone_list', self.get_risk_zone_list_srv)
-
+        self.create_service(ChennalPathList, '/get_chennal_path_list', self.get_chennal_path_list_srv)
 
         # 新增風險區域相關的路徑記錄
         self.risk_path = Path()
@@ -98,6 +105,13 @@ class PathRecorder(Node):
         
         # 添加初始化定時器，等待TF可用
         self.init_timer = self.create_timer(0.5, self.try_initialize)
+        
+        self.chennal_record_status = False
+        self.chennal_record_id = 0
+        self.chennal_record_name = "chennal_record_" + str(self.chennal_record_id)
+        self.chennal_path = Path()  # 當前記錄的 chennal 路徑
+        self.chennal_path.header.frame_id = self.get_parameter('frame_id').value
+        self.chennal_path_array = MarkerArray()  # 用於發布的 MarkerArray
         
         # 在初始化完成後自動載入區域資料
         # self.create_timer(1.0, self.auto_load_zones_on_startup)  # 延遲1秒載入
@@ -350,6 +364,34 @@ class PathRecorder(Node):
                     self.risk_zone_marker = self.create_risk_polygon_from_path(self.risk_path.poses)
                     if self.risk_zone_marker is not None:
                         self.risk_zone_marker_pub.publish(self.risk_zone_marker)
+
+        # 新增 chennal 路徑記錄邏輯
+        if self.chennal_record_status:
+            if not self.initialized:
+                return
+                
+            robot_pos = self.get_robot_pos()
+            now = self.get_clock().now()
+            
+            if robot_pos is None:
+                return
+                
+            # 如果是第一次記錄 chennal 路徑，初始化 last_robot_pos
+            if self.last_robot_pos is None:
+                self.last_robot_pos = robot_pos
+                return
+                
+            dt = (now - rclpy.time.Time.from_msg(self.last_robot_pos.header.stamp)).nanoseconds * 1e-9
+            dx = robot_pos.pose.position.x - self.last_robot_pos.pose.position.x
+            dy = robot_pos.pose.position.y - self.last_robot_pos.pose.position.y
+
+            if math.hypot(dx, dy) >= self.get_parameter('min_dist').value and dt >= self.get_parameter('min_dt').value:
+                self.chennal_path.poses.append(robot_pos)
+                self.last_robot_pos = robot_pos
+                self.chennal_path.header.stamp = self.get_clock().now().to_msg()
+                
+                # 發布當前 chennal 路徑
+                self.chennal_path_pub.publish(self.chennal_path)
 
     # ============================================================
     # 記錄區域起始點 新增zone 區域
@@ -743,7 +785,75 @@ class PathRecorder(Node):
         if self._load_risk_zone_list():
             self.get_logger().info(f"啟動時自動載入風險區域列表: {len(self.risk_zone_list.markers)} 個風險區域")
             self.risk_zone_list_pub.publish(self.risk_zone_list)
-    
+
+    def chennal_record_start_srv(self, req, res):
+        """開始記錄 chennal 路徑"""
+        self.get_logger().info("開始記錄 chennal 路徑")
+        
+        # 設置記錄狀態
+        self.chennal_record_status = True
+        self.chennal_record_id += 1
+        self.chennal_record_name = "chennal_record_" + str(self.chennal_record_id)
+        
+        # 初始化新的 chennal 路徑
+        self.chennal_path = Path()
+        self.chennal_path.header.frame_id = self.get_parameter('frame_id').value
+        self.chennal_path.header.stamp = self.get_clock().now().to_msg()
+        
+        # 重新初始化機器人位置
+        robot_pos = self.get_robot_pos()
+        if robot_pos is not None:
+            self.last_robot_pos = robot_pos
+            self.get_logger().info(f"Chennal 記錄 - 初始化機器人位置: x={robot_pos.pose.position.x:.3f}, y={robot_pos.pose.position.y:.3f}")
+            
+            # 將起始點添加到路徑中
+            self.chennal_path.poses.append(robot_pos)
+            self.chennal_path_pub.publish(self.chennal_path)
+        
+        res.success = True
+        res.message = f"成功開始記錄 chennal 路徑 #{self.chennal_record_id}"
+        return res
+
+    def chennal_record_end_srv(self, req, res):
+        """結束記錄 chennal 路徑並添加到路徑列表中"""
+        self.get_logger().info("結束記錄 chennal 路徑")
+        
+        if not self.chennal_record_status:
+            res.success = False
+            res.message = "沒有正在進行的 chennal 路徑記錄"
+            return res
+        
+        # 停止記錄
+        self.chennal_record_status = False
+        
+        # 添加結束點到當前路徑
+        robot_pos = self.get_robot_pos()
+        if robot_pos is not None and len(self.chennal_path.poses) > 0:
+            # 檢查是否需要添加最終位置
+            last_pose = self.chennal_path.poses[-1]
+            dx = robot_pos.pose.position.x - last_pose.pose.position.x
+            dy = robot_pos.pose.position.y - last_pose.pose.position.y
+            if math.hypot(dx, dy) >= self.get_parameter('min_dist').value:
+                self.chennal_path.poses.append(robot_pos)
+        
+        # 將完成的路徑添加到路徑列表中
+        if len(self.chennal_path.poses) > 0:
+            self.chennal_path_array.markers.append(path_to_marker(self.chennal_path, 
+                                                        ns="chennal_path",
+                                                        marker_id=self.chennal_record_id,
+                                                        color=(0.0, 1.0, 0.0),
+                                                        scale=0.1))
+            self.chennal_path_array_pub.publish(self.chennal_path_array)
+        res.success = True
+        res.message = f"成功結束記錄 chennal 路徑"
+        return res
+    def get_chennal_path_list_srv(self, req, res):
+        self.get_logger().info(f"獲取 chennal 路徑列表，共 {len(self.chennal_path_array.markers)} 條 chennal 路徑")
+        res.success = True
+        res.message = f"成功獲取 chennal 路徑列表"
+        res.chennal_path_array = self.chennal_path_array
+        return res
+
 def main():
     rclpy.init()
     node = PathRecorder()
