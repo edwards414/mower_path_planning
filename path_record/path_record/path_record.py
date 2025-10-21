@@ -445,7 +445,7 @@ class PathRecorder(Node):
     # 儲存區域列表服務
     # ============================================================
     def save_zone_list_srv(self, req, res):
-        """合并的区域列表保存服务 - 同时保存普通区域和风险区域"""
+        """合并的区域列表保存服务 - 同时保存普通区域、风险区域和 chennal 路径"""
         success_count = 0
         error_messages = []
         
@@ -463,16 +463,23 @@ class PathRecorder(Node):
         else:
             error_messages.append("储存风险区域列表失败")
         
+        # 保存 chennal 路径列表
+        if self._save_chennal_path_list():
+            success_count += 1
+            self.get_logger().info("成功储存 chennal 路径列表")
+        else:
+            error_messages.append("储存 chennal 路径列表失败")
+        
         # 根据结果设置响应
-        if success_count == 2:
+        if success_count == 3:
             res.success = True
-            res.message = "成功储存所有区域列表（普通区域 + 风险区域）"
-        elif success_count == 1:
+            res.message = "成功储存所有列表（普通区域 + 风险区域 + chennal 路径）"
+        elif success_count > 0:
             res.success = True
-            res.message = f"部分成功储存区域列表。错误: {'; '.join(error_messages)}"
+            res.message = f"部分成功储存列表。错误: {'; '.join(error_messages)}"
         else:
             res.success = False
-            res.message = f"储存区域列表失败: {'; '.join(error_messages)}"
+            res.message = f"储存列表失败: {'; '.join(error_messages)}"
         
         return res
 
@@ -847,12 +854,146 @@ class PathRecorder(Node):
         res.success = True
         res.message = f"成功結束記錄 chennal 路徑"
         return res
+        
     def get_chennal_path_list_srv(self, req, res):
         self.get_logger().info(f"獲取 chennal 路徑列表，共 {len(self.chennal_path_array.markers)} 條 chennal 路徑")
         res.success = True
         res.message = f"成功獲取 chennal 路徑列表"
         res.chennal_path_array = self.chennal_path_array
         return res
+
+    def save_chennal_path_list_srv(self, req, res):
+        """保存 chennal 路径列表到 JSON 文件"""
+        try:
+            self.get_logger().info("开始保存 chennal 路径列表")
+            
+            # 将 MarkerArray 转换为可序列化的格式
+            chennal_paths_data = []
+            for marker in self.chennal_path_array.markers:
+                marker_data = {
+                    'id': marker.id,
+                    'ns': marker.ns,
+                    'points': [[p.x, p.y, p.z] for p in marker.points],
+                    'color': {
+                        'r': marker.color.r,
+                        'g': marker.color.g,
+                        'b': marker.color.b,
+                        'a': marker.color.a
+                    },
+                    'scale': marker.scale.x
+                }
+                chennal_paths_data.append(marker_data)
+            
+            # 保存到 JSON 文件
+            save_path = self.get_parameter('save_dir').value + '/chennal_path_list.json'
+            with open(save_path, 'w') as f:
+                json.dump(chennal_paths_data, f, indent=2)
+            
+            self.get_logger().info(f"成功保存 {len(chennal_paths_data)} 条 chennal 路径到 {save_path}")
+            res.success = True
+            res.message = f"成功保存 {len(chennal_paths_data)} 条 chennal 路径"
+            return res
+            
+        except Exception as e:
+            self.get_logger().error(f"保存 chennal 路径列表失败: {e}")
+            res.success = False
+            res.message = f"保存 chennal 路径列表失败: {str(e)}"
+            return res
+
+    def _save_chennal_path_list(self):
+        """内部方法：保存 chennal 路径列表"""
+        try:
+            # 将 MarkerArray 转换为可序列化的格式
+            chennal_paths_data = []
+            for marker in self.chennal_path_array.markers:
+                marker_data = {
+                    'id': marker.id,
+                    'ns': marker.ns,
+                    'points': [[p.x, p.y, p.z] for p in marker.points],
+                    'color': {
+                        'r': marker.color.r,
+                        'g': marker.color.g,
+                        'b': marker.color.b,
+                        'a': marker.color.a
+                    },
+                    'scale': marker.scale.x
+                }
+                chennal_paths_data.append(marker_data)
+            
+            # 保存到 JSON 文件
+            save_path = self.get_parameter('save_dir').value + '/chennal_path_list.json'
+            with open(save_path, 'w') as f:
+                json.dump(chennal_paths_data, f, indent=2)
+            
+            return True
+        except Exception as e:
+            self.get_logger().error(f"保存 chennal 路径列表失败: {e}")
+            return False
+
+    def _load_chennal_path_list(self):
+        """内部方法：加载 chennal 路径列表"""
+        try:
+            save_path = self.get_parameter('save_dir').value + '/chennal_path_list.json'
+            with open(save_path, 'r') as f:
+                chennal_paths_data = json.load(f)
+            
+            # 重建 MarkerArray
+            self.chennal_path_array = MarkerArray()
+            for marker_data in chennal_paths_data:
+                marker = Marker()
+                marker.header.frame_id = self.get_parameter('frame_id').value
+                marker.header.stamp = self.get_clock().now().to_msg()
+                marker.ns = marker_data['ns']
+                marker.id = marker_data['id']
+                marker.type = Marker.LINE_STRIP
+                marker.action = Marker.ADD
+                marker.scale.x = marker_data.get('scale', 0.1)
+                
+                # 设置颜色
+                color_data = marker_data.get('color', {'r': 0.0, 'g': 1.0, 'b': 0.0, 'a': 0.8})
+                marker.color.r = color_data['r']
+                marker.color.g = color_data['g']
+                marker.color.b = color_data['b']
+                marker.color.a = color_data['a']
+                
+                # 重建点列表
+                marker.points = []
+                for point_data in marker_data['points']:
+                    point = Point()
+                    point.x = point_data[0]
+                    point.y = point_data[1]
+                    point.z = point_data[2]
+                    marker.points.append(point)
+                
+                self.chennal_path_array.markers.append(marker)
+            
+            return True
+        except Exception as e:
+            self.get_logger().error(f"加载 chennal 路径列表失败: {e}")
+            return False
+
+    def load_chennal_path_list_srv(self, req, res):
+        """加载 chennal 路径列表从 JSON 文件"""
+        try:
+            self.get_logger().info("开始加载 chennal 路径列表")
+            
+            if self._load_chennal_path_list():
+                self.get_logger().info(f"成功加载 chennal 路径列表: {len(self.chennal_path_array.markers)} 条路径")
+                # 发布加载的路径
+                self.chennal_path_array_pub.publish(self.chennal_path_array)
+                res.success = True
+                res.message = f"成功加载 {len(self.chennal_path_array.markers)} 条 chennal 路径"
+            else:
+                res.success = False
+                res.message = "加载 chennal 路径列表失败"
+            
+            return res
+            
+        except Exception as e:
+            self.get_logger().error(f"加载 chennal 路径列表失败: {e}")
+            res.success = False
+            res.message = f"加载 chennal 路径列表失败: {str(e)}"
+            return res
 
 def main():
     rclpy.init()

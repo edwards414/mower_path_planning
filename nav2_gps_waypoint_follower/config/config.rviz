@@ -8,7 +8,8 @@ Panels:
         - /TF1/Frames1
         - /TF1/Tree1
         - /path_record1
-        - /boustrophedon1
+        - /Maphub1
+        - /Maphub1/chennal_map_inflated1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 788
   - Class: rviz_common/Selection
@@ -295,7 +296,7 @@ Visualization Manager:
           Enabled: true
           Name: drawing_zone
           Namespaces:
-            {}
+            zones: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -320,7 +321,7 @@ Visualization Manager:
           Enabled: true
           Name: risk_zone
           Namespaces:
-            {}
+            risk_zones: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -361,7 +362,7 @@ Visualization Manager:
           Enabled: true
           Name: chennal_path_array
           Namespaces:
-            {}
+            chennal_path: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -373,33 +374,28 @@ Visualization Manager:
       Name: path_record
     - Class: rviz_common/Group
       Displays:
-        - Alpha: 1
-          Buffer Length: 1
-          Class: rviz_default_plugins/Path
-          Color: 25; 255; 0
+        - Alpha: 0.5
+          Binary representation: false
+          Binary threshold: 100
+          Class: rviz_default_plugins/Map
+          Color Scheme: map
+          Draw Behind: true
           Enabled: true
-          Head Diameter: 0.05999999865889549
-          Head Length: 0.03999999910593033
-          Length: 0.30000001192092896
-          Line Style: Lines
-          Line Width: 0.029999999329447746
-          Name: coverage_path
-          Offset:
-            X: 0
-            Y: 0
-            Z: 0
-          Pose Color: 255; 85; 255
-          Pose Style: Arrows
-          Radius: 0.029999999329447746
-          Shaft Diameter: 0.019999999552965164
-          Shaft Length: 0.019999999552965164
+          Name: ChennalMap
           Topic:
             Depth: 5
             Durability Policy: Volatile
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /coverage_path
+            Value: /chennal_map
+          Update Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /chennal_map_updates
+          Use Timestamp: false
           Value: true
         - Alpha: 0.5
           Binary representation: false
@@ -447,34 +443,6 @@ Visualization Manager:
             Value: /free_space_inflated_updates
           Use Timestamp: false
           Value: true
-        - Alpha: 1
-          Buffer Length: 1
-          Class: rviz_default_plugins/Path
-          Color: 229; 165; 10
-          Enabled: true
-          Head Diameter: 0.30000001192092896
-          Head Length: 0.20000000298023224
-          Length: 0.30000001192092896
-          Line Style: Billboards
-          Line Width: 0.10000000149011612
-          Name: record_path
-          Offset:
-            X: 0
-            Y: 0
-            Z: 0
-          Pose Color: 255; 85; 255
-          Pose Style: None
-          Radius: 0.029999999329447746
-          Shaft Diameter: 0.10000000149011612
-          Shaft Length: 0.10000000149011612
-          Topic:
-            Depth: 5
-            Durability Policy: Volatile
-            Filter size: 10
-            History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /recorded_path
-          Value: true
         - Alpha: 0.30000001192092896
           Binary representation: false
           Binary threshold: 100
@@ -521,14 +489,94 @@ Visualization Manager:
             Value: /risk_map_updates
           Use Timestamp: false
           Value: true
+        - Alpha: 0.4000000059604645
+          Binary representation: false
+          Binary threshold: 100
+          Class: rviz_default_plugins/Map
+          Color Scheme: map
+          Draw Behind: true
+          Enabled: true
+          Name: chennal_map_inflated
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /chennal_map_inflated
+          Update Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /chennal_map_inflated_updates
+          Use Timestamp: false
+          Value: true
+      Enabled: true
+      Name: Maphub
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 25; 255; 0
+          Enabled: true
+          Head Diameter: 0.05999999865889549
+          Head Length: 0.03999999910593033
+          Length: 0.30000001192092896
+          Line Style: Lines
+          Line Width: 0.029999999329447746
+          Name: coverage_path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: Arrows
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.019999999552965164
+          Shaft Length: 0.019999999552965164
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /coverage_path
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 229; 165; 10
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.10000000149011612
+          Name: record_path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /recorded_path
+          Value: true
         - Class: rviz_default_plugins/MarkerArray
           Enabled: true
           Name: coverage_path_markers
           Namespaces:
-            zone_1_arrows: true
-            zone_1_path: true
-            zone_2_arrows: true
-            zone_2_path: true
+            {}
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -631,7 +679,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -8.065814018249512
+      Angle: -7.8608012199401855
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -641,11 +689,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: -337.37835693359375
+      Scale: -55.94152069091797
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 1.1028796434402466
-      Y: 2.286010265350342
+      X: 1.1871261596679688
+      Y: 0.7441679835319519
     Saved: ~
 Window Geometry:
   Displays:

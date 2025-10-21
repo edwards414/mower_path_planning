@@ -12,6 +12,7 @@ from boustrophedon_coverage_interfaces.srv import GetZoneList
 from boustrophedon_coverage_interfaces.srv import ZoneMapList
 from boustrophedon_coverage_interfaces.msg import ZoneMap
 import math
+from path_record_interface.srv import ChennalPathList
 
 class MapManage(Node):
     def __init__(self):
@@ -29,6 +30,8 @@ class MapManage(Node):
         self.create_service(Trigger, '/create_free_space', self.create_free_space_srv)
 
         # 添加新的服务
+        self.create_service(Trigger, '/create_chennal_map', self.create_chennal_map_srv)
+        # 添加新的服务
         self.create_service(ZoneMapList, '/get_zone_map_list_srv', self.get_zone_map_list_srv)
 
         self.service_callback_group = ReentrantCallbackGroup()
@@ -40,7 +43,7 @@ class MapManage(Node):
             GetZoneList, '/get_record_zone_list',
             callback_group=self.service_callback_group
         )
-
+        
         qos = QoSProfile(depth=1)
         qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         qos.reliability = QoSReliabilityPolicy.RELIABLE
@@ -55,6 +58,19 @@ class MapManage(Node):
 
         self.zone_list = []
         self.base_map = None
+
+        # 添加 chennal path 客户端
+        self.get_chennal_path_list_client = self.create_client(
+            ChennalPathList, '/get_chennal_path_list',
+            callback_group=self.service_callback_group
+        )
+        
+        # 添加 chennal map 发布者
+        self.chennal_map_pub = self.create_publisher(OccupancyGrid, '/chennal_map', qos)
+        self.chennal_map_inflated_pub = self.create_publisher(OccupancyGrid, '/chennal_map_inflated', qos)
+        
+        # 添加参数
+        self.declare_parameter('chennal_width_m', 0.6)  # 通道宽度（米）
 
     def create_risk_map_srv(self, req, res):
         """創建風險地圖服務"""
@@ -184,7 +200,7 @@ class MapManage(Node):
             return risk_map
 
     def create_free_space_srv(self, req, res):
-        self.get_logger().info("(service)create_free_space_srv call")
+        self.get_logger().info("(service)create_chennal_free_space_srv call")
         
         # 立即返回接受狀態，然後異步處理
         res.success = True
@@ -356,6 +372,165 @@ class MapManage(Node):
             return inflated_map
         else:
             return free_space_map
+
+    def create_chennal_map_srv(self, req, res):
+        """创建通道地图服务"""
+        self.get_logger().info("(service)create_chennal_map_srv call")
+        
+        # 立即返回接受状态，然后异步处理
+        res.success = True
+        res.message = "开始创建通道地图，请稍候..."
+        
+        # 启动异步处理
+        self._start_create_chennal_map_async()
+        
+        return res
+    
+    def _start_create_chennal_map_async(self):
+        """异步创建通道地图"""
+        try:
+            # 等待 chennal path 列表服务可用
+            if not self.get_chennal_path_list_client.wait_for_service(timeout_sec=5.0):
+                self.get_logger().error("通道路径列表服务不可用")
+                return
+            
+            # 调用获取 chennal path 列表服务
+            chennal_req = ChennalPathList.Request()
+            future = self.get_chennal_path_list_client.call_async(chennal_req)
+            
+            # 添加完成回调
+            future.add_done_callback(self._handle_chennal_path_list_response)
+            
+        except Exception as e:
+            self.get_logger().error(f"启动异步创建通道地图时发生错误: {e}")
+
+    def _handle_chennal_path_list_response(self, future):
+        """处理通道路径列表服务响应"""
+        try:
+            if not future.done():
+                self.get_logger().error("获取通道路径列表超时")
+                return
+            
+            chennal_response = future.result()
+            
+            if not chennal_response.success:
+                self.get_logger().error(f"获取通道路径列表失败: {chennal_response.message}")
+                return
+            
+            # 生成通道地图
+            chennal_map = self._generate_chennal_map(chennal_response.chennal_path_array)
+            chennal_map_inflated = self._create_chennal_map_inflated(chennal_map)
+            
+            if chennal_map is not None:
+                self.chennal_map_pub.publish(chennal_map)
+                self.chennal_map_inflated_pub.publish(chennal_map_inflated)
+                self.get_logger().info(f"成功创建通道地图，包含 {len(chennal_response.chennal_path_array.markers)} 条通道")
+            else:
+                self.get_logger().error("生成通道地图失败")
+            
+        except Exception as e:
+            self.get_logger().error(f"处理通道路径列表响应时发生错误: {e}")
+
+    def _generate_chennal_map(self, chennal_path_array):
+        """根据通道路径生成通道地图"""
+        try:
+            if not chennal_path_array.markers:
+                self.get_logger().warn("没有通道路径数据")
+                return None
+            if not self.base_map:
+                self.get_logger().error("没有基础地图")
+                return None
+            # 计算所有路径点的边界
+            all_points = []
+            for marker in chennal_path_array.markers:
+                for point in marker.points:
+                    all_points.append((point.x, point.y))
+            
+            if not all_points:
+                self.get_logger().warn("没有有效的路径点数据")
+                return None
+            
+            chennal_width = float(self.get_parameter('chennal_width_m').value)
+
+            # 创建通道地图
+            chennal_map = OccupancyGrid()
+            chennal_map.header.stamp = self.get_clock().now().to_msg()
+            chennal_map.header.frame_id = self.base_map.header.frame_id
+            chennal_map.info = self.base_map.info
+            H = self.base_map.info.height
+            W = self.base_map.info.width
+            ox = self.base_map.info.origin.position.x
+            oy = self.base_map.info.origin.position.y
+            
+            # 初始化为障碍物
+            chennal_map_data = np.full((H, W), 100, dtype=np.uint8)
+            resolution = self.base_map.info.resolution
+     
+            # 为每条路径创建通道
+            for marker in chennal_path_array.markers:
+                if len(marker.points) < 2:
+                    continue
+                
+                # 将路径点转换为像素坐标
+                path_points = []
+                for point in marker.points:
+                    x = int((point.x - ox) / resolution)
+                    y = int((point.y - oy) / resolution)
+                    # 确保坐标在地图范围内
+                    x = max(0, min(x, W-1))
+                    y = max(0, min(y, H-1))
+                    path_points.append((x, y))
+                
+                # 为路径线段创建膨胀的通道
+                chennal_width_pixels = int(chennal_width / resolution)
+                
+                for i in range(len(path_points) - 1):
+                    # 在两点之间画线，并膨胀
+                    pt1 = path_points[i]
+                    pt2 = path_points[i + 1]
+                    
+                    # 创建临时图像来画线
+                    temp_img = np.zeros((H, W), dtype=np.uint8)
+                    cv2.line(temp_img, pt1, pt2, 1, thickness=chennal_width_pixels)
+                    
+                    # 将通道区域标记为自由空间
+                    chennal_map_data = np.where(temp_img == 1, 0, chennal_map_data)
+            
+            # 将numpy数组转换为ROS消息格式
+            chennal_map.data = chennal_map_data.flatten().tolist()
+            return chennal_map
+            
+        except Exception as e:
+            self.get_logger().error(f"生成通道地图时发生错误: {e}")
+            return None
+
+    def _create_chennal_map_inflated(self, chennal_map: OccupancyGrid):
+        """
+        膨胀通道地图，使通道向外膨胀 inflate_r_m
+        """
+        inflate_r_m = float(self.get_parameter('inflate_radius_m').value)
+        resolution = chennal_map.info.resolution
+        H = chennal_map.info.height
+        W = chennal_map.info.width
+        chennal_map_data = np.asarray(chennal_map.data, dtype=np.int16).reshape(H, W)
+        r_cells = max(0, int(math.ceil(inflate_r_m / resolution)))
+        
+        # 将通道区域(0)向內膨胀（腐蚀处理）
+        if r_cells > 0:
+            # 通道二值化 (1:通道, 0:非通道)
+            chennal_binary = (chennal_map_data == 0).astype(np.uint8)
+            # 用形態學腐蝕（向內收縮通道區）
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
+            chennal_binary_eroded = cv2.erode(chennal_binary, k)
+            # 重新构造 chennal_map 結果
+            eroded_data = np.where(chennal_binary_eroded == 1, 0, 100).astype(np.int8)
+            eroded_map = OccupancyGrid()
+            eroded_map.header = chennal_map.header
+            eroded_map.info = chennal_map.info
+            eroded_map.data = eroded_data.flatten().tolist()
+            return eroded_map
+        else:
+            return chennal_map
 
     def get_zone_map_list_srv(self, req, res):
         """獲取當前的zone map列表"""

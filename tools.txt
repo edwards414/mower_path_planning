@@ -20,29 +20,38 @@ node[boustrophedon_coverage]:
 
 node[path record]:
   service:
-    #new! 記錄區域 起始點 
+    記錄區域 起始點 
     ros2 service call /record_zone_start std_srvs/srv/Trigger
 
-    #new! 記錄區域 結束點  
+    記錄區域 結束點  
     ros2 service call /record_zone_end std_srvs/srv/Trigger
 
-    #new! 記錄risk zone 起始點
+    記錄risk zone 起始點
     ros2 service call /risk_zone_start std_srvs/srv/Trigger
 
-    #new! 記錄risk zone 結束點
+    記錄risk zone 結束點
     ros2 service call /risk_zone_end std_srvs/srv/Trigger
 
-    #new! 記錄區域 save
+    記錄區域 save
     ros2 service call /save_zone_list std_srvs/srv/Trigger
 
-    #new! 記錄區域 risk save
+    記錄區域 risk save
     ros2 service call /risk_zone_save std_srvs/srv/Trigger
 
-    #new! 記錄區域 load
+    記錄區域 load
     ros2 service call /load_zone_list std_srvs/srv/Trigger
 
-    #new! path_record  info test
+    path_record  info test
     ros2 service call /get_record_zone_info std_srvs/srv/Trigger
+    
+    記錄chennal start
+    ros2 service call /chennal_record_start std_srvs/srv/Trigger
+
+    記錄chennal end
+    ros2 service call /chennal_record_end std_srvs/srv/Trigger
+
+    讀取chennal path list
+    ros2 service call /get_chennal_path_list std_srvs/srv/Trigger
 
 
   executable:
@@ -57,6 +66,11 @@ node[map_manage]:
 
     [生成多個zone的riskspace]
     ros2 service call /create_risk_map std_srvs/srv/Trigger {}
+
+    [建立chennal map]
+    ros2 service call /create_chennal_map std_srvs/srv/Trigger {}
+
+
 
     #[生成free_space mask]
     #ros2 service call /generate_polygon_mask std_srvs/srv/Trigger {}
