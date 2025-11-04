@@ -8,8 +8,14 @@ node[nav2_gps_waypoint_follower]:
   executable:
 
   launch:
-    [地圖 nav2]
+    [地圖 nav2] 
     ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
+
+    [test system]
+    ros2 launch nav2_gps_waypoint_follower test_system.launch.py
+
+
+
 
 node[boustrophedon_coverage]:
   executable:
@@ -70,6 +76,8 @@ node[map_manage]:
     [建立chennal map]
     ros2 service call /create_chennal_map std_srvs/srv/Trigger {}
 
+    [建立BCD]
+    ros2 service call /create_zone_cell_decomposition std_srvs/srv/Trigger {}
 
 
     #[生成free_space mask]
@@ -85,14 +93,16 @@ node[map_manage]:
 
 node[boustrophedon_coverage]:
   service:
+    [coverage_planner]
+      ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
+      
     [waypoint pub]
     ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
 
     [cencel waypoint]
     ros2 servuce call /cencel_nav2 std_srvs/srv/Trigger {}
 
-    [coverage_planner]
-    ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
+
   executable:
     [生成路徑] 
     ros2 run boustrophedon_coverage boustrophedon_coverage
@@ -100,7 +110,7 @@ node[boustrophedon_coverage]:
 
   launch:
 
-
+  ros2 run lawer_qt_window lawer_qt_window_node
 
   
 
