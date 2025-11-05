@@ -13,6 +13,9 @@ from boustrophedon_coverage_interfaces.srv import ZoneMapList
 from boustrophedon_coverage_interfaces.msg import ZoneMap
 import math
 from path_record_interface.srv import ChennalPathList
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
 
 class MapManage(Node):
     def __init__(self):
@@ -33,6 +36,7 @@ class MapManage(Node):
         self.create_service(Trigger, '/create_chennal_map', self.create_chennal_map_srv)
         # 添加新的服务
         self.create_service(ZoneMapList, '/get_zone_map_list_srv', self.get_zone_map_list_srv)
+        # self.create_service(Trigger, '/create_zone_cell_decomposition', self.create_zone_cell_decomposition_srv)
 
         self.service_callback_group = ReentrantCallbackGroup()
         self.get_risk_zone_list_client = self.create_client(
@@ -69,8 +73,16 @@ class MapManage(Node):
         self.chennal_map_pub = self.create_publisher(OccupancyGrid, '/chennal_map', qos)
         self.chennal_map_inflated_pub = self.create_publisher(OccupancyGrid, '/chennal_map_inflated', qos)
         
+        # # 添加可视化发布者
+        # self.cell_decomposition_lines_pub = self.create_publisher(MarkerArray, '/zone_cell_decomposition_lines', qos)
+        # self.zone_cell_map_pub = self.create_publisher(OccupancyGrid, '/zone_cell_map', qos)
+        
         # 添加参数
         self.declare_parameter('chennal_width_m', 0.6)  # 通道宽度（米）
+        # self.declare_parameter('cell_width_m', 0.3)  # 细胞宽度（米）
+        
+        # # 存储zone cell maps
+        # self.zone_cell_maps = []
 
     def create_risk_map_srv(self, req, res):
         """創建風險地圖服務"""
@@ -532,10 +544,347 @@ class MapManage(Node):
         else:
             return chennal_map
 
+    # def create_zone_cell_decomposition_srv(self, req, res):
+    #     """创建zone细胞分解服务"""
+    #     self.get_logger().info("(service)create_zone_cell_decomposition_srv call")
+        
+    #     # 立即返回接受状态，然后异步处理
+    #     res.success = True
+    #     res.message = "开始创建zone细胞分解，请稍候..."
+        
+    #     # 启动异步处理
+    #     self._start_create_zone_cell_decomposition_async()
+        
+    #     return res
+    
+    # def _start_create_zone_cell_decomposition_async(self):
+    #     """异步创建zone细胞分解"""
+    #     try:
+    #         # 等待记录区域列表服务可用
+    #         if not self.get_record_zone_list_client.wait_for_service(timeout_sec=5.0):
+    #             self.get_logger().error("记录区域列表服务不可用")
+    #             return
+            
+    #         # 调用获取记录区域列表服务
+    #         zone_req = GetZoneList.Request()
+    #         future = self.get_record_zone_list_client.call_async(zone_req)
+            
+    #         # 添加完成回调
+    #         future.add_done_callback(self._handle_zone_cell_decomposition_response)
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"启动异步创建zone细胞分解时发生错误: {e}")
+    
+    # def _handle_zone_cell_decomposition_response(self, future):
+    #     """处理zone细胞分解响应"""
+    #     try:
+    #         if not future.done():
+    #             self.get_logger().error("获取记录区域列表超时")
+    #             return
+            
+    #         zone_response = future.result()
+            
+    #         if not zone_response.success:
+    #             self.get_logger().error(f"获取记录区域列表失败: {zone_response.message}")
+    #             return
+            
+    #         # 为每个zone进行细胞分解
+    #         self.zone_cell_maps = []
+    #         all_decomposition_lines = MarkerArray()
+            
+    #         for zone_idx, polygon_points in enumerate(zone_response.zone_list.markers):
+    #             zone_cell_map, decomposition_lines = self._perform_boustrophedon_cellular_decomposition(
+    #                 polygon_points, zone_idx
+    #             )
+                
+    #             if zone_cell_map is not None:
+    #                 self.zone_cell_maps.append({
+    #                     'zone_id': polygon_points.id,
+    #                     'cell_map': zone_cell_map,
+    #                     'decomposition_lines': decomposition_lines
+    #                 })
+                    
+    #                 # 添加到总的可视化标记中
+    #                 all_decomposition_lines.markers.extend(decomposition_lines.markers)
+            
+    #         # 发布可视化线段
+    #         if all_decomposition_lines.markers:
+    #             self.cell_decomposition_lines_pub.publish(all_decomposition_lines)
+    #             self.get_logger().info(f"成功创建 {len(self.zone_cell_maps)} 个zone的细胞分解")
+            
+    #         # 创建并发布合并的zone cell map
+    #         combined_cell_map = self._create_combined_zone_cell_map()
+    #         if combined_cell_map is not None:
+    #             self.zone_cell_map_pub.publish(combined_cell_map)
+                
+    #     except Exception as e:
+    #         self.get_logger().error(f"处理zone细胞分解响应时发生错误: {e}")
+
+    # def _perform_boustrophedon_cellular_decomposition(self, polygon_points, zone_idx):
+    #     """对单个zone执行boustrophedon细胞分解"""
+    #     try:
+    #         if not self.base_map:
+    #             self.get_logger().error("没有基础地图进行细胞分解")
+    #             return None, MarkerArray()
+            
+    #         # 获取基础地图信息
+    #         H = self.base_map.info.height
+    #         W = self.base_map.info.width
+    #         resolution = self.base_map.info.resolution
+    #         ox = self.base_map.info.origin.position.x
+    #         oy = self.base_map.info.origin.position.y
+            
+    #         # 创建zone mask
+    #         zone_mask = np.zeros((H, W), dtype=np.uint8)
+    #         poly_px = []
+    #         for pt in polygon_points.points:
+    #             x = int((pt.x - ox) / resolution)
+    #             y = int((pt.y - oy) / resolution)
+    #             # 确保坐标在地图范围内
+    #             x = max(0, min(x, W-1))
+    #             y = max(0, min(y, H-1))
+    #             poly_px.append([x, y])
+            
+    #         if len(poly_px) >= 3:
+    #             poly_px = np.array([poly_px], dtype=np.int32)
+    #             cv2.fillPoly(zone_mask, [poly_px], 1)
+    #         else:
+    #             return None, MarkerArray()
+            
+    #         # 执行boustrophedon细胞分解
+    #         cell_width_m = float(self.get_parameter('cell_width_m').value)
+    #         cell_width_pixels = max(1, int(cell_width_m / resolution))
+            
+    #         # 创建细胞地图
+    #         cell_map = self._create_boustrophedon_cells(zone_mask, cell_width_pixels, H, W, resolution, ox, oy)
+            
+    #         # 创建可视化线段
+    #         decomposition_lines = self._create_decomposition_visualization(
+    #             zone_mask, cell_width_pixels, H, W, resolution, ox, oy, zone_idx
+    #         )
+            
+    #         return cell_map, decomposition_lines
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"执行zone {zone_idx} 细胞分解时发生错误: {e}")
+    #         return None, MarkerArray()
+
+    # def _create_boustrophedon_cells(self, zone_mask, cell_width_pixels, H, W, resolution, ox, oy):
+    #     """创建boustrophedon细胞地图"""
+    #     try:
+    #         # 创建细胞地图
+    #         cell_map = OccupancyGrid()
+    #         cell_map.header.stamp = self.get_clock().now().to_msg()
+    #         cell_map.header.frame_id = 'map'
+    #         cell_map.info = self.base_map.info
+            
+    #         # 初始化为障碍物
+    #         cell_data = np.full((H, W), 100, dtype=np.uint8)
+            
+    #         # 找到zone的边界
+    #         zone_indices = np.where(zone_mask == 1)
+    #         if len(zone_indices[0]) == 0:
+    #             cell_map.data = cell_data.flatten().tolist()
+    #             return cell_map
+            
+    #         min_col = np.min(zone_indices[1])
+    #         max_col = np.max(zone_indices[1])
+            
+    #         # 按列进行boustrophedon分解
+    #         cell_id = 1
+    #         for col in range(min_col, max_col + 1, cell_width_pixels):
+    #             # 找到该列中zone的连续段
+    #             col_mask = zone_mask[:, col] if col < W else np.zeros(H)
+    #             segments = self._find_continuous_segments(col_mask)
+                
+    #             for start_row, end_row in segments:
+    #                 # 为每个连续段创建一个细胞
+    #                 cell_start_col = col
+    #                 cell_end_col = min(col + cell_width_pixels, W)
+                    
+    #                 # 在细胞区域内标记为自由空间，并给每个细胞一个唯一ID
+    #                 for c in range(cell_start_col, cell_end_col):
+    #                     for r in range(start_row, end_row + 1):
+    #                         if c < W and r < H and zone_mask[r, c] == 1:
+    #                             cell_data[r, c] = 0  # 自由空间
+                    
+    #                 cell_id += 1
+            
+    #         cell_map.data = cell_data.flatten().tolist()
+    #         return cell_map
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"创建boustrophedon细胞时发生错误: {e}")
+    #         return None
+
+    # def _find_continuous_segments(self, col_mask):
+    #     """找到列中的连续段"""
+    #     segments = []
+    #     start = None
+        
+    #     for i, val in enumerate(col_mask):
+    #         if val == 1 and start is None:
+    #             start = i
+    #         elif val == 0 and start is not None:
+    #             segments.append((start, i - 1))
+    #             start = None
+        
+    #     # 处理最后一个段
+    #     if start is not None:
+    #         segments.append((start, len(col_mask) - 1))
+        
+    #     return segments
+
+    # def _create_decomposition_visualization(self, zone_mask, cell_width_pixels, H, W, resolution, ox, oy, zone_idx):
+    #     """创建分解可视化线段"""
+    #     try:
+    #         marker_array = MarkerArray()
+            
+    #         # 找到zone的边界
+    #         zone_indices = np.where(zone_mask == 1)
+    #         if len(zone_indices[0]) == 0:
+    #             return marker_array
+            
+    #         min_col = np.min(zone_indices[1])
+    #         max_col = np.max(zone_indices[1])
+    #         min_row = np.min(zone_indices[0])
+    #         max_row = np.max(zone_indices[0])
+            
+    #         marker_id = zone_idx * 1000  # 为每个zone分配不同的ID范围
+            
+    #         # 创建垂直分割线
+    #         for col in range(min_col, max_col + 1, cell_width_pixels):
+    #             if col >= W:
+    #                 continue
+                    
+    #             # 找到该列的zone范围
+    #             col_mask = zone_mask[:, col]
+    #             segments = self._find_continuous_segments(col_mask)
+                
+    #             for start_row, end_row in segments:
+    #                 # 创建垂直线标记
+    #                 line_marker = Marker()
+    #                 line_marker.header.frame_id = 'map'
+    #                 line_marker.header.stamp = self.get_clock().now().to_msg()
+    #                 line_marker.ns = f"zone_{zone_idx}_vertical_lines"
+    #                 line_marker.id = marker_id
+    #                 line_marker.type = Marker.LINE_STRIP
+    #                 line_marker.action = Marker.ADD
+                    
+    #                 # 设置线条属性
+    #                 line_marker.scale.x = 0.02  # 线条宽度
+    #                 line_marker.color.r = 1.0
+    #                 line_marker.color.g = 0.0
+    #                 line_marker.color.b = 0.0
+    #                 line_marker.color.a = 0.8
+                    
+    #                 # 添加线段端点
+    #                 start_point = Point()
+    #                 start_point.x = ox + (col + 0.5) * resolution
+    #                 start_point.y = oy + (start_row + 0.5) * resolution
+    #                 start_point.z = 0.1
+                    
+    #                 end_point = Point()
+    #                 end_point.x = ox + (col + 0.5) * resolution
+    #                 end_point.y = oy + (end_row + 0.5) * resolution
+    #                 end_point.z = 0.1
+                    
+    #                 line_marker.points.append(start_point)
+    #                 line_marker.points.append(end_point)
+                    
+    #                 marker_array.markers.append(line_marker)
+    #                 marker_id += 1
+            
+    #         # 创建水平分割线（可选，用于显示细胞边界）
+    #         for col in range(min_col, max_col + 1, cell_width_pixels):
+    #             if col >= W:
+    #                 continue
+                    
+    #             col_mask = zone_mask[:, col]
+    #             segments = self._find_continuous_segments(col_mask)
+                
+    #             for start_row, end_row in segments:
+    #                 # 在细胞的顶部和底部创建水平线
+    #                 for row in [start_row, end_row]:
+    #                     line_marker = Marker()
+    #                     line_marker.header.frame_id = 'map'
+    #                     line_marker.header.stamp = self.get_clock().now().to_msg()
+    #                     line_marker.ns = f"zone_{zone_idx}_horizontal_lines"
+    #                     line_marker.id = marker_id
+    #                     line_marker.type = Marker.LINE_STRIP
+    #                     line_marker.action = Marker.ADD
+                        
+    #                     # 设置线条属性
+    #                     line_marker.scale.x = 0.02
+    #                     line_marker.color.r = 0.0
+    #                     line_marker.color.g = 1.0
+    #                     line_marker.color.b = 0.0
+    #                     line_marker.color.a = 0.6
+                        
+    #                     # 添加水平线段
+    #                     start_point = Point()
+    #                     start_point.x = ox + (col + 0.5) * resolution
+    #                     start_point.y = oy + (row + 0.5) * resolution
+    #                     start_point.z = 0.1
+                        
+    #                     end_point = Point()
+    #                     end_point.x = ox + (min(col + cell_width_pixels, W) - 0.5) * resolution
+    #                     end_point.y = oy + (row + 0.5) * resolution
+    #                     end_point.z = 0.1
+                        
+    #                     line_marker.points.append(start_point)
+    #                     line_marker.points.append(end_point)
+                        
+    #                     marker_array.markers.append(line_marker)
+    #                     marker_id += 1
+            
+    #         return marker_array
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"创建分解可视化时发生错误: {e}")
+    #         return MarkerArray()
+
+    # def _create_combined_zone_cell_map(self):
+    #     """创建合并的zone细胞地图"""
+    #     try:
+    #         if not self.zone_cell_maps or not self.base_map:
+    #             return None
+            
+    #         # 创建合并地图
+    #         combined_map = OccupancyGrid()
+    #         combined_map.header.stamp = self.get_clock().now().to_msg()
+    #         combined_map.header.frame_id = 'map'
+    #         combined_map.info = self.base_map.info
+            
+    #         H = self.base_map.info.height
+    #         W = self.base_map.info.width
+            
+    #         # 初始化为障碍物
+    #         combined_data = np.full((H, W), 100, dtype=np.uint8)
+            
+    #         # 合并所有zone的细胞地图
+    #         for zone_cell_info in self.zone_cell_maps:
+    #             cell_map = zone_cell_info['cell_map']
+    #             cell_data = np.asarray(cell_map.data, dtype=np.uint8).reshape(H, W)
+                
+    #             # 将自由空间合并到总地图中
+    #             combined_data = np.where(cell_data == 0, 0, combined_data)
+            
+    #         combined_map.data = combined_data.flatten().tolist()
+    #         return combined_map
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"创建合并zone细胞地图时发生错误: {e}")
+    #         return None
+
     def get_zone_map_list_srv(self, req, res):
         """獲取當前的zone map列表"""
         res.zone_map_list = self.zone_map_list
         return res
+
+    def get_zone_cell_maps(self):
+        """获取zone细胞地图列表"""
+        return self.zone_cell_maps
 
 
 # class ZoneMap:
