@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from nav_msgs.msg import Path, OccupancyGrid
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Pose
 from std_msgs.msg import Header
 
 def _euler_to_quaternion(roll, pitch, yaw):
@@ -57,6 +57,20 @@ def _transform_coverage_path_points(points: list,map_header: Header) -> Path:
 
         coverage_path.poses.append(goal_pose)
     return coverage_path
+
+def _transform_coverage_split_points(points: list[tuple[float, float]],map_header: Header) -> list[Pose]:
+    """
+    將分割點轉換為PoseStamped消息
+    """
+    coverage_split_points = []
+    for x, y in points:
+        pose = Pose()
+        pose.position.x = float(x)
+        pose.position.y = float(y)
+        coverage_split_points.append(pose)
+    return coverage_split_points
+
+
 
 def _validate_maps_compatibility(self, map1: OccupancyGrid, map2: OccupancyGrid) -> bool:
     """驗證兩個地圖是否兼容（相同的分辨率、尺寸和原點）"""

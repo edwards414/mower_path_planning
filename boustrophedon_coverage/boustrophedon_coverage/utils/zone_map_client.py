@@ -1,14 +1,18 @@
 import rclpy
 from rclpy.node import Node
 from boustrophedon_coverage_interfaces.srv import ZoneMapList
-
+from boustrophedon_coverage_interfaces.msg import ZoneMap
 class ZoneMapClient(Node):
     def __init__(self):
         super().__init__('zone_map_client')
         self.client = self.create_client(ZoneMapList, '/get_zone_map_list_srv')
         
-    def get_zone_maps(self):
-        """调用服务获取 zone map 列表"""
+    def get_zone_maps(self)->list[ZoneMap]:
+        """
+        Get the zone map list.
+        Returns:
+            list[ZoneMap]: The zone map list.
+        """
         if not self.client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('服务不可用')
             return None

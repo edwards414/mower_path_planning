@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetZoneList.srv"
   "srv/ZoneMapList.srv"
   "msg/ZoneMap.msg"
+  "srv/ZoneExecPath.srv"
   DEPENDENCIES example_interfaces visualization_msgs nav_msgs std_msgs geometry_msgs
 )
 

@@ -15,3 +15,6 @@ nav_msgs/OccupancyGrid mask_map_inflated
 
 #路徑
 nav_msgs/Path path
+
+# 覆蓋分割點
+geometry_msgs/Pose[] coverage_split_points

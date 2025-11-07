@@ -6,6 +6,7 @@ import cv2
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.action import ActionClient
 
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid, Path
@@ -15,12 +16,13 @@ from geometry_msgs.msg import Point
 
 from std_srvs.srv import Trigger,SetBool
 from nav2_simple_commander.robot_navigator import BasicNavigator
+from nav2_action_interfaces.action import Waypoint
 
 from .path_generators.boustrophedon import _generate_coverage_boustrophedon_path
-from .utils.path_utils import _transform_coverage_path_points
-from .utils.nav_action_client import NavActionClient
+from .utils.path_utils import _transform_coverage_path_points, _transform_coverage_split_points
 from .utils.zone_map_client import ZoneMapClient
-
+from boustrophedon_coverage_interfaces.srv import ZoneExecPath
+from .utils.nav_action_client import NavActionClient
 class CoveragePlanner(Node):
     def __init__(self):
         super().__init__('boustrophedon_coverage')
@@ -42,17 +44,16 @@ class CoveragePlanner(Node):
    
         # 建立服務 service
         self.create_service(Trigger, '/generate_coverage_path', self.generate_coverage_path_srv)
-        self.create_service(Trigger, '/waypoint_pub', self.waypoint_pub_srv)
+        self.create_service(ZoneExecPath, '/zone_exec_path', self.zone_exec_path_srv)
         self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv)
         self.create_service(Trigger, '/check_nav_status', self.check_nav_status_srv)
-
         # 创建回调组用于服务调用
         #建立服務 client
         self.waypoint_active_client = self.create_client(
             SetBool, '/record_path_status', 
         )
-        #建立action client
-        self.nav_action_client = NavActionClient()
+        #建立action client - 直接在此节点中创建
+        self._action_client_split_path = NavActionClient()
         self.zone_map_client = ZoneMapClient()
         #發布區
         self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
@@ -127,7 +128,7 @@ class CoveragePlanner(Node):
             # 根據規則生成safe_map: 在膨脹區域內且非risk
             safe_map = np.logical_and(mask_map_inflated_data == 0, risk_map_data == 0).astype(np.uint8)
             
-            points = _generate_coverage_boustrophedon_path(safe_map=safe_map,
+            coverage_path, coverage_split_points = _generate_coverage_boustrophedon_path(safe_map=safe_map,
                                                             strip_width_m=self.get_parameter('strip_width_m').value,
                                                             waypoint_spacing_m=self.get_parameter('waypoint_spacing_m').value,
                                                             res=res,
@@ -137,8 +138,13 @@ class CoveragePlanner(Node):
                                                             origin_y=oy,
                                                             angle_deg=0.0)
 
-            coverage_path = _transform_coverage_path_points(points,self.zone_map_list[i].mask_map.header)
+            coverage_path = _transform_coverage_path_points(points = coverage_path,
+                                                            map_header = self.zone_map_list[i].mask_map.header)
+
+            coverage_split_points = _transform_coverage_split_points(points = coverage_split_points,
+                                                                    map_header = self.zone_map_list[i].mask_map.header)
             self.zone_map_list[i].path = coverage_path
+            self.zone_map_list[i].coverage_split_points = coverage_split_points
         #這邊
         # 修正路徑點，確保每個點的朝向正確
         vivid_colors = [
@@ -217,17 +223,37 @@ class CoveragePlanner(Node):
         return True
 
     #發佈coverage path to action server 
-    def waypoint_pub_srv(self, req, res):        # 停止使用 self.path_pub
-        set_bool_req = SetBool.Request()
-        set_bool_req.data = True
-        self.waypoint_active_client.call_async(set_bool_req)
-        self.nav_action_client.send_goal_split_path(self.coverage_path,self.coverage_split_points)
-        res.success = True
-        res.message = 'Waypoint published'
+    def zone_exec_path_srv(self, req, res):
+        """
+        Execute a path for a given zone.
+        Args:
+            zone_id (str): The ID of the zone to execute.
+        command: ros2 service call /zone_exec_path boustrophedon_coverage_interfaces/srv/ZoneExecPath "zone_id: 'zone_1'"
+        """
+
+        self.get_logger().info(f"zone_exec_path_srv start: {req.zone_id}")
+        zone_id = req.zone_id
+        zone_map = None 
+        for zone in self.zone_map_list:
+            if zone.zone_id == zone_id:
+                zone_map = zone
+                break
+        
+        if zone_map:
+            # 调用发送目标的方法
+            self._action_client_split_path.send_goal_split_path(path=zone_map.path,
+                                                                coverage_split_points=zone_map.coverage_split_points)
+            res.success = True
+            res.message = 'Goal sent to navigation action server'
+        else:
+            res.success = False
+            res.message = 'Zone not found'
+        
         return res
 
+    
+
     def cancel_nav2_srv(self, req, res):
-        # self.waypoint_active = False
         self.nav.cancelTask()
         res.success = True
         res.message = 'Nav2 canceled'
@@ -243,12 +269,18 @@ class CoveragePlanner(Node):
         return res
 
     def record_path_status_srv(self, req, res):
+        """
+        Record the status of the path.
+        Args:
+            data (bool): The status of the path.
+        Returns:
+            SetBool.Response: The response message.
+        """
         self.waypoint_active = req.data  # 直接赋值
         res.success = True
         res.message = f'Path recording status: {self.waypoint_active}'
         return res
 
-        
 def main(args=None):
     rclpy.init(args=args)
     node = CoveragePlanner()

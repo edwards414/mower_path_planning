@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+生成牛耕式覆蓋路徑
+"""
+
 import numpy as np
 
 def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
@@ -8,13 +13,27 @@ def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
                                             W: int,#地圖寬
                                             origin_x: float,#地圖原點X
                                             origin_y: float,#地圖原點Y
-                                            angle_deg: float = 0.0)-> list:#條帶相對X軸角度（degree）
+                                            angle_deg: float = 0.0)\
+                                            -> (list[tuple[float, float]], list[tuple[float, float]]):#條帶相對X軸角度（degree）
     """
+    Args:
+        safe_map: 可行區域 2維陣列
+        strip_width_m: 割草機有效割幅
+        waypoint_spacing_m: 路徑點間距
+        res: 地圖解析度(m)
+        H: 地圖高
+        W: 地圖寬
+        origin_x: 地圖原點X
+        origin_y: 地圖原點Y
+        angle_deg: 條帶相對X軸角度（degree）
+    Returns:
+        points: 覆蓋路徑點列表
+        coverage_split_points: 覆蓋路徑分割點列表
     生成直線牛耕式覆蓋路徑，可指定條帶角度（degree, 逆時針，0為Y掃描） 
-    angle_deg: 條帶相對X軸角度（degree）
     """
     # 如果角度為0，則維持原行為
     angle_rad = np.deg2rad(angle_deg)
+    coverage_split_points = []
     if abs(angle_rad) < 1e-6:
         # 條帶設定：以 X 方向切直條(沿 Y 掃描)
         strip_w_m = strip_width_m
@@ -39,7 +58,7 @@ def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
                     start = None
 
             segs = segments[::-1] if reverse else segments
-            for (s, e) in segs:
+            for (s, e) in segs: #s: start, e: end
                 y0 = origin_y + (s + 0.5) * res
                 y1 = origin_y + (e + 0.5) * res
                 x  = origin_x + (mc + 0.5) * res
@@ -50,8 +69,10 @@ def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
                 ys = ys[::-1] if reverse else ys
                 for y in ys:
                     points.append((x, y))
+                
+                coverage_split_points.append((x, y))
             reverse = not reverse
-        return points
+        return points, coverage_split_points
     # 否則，根據角度旋轉生成覆蓋路徑
     # Step1: 將safe_map投影至旋轉後座標系
     # step2: 在旋轉後座標系產生牛耕路徑
@@ -110,13 +131,18 @@ def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
         ordered = candidates[sort_order]
         # 間隔densify
         prev_pt = None
+        strip_last_point = None  # 記錄該條帶的最後一個點
         for pt in ordered:
             if prev_pt is not None:
                 dist = np.linalg.norm(pt - prev_pt)
                 if dist < max(res, waypoint_spacing_m)*0.5:
                     continue
             prev_pt = pt
+            strip_last_point = pt  # 更新最後一個點
             points.append(tuple(pt))
+        # 記錄該條帶的分割點（最後一個點）
+        if strip_last_point is not None:
+            coverage_split_points.append(tuple(strip_last_point))
         reverse = not reverse
     # 將points從旋轉座標轉回原地圖座標
     if angle_deg != 0.0:
@@ -128,4 +154,10 @@ def _generate_coverage_boustrophedon_path(safe_map: np.ndarray,
         points_np = points_np @ rotMinv.T
         points_np = points_np + np.array([center_x, center_y])
         points = [tuple(pt) for pt in points_np]
-    return points
+        # 同樣將分割點反向旋轉回原座標
+        if len(coverage_split_points) > 0:
+            split_points_np = np.array(coverage_split_points) - np.array([center_x, center_y])
+            split_points_np = split_points_np @ rotMinv.T
+            split_points_np = split_points_np + np.array([center_x, center_y])
+            coverage_split_points = [tuple(pt) for pt in split_points_np]
+    return points, coverage_split_points

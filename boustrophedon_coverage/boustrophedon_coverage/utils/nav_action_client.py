@@ -10,7 +10,12 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 
 class NavActionClient(Node):
     def __init__(self, is_nav = False):
+        """
+            is_nav : 是否使用nav2的action server
+        """
+
         super().__init__('nav_action_client')
+        self.get_logger().info('nav_action_client init')
         self.set_parameters([
             Parameter('use_sim_time',Parameter.Type.BOOL,True)
         ])
@@ -18,7 +23,15 @@ class NavActionClient(Node):
         self._action_client_split_path = ActionClient(self, Waypoint, 'nav_action_follow_path')
         self.nav = BasicNavigator() if is_nav else None
 
-    def send_goal_split_path(self, path :Path,coverage_split_points :[Pose]):
+    def send_goal_split_path(self, path :Path, coverage_split_points :list[Pose]):
+        """
+        Send a goal to the action server to execute a split path.
+        Args:
+            path (Path): The path to execute.
+            coverage_split_points (list[Pose]): The split points of the path.
+        use .srv
+        """
+        
         self.get_logger().info('send_goal_split_path')
         goal_msg = Waypoint.Goal()
         goal_msg.path = path
@@ -78,9 +91,9 @@ def main(args=None):
     rclpy.init(args=args)
 
     action_client = NavActionClient(is_nav=True)
-    path = action_client._create_path()
+    # path = action_client._create_path()
     
-    action_client.send_goal(path)
+    # action_client.send_goal(path)
 
     rclpy.spin(action_client)
 

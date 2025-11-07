@@ -27,7 +27,7 @@ setup(
         'console_scripts': [
             'boustrophedon_coverage = boustrophedon_coverage.boustrophedon_coverage:main',
             'path_record = boustrophedon_coverage.path_record:main',
-            'nav_action_client = boustrophedon_coverage.nav_action_client:main',
+            'nav_action_client = boustrophedon_coverage.utils.nav_action_client:main',
             'zone_map_client = boustrophedon_coverage.zone_map_client:main',
         ],
     },
