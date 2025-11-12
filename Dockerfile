@@ -1,31 +1,22 @@
 FROM ros:jazzy-ros-core AS base
 
-#arguments
-ARG USER_UID
-ARG USER_GID
-ARG USER_NAME
+# Install packages and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-colcon-common-extensions \
+    && rm -rf /var/lib/apt/lists/*
 
-#create user and group
-RUN groupadd -g ${USER_GID} -o ${USER_NAME}
+RUN . /opt/ros/jazzy/setup.sh
+#禁用ubuntu password
+RUN passwd -d ubuntu && passwd -l ubuntu 
+# RUN apt-get update && apt-get install -y sudo && \
+#     useradd -m ubuntu && \
+#     echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-#create user and set password
-RUN useradd -m -u ${USER_UID} -g ${USER_GID} -o -s /bin/bash ${USER_NAME} && yes ${USER_NAME} | passwd ${USER_NAME}
+# USER ubuntu
+ENV LAUNCH_COMMAND='ros2 topic pub /talker std_msgs/msg/String "{data: Hello world}"'
 
+RUN echo 'alias run="su - ubuntu --whitelist-environment=\"ROS_DOMAIN_ID\" /run.sh"' >> /etc/bash.bashrc && \
+    # echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc && \
+    echo "source /opt/ros/jazzy/setup.bash; echo UID: $UID; echo ROS_DOMAIN_ID: $ROS_DOMAIN_ID; $LAUNCH_COMMAND" >> /run.sh && chmod +x /run.sh
 
-RUN apt-get update && apt-get install -y  git net-tools iputils-ping 
-
-RUN rosdep update --rosdistro $ROS_DISTRO
-
-FROM base AS development
-
-#create workspace
-# WORKDIR /car_ws
-
-
-
-CMD ["bash"]
-# #install development tools
-# RUN apt-get update && apt-get install -y  zsh git sudo ssh gdb rsync
-
-# #change shell to zsh
-# RUN chsh -s /bin/zsh ${USER_NAME}
