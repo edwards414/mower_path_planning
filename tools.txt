@@ -14,7 +14,7 @@ node[nav2_gps_waypoint_follower]:
     [test system]
     ros2 launch nav2_gps_waypoint_follower test_system.launch.py
 
-
+    ros2 run lawer_qt_py lawer_qt
 
 
 node[boustrophedon_coverage]:
@@ -97,8 +97,7 @@ node[boustrophedon_coverage]:
       ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
       
     [waypoint pub]
-    ros2 service call /waypoint_pub std_srvs/srv/Trigger {}
-
+    ros2 service call /zone_exec_path boustrophedon_coverage_interfaces/srv/ZoneExecPath "zone_id: 1"
     [cencel waypoint]
     ros2 servuce call /cencel_nav2 std_srvs/srv/Trigger {}
 
@@ -110,8 +109,10 @@ node[boustrophedon_coverage]:
 
   launch:
 
-  ros2 run lawer_qt_window lawer_qt_window_node
+ # ros2 run lawer_qt_window lawer_qt_window_node
 
+
+ros2 run nav2_action_interfaces nav_action_server_node.py
   
 
 
@@ -123,13 +124,11 @@ boustrophedon_coverage node
 
 
 
-[client 跑4點]
+[nav_action_server]
 ros2 run boustrophedon_coverage nav_action_client
 
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard
-
-ros2 run nav2_action_interfaces nav_action_server_node.py 
 
 #--------------------
 
