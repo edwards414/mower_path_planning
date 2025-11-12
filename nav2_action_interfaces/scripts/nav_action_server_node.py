@@ -30,30 +30,36 @@ class NavActionServer(Node):
             self,
             Waypoint,
             'nav_action_follow_path',
-            self.test2_execute_callback
+            self.single_path_execute_callback
         )
         self.split_path_pub = self.create_publisher(Path, '/split_path', 1)
         self.coverage_split_points_pub = self.create_publisher(Marker, '/coverage_split_points', 1)
         self.coverage_split_points = []
         # self.action_server_follow_pat
-    def test_execute_callback(self, goal_handle):
-        path = goal_handle.request.path
-        self.navigator.followPath(path)
-        while not self.navigator.isTaskComplete():
-            feedback = self.navigator.getFeedback()
-            self.get_logger().info(f"Feedback: {feedback.distance_to_goal}")
-        goal_handle.succeed()
-        result = Waypoint.Result()
-        result.success = True
-        return result
+    # def test_execute_callback(self, goal_handle):
+    #     path = goal_handle.request.path
+    #     self.navigator.followPath(path)
+    #     while not self.navigator.isTaskComplete():
+    #         feedback = self.navigator.getFeedback()
+    #         self.get_logger().info(f"Feedback: {feedback.distance_to_goal}")
+    #     goal_handle.succeed()
+    #     result = Waypoint.Result()
+    #     result.success = True
+    #     return result
 
 
     #發佈單條路徑
-    def test2_execute_callback(self, goal_handle): 
+    def single_path_execute_callback(self, goal_handle): 
+        """
+        Execute a single path.
+        Args:
+            goal_handle (GoalHandle): The goal handle.
+        """
+
         import time
         self.get_logger().info('執行目標')
         path = goal_handle.request.path
-        coverage_split_points = goal_handle.request.coverage_split_points
+        coverage_split_points = goal_handle.request.poses
 
         self.get_logger().info(f"path 長度: {len(path.poses)}")
         self.get_logger().info(f"coverage_split_points 長度: {len(coverage_split_points)}")
