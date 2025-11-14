@@ -1,0 +1,35 @@
+FROM ros:jazzy
+
+# ---------- arguments for host UID/GID ----------
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+# ---------- create non-root user ----------
+RUN groupadd --gid $USER_GID $USERNAME && \
+    useradd --uid $USER_UID --gid $USER_GID -m $USERNAME && \
+    apt-get update && apt-get install -y \
+        sudo \
+        python3-pip \
+        build-essential \
+        git \
+        vim \
+        ros-jazzy-rmw-fastrtps-cpp \
+        && \
+    echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$USERNAME
+
+USER $USERNAME
+WORKDIR /home/$USERNAME
+
+# ---------- create ros2 workspace ----------
+RUN mkdir -p ~/ros2_ws/src
+WORKDIR /home/$USERNAME/ros2_ws
+
+# ---------- install colcon tools ----------
+RUN pip3 install -U colcon-common-extensions
+
+# ---------- auto source ROS & workspace ----------
+RUN echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc && \
+    echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+
+CMD ["/bin/bash"]

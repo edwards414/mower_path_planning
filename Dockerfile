@@ -1,22 +1,38 @@
-FROM ros:jazzy-ros-core AS base
+# FROM ros:jazzy-ros-core AS base
+FROM ros:jazzy AS base
+
+ARG WORKSPACE=/car_ws
+SHELL ["/bin/bash", "-c"]
 
 # Install packages and dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    python3-colcon-common-extensions \
+RUN mkdir -p ${WORKSPACE}/src
+WORKDIR $WORKSPACE
+
+COPY ./ ${WORKSPACE}/src
+COPY Makefile ${WORKSPACE}/
+
+RUN  . /opt/ros/jazzy/setup.sh \
+    && apt-get update \
+    && rosdep update \
+    && make deps \
+    && make build-release \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN . /opt/ros/jazzy/setup.sh
+
 #禁用ubuntu password
 RUN passwd -d ubuntu && passwd -l ubuntu 
-# RUN apt-get update && apt-get install -y sudo && \
-#     useradd -m ubuntu && \
-#     echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# USER ubuntu
-ENV LAUNCH_COMMAND='ros2 topic pub /talker std_msgs/msg/String "{data: Hello world}"'
+COPY utiles/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
-RUN echo 'alias run="su - ubuntu --whitelist-environment=\"ROS_DOMAIN_ID\" /run.sh"' >> /etc/bash.bashrc && \
-    # echo 'source /opt/ros/jazzy/setup.bash' >> /etc/bash.bashrc && \
-    echo "source /opt/ros/jazzy/setup.bash; echo UID: $UID; echo ROS_DOMAIN_ID: $ROS_DOMAIN_ID; $LAUNCH_COMMAND" >> /run.sh && chmod +x /run.sh
+RUN mkdir -p /car_ws/zone_record && chmod 777 /car_ws/zone_record
 
+# RUN echo aris build = colcon build
+
+USER ubuntu
+WORKDIR $WORKSPACE
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+CMD ["ros2", "launch", "nav2_gps_waypoint_follower", "small_test.launch.py"]
