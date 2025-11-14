@@ -1,7 +1,7 @@
 # Mower Path Planning System
 
 <div align="center">
-  <img src=“img/mower.png" alt="Mower System" width="400">
+  <img src='img/mower.png' alt="Mower System" width="400">
 </div>
 
 An autonomous lawn mower path planning and navigation solution based on ROS2 Jazzy.
