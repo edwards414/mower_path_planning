@@ -100,8 +100,9 @@ def generate_launch_description():
     ld.add_action(navigation_cmd)
 
     # # viz launch
-    ld.add_action(declare_use_rviz_cmd)
-    ld.add_action(rviz_cmd)
+    # ld.add_action(declare_use_rviz_cmd)
+    # ld.add_action(rviz_cmd)
+
     # ld.add_action(declare_use_mapviz_cmd)
     # ld.add_action(mapviz_cmd)
 
