@@ -23,6 +23,8 @@ services:
     image: lawan_node:latest
     environment:
       - ROS_DOMAIN_ID
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION
     restart: always
     network_mode: host
     ipc: host
@@ -33,17 +35,20 @@ services:
     #   - ./build:/car_ws/build:rw
     #   - ./install:/car_ws/install:rw
     #   - ./log:/car_ws/log:rw
-    command: ["sleep", "infinity"]
-  sim:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: simulator:latest
-    environment:
-      - ROS_DOMAIN_ID
-    restart: always
-    network_mode: host
-    ipc: host
-    pid: host
-    user: ubuntu
-    command: ["sleep", "infinity"]
+    # command: ['id']
+
+    command: >
+      bash -c "source /mower_ws/install/setup.bash && ros2 launch nav2_gps_waypoint_follower test_system.launch.py"
+  # sim:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: simulator:latest
+  #   environment:
+  #     - ROS_DOMAIN_ID
+  #   restart: always
+  #   network_mode: host
+  #   ipc: host
+  #   pid: host
+  #   user: ubuntu
+  #   command: ["sleep", "infinity"]

@@ -1,14 +1,14 @@
 # FROM ros:jazzy-ros-core AS base
 FROM ros:jazzy AS base
 
-ARG WORKSPACE=/car_ws
+ARG WORKSPACE=/mower_ws
 SHELL ["/bin/bash", "-c"]
 
 # Install packages and dependencies
 RUN mkdir -p ${WORKSPACE}/src
 WORKDIR $WORKSPACE
 
-COPY ./ ${WORKSPACE}/src
+COPY ./src ${WORKSPACE}/src
 COPY Makefile ${WORKSPACE}/
 
 RUN  . /opt/ros/jazzy/setup.sh \
@@ -26,7 +26,7 @@ RUN passwd -d ubuntu && passwd -l ubuntu
 COPY utiles/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-RUN mkdir -p /car_ws/zone_record && chmod 777 /car_ws/zone_record
+RUN mkdir -p /mower_ws/zone_record && chmod 777 /mower_ws/zone_record
 
 # RUN echo aris build = colcon build
 

@@ -1,3 +1,16 @@
+# Copyright 2024 fxrbindi
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 from subprocess import call
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
@@ -6,10 +19,10 @@ from launch.event_handlers import OnProcessExit
 
 def generate_launch_description():
     # 1. 啟動 gps_waypoint_follower.launch.py
-    gps_waypoint_follower = ExecuteProcess(
-        cmd=['ros2', 'launch', 'nav2_gps_waypoint_follower', 'gps_waypoint_follower.launch.py'],
-        output='screen'
-    )
+    # gps_waypoint_follower = ExecuteProcess(
+    #     cmd=['ros2', 'launch', 'nav2_gps_waypoint_follower', 'gps_waypoint_follower.launch.py'],
+    #     output='screen'
+    # )
 
     # 2. 其他指令（每個間隔5秒執行）
     path_record = ExecuteProcess(
@@ -82,7 +95,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        gps_waypoint_follower,
+        # gps_waypoint_follower,
         timer_path_record,
         timer_map_manage,
         timer_boustrophedon_coverage,
