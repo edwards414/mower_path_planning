@@ -11,24 +11,36 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction, DeclareLaunchArgument
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+"""Launch file for Nav2 with Gazebo simulation."""
 
-from ament_index_python.packages import get_package_share_directory
 import os
 
+from ament_index_python.packages import get_package_share_directory
+
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+
+from launch_ros.actions import Node
+
+
 def generate_launch_description():
+    """Generate launch description for Nav2 navigation with Gazebo."""
     # 聲明 gui 參數，默認為 false
-    boustrophedon_coverage_dir = get_package_share_directory('boustrophedon_coverage')
-    turtlebot3_gazebo_dir = get_package_share_directory('turtlebot3_gazebo')
+    boustrophedon_coverage_dir = get_package_share_directory(
+        'boustrophedon_coverage'
+    )
+    turtlebot3_gazebo_dir = get_package_share_directory(
+        'turtlebot3_gazebo'
+    )
     turtlebot3_nav2_dir = get_package_share_directory('tb3_nav2_bringup')
-    # turtlebot3_nav2_dir = get_package_share_directory('turtlebot3_navigation2')
     ROS_DISTRO = os.environ['ROS_DISTRO']
     TURTLEBOT3_MODEL = os.environ['TURTLEBOT3_MODEL']
-    # 啟動 turtlebot3_gazebo 的 turtlebot3_world.launch.py  
+    # 啟動 turtlebot3_gazebo 的 turtlebot3_world.launch.py
 
     param_file_name = TURTLEBOT3_MODEL + '.yaml'
     if ROS_DISTRO == 'humble':
@@ -50,7 +62,7 @@ def generate_launch_description():
     map_dir = LaunchConfiguration(
             'map',
             default=os.path.join(
-                boustrophedon_coverage_dir, 
+                boustrophedon_coverage_dir,
                 'map',
                 'map.yaml'))
 
@@ -75,8 +87,12 @@ def generate_launch_description():
 
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(turtlebot3_gazebo_dir, 'launch', 'turtlebot3_world.launch.py')
-        ), 
+            os.path.join(
+                turtlebot3_gazebo_dir,
+                'launch',
+                'turtlebot3_world.launch.py'
+            )
+        ),
         launch_arguments={
             'use_sim_time': 'true'
         }.items()
@@ -87,7 +103,7 @@ def generate_launch_description():
             os.path.join(turtlebot3_nav2_dir, 'launch', 'bringup.launch.py')
         ),
         launch_arguments={
-            'use_sim_time': 'true', 
+            'use_sim_time': 'true',
             'map': map_dir,
             'params_file': param_dir
         }.items()
