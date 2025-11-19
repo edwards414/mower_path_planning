@@ -27,7 +27,10 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    launch_file_dir = os.path.join(get_package_share_directory('nav2_gps_waypoint_follower'), 'launch')
+    launch_file_dir = os.path.join(get_package_share_directory(
+        'nav2_gps_waypoint_follower'),
+        'launch'
+    )
     ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')

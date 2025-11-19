@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from subprocess import call
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
-from launch_ros.actions import Node
-from launch.event_handlers import OnProcessExit
+from launch.actions import ExecuteProcess, TimerAction
+
 
 def generate_launch_description():
     # 1. 啟動 gps_waypoint_follower.launch.py
@@ -56,29 +54,27 @@ def generate_launch_description():
         output='screen'
     )
 
-
-
     # 使用多個TimerAction，每個間隔5秒
     timer_path_record = TimerAction(
         period=5.0,  # 5秒後啟動 path_record
         actions=[path_record]
     )
-    
+
     timer_map_manage = TimerAction(
         period=10.0,  # 10秒後啟動 map_manage
         actions=[map_manage]
     )
-    
+
     timer_boustrophedon_coverage = TimerAction(
         period=15.0,  # 15秒後啟動 boustrophedon_coverage
         actions=[boustrophedon_coverage]
     )
-    
+
     timer_load_zone_list = TimerAction(
         period=20.0,  # 20秒後啟動 load_zone_list
         actions=[load_zone_list]
     )
-    
+
     timer_create_free_space = TimerAction(
         period=25.0,  # 25秒後啟動 create_free_space
         actions=[create_free_space]

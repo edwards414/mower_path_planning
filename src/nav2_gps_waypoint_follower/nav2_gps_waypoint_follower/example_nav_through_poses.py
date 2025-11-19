@@ -86,8 +86,8 @@ def main() -> None:
     # sanity check a valid path exists
     # path = navigator.getPathThroughPoses(initial_pose, goal_poses)
 
-    nav_through_poses_task = navigator.goThroughPoses(goal_poses)
-    print(f"nav.isTaskComplete(): {navigator.isTaskComplete()}")
+    # nav_through_poses_task = navigator.goThroughPoses(goal_poses)
+    print(f'nav.isTaskComplete(): {navigator.isTaskComplete()}')
 
     i = 0
     while not navigator.isTaskComplete():

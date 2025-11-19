@@ -61,12 +61,8 @@ class NavActionClient(Node):
         Send a goal to the action server to execute a split path.
 
         Args:
-        ----
-        path : Path
-            The path to execute.
-        coverage_split_points : list[Pose]
-            The split points.
-
+            path (Path): The path to execute.
+            coverage_split_points (list[Pose]): The split points.
         """
         self.get_logger().info('send_goal_split_path')
         goal_msg = Waypoint.Goal()

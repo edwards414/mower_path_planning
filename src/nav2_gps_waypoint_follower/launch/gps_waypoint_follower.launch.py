@@ -11,81 +11,86 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.substitutions import LaunchConfiguration
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.conditions import IfCondition
+
 from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
     # 取得 launch 目錄
-    bringup_dir = get_package_share_directory("nav2_bringup")
-
-    nav2_gps_waypoint_follower_dir = get_package_share_directory("nav2_gps_waypoint_follower")
-    
-    launch_dir = os.path.join(nav2_gps_waypoint_follower_dir, 'launch')
-    params_dir = os.path.join(nav2_gps_waypoint_follower_dir, "config")
-    nav2_params = os.path.join(params_dir, "nav2_no_map_params.yaml")
-    configured_params = RewrittenYaml(
-        source_file=nav2_params, root_key="", param_rewrites="", convert_types=True
+    nav2_gps_waypoint_follower_dir = get_package_share_directory(
+        'nav2_gps_waypoint_follower'
     )
 
-    use_rviz = LaunchConfiguration('use_rviz')
-    use_mapviz = LaunchConfiguration('use_mapviz')
+    # launch_dir = os.path.join(nav2_gps_waypoint_follower_dir, 'launch')
+    params_dir = os.path.join(nav2_gps_waypoint_follower_dir, 'config')
+    nav2_params = os.path.join(params_dir, 'nav2_no_map_params.yaml')
+    configured_params = RewrittenYaml(
+        source_file=nav2_params, root_key='', param_rewrites='', convert_types=True
+    )
 
-    declare_use_rviz_cmd = DeclareLaunchArgument(
-        'use_rviz',
-        default_value='True',
-        description='Whether to start RVIZ')
+    # use_rviz = LaunchConfiguration('use_rviz')
+    # use_mapviz = LaunchConfiguration('use_mapviz')
 
-    declare_use_mapviz_cmd = DeclareLaunchArgument(
-        'use_mapviz',
-        default_value='False',
-        description='Whether to start mapviz')
+    # declare_use_rviz_cmd = DeclareLaunchArgument(
+    #     'use_rviz',
+    #     default_value='True',
+    #     description='Whether to start RVIZ')
+
+    # declare_use_mapviz_cmd = DeclareLaunchArgument(
+    #     'use_mapviz',
+    #     default_value='False',
+    #     description='Whether to start mapviz')
 
     gazebo_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir,"launch", 'gps_world.launch.py')),
-            # launch_arguments={
-                
-            #     "use_sim_time": "True",
-            # }.items()
+            os.path.join(
+                nav2_gps_waypoint_follower_dir, 'launch', 'gps_world.launch.py'
+            )
+        ),
+        # launch_arguments={
+        #     "use_sim_time": "True",
+        # }.items()
     )
 
     robot_localization_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'dual_ekf_navsat.launch.py'))
+            os.path.join(
+                nav2_gps_waypoint_follower_dir, 'launch', 'dual_ekf_navsat.launch.py'
+            )
+        )
     )
 
     navigation_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir, "launch", "navigation_launch.py")
+            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'navigation_launch.py')
         ),
         launch_arguments={
-            "use_sim_time": "True",
-            "params_file": configured_params,
-            "autostart": "True",
+            'use_sim_time': 'True',
+            'params_file': configured_params,
+            'autostart': 'True',
         }.items(),
     )
 
-    rviz_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir, "launch", 'rviz.launch.py')),
-        condition=IfCondition(use_rviz)
-    )
+    # rviz_cmd = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'rviz.launch.py')
+    #     ),
+    #     condition=IfCondition(use_rviz)
+    # )
 
-    mapviz_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(launch_dir, 'mapviz.launch.py')),
-        condition=IfCondition(use_mapviz)
-    )
+    # mapviz_cmd = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(launch_dir, 'mapviz.launch.py')
+    #     ),
+    #     condition=IfCondition(use_mapviz)
+    # )
 
     # Create the launch description and populate
     ld = LaunchDescription()

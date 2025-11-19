@@ -15,14 +15,11 @@
 # limitations under the License.
 #
 # Authors: Darby Lim
-
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch.substitutions import PythonExpression
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -54,7 +51,6 @@ def generate_launch_description():
                 'use_sim_time': True,
                 'robot_description': robot_desc,
                 'frame_prefix': PythonExpression(["'", frame_prefix, "/'"])
-        
             }],
         ),
     ])

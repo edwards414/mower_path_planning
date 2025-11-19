@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from subprocess import call
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
-from launch_ros.actions import Node
-from launch.event_handlers import OnProcessExit
+from launch.actions import ExecuteProcess
+
 
 def generate_launch_description():
     # 2. 其他指令（每個間隔5秒執行）

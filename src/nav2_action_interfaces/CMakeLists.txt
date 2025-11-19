@@ -18,7 +18,7 @@ find_package(nav_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/Waypoint.action"
   DEPENDENCIES action_msgs nav_msgs
-  )
+)
 
 
 if(BUILD_TESTING)

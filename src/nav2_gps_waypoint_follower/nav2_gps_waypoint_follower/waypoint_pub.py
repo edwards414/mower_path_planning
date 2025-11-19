@@ -11,12 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
-from std_msgs.msg import Header
 import rclpy
 from rclpy.duration import Duration
-import time
+
 
 def main():
     rclpy.init()
@@ -45,16 +44,14 @@ def main():
         goal_pose.pose.orientation.z = 0.0
         goal_poses.append(goal_pose)
 
-    nav_start = nav.get_clock().now()
-    print("開始發佈waypoint")
+    print('開始發佈waypoint')
     print(len(goal_poses))
     goal_poses = goal_poses[::-1]
 
-    nav_through_poses_task = nav.goThroughPoses(goal_poses)
+    nav.goThroughPoses(goal_poses)
     i = 0
 
-    print(f"nav.isTaskComplete(): {nav.isTaskComplete()}")
-
+    print(f'nav.isTaskComplete(): {nav.isTaskComplete()}')
 
     while not nav.isTaskComplete():
         ################################################
@@ -78,18 +75,18 @@ def main():
 
             # Some navigation timeout to demo cancellation
             if Duration.from_msg(feedback.navigation_time) > Duration(seconds=600.0):
-                navigator.cancelTask()
+                nav.cancelTask()
 
             # Some navigation request change to demo preemption
             if Duration.from_msg(feedback.navigation_time) > Duration(seconds=35.0):
                 goal_pose4 = PoseStamped()
                 goal_pose4.header.frame_id = 'map'
-                goal_pose4.header.stamp = navigator.get_clock().now().to_msg()
+                goal_pose4.header.stamp = nav.get_clock().now().to_msg()
                 goal_pose4.pose.position.x = 0.0
                 goal_pose4.pose.position.y = 0.0
                 goal_pose4.pose.orientation.w = 1.0
                 goal_pose4.pose.orientation.z = 0.0
-                navigator.goThroughPoses([goal_pose4])
+                nav.goThroughPoses([goal_pose4])
 
     result = nav.getResult()
     if result == TaskResult.SUCCEEDED:
@@ -98,9 +95,10 @@ def main():
         print('Goal was canceled!')
     elif result == TaskResult.FAILED:
         print('Goal failed!')
-    
+
     # nav.lifecycleShutdown()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
