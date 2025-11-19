@@ -11,9 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from setuptools import find_packages, setup
-import os
+
 from glob import glob
+import os
+
+from setuptools import find_packages, setup
+
 package_name = 'turtlebot3_mapviz'
 
 setup(
@@ -24,8 +27,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-    ],  
+        (
+            os.path.join('share', package_name, 'launch'),
+            glob(os.path.join('launch', '*launch.[pxy][yma]*'))
+        ),
+    ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='fxrbindi',
