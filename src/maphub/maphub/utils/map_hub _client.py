@@ -11,12 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import rclpy
-from rclpy.node import Node 
-from boustrophedon_coverage_interfaces.srv import GetZoneList  
+from boustrophedon_coverage_interfaces.srv import GetZoneList
+
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.node import Node
+
 
 class MapHubClient(Node):
+
     def __init__(self):
         super().__init__('map_hub_client')
         self.service_callback_group = ReentrantCallbackGroup()
@@ -28,4 +30,3 @@ class MapHubClient(Node):
             GetZoneList, '/get_record_zone_list',
             callback_group=self.service_callback_group
         )
-    
