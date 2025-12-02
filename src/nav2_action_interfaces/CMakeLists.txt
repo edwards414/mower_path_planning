@@ -33,14 +33,5 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-
-install(
-  PROGRAMS
-    scripts/nav_action_server_node.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-
-
 ament_export_dependencies(rosidl_default_generators action_msgs nav_msgs)
 ament_package()

@@ -73,7 +73,7 @@ class NavActionServer(Node):
         """
         self.get_logger().info('執行目標')
         path = goal_handle.request.path
-        coverage_split_points = goal_handle.request.poses
+        coverage_split_points = goal_handle.request.coverage_split_points
 
         self.get_logger().info(f'path 長度: {len(path.poses)}')
         self.get_logger().info(

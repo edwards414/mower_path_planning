@@ -33,6 +33,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'nav_action_server = nav_robot.nav_action_server_node:main',
         ],
     },
 )

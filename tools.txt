@@ -14,6 +14,7 @@ node[nav2_gps_waypoint_follower]:
     [test system]
     ros2 launch nav2_gps_waypoint_follower test_system.launch.py
 
+  ros2 launch nav2_gps_waypoint_follower rviz.launch.py
     ros2 run lawer_qt_py lawer_qt
 
 
@@ -131,7 +132,6 @@ ros2 run boustrophedon_coverage nav_action_client
 ros2 run turtlebot3_teleop teleop_keyboard
 
 #--------------------
-
 
 [發起gps world 跟 turtlebot]
 ros2 launch nav2_gps_waypoint_follower gps_world.launch.py

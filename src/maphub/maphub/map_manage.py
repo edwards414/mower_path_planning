@@ -71,7 +71,7 @@ class MapManage(Node):
         )
 
         qos = QoSProfile(depth=1)
-        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos.durability = QoSDurabilityPolicy.VOLATILE
         qos.reliability = QoSReliabilityPolicy.RELIABLE
 
         # 發布區

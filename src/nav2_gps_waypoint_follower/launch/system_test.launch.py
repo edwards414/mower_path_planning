@@ -17,10 +17,10 @@ from launch.actions import ExecuteProcess, TimerAction
 
 def generate_launch_description():
     # 1. 啟動 gps_waypoint_follower.launch.py
-    # gps_waypoint_follower = ExecuteProcess(
-    #     cmd=['ros2', 'launch', 'nav2_gps_waypoint_follower', 'gps_waypoint_follower.launch.py'],
-    #     output='screen'
-    # )
+    gps_waypoint_follower = ExecuteProcess(
+        cmd=['ros2', 'launch', 'nav2_gps_waypoint_follower', 'gps_waypoint_follower.launch.py'],
+        output='screen'
+    )
 
     # 2. 其他指令（每個間隔5秒執行）
     path_record = ExecuteProcess(
@@ -33,6 +33,10 @@ def generate_launch_description():
     )
     boustrophedon_coverage = ExecuteProcess(
         cmd=['ros2', 'run', 'boustrophedon_coverage', 'boustrophedon_coverage'],
+        output='screen'
+    )
+    nav_robot = ExecuteProcess(
+        cmd=['ros2', 'run', 'nav_robot', 'nav_robot'],
         output='screen'
     )
     load_zone_list = ExecuteProcess(
@@ -91,7 +95,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # gps_waypoint_follower,
+        gps_waypoint_follower,
         timer_path_record,
         timer_map_manage,
         timer_boustrophedon_coverage,
