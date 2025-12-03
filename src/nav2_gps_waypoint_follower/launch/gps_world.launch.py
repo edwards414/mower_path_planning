@@ -15,19 +15,28 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+
 
 
 def generate_launch_description():
+
+    # Declare launch arguments
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true',
+    )
+
+    # Launch configuration
+    use_sim_time = LaunchConfiguration('use_sim_time')
     os.environ['TURTLEBOT3_MODEL'] = 'burger_cam_gps'
     # 取得 boustrophedon_coverage 套件的 share 目錄
     nav2_gps_waypoint_follower_dir = get_package_share_directory(
         'nav2_gps_waypoint_follower'
     )
-
-    # 模型名稱
-    # model_name = 'turtlebot3_burger_cam_gps'
 
     # world 檔案
     world_file = os.path.join(
@@ -35,13 +44,6 @@ def generate_launch_description():
         'worlds',
         'mower_world.world'
     )
-
-    # 橋接參數檔
-    # bridge_yaml = os.path.join(
-    #     nav2_gps_waypoint_follower_dir,
-    #     'config',
-    #     'turtlebot3_burger_cam_gps_bridge.yaml'
-    # )
 
     # 載入 Gazebo world
     gz_sim_launch = IncludeLaunchDescription(
@@ -65,7 +67,7 @@ def generate_launch_description():
                 'robot_state_publisher.launch.py'
             )
         ),
-        launch_arguments={'use_sim_time': 'true'}.items()
+        launch_arguments={'use_sim_time': use_sim_time}.items()
     )
 
     spawn_turtlebot_cmd = IncludeLaunchDescription(
@@ -80,24 +82,11 @@ def generate_launch_description():
         }.items()
     )
 
-    # bridge = Node(
-    #     package='ros_gz_bridge',
-    #     executable='parameter_bridge',
-    #     # namespace='turtlebot3',
-    #     parameters=[
-    #         {
-    #             'config_file': bridge_yaml,
-    #             'expand_gz_topic_names': True,
-    #             'use_sim_time': True,
-    #         }
-    #     ],
-    #     output='screen',
-    #  )
 
     ld = LaunchDescription()
     # Add the commands to the launch description
+    ld.add_action(declare_use_sim_time)
     ld.add_action(gz_sim_launch)
-    # ld.add_action(bridge)
     ld.add_action(spawn_turtlebot_cmd)
     ld.add_action(robot_state_publisher_cmd)
     return ld

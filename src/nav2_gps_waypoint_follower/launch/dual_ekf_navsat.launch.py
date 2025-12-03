@@ -16,17 +16,29 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 import launch.actions
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 import launch_ros.actions
 
 
 def generate_launch_description():
+    # Declare launch arguments
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true',
+    )
+
+    # Launch configuration
+    use_sim_time = LaunchConfiguration('use_sim_time')
+
     gps_wpf_dir = get_package_share_directory(
         'nav2_gps_waypoint_follower')
     rl_params_file = os.path.join(
         gps_wpf_dir, 'config', 'dual_ekf_navsat_params.yaml')
-
     return LaunchDescription(
         [
+            declare_use_sim_time,
             launch.actions.DeclareLaunchArgument(
                 'output_final_position', default_value='false'
             ),
@@ -38,7 +50,7 @@ def generate_launch_description():
                 executable='ekf_node',
                 name='ekf_filter_node_odom',
                 output='screen',
-                parameters=[rl_params_file, {'use_sim_time': True}],
+                parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
                 remappings=[('odometry/filtered', 'odometry/local')],
             ),
             launch_ros.actions.Node(
@@ -46,7 +58,7 @@ def generate_launch_description():
                 executable='ekf_node',
                 name='ekf_filter_node_map',
                 output='screen',
-                parameters=[rl_params_file, {'use_sim_time': True}],
+                parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
                 remappings=[('odometry/filtered', 'odometry/global')],
             ),
             launch_ros.actions.Node(
@@ -54,7 +66,7 @@ def generate_launch_description():
                 executable='navsat_transform_node',
                 name='navsat_transform',
                 output='screen',
-                parameters=[rl_params_file, {'use_sim_time': True}],
+                parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
                 remappings=[
                     ('imu/data', 'imu/data'),
                     ('gps/fix', 'gps/fix'),

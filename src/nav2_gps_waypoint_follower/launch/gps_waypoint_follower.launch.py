@@ -16,13 +16,24 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 from nav2_common.launch import RewrittenYaml
 
 
+
 def generate_launch_description():
+    # Launch configuration
+    use_sim_time = LaunchConfiguration('use_sim_time')
+
+    # Declare launch arguments
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='Use simulation (Gazebo) clock if true',
+    )
     # 取得 launch 目錄
     nav2_gps_waypoint_follower_dir = get_package_share_directory(
         'nav2_gps_waypoint_follower'
@@ -35,28 +46,15 @@ def generate_launch_description():
         source_file=nav2_params, root_key='', param_rewrites='', convert_types=True
     )
 
-    # use_rviz = LaunchConfiguration('use_rviz')
-    # use_mapviz = LaunchConfiguration('use_mapviz')
-
-    # declare_use_rviz_cmd = DeclareLaunchArgument(
-    #     'use_rviz',
-    #     default_value='True',
-    #     description='Whether to start RVIZ')
-
-    # declare_use_mapviz_cmd = DeclareLaunchArgument(
-    #     'use_mapviz',
-    #     default_value='False',
-    #     description='Whether to start mapviz')
-
     gazebo_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
                 nav2_gps_waypoint_follower_dir, 'launch', 'gps_world.launch.py'
             )
         ),
-        # launch_arguments={
-        #     "use_sim_time": "True",
-        # }.items()
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+        }.items()
     )
 
     robot_localization_cmd = IncludeLaunchDescription(
@@ -64,15 +62,18 @@ def generate_launch_description():
             os.path.join(
                 nav2_gps_waypoint_follower_dir, 'launch', 'dual_ekf_navsat.launch.py'
             )
-        )
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
     )
 
     navigation_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'navigation_launch.py')
+            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'navigation.launch.py')
         ),
         launch_arguments={
-            'use_sim_time': 'True',
+            'use_sim_time': use_sim_time,
             'params_file': configured_params,
             'autostart': 'True',
         }.items(),
@@ -94,6 +95,7 @@ def generate_launch_description():
 
     # Create the launch description and populate
     ld = LaunchDescription()
+    ld.add_action(declare_use_sim_time)
 
     # simulator launch
     ld.add_action(gazebo_cmd)
@@ -103,7 +105,6 @@ def generate_launch_description():
 
     # # navigation2 launch
     ld.add_action(navigation_cmd)
-
     # # viz launch
     # ld.add_action(declare_use_rviz_cmd)
     # ld.add_action(rviz_cmd)
