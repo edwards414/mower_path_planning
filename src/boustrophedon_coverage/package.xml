@@ -14,7 +14,6 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>example_interfaces</exec_depend>
   <exec_depend>boustrophedon_coverage_interfaces</exec_depend>
   
   <test_depend>ament_copyright</test_depend>

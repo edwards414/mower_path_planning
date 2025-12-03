@@ -10,6 +10,9 @@
 
   <depend>boustrophedon_coverage_interfaces</depend>
   <depend>path_record_interface</depend>
+
+  <exec_depend>tf2_ros</exec_depend>
+  
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

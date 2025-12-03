@@ -9,7 +9,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(example_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -21,7 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ZoneMapList.srv"
   "msg/ZoneMap.msg"
   "srv/ZoneExecPath.srv"
-  DEPENDENCIES example_interfaces visualization_msgs nav_msgs std_msgs geometry_msgs
+  DEPENDENCIES visualization_msgs nav_msgs std_msgs geometry_msgs
 )
 
 if(BUILD_TESTING)
