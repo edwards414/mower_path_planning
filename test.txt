@@ -1,0 +1,19 @@
+Starting >>> turtlebot3_mapviz
+--- output: turtlebot3_mapviz
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.4.0
+cachedir: /home/fxrbindi/Desktop/mower_ws/build/turtlebot3_mapviz/.pytest_cache
+rootdir: /home/fxrbindi/Desktop/mower_ws/src/turtlebot3_mapviz
+plugins: ament-flake8-0.17.1, ament-pep257-0.17.1, ament-lint-0.17.1, launch-testing-ros-0.26.6, launch-testing-3.4.3, ament-copyright-0.17.1, ament-xmllint-0.17.1, cov-4.1.0, colcon-core-0.18.4, typeguard-4.1.5
+collected 3 items
+
+test/test_copyright.py s                                                 [ 33%]
+test/test_flake8.py .                                                    [ 66%]
+test/test_pep257.py .                                                    [100%]
+
+- generated xml file: /home/fxrbindi/Desktop/mower_ws/build/turtlebot3_mapviz/pytest.xml -
+========================= 2 passed, 1 skipped in 0.28s =========================
+---
+Finished <<< turtlebot3_mapviz [1.24s]
+
+Summary: 1 package finished [1.43s]
