@@ -1,54 +1,14 @@
 services:
-  # lawan_node_dev:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.dev
-  #   image: lawan_node_dev:latest
-  #   environment:
-  #     - ROS_DOMAIN_ID
-  #   restart: always
-  #   network_mode: host
-  #   volumes:
-  #     - ./:/car_ws/src:rw
-  #     - ./build:/car_ws/build:rw
-  #     - ./install:/car_ws/install:rw
-  #     - ./log:/car_ws/log:rw
-  #   ipc: host
-  #   pid: host
-  #   command: ["/bin/bash"]
   lawan_node:
     build:
       context: .
       dockerfile: Dockerfile
+    #image: ghcr.io/edwards414/mower_path_planning:main
     image: lawan_node:latest
     environment:
-      - ROS_DOMAIN_ID
+      - ROS_DOMAIN_ID = 0
       - ROS_LOCALHOST_ONLY=1
-      - RMW_IMPLEMENTATION
-    restart: always
     network_mode: host
     ipc: host
     pid: host
-    # volumes:
-    #   # 开发时挂载源代码
-    #   - ./:/car_ws/src:rw
-    #   - ./build:/car_ws/build:rw
-    #   - ./install:/car_ws/install:rw
-    #   - ./log:/car_ws/log:rw
-    # command: ['id']
-
-    command: >
-      bash -c "source /mower_ws/install/setup.bash && ros2 launch nav2_gps_waypoint_follower test_system.launch.py"
-  # sim:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   image: simulator:latest
-  #   environment:
-  #     - ROS_DOMAIN_ID
-  #   restart: always
-  #   network_mode: host
-  #   ipc: host
-  #   pid: host
-  #   user: ubuntu
-  #   command: ["sleep", "infinity"]
+    # command: ["ros2", "launch", "nav2_gps_waypoint_follower", "small_test.launch.py"]
