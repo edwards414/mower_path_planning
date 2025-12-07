@@ -1,28 +1,81 @@
-FROM ros:jazzy
-ARG USERNAME=fxrbindi
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
+ARG ROS_DISTRO=jazzy
+##############################################
+# Stage 1: Base
+##############################################
+FROM ros:${ROS_DISTRO}-ros-base AS base
+ENV ROS_DISTRO=${ROS_DISTRO}
 
-# Delete user if it exists in container (e.g Ubuntu Noble: ubuntu)
-RUN if id -u $USER_UID ; then userdel `id -un $USER_UID` ; fi
+# 安裝必要工具
+RUN apt-get update && \
+    apt-get install -y $(cut -d# -f1 </tmp/apt-base-packages) && \
+    rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
-# Create the user
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
-    #
-    # [Optional] Add sudo support. Omit if you don't need to install software after connecting.
+RUN rosdep update 
+
+WORKDIR ${WORKSPACE}
+
+
+##############################################
+# Stage 2: Builder
+##############################################
+FROM base AS builder
+
+RUN apt-get update && \
+    apt-get install -y $(cut -d# -f1 </tmp/apt-cv-packages | envsubst) \
+    && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
+
+##############################################
+# Stage 3: dev
+##############################################
+FROM builder AS dev
+
+RUN apt-get update && \
+    apt-get install -y $(cut -d# -f1 </tmp/apt-dev-packages | envsubst) \
+    && rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
+
+
+# Add user with same UID and GID as your host system, replace if one exists with same UID
+ARG USER_NAME=fxrbindi
+ARG USER_ID
+ARG GROUP_NAME
+ARG GROUP_ID
+
+# 建立與主機相同 UID/GID 的使用者，避免檔案權限問題
+RUN \
+    # === 處理群組 ===
+    # 檢查該 GID 是否已存在
+    if getent group $GROUP_ID > /dev/null; then \
+        # 若存在：取得原群組名稱，並重新命名為目標名稱
+        OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
+        groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
+    else \
+        # 若不存在：建立新群組
+        groupadd --gid $GROUP_ID $USER_NAME; \
+    fi \
+    # === 處理使用者 ===
+    # 檢查該 UID 是否已存在
+    && if getent passwd $USER_ID > /dev/null; then \
+        # 若存在：取得原使用者名稱，重新命名並移動家目錄
+        OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
+        usermod -l $USER_NAME $OLD_USER_NAME; \
+        usermod -d /home/$USER_NAME -m $USER_NAME; \
+    else \
+        # 若不存在：建立新使用者（指定 shell、UID、GID、建立家目錄）
+        useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
+    fi \
+    # === 設定 sudo 權限 ===
     && apt-get update \
     && apt-get install -y sudo \
-    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME
-RUN apt-get update && apt-get upgrade -y
-RUN apt-get install -y python3-pip
-ENV SHELL=/bin/bash
+    # 允許該使用者以 root 權限執行任何指令且不需密碼
+    && echo $USER_NAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USER_NAME \
+    # 設定 sudoers 檔案權限為 0440（僅 root 可讀）
+    && chmod 0440 /etc/sudoers.d/$USER_NAME
 
-# ********************************************************
-# * Anything else you want to do like clean up goes here *
-# ********************************************************
 
-# [Optional] Set the default user. Omit if you want to keep the default as root.
-USER $USERNAME
-CMD ["/bin/bash"]
+
+# Add user to video group to allow access to webcam
+RUN sudo usermod --append --groups video $USER_NAME
+
+RUN rosdep update
+
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc

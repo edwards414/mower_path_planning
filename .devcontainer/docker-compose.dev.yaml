@@ -1,0 +1,22 @@
+services:
+  lawan_node_dev: # name of this service, will be used in devcontainer.json
+    image: lawan_node_dev # thw image will have this name once built
+    extends:
+      file: docker-compose.cv.yaml # extend the below service from this file
+      service: lawan_node_cv
+    build:
+      context: .
+      dockerfile: Dockerfile # the only dockerfile
+      args:
+        USER_NAME: $USER_NAME # will be taken from .env file, run export_env.sh first
+        USER_ID: $USER_ID       
+        GROUP_NAME: $GROUP_NAME  
+        GROUP_ID: $GROUP_ID      
+      target: dev # must match the stage name in Dockerfile
+    user: $USER_NAME # will login as your usename
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw # for gui applications
+      - /Users/$USER_NAME/.ssh:/home/$USER_NAME/.ssh:ro # git credentials
+      - /Users/$USER_NAME/data:/home/$USER_NAME/data:rw # i like to keep data this way
+      - /dev/bus/usb:/dev/bus/usb # for usb access, depends where its located
+      - ../:/home/$USER_NAME/mower_ws # mount workspace directory inside the container

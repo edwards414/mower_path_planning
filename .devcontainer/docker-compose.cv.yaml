@@ -1,0 +1,10 @@
+services:
+  lawan_node_cv:
+    image: lawan_node_cv
+    extends:
+      file: docker-compose.base.yaml
+      service: lawan_node_base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder

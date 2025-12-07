@@ -1,0 +1,13 @@
+services:
+  lawan_node_base:
+    image: lawan_node_base
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        ROS_DISTRO: jazzy
+      target: base
+    environment:
+      - DISPLAY=$DISPLAY
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_DRIVER_CAPABILITIES=all
