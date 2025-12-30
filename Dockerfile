@@ -29,6 +29,12 @@ COPY ./src ${WORKSPACE}/src
 RUN . /opt/ros/jazzy/setup.sh && \
     rosdep install --from-paths src -i --rosdistro jazzy -y
 
+RUN apt-get update && apt-get install -y libusb-1.0-0-dev \
+        ros-$ROS_DISTRO-rtcm-msgs \
+        ros-$ROS_DISTRO-ublox-dgnss \
+        ros-$ROS_DISTRO-ublox-ubx-msgs  \ 
+        ros-$ROS_DISTRO-nav2-common 
+
 # # 建置 colcon
 RUN . /opt/ros/jazzy/setup.sh && \
     colcon build --event-handlers console_cohesion+
@@ -46,7 +52,8 @@ RUN apt-get update \
     && apt-get install -y python3-opencv \
     && rm -rf /var/lib/apt/lists/*
     
-
-ENTRYPOINT ["/bin/bash", "-c"]
+RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc && \
+    echo "source /mower_ws/install/setup.bash" >> /root/.bashrc
+# ENTRYPOINT ["/bin/bash", "-c"]
 # 默认启动命令
-CMD ["source /opt/ros/jazzy/setup.bash && source /mower_ws/install/setup.bash && ros2 launch nav2_gps_waypoint_follower small_test.launch.py"]
+# CMD ["source /opt/ros/jazzy/setup.bash && source /mower_ws/install/setup.bash && ros2 launch nav2_gps_waypoint_follower small_test.launch.py"]

@@ -1,5 +1,10 @@
 {
-    "build": {
-        "dockerfile": "Dockerfile.dev"
-    }
+	"name": "lawan_node",
+	"dockerComposeFile": [
+		"docker-compose.base.yaml",
+		"docker-compose.cv.yaml",
+		"docker-compose.dev.yaml"	
+	],
+	"service": "lawan_node_dev",
+	"workspaceFolder": "/home/${localEnv:USER}/mower_ws"
 }

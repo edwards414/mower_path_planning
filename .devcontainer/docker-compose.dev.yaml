@@ -14,6 +14,9 @@ services:
         GROUP_ID: $GROUP_ID      
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
+        # Interactive shell
+    stdin_open: true
+    tty: true
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw # for gui applications
       - /Users/$USER_NAME/.ssh:/home/$USER_NAME/.ssh:ro # git credentials

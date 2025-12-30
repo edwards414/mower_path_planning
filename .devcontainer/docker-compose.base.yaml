@@ -8,6 +8,6 @@ services:
         ROS_DISTRO: jazzy
       target: base
     environment:
-      - DISPLAY=$DISPLAY
+      - DISPLAY=docker.for.mac.host.internal:0  # macOS Docker Desktop 專用
       - QT_X11_NO_MITSHM=1
       - NVIDIA_DRIVER_CAPABILITIES=all

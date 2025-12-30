@@ -5,3 +5,4 @@ curl
 git
 python3-pip
 python-is-python3
+libusb-1.0-0-dev

@@ -6,4 +6,5 @@ echo "USER_NAME=${USER}" > ${ENV_FILE}
 echo "USER_ID=$(id -u $USER)" >> ${ENV_FILE}
 echo "GROUP_NAME=$(id -gn $USER)" >> ${ENV_FILE}
 echo "GROUP_ID=$(id -g $USER)" >> ${ENV_FILE}
-echo "DISPLAY=${DISPLAY}" >> ${ENV_FILE}
+# echo "DISPLAY=${DISPLAY}" >> ${ENV_FILE}
+echo "DISPLAY=docker.for.mac.host.internal:0" >> ${ENV_FILE}

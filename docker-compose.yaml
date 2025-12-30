@@ -1,14 +1,18 @@
 services:
   lawan_node:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    #image: ghcr.io/edwards414/mower_path_planning:main
-    image: lawan_node:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    image: ghcr.io/edwards414/mower_path_planning:main
+    # image: lawan_node:latest
     environment:
-      - ROS_DOMAIN_ID = 0
+      # - ROS_DOMAIN_ID = 0
       - ROS_LOCALHOST_ONLY=1
     network_mode: host
     ipc: host
     pid: host
+
+    stdin_open: true
+    tty: true
+    # command: [sleep, infinity]
     # command: ["ros2", "launch", "nav2_gps_waypoint_follower", "small_test.launch.py"]
