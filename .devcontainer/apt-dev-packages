@@ -3,3 +3,7 @@ ros-$ROS_DISTRO-tf-transformations
 ros-$ROS_DISTRO-rqt-graph
 ros-$ROS_DISTRO-rosbag2-storage-mcap
 ros-$ROS_DISTRO-ament-cmake-clang-format
+ros-$ROS_DISTRO-rtcm-msgs 
+ros-$ROS_DISTRO-ublox-dgnss 
+ros-$ROS_DISTRO-ublox-ubx-msgs  
+ros-$ROS_DISTRO-nav2-common 

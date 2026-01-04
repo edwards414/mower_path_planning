@@ -14,5 +14,8 @@ services:
 
     stdin_open: true
     tty: true
+    devices:
+      - /dev/imu_usb:/dev/imu_usb
+      
     # command: [sleep, infinity]
     # command: ["ros2", "launch", "nav2_gps_waypoint_follower", "small_test.launch.py"]
