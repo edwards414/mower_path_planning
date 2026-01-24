@@ -1,0 +1,9 @@
+<library path="mower_controller">
+  <class name="mower_controller/MowerController"
+         type="MowerSystemHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware Interface for Mower Controller.
+    </description>
+  </class>
+</library>
