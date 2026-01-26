@@ -1,5 +1,5 @@
 <library path="mower_controller">
-  <class name="mower_controller/MowerController"
+  <class name="mower_controller/MowerSystemHardware"
          type="MowerSystemHardware"
          base_class_type="hardware_interface::SystemInterface">
     <description>

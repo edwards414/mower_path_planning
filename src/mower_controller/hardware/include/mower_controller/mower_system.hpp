@@ -32,6 +32,7 @@
 
 #include "mower_controller/wheel.hpp"
 #include "mower_controller/Stm_Comms.hpp"
+#include "mower_controller/config.hpp"
 
 
 class MowerSystemHardware : public hardware_interface::SystemInterface
@@ -39,16 +40,10 @@ class MowerSystemHardware : public hardware_interface::SystemInterface
 public:
     RCLCPP_SHARED_PTR_DEFINITIONS(MowerSystemHardware)
 
-    hardware_interface::CallbackReturn on_init(
-        const hardware_interface::HardwareComponentInterfaceParams & params) override;
-
     hardware_interface::CallbackReturn on_configure(
         const rclcpp_lifecycle::State & previous_state) override;
 
     hardware_interface::CallbackReturn on_activate(
-        const rclcpp_lifecycle::State & previous_state) override;
-
-    hardware_interface::CallbackReturn on_deactivate(
         const rclcpp_lifecycle::State & previous_state) override;
 
     hardware_interface::return_type read(
@@ -57,19 +52,18 @@ public:
     hardware_interface::return_type write(
         const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
-    std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
-    std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
+
 
 private:
   // Parameters for the DiffBot simulation
 
   StmComms stm_comms_;
 
-  Wheel wheel_left_;
-  Wheel wheel_right_;
+//   Wheel wheel_left_;
+//   Wheel wheel_right_;
 
-  double hw_start_sec_;
-  double hw_stop_sec_;
+  Config cfg_;
+
 };
 
 

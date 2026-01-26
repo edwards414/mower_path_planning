@@ -1,7 +1,8 @@
 #ifndef MOWER_CONTROLLER_STM_COMMS_HPP
 #define MOWER_CONTROLLER_STM_COMMS_HPP
 
-#include <serial/serial.h>
+#include <libserial/SerialPort.h>
+#include <string>
 
 #define MAX_RADPS 59.76f
 #define PWM_MAX   200.0f
@@ -13,13 +14,16 @@ public:
     StmComms()
     {  }
 
-    StmComms(const std::string &serial_device, int32_t baud_rate, int32_t timeout_ms)
-        : serial_conn_(serial_device, baud_rate, serial::Timeout::simpleTimeout(timeout_ms))
-    {  }
+    StmComms(const std::string &serial_device, int32_t baud_rate, int32_t timeout_ms);
+    
     void setup(const std::string &serial_device, int32_t baud_rate, int32_t timeout_ms);
     void setMotorValues(int val_1, int val_2);
     std::string sendMsg(const std::string &msg, bool print_output = false);
+    bool is_connected() const;
 
 private:
-    serial::Serial serial_conn_;
+    LibSerial::SerialPort serial_conn_;
+    int32_t timeout_ms_;
 };
+
+#endif // MOWER_CONTROLLER_STM_COMMS_HPP

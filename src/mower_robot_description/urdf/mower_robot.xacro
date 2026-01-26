@@ -4,6 +4,8 @@
 <xacro:include filename="$(find mower_robot_description)/urdf/materials.xacro" />
 <xacro:include filename="$(find mower_robot_description)/urdf/mower_robot.trans" />
 <xacro:include filename="$(find mower_robot_description)/urdf/mower_robot.gazebo" />
+<xacro:include filename="$(find mower_robot_description)/urdf/ros2_control.xacro" />
+
 <link name="base_link">
   <inertial>
     <origin xyz="-0.00013914774572061804 0.0011217762762978716 -0.036198325107881256" rpy="0 0 0"/>

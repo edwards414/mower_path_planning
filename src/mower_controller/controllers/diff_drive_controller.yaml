@@ -5,8 +5,8 @@ controller_manager:
     diff_controller:
       type: diff_drive_controller/DiffDriveController
 
-    joint_state_broadcaster:
-      type: joint_state_broadcaster/JointStateBroadcaster
+    # joint_state_broadcaster:
+    #   type: joint_state_broadcaster/JointStateBroadcaster
 
 diff_controller:
   ros__parameters:
@@ -18,6 +18,7 @@ diff_controller:
     wheel_radius: 0.18
     base_frame_id: base_link
     use_stamped_vel: false
+    open_loop: true
 
     linear.x.has_velocity_limits: false
     linear.x.has_acceleration_limits: false

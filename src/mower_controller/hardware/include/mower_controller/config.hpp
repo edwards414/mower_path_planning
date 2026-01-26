@@ -12,6 +12,7 @@ struct Config
   std::string device = "/dev/ttyUSB0";
   int baud_rate = 115200;
   int timeout = 1000;
+  int enc_counts_per_rev = 1024;
 };
 
 #endif // MOWER_CONTROLLER_CONFIG_H
