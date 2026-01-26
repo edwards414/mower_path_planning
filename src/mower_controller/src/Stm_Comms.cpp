@@ -41,7 +41,7 @@ void StmComms::setMotorValues(int val_1, int val_2)
 {
     // Send motor command to the STM32
     std::stringstream ss;
-    ss << "@m " << val_1 << " " << val_2 << "\r";
+    ss << "@M " << val_1 << " " << val_2 << "\r";
     sendMsg(ss.str(), false);
 }
 

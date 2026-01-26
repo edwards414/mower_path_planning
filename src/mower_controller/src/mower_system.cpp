@@ -23,15 +23,15 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_configure(
   cfg_.device = info_.hardware_parameters["device"];
   cfg_.baud_rate = std::stoi(info_.hardware_parameters["baud_rate"]);
   cfg_.timeout = std::stoi(info_.hardware_parameters["timeout"]);
+  cfg_.left_wheel_name = info_.hardware_parameters["left_wheel_name"];
+  cfg_.right_wheel_name = info_.hardware_parameters["right_wheel_name"];
   // Set up the wheels with their names
-
-  // stm_comms_.setup(cfg_.device, cfg_.baud_rate, cfg_.timeout);
-
+  wheel_left_.setup(cfg_.left_wheel_name);
+  wheel_right_.setup(cfg_.right_wheel_name);
   RCLCPP_INFO(get_logger(), "Finished Configuration - Connected to %s", cfg_.device.c_str());
   
   return hardware_interface::CallbackReturn::SUCCESS;
 }
-
 
 hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
   const rclcpp_lifecycle::State & /*previous_state*/)
@@ -39,6 +39,13 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   RCLCPP_INFO(get_logger(), "Activating ...please wait...");
 
+  stm_comms_.setup(cfg_.device, cfg_.baud_rate, cfg_.timeout);
+  
+  if(!stm_comms_.is_connected())
+  {
+    RCLCPP_ERROR(get_logger(), "Failed to connect to the STM32");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
   // END: This part here is for exemplary purposes - Please do not copy to your production code
 
   // command and state should be equal when starting
@@ -80,27 +87,33 @@ hardware_interface::return_type MowerSystemHardware::read(
   return hardware_interface::return_type::OK;
 }
 
-hardware_interface::return_type MowerSystemHardware::write(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
-{
-  std::stringstream ss;
-//  if(!stm_comms_.is_connected())
-//  {
-//   return hardware_interface::return_type::ERROR;
-//  }
- // Set the motor values
- for (const auto & [name, descr] : joint_command_interfaces_)
- {
-   // Simulate sending commands to the hardware
-  //  set_state(name, get_command(name));
+  hardware_interface::return_type MowerSystemHardware::write(
+    const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  {
+    if(!stm_comms_.is_connected())
+    {
+      return hardware_interface::return_type::ERROR;
+    }
+    // Set the motor values
+    for (const auto & [name, descr] : joint_command_interfaces_)
+    {
+      // Collect commands for sending to hardware
+      if (name == wheel_left_.name)
+      {
+        wheel_left_.cmd = get_command(name);
+      }
+      else if (name == wheel_right_.name)
+      {
+        wheel_right_.cmd = get_command(name);
+      }
+    }
 
-   ss << std::fixed << std::setprecision(2) << std::endl
-      << "\t" << "command " << get_command(name) << " for '" << name << "'!";
- }
-//  stm_comms_.setMotorValues(get_command(wheel_left_.name) * RADPS_TO_PWM, get_command(wheel_right_.name) * RADPS_TO_PWM);
- RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
- return hardware_interface::return_type::OK;
-}
+  stm_comms_.setMotorValues(wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
+
+  RCLCPP_INFO(get_logger(), "Left wheel command: %f, Right wheel command: %f", wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
+  //  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+  return hardware_interface::return_type::OK;
+  }
 
 
 #include "pluginlib/class_list_macros.hpp"

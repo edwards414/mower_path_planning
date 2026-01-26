@@ -59,8 +59,8 @@ private:
 
   StmComms stm_comms_;
 
-//   Wheel wheel_left_;
-//   Wheel wheel_right_;
+  Wheel wheel_left_;
+  Wheel wheel_right_;
 
   Config cfg_;
 
