@@ -14,12 +14,12 @@ services:
         GROUP_ID: $GROUP_ID      
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
+
+    devices:
+    #   - /dev/imu_usb:/dev/imu_usb
+      - /dev/ttyACM0:/dev/ttyACM0
         # Interactive shell
     stdin_open: true
     tty: true
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw # for gui applications
-      - /Users/$USER_NAME/.ssh:/home/$USER_NAME/.ssh:ro # git credentials
-      - /Users/$USER_NAME/data:/home/$USER_NAME/data:rw # i like to keep data this way
-      - /dev/bus/usb:/dev/bus/usb # for usb access, depends where its located
       - ../:/home/$USER_NAME/mower_ws # mount workspace directory inside the container
