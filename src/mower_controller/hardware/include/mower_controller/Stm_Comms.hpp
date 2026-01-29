@@ -20,6 +20,8 @@ public:
     void setMotorValues(int val_1, int val_2);
     std::string sendMsg(const std::string &msg, bool print_output = false);
     bool is_connected() const;
+    void setLedOK();
+    void setLedError();
 
 private:
     LibSerial::SerialPort serial_conn_;

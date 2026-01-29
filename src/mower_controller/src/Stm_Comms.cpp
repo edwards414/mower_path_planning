@@ -45,6 +45,21 @@ void StmComms::setMotorValues(int val_1, int val_2)
     sendMsg(ss.str(), false);
 }
 
+void StmComms::setLedOK()
+{
+    std::stringstream ss;
+    ss << "@L 1 0 255 0\r";
+    sendMsg(ss.str(), false);
+}
+
+void StmComms::setLedError()
+{
+    std::stringstream ss;
+    ss << "@L 2 255 0 0\r";
+    sendMsg(ss.str(), false);
+}
+
+
 std::string StmComms::sendMsg(const std::string &msg, bool print_output)
 {
     // Write the data to the STM32

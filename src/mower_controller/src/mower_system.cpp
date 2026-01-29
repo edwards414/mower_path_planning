@@ -40,7 +40,7 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
   RCLCPP_INFO(get_logger(), "Activating ...please wait...");
 
   stm_comms_.setup(cfg_.device, cfg_.baud_rate, cfg_.timeout);
-  
+  stm_comms_.setLedOK();
   if(!stm_comms_.is_connected())
   {
     RCLCPP_ERROR(get_logger(), "Failed to connect to the STM32");
@@ -55,6 +55,20 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
   // }
 
   RCLCPP_INFO(get_logger(), "Successfully activated!");
+
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn MowerSystemHardware::on_deactivate(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
+  RCLCPP_INFO(get_logger(), "Deactivating ...please wait...");
+
+  stm_comms_.setLedError();
+  // END: This part here is for exemplary purposes - Please do not copy to your production code
+
+  RCLCPP_INFO(get_logger(), "Successfully deactivated!");
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
