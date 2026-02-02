@@ -14,10 +14,13 @@ services:
         GROUP_ID: $GROUP_ID      
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
-
+    network_mode: host
+    ipc: host
+    pid: host
     devices:
-    #   - /dev/imu_usb:/dev/imu_usb
-      - /dev/ttyACM0:/dev/ttyACM0
+      - /dev/imu_usb:/dev/imu_usb
+      - /dev/stmcom:/dev/stmcom
+      
         # Interactive shell
     stdin_open: true
     tty: true

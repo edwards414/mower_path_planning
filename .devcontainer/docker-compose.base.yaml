@@ -3,7 +3,7 @@ services:
     image: lawan_node_base
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
       args:
         ROS_DISTRO: jazzy
       target: base

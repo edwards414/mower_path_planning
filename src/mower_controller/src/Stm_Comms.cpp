@@ -39,24 +39,42 @@ void StmComms::setup(const std::string &serial_device, int32_t baud_rate, int32_
 
 void StmComms::setMotorValues(int val_1, int val_2)
 {
-    // Send motor command to the STM32
+    // Send motor command to the STM32 without waiting for response
     std::stringstream ss;
     ss << "@M " << val_1 << " " << val_2 << "\r";
-    sendMsg(ss.str(), false);
+    
+    try {
+        serial_conn_.Write(ss.str());
+        serial_conn_.DrainWriteBuffer();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(rclcpp::get_logger("StmComms"), "Error writing motor values: %s", e.what());
+    }
 }
 
 void StmComms::setLedOK()
 {
     std::stringstream ss;
     ss << "@L 1 0 255 0\r";
-    sendMsg(ss.str(), false);
+    
+    try {
+        serial_conn_.Write(ss.str());
+        serial_conn_.DrainWriteBuffer();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(rclcpp::get_logger("StmComms"), "Error writing LED OK: %s", e.what());
+    }
 }
 
 void StmComms::setLedError()
 {
     std::stringstream ss;
     ss << "@L 2 255 0 0\r";
-    sendMsg(ss.str(), false);
+    
+    try {
+        serial_conn_.Write(ss.str());
+        serial_conn_.DrainWriteBuffer();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(rclcpp::get_logger("StmComms"), "Error writing LED Error: %s", e.what());
+    }
 }
 
 

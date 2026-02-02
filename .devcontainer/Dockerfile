@@ -5,6 +5,9 @@ ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base AS base
 ENV ROS_DISTRO=${ROS_DISTRO}
 
+# 复制包列表文件
+COPY apt-base-packages /tmp/apt-base-packages
+
 # 安裝必要工具
 RUN apt-get update && \
     apt-get install -y $(cut -d# -f1 </tmp/apt-base-packages) && \
@@ -19,6 +22,9 @@ WORKDIR ${WORKSPACE}
 # Stage 2: Builder
 ##############################################
 FROM base AS builder
+ENV ROS_DISTRO=${ROS_DISTRO}
+# 复制 CV 包列表文件
+COPY apt-cv-packages /tmp/apt-cv-packages
 
 RUN apt-get update && \
     apt-get install -y $(cut -d# -f1 </tmp/apt-cv-packages | envsubst) \
@@ -28,10 +34,16 @@ RUN apt-get update && \
 # Stage 3: dev
 ##############################################
 FROM builder AS dev
+ARG ROS_DISTRO=${ROS_DISTRO}
 
+# 复制开发包列表文件
+COPY apt-dev-packages /tmp/apt-dev-packages
+
+# 安装 gettext-base 以提供 envsubst 命令，然后安装开发包
 RUN apt-get update && \
-    apt-get install -y $(cut -d# -f1 </tmp/apt-dev-packages | envsubst) \
-    && rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
+    apt-get install -y gettext-base && \
+    apt-get install -y $(cut -d# -f1 </tmp/apt-dev-packages | envsubst) && \
+    rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 
 # Add user with same UID and GID as your host system, replace if one exists with same UID
