@@ -1,0 +1,67 @@
+ARG ROS_DISTRO=jazzy
+
+##############################################
+# Gazebo Simulation Environment with VNC
+##############################################
+FROM tiryoh/ros2-desktop-vnc:${ROS_DISTRO}
+
+ENV ROS_DISTRO=${ROS_DISTRO}
+
+# 安裝 Gazebo 和相關套件
+RUN apt-get update && \
+    apt-get install -y \
+    ros-${ROS_DISTRO}-gazebo-ros-pkgs \
+    ros-${ROS_DISTRO}-gazebo-ros2-control \
+    ros-${ROS_DISTRO}-ros-gz \
+    ros-${ROS_DISTRO}-navigation2 \
+    ros-${ROS_DISTRO}-nav2-bringup \
+    && rm -rf /var/lib/apt/lists/*
+
+# 設定使用者 (與主機同步)
+ARG USER_NAME=fxrbindi
+ARG USER_ID
+ARG GROUP_NAME
+ARG GROUP_ID
+
+# 建立與主機相同 UID/GID 的使用者
+RUN \
+    # === 處理群組 ===
+    if getent group $GROUP_ID > /dev/null; then \
+    OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
+    groupmod --new-name $GROUP_NAME $OLD_GROUP_NAME; \
+    else \
+    groupadd --gid $GROUP_ID $GROUP_NAME; \
+    fi \
+    # === 處理使用者 ===
+    && if getent passwd $USER_ID > /dev/null; then \
+    OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
+    usermod -l $USER_NAME $OLD_USER_NAME; \
+    usermod -d /home/$USER_NAME -m $USER_NAME; \
+    usermod -g $GROUP_ID $USER_NAME; \
+    else \
+    useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
+    fi \
+    # === 設定 sudo 權限 ===
+    && apt-get update \
+    && apt-get install -y sudo \
+    && echo $USER_NAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USER_NAME \
+    && chmod 0440 /etc/sudoers.d/$USER_NAME
+
+# 將使用者加入必要的群組
+RUN usermod --append --groups video,render $USER_NAME
+
+# 設定工作目錄
+WORKDIR /home/${USER_NAME}/mower_ws
+
+# 設定 ROS 環境
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc && \
+    echo "if [ -f /home/${USER_NAME}/mower_ws/install/setup.bash ]; then" >> /home/${USER_NAME}/.bashrc && \
+    echo "    source /home/${USER_NAME}/mower_ws/install/setup.bash" >> /home/${USER_NAME}/.bashrc && \
+    echo "fi" >> /home/${USER_NAME}/.bashrc
+
+# 設定 Gazebo 環境變數
+ENV GAZEBO_MODEL_PATH=/home/${USER_NAME}/mower_ws/src/models:${GAZEBO_MODEL_PATH}
+ENV IGN_GAZEBO_RESOURCE_PATH=/home/${USER_NAME}/mower_ws/src/models:${IGN_GAZEBO_RESOURCE_PATH}
+
+# 切換到使用者
+USER ${USER_NAME}

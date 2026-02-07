@@ -1,5 +1,6 @@
 services:
-  lawan_node_dev: # name of this service, will be used in devcontainer.json
+  lawan_node_dev:
+    # name of this service, will be used in devcontainer.json
     image: lawan_node_dev # thw image will have this name once built
     extends:
       file: docker-compose.cv.yaml # extend the below service from this file
@@ -9,9 +10,9 @@ services:
       dockerfile: Dockerfile # the only dockerfile
       args:
         USER_NAME: $USER_NAME # will be taken from .env file, run export_env.sh first
-        USER_ID: $USER_ID       
-        GROUP_NAME: $GROUP_NAME  
-        GROUP_ID: $GROUP_ID      
+        USER_ID: $USER_ID
+        GROUP_NAME: $GROUP_NAME
+        GROUP_ID: $GROUP_ID
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
     network_mode: host
@@ -19,10 +20,37 @@ services:
     pid: host
     devices:
       - /dev/imu_usb:/dev/imu_usb
-      - /dev/stmcom:/dev/stmcom
-      
-        # Interactive shell
+      - /dev/stmcom:/dev/stmcom # Interactive shell
     stdin_open: true
     tty: true
     volumes:
       - ../:/home/$USER_NAME/mower_ws # mount workspace directory inside the container
+
+  # Gazebo Simulation Environment with VNC
+  gazebo:
+    image: lawan_gazebo
+    build:
+      context: .
+      dockerfile: Dockerfile.gazebo
+      args:
+        USER_NAME: $USER_NAME
+        USER_ID: $USER_ID
+        GROUP_NAME: $GROUP_NAME
+        GROUP_ID: $GROUP_ID
+        ROS_DISTRO: jazzy
+    user: $USER_NAME
+    network_mode: host
+    ipc: host
+    environment:
+      - DISPLAY=${DISPLAY:-:1}
+      - VNC_PASSWORD=0000 # 修改為你想要的 VNC 密碼
+      - RESOLUTION=1920x1080
+    ports:
+      - "6080:6080" # noVNC web interface
+      - "5900:5900" # VNC server
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../:/home/$USER_NAME/mower_ws
+    privileged: true # Gazebo 可能需要硬體加速
+    shm_size: '2gb' # 增加共享記憶體以提升 Gazebo 效能
