@@ -28,28 +28,13 @@ services:
 
   # Gazebo Simulation Environment with VNC
   gazebo:
-    image: lawan_gazebo
-    build:
-      context: .
-      dockerfile: Dockerfile.gazebo
-      args:
-        USER_NAME: $USER_NAME
-        USER_ID: $USER_ID
-        GROUP_NAME: $GROUP_NAME
-        GROUP_ID: $GROUP_ID
-        ROS_DISTRO: jazzy
-    user: $USER_NAME
-    network_mode: host
-    ipc: host
-    environment:
-      - DISPLAY=${DISPLAY:-:1}
-      - VNC_PASSWORD=0000 # 修改為你想要的 VNC 密碼
-      - RESOLUTION=1920x1080
+    image: tiryoh/ros2-desktop-vnc:jazzy
+    #network_mode: host
+    #ipc: host
+    security_opt:
+      - seccomp=unconfined
     ports:
-      - "6080:6080" # noVNC web interface
-      - "5900:5900" # VNC server
-    stdin_open: true
-    tty: true
+      - "6080:80" # noVNC web interface
     volumes:
       - ../:/home/$USER_NAME/mower_ws
     privileged: true # Gazebo 可能需要硬體加速
