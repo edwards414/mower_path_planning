@@ -20,6 +20,7 @@ from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from launch.conditions import IfCondition
 from nav2_common.launch import RewrittenYaml
 
 
@@ -34,16 +35,17 @@ def generate_launch_description():
         default_value='true',
         description='Use simulation (Gazebo) clock if true',
     )
+
+    declare_use_rviz_cmd = DeclareLaunchArgument(
+        'use_rviz',
+        default_value='True',
+        description='Whether to start RVIZ'
+    )
+
+    use_rviz = LaunchConfiguration('use_rviz')
     # 取得 launch 目錄
     nav2_gps_waypoint_follower_dir = get_package_share_directory(
         'nav2_gps_waypoint_follower'
-    )
-
-    # launch_dir = os.path.join(nav2_gps_waypoint_follower_dir, 'launch')
-    params_dir = os.path.join(nav2_gps_waypoint_follower_dir, 'config')
-    nav2_params = os.path.join(params_dir, 'nav2_no_map_params.yaml')
-    configured_params = RewrittenYaml(
-        source_file=nav2_params, root_key='', param_rewrites='', convert_types=True
     )
 
     gazebo_cmd = IncludeLaunchDescription(
@@ -57,34 +59,13 @@ def generate_launch_description():
         }.items()
     )
 
-    robot_localization_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                nav2_gps_waypoint_follower_dir, 'launch', 'dual_ekf_navsat.launch.py'
-            )
-        ),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-        }.items()
-    )
 
-    navigation_cmd = IncludeLaunchDescription(
+    rviz_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'navigation.launch.py')
+            os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'rviz.launch.py')
         ),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'params_file': configured_params,
-            'autostart': 'True',
-        }.items(),
+        condition=IfCondition(use_rviz)
     )
-
-    # rviz_cmd = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(
-    #         os.path.join(nav2_gps_waypoint_follower_dir, 'launch', 'rviz.launch.py')
-    #     ),
-    #     condition=IfCondition(use_rviz)
-    # )
 
     # mapviz_cmd = IncludeLaunchDescription(
     #     PythonLaunchDescriptionSource(
@@ -101,13 +82,13 @@ def generate_launch_description():
     ld.add_action(gazebo_cmd)
 
     # robot localization launch
-    ld.add_action(robot_localization_cmd)
+    # ld.add_action(robot_localization_cmd)
 
     # # navigation2 launch
-    ld.add_action(navigation_cmd)
+    # ld.add_action(navigation_cmd)
     # # viz launch
-    # ld.add_action(declare_use_rviz_cmd)
-    # ld.add_action(rviz_cmd)
+    ld.add_action(declare_use_rviz_cmd)
+    ld.add_action(rviz_cmd)
 
     # ld.add_action(declare_use_mapviz_cmd)
     # ld.add_action(mapviz_cmd)
