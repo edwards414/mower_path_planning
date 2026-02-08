@@ -6,5 +6,19 @@ ARG ROS_DISTRO=jazzy
 FROM tiryoh/ros2-desktop-vnc:${ROS_DISTRO}
 
 RUN apt-get update && apt-get install -y \
-    ros-${ROS_DISTRO}-nav2-bringup \
+    ros-${ROS_DISTRO}-turtlebot3* \ 
     && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /home/fxrbindi/mower_ws/src
+
+COPY src/nav2_gps_waypoint_follower /home/fxrbindi/mower_ws/src/nav2_gps_waypoint_follower
+
+WORKDIR /home/fxrbindi/mower_ws
+
+# Set shell to bash to use source
+SHELL ["/bin/bash", "-c"]
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --packages-select nav2_gps_waypoint_follower
+
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
+RUN echo "source /home/fxrbindi/mower_ws/install/setup.bash" >> ~/.bashrc
+
+CMD ["/bin/bash"]

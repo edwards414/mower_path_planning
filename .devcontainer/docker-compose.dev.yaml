@@ -1,3 +1,8 @@
+networks:
+  rosnet:
+    name: rosnet
+    driver: bridge
+
 services:
   lawan_node_dev:
     # name of this service, will be used in devcontainer.json
@@ -15,12 +20,13 @@ services:
         GROUP_ID: $GROUP_ID
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
-    network_mode: host
+    networks:
+      - rosnet
     ipc: host
     pid: host
-    devices:
-      - /dev/imu_usb:/dev/imu_usb
-      - /dev/stmcom:/dev/stmcom # Interactive shell
+    # devices: 
+    #   - /dev/imu_usb:/dev/imu_usb
+    #   - /dev/stmcom:/dev/stmcom # Interactive shell
     stdin_open: true
     tty: true
     volumes:
@@ -28,14 +34,18 @@ services:
 
   # Gazebo Simulation Environment with VNC
   gazebo:
-    image: tiryoh/ros2-desktop-vnc:jazzy
-    #network_mode: host
-    #ipc: host
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile.gazebo
+    networks:
+      - rosnet
+    ipc: host
     security_opt:
       - seccomp=unconfined
+    working_dir: /home/$USER_NAME/mower_ws
     ports:
       - "6080:80" # noVNC web interface
-    volumes:
-      - ../:/home/$USER_NAME/mower_ws
+    # volumes:
+    #   - ../:/home/$USER_NAME/mower_ws/src/nav2_gps_waypoint_follower
     privileged: true # Gazebo 可能需要硬體加速
     shm_size: '2gb' # 增加共享記憶體以提升 Gazebo 效能
