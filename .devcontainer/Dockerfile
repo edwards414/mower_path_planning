@@ -6,11 +6,13 @@ FROM ros:${ROS_DISTRO}-ros-base AS base
 ENV ROS_DISTRO=${ROS_DISTRO}
 
 # 复制包列表文件
-COPY apt-base-packages /tmp/apt-base-packages
+COPY apt-base-packages /tmp/apt-base-packages 
 
 # 安裝必要工具
+
 RUN apt-get update && \
-    apt-get install -y $(cut -d# -f1 </tmp/apt-base-packages) && \
+    apt-get install -y gettext-base && \
+    apt-get install -y $(cut -d# -f1 </tmp/apt-base-packages | envsubst) && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -57,23 +59,23 @@ RUN \
     # === 處理群組 ===
     # 檢查該 GID 是否已存在
     if getent group $GROUP_ID > /dev/null; then \
-        # 若存在：取得原群組名稱，並重新命名為目標名稱
-        OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
-        groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
+    # 若存在：取得原群組名稱，並重新命名為目標名稱
+    OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
+    groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
     else \
-        # 若不存在：建立新群組
-        groupadd --gid $GROUP_ID $USER_NAME; \
+    # 若不存在：建立新群組
+    groupadd --gid $GROUP_ID $USER_NAME; \
     fi \
     # === 處理使用者 ===
     # 檢查該 UID 是否已存在
     && if getent passwd $USER_ID > /dev/null; then \
-        # 若存在：取得原使用者名稱，重新命名並移動家目錄
-        OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
-        usermod -l $USER_NAME $OLD_USER_NAME; \
-        usermod -d /home/$USER_NAME -m $USER_NAME; \
+    # 若存在：取得原使用者名稱，重新命名並移動家目錄
+    OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
+    usermod -l $USER_NAME $OLD_USER_NAME; \
+    usermod -d /home/$USER_NAME -m $USER_NAME; \
     else \
-        # 若不存在：建立新使用者（指定 shell、UID、GID、建立家目錄）
-        useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
+    # 若不存在：建立新使用者（指定 shell、UID、GID、建立家目錄）
+    useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
     fi \
     # === 設定 sudo 權限 ===
     && apt-get update \
