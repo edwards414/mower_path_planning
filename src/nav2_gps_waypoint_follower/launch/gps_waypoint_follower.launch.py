@@ -19,8 +19,8 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-
 from launch.conditions import IfCondition
+from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
 
 
@@ -74,12 +74,14 @@ def generate_launch_description():
     #     condition=IfCondition(use_mapviz)
     # )
 
+
     # Create the launch description and populate
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time)
 
     # simulator launch
     ld.add_action(gazebo_cmd)
+    # clock bridge（必須在 Gazebo 之後啟動）
 
     # robot localization launch
     # ld.add_action(robot_localization_cmd)
