@@ -10,15 +10,19 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /home/fxrbindi/mower_ws/src
 
-COPY src/nav2_gps_waypoint_follower /home/fxrbindi/mower_ws/src/nav2_gps_waypoint_follower
+# COPY src/nav2_gps_waypoint_follower /home/fxrbindi/mower_ws/src/nav2_gps_waypoint_follower
+# COPY src/lawer_qt_py /home/fxrbindi/mower_ws/src/lawer_qt_py
 
 WORKDIR /home/fxrbindi/mower_ws
 
 # Set shell to bash to use source
 SHELL ["/bin/bash", "-c"]
-RUN source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --packages-select nav2_gps_waypoint_follower
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build 
 
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
-RUN echo "source /home/fxrbindi/mower_ws/install/setup.bash" >> ~/.bashrc
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
+    echo "source /home/fxrbindi/mower_ws/install/setup.bash" >> ~/.bashrc
+
+
+
 
 CMD ["/bin/bash"]

@@ -22,8 +22,6 @@ services:
     user: $USER_NAME # will login as your usename
     networks:
       - rosnet
-    ipc: host
-    pid: host
     # devices: 
     #   - /dev/imu_usb:/dev/imu_usb
     #   - /dev/stmcom:/dev/stmcom # Interactive shell
@@ -39,13 +37,13 @@ services:
       dockerfile: .devcontainer/Dockerfile.gazebo
     networks:
       - rosnet
-    ipc: host
+
     security_opt:
       - seccomp=unconfined
     working_dir: /home/$USER_NAME/mower_ws
     ports:
       - "6080:80" # noVNC web interface
-    # volumes:
-    #   - ../:/home/$USER_NAME/mower_ws/src/nav2_gps_waypoint_follower
+    volumes:
+      - ../:/home/$USER_NAME/mower_ws
     privileged: true # Gazebo 可能需要硬體加速
     shm_size: '2gb' # 增加共享記憶體以提升 Gazebo 效能
