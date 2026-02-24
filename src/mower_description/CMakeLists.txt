@@ -24,7 +24,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY launch rviz mower_robot
+  DIRECTORY launch rviz mower_robot config worlds
   DESTINATION share/${PROJECT_NAME}
 )
 

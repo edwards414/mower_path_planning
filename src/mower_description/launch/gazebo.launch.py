@@ -1,0 +1,86 @@
+import os
+import xacro
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    IncludeLaunchDescription,
+    TimerAction,
+    SetEnvironmentVariable,
+)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    # ─────────────────────────────────────────────────────────────
+    # 路徑設定
+    # ─────────────────────────────────────────────────────────────
+    mower_desc_share = get_package_share_directory('mower_description')
+    nav2_gps_share   = get_package_share_directory('nav2_gps_waypoint_follower')
+    world_file        = os.path.join(nav2_gps_share, 'worlds', 'mower_world.world')
+
+    # ─────────────────────────────────────────────────────────────
+    # GZ_SIM_RESOURCE_PATH：
+    #   Gazebo 把 URDF 裡的 package://mower_description/...
+    #   轉成 model://mower_description/... 後，
+    #   會在這個路徑底下找 mower_description/ 資料夾
+    #
+    #   install/mower_description/share/
+    #   └── mower_description/          ← Gazebo 找 "mower_description" 模型的地方
+    #       └── mower_robot/
+    #           └── assets/
+    #               └── blade_hub.stl   ← 實際 STL 位置
+    # ─────────────────────────────────────────────────────────────
+    gz_resource_path = os.path.dirname(mower_desc_share)   # .../share （parent）
+
+    set_gz_resource_path = SetEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH',
+        value=gz_resource_path,
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 1. 啟動 Gazebo Harmonic
+    # ─────────────────────────────────────────────────────────────
+    gz_sim_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('ros_gz_sim'),
+                'launch',
+                'gz_sim.launch.py'
+            )
+        ),
+        launch_arguments={
+            'gz_args': f'-v 4 -r {world_file}'
+        }.items()
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 2. Spawn 機器人（延遲 3 秒，等 Gazebo 完全啟動）
+    # ─────────────────────────────────────────────────────────────
+    spawn_mowerbot_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                mower_desc_share,
+                'launch',
+                'spawn_mowerbot.launch.py'
+            )
+        ),
+        launch_arguments={
+            'x_pose': '0.0',
+            'y_pose': '0.0',
+        }.items()
+    )
+
+    delayed_spawn = TimerAction(
+        period=3.0,
+        actions=[spawn_mowerbot_launch]
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 組合（resource path 必須在 gz_sim 之前 set）
+    # ─────────────────────────────────────────────────────────────
+    return LaunchDescription([
+        set_gz_resource_path,
+        gz_sim_launch,
+        delayed_spawn,
+    ])

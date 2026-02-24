@@ -1,0 +1,392 @@
+<?xml version="1.0" ?>
+<!-- 機器人本體定義 (URDF) -->
+<!-- 從 robot.urdf 轉換為 Xacro 格式，並新增 GPS link / base_footprint -->
+<robot name="mower_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ============================================================ -->
+  <!--  Material 定義                                                -->
+  <!-- ============================================================ -->
+  <material name="base_link_material">
+    <color rgba="0.901961 0.878431 0.811765 1"/>
+  </material>
+  <material name="wheel_material">
+    <color rgba="0.627451 0.627451 0.627451 1"/>
+  </material>
+  <material name="dark_material">
+    <color rgba="0.207843 0.192157 0.192157 1"/>
+  </material>
+  <material name="grey_material">
+    <color rgba="0.678431 0.678431 0.678431 1"/>
+  </material>
+  <material name="camera_material">
+    <color rgba="0.701961 0.701961 0.701961 1"/>
+  </material>
+  <material name="black_material">
+    <color rgba="0 0 0 1"/>
+  </material>
+  <material name="silver_material">
+    <color rgba="0.6 0.6 0.6 1"/>
+  </material>
+
+  <!-- ============================================================ -->
+  <!--  base_footprint（Nav2 必要）                                  -->
+  <!-- ============================================================ -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  base_link                                                    -->
+  <!-- ============================================================ -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="5.0"/>
+      <inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0145303 0.0155339 -0.0929528" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/base_link.stl"/>
+      </geometry>
+      <material name="base_link_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0145303 0.0155339 -0.0929528" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/base_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ============================================================ -->
+  <!--  左輪 left_wheel_link                                        -->
+  <!-- ============================================================ -->
+  <link name="left_wheel_link">
+    <inertial>
+      <origin xyz="-3.1524e-07 9.95807e-06 -0.0428781" rpy="0 0 0"/>
+      <mass value="0.368513"/>
+      <inertia ixx="0.000961278" ixy="3.92e-09" ixz="6.596e-09"
+               iyy="0.000961335" iyz="1.3009e-08" izz="0.00177481"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.025531" rpy="0 -0 -0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/left_wheel_link.stl"/>
+      </geometry>
+      <material name="wheel_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.025531" rpy="0 -0 -0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/left_wheel_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → left_wheel_link -->
+  <joint name="left_wheel_joint" type="continuous">
+    <origin xyz="0.13253 0.165534 -0.00295275" rpy="1.5708 1.22081 -1.5708"/>
+    <parent link="base_link"/>
+    <child link="left_wheel_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="6"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  右輪 right_wheel_link                                       -->
+  <!-- ============================================================ -->
+  <link name="right_wheel_link">
+    <inertial>
+      <origin xyz="-3.1524e-07 9.95807e-06 -0.0428781" rpy="0 0 0"/>
+      <mass value="0.368513"/>
+      <inertia ixx="0.000961278" ixy="3.92e-09" ixz="6.596e-09"
+               iyy="0.000961335" iyz="1.3009e-08" izz="0.00177481"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.025531" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/right_wheel_link.stl"/>
+      </geometry>
+      <material name="wheel_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.025531" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/right_wheel_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → right_wheel_link -->
+  <joint name="right_wheel_joint" type="continuous">
+    <origin xyz="-0.10347 0.165534 -0.00295275" rpy="-1.5708 1.51106 -1.5708"/>
+    <parent link="base_link"/>
+    <child link="right_wheel_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="6"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  caster_yaw_link                                             -->
+  <!-- ============================================================ -->
+  <link name="caster_yaw_link">
+    <inertial>
+      <origin xyz="-0.00894349 -1.10704e-07 -0.0235114" rpy="0 0 0"/>
+      <mass value="0.205996"/>
+      <inertia ixx="0.000152202" ixy="-7.97e-10" ixz="-3.03099e-05"
+               iyy="0.000161102" iyz="-1.164e-09" izz="0.000106547"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/caster_yaw_link.stl"/>
+      </geometry>
+      <material name="grey_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/caster_yaw_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → caster_yaw_link -->
+  <joint name="caster_yaw_joint" type="revolute">
+    <origin xyz="0.0145303 -0.150966 0.0155472" rpy="0 -0 -1.5708"/>
+    <parent link="base_link"/>
+    <child link="caster_yaw_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="6" lower="-3.14159" upper="3.14159"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  caster_wheel_link                                           -->
+  <!-- ============================================================ -->
+  <link name="caster_wheel_link">
+    <inertial>
+      <origin xyz="2.3994e-08 -1.69119e-07 -0.0164994" rpy="0 0 0"/>
+      <mass value="0.138953"/>
+      <inertia ixx="5.52912e-05" ixy="-1.43e-10" ixz="-5.3e-11"
+               iyy="5.52922e-05" iyz="3.05e-10" izz="8.94246e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.0165" rpy="-1.5708 -1.5708 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/caster_wheel_link.stl"/>
+      </geometry>
+      <material name="dark_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.0165" rpy="-1.5708 -1.5708 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/caster_wheel_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: caster_yaw_link → caster_wheel_link -->
+  <joint name="caster_wheel_joint" type="continuous">
+    <origin xyz="-0.0255 0.0170526 -0.0695" rpy="1.5708 1.52376 -3.14159"/>
+    <parent link="caster_yaw_link"/>
+    <child link="caster_wheel_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="6"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  depth_camera_link                                           -->
+  <!-- ============================================================ -->
+  <link name="depth_camera_link">
+    <inertial>
+      <origin xyz="-0.0210924 2.34653e-05 -0.0116574" rpy="0 0 0"/>
+      <mass value="0.292898"/>
+      <inertia ixx="2.81585e-05" ixy="-1.4716e-08" ixz="-1.69117e-06"
+               iyy="0.000189634" iyz="8.1277e-08" izz="0.000187962"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.0225 0 -0.02505" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/depth_camera_link.stl"/>
+      </geometry>
+      <material name="camera_material"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.0225 0 -0.02505" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/depth_camera_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → depth_camera_link -->
+  <joint name="depth_camera_joint" type="fixed">
+    <origin xyz="0.0370303 -0.183912 0.0740472" rpy="-1.5708 -0 0"/>
+    <parent link="base_link"/>
+    <child link="depth_camera_link"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  back_camera_link                                            -->
+  <!-- ============================================================ -->
+  <link name="back_camera_link">
+    <inertial>
+      <origin xyz="0.000174127 0.000320936 -0.0147836" rpy="0 0 0"/>
+      <mass value="0.0107094"/>
+      <inertia ixx="9.78237e-07" ixy="-2.6898e-08" ixz="1.5856e-08"
+               iyy="9.49758e-07" iyz="2.9225e-08" izz="1.19328e-06"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.0202866" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/back_camera_link.stl"/>
+      </geometry>
+      <material name="camera_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.0202866" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/back_camera_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → back_camera_link -->
+  <joint name="back_camera_joint" type="fixed">
+    <origin xyz="0.0145303 0.218752 0.0620472" rpy="-1.5708 -0 0"/>
+    <parent link="base_link"/>
+    <child link="back_camera_link"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  imu_link                                                    -->
+  <!-- ============================================================ -->
+  <link name="imu_link">
+    <inertial>
+      <origin xyz="-0.000251465 3.703e-09 -0.00531321" rpy="0 0 0"/>
+      <mass value="0.205582"/>
+      <inertia ixx="3.85914e-05" ixy="1.7e-11" ixz="-3.105e-09"
+               iyy="4.59431e-05" iyz="-1e-12" izz="7.98412e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.000256254 0 -0.005" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/imu_link.stl"/>
+      </geometry>
+      <material name="black_material"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.000256254 0 -0.005" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/imu_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → imu_link -->
+  <joint name="imu_joint" type="fixed">
+    <origin xyz="0.015897 0.209534 -0.0129528" rpy="3.14159 -0 0"/>
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  NEW: gps_link（GPS 天線位置）                               -->
+  <!-- ============================================================ -->
+  <link name="gps_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.03 0.03 0.01"/>
+      </geometry>
+      <material name="black_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.03 0.03 0.01"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: base_link → gps_link（放在機器人頂部中央）-->
+  <joint name="gps_joint" type="fixed">
+    <origin xyz="0.0 0.0 0.12" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="gps_link"/>
+  </joint>
+
+  <!-- ============================================================ -->
+  <!--  connector + blade_hub（割草機刀盤）                         -->
+  <!-- ============================================================ -->
+  <link name="connector">
+    <inertial>
+      <origin xyz="-8.04e-10 -0.000464193 -0.0128143" rpy="0 0 0"/>
+      <mass value="0.0120859"/>
+      <inertia ixx="1.19168e-06" ixy="0" ixz="0"
+               iyy="1.267e-06" iyz="2.3234e-08" izz="2.01476e-06"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/connector.stl"/>
+      </geometry>
+      <material name="silver_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/connector.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="blade_hub">
+    <inertial>
+      <origin xyz="-0 -0 -0.00147225" rpy="0 0 0"/>
+      <mass value="0.0672483"/>
+      <inertia ixx="9.33182e-05" ixy="0" ixz="0"
+               iyy="9.33182e-05" iyz="0" izz="0.000186538"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.003" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/blade_hub.stl"/>
+      </geometry>
+      <material name="silver_material"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.003" rpy="3.14159 -0 0"/>
+      <geometry>
+        <mesh filename="package://mower_description/mower_robot/assets/blade_hub.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Joint: connector → blade_hub -->
+  <joint name="pad_joint" type="fixed">
+    <origin xyz="-0 0 -0.018" rpy="0 -0 -0"/>
+    <parent link="connector"/>
+    <child link="blade_hub"/>
+  </joint>
+
+  <!-- Joint: base_link → connector -->
+  <joint name="mower_joint" type="revolute">
+    <origin xyz="0.0145303 0.0155339 -0.0549528" rpy="0 -0 3.14159"/>
+    <parent link="base_link"/>
+    <child link="connector"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="6" lower="-3.14159" upper="3.14159"/>
+  </joint>
+
+</robot>

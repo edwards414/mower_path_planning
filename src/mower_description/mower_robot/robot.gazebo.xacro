@@ -1,0 +1,205 @@
+<?xml version="1.0" ?>
+<!-- Gazebo Harmonic (gz-sim 8.x) Sensor & Plugin 定義 -->
+<!-- 對應 ROS2 Jazzy + Gazebo Harmonic 環境                 -->
+<robot name="mower_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ============================================================ -->
+  <!--  Gazebo 材質顏色                                              -->
+  <!-- ============================================================ -->
+  <gazebo reference="base_link">
+    <material>Gazebo/White</material>
+  </gazebo>
+
+  <gazebo reference="left_wheel_link">
+    <material>Gazebo/Grey</material>
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+  </gazebo>
+
+  <gazebo reference="right_wheel_link">
+    <material>Gazebo/Grey</material>
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+  </gazebo>
+
+  <gazebo reference="caster_yaw_link">
+    <material>Gazebo/DarkGrey</material>
+    <mu1>0.01</mu1>
+    <mu2>0.01</mu2>
+  </gazebo>
+
+  <gazebo reference="caster_wheel_link">
+    <material>Gazebo/DarkGrey</material>
+    <mu1>0.01</mu1>
+    <mu2>0.01</mu2>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  1. Differential Drive Plugin                                -->
+  <!--     gz-sim-diff-drive-system                                 -->
+  <!--     訂閱: /cmd_vel                                           -->
+  <!--     發布: /odom, /tf                                         -->
+  <!-- ============================================================ -->
+  <gazebo>
+    <plugin
+      filename="gz-sim-diff-drive-system"
+      name="gz::sim::systems::DiffDrive">
+      <!-- 左右輪 joint 名稱（對應 robot.urdf.xacro 的 joint name）-->
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+
+      <!-- 車輪規格（單位: 公尺）-->
+      <wheel_separation>0.23600</wheel_separation>  <!-- 左右輪距 -->
+      <wheel_radius>0.05100</wheel_radius>           <!-- 車輪半徑 -->
+
+      <!-- Odometry 設定 -->
+      <odom_publish_frequency>50</odom_publish_frequency>
+
+      <!-- ROS topics -->
+      <topic>/cmd_vel</topic>
+      <odom_topic>/odom</odom_topic>
+      <tf_topic>/tf</tf_topic>
+
+      <!-- Frame 名稱 -->
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+    </plugin>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  2. Joint State Publisher Plugin                             -->
+  <!--     發布所有 joint 的角度，給 robot_state_publisher 使用     -->
+  <!-- ============================================================ -->
+  <gazebo>
+    <plugin
+      filename="gz-sim-joint-state-publisher-system"
+      name="gz::sim::systems::JointStatePublisher">
+      <topic>/joint_states</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  3. IMU Sensor（掛載在 imu_link 上）                         -->
+  <!--     發布: /imu/data                                          -->
+  <!-- ============================================================ -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>200</update_rate>
+      <visualize>false</visualize>
+      <topic>/imu/data</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.009</stddev>
+              <bias_mean>0.00075</bias_mean>
+              <bias_stddev>0.005</bias_stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.009</stddev>
+              <bias_mean>0.00075</bias_mean>
+              <bias_stddev>0.005</bias_stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.009</stddev>
+              <bias_mean>0.00075</bias_mean>
+              <bias_stddev>0.005</bias_stddev>
+            </noise>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.021</stddev>
+              <bias_mean>0.05</bias_mean>
+              <bias_stddev>0.0075</bias_stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.021</stddev>
+              <bias_mean>0.05</bias_mean>
+              <bias_stddev>0.0075</bias_stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.021</stddev>
+              <bias_mean>0.05</bias_mean>
+              <bias_stddev>0.0075</bias_stddev>
+            </noise>
+          </z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  4. GPS / NavSat Sensor（掛載在 gps_link 上）                -->
+  <!--     發布: /gps/fix (sensor_msgs/NavSatFix)                   -->
+  <!-- ============================================================ -->
+  <gazebo reference="gps_link">
+    <sensor name="gps_sensor" type="navsat">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <topic>/gps/fix</topic>
+      <gz_frame_id>gps_link</gz_frame_id>
+      <navsat>
+        <position_sensing>
+          <horizontal>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.5</stddev>   <!-- 水平精度 0.5m -->
+            </noise>
+          </horizontal>
+          <vertical>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.8</stddev>   <!-- 垂直精度 0.8m -->
+            </noise>
+          </vertical>
+        </position_sensing>
+        <velocity_sensing>
+          <horizontal>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.1</stddev>
+            </noise>
+          </horizontal>
+          <vertical>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.1</stddev>
+            </noise>
+          </vertical>
+        </velocity_sensing>
+      </navsat>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  5. ROS2 橋接 Plugin (gz_ros2_control 或 ros_gz_bridge)      -->
+  <!--     讓 gz-sim 的 topic 橋接到 ROS2                           -->
+  <!-- ============================================================ -->
+  <gazebo>
+    <plugin
+      filename="gz-sim-ros2-control-system"
+      name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <!-- 如果你使用 ros2_control，在這裡指定 URDF 中的 controller -->
+      <!-- 如果只用 diff_drive plugin，可以刪除此 plugin -->
+    </plugin>
+  </gazebo>
+
+</robot>

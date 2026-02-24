@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<!--
+  mower_robot 主 Xacro 檔案
+  ════════════════════════════════════════════════════════════
+  此檔案將以下兩個 Xacro 組合在一起:
+    1. robot.urdf.xacro   → 機器人本體 (links, joints)
+    2. robot.gazebo.xacro → Gazebo Harmonic sensor plugins
+  ════════════════════════════════════════════════════════════
+  使用方式:
+    # 轉換為 URDF (用於 robot_state_publisher)
+    xacro robot.xacro > /tmp/robot_generated.urdf
+
+    # 在 launch file 中動態載入
+    robot_description = xacro.process_file('robot.xacro').toxml()
+-->
+<robot name="mower_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ============================================================ -->
+  <!--  1. 機器人本體 (URDF: links, joints, materials)              -->
+  <!-- ============================================================ -->
+  <xacro:include filename="$(find mower_description)/mower_robot/robot.urdf.xacro"/>
+
+  <!-- ============================================================ -->
+  <!--  2. Gazebo Sensor & Plugin 定義                              -->
+  <!--     (diff_drive, IMU, GPS, joint_state_publisher)            -->
+  <!-- ============================================================ -->
+  <xacro:include filename="$(find mower_description)/mower_robot/robot.gazebo.xacro"/>
+
+</robot>
