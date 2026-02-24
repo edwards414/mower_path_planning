@@ -15,14 +15,14 @@
   <visual>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -36,14 +36,14 @@
   <visual>
     <origin xyz="-0.01938 0.190279 0.1125" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/caster_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/caster_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.01938 0.190279 0.1125" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/caster_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/caster_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -57,14 +57,14 @@
   <visual>
     <origin xyz="0.0 0.1665 0.043" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.0 0.1665 0.043" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -78,14 +78,14 @@
   <visual>
     <origin xyz="-0.12 -0.15 0.06" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/left_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/left_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.12 -0.15 0.06" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/left_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/left_wheel_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -99,14 +99,14 @@
   <visual>
     <origin xyz="0.12 -0.15 0.06" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/left_wheel_link_2.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/left_wheel_link_2.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.12 -0.15 0.06" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/left_wheel_link_2.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/left_wheel_link_2.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -120,14 +120,14 @@
   <visual>
     <origin xyz="0.000633 -0.194 0.07" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/imu_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/imu_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.000633 -0.194 0.07" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/imu_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/imu_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -141,14 +141,14 @@
   <visual>
     <origin xyz="0.0 -0.2024 0.145" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/back_camera_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/back_camera_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="0.0 -0.2024 0.145" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/back_camera_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/back_camera_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>
@@ -162,14 +162,14 @@
   <visual>
     <origin xyz="-0.0225 0.199445 -0.0175" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/depth_camera_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/depth_camera_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>
   <collision>
     <origin xyz="-0.0225 0.199445 -0.0175" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="file://$(find mower_robot_description)/meshes/depth_camera_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/depth_camera_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
   </collision>
 </link>

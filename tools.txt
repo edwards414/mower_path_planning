@@ -9,9 +9,14 @@ node[nav2_gps_waypoint_follower]:
 
   launch:
     [地圖 nav2] 
+    """
     ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py
+    """
 
     [test system]
+    """
+
+    """
     ros2 launch nav2_gps_waypoint_follower system_test.launch.py
 
     ros2 launch nav2_gps_waypoint_follower small_test.launch.py
@@ -152,13 +157,14 @@ ros2 launch nav2_gps_waypoint_follower navigation_launch.py
 
 
 
-
-
 [開啟地圖]
 ros2 launch boustrophedon_coverage nav2.launch.py
 
 [開啓nav2]*
 ros2 launch tb3_nav2_bringup bringup.launch.py
+
+[開啟mower display]
+ros2 launch mower_description display.launch.py
 
 
 

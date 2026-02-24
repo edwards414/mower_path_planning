@@ -1,0 +1,13 @@
+{
+    "configuration": "default",
+    "documentId": "4ced43830c4ff4955e236ea8",
+    "documentMicroversion": "9634fcdcf5d3152ac664b3ef",
+    "elementId": "9b42cc0a291d1c82c80b524b",
+    "fullConfiguration": "default",
+    "id": "M/jcv93s/da1QmrVZ",
+    "isStandardContent": false,
+    "name": "caster_yaw_link <1>",
+    "partId": "JFD",
+    "suppressed": false,
+    "type": "Part"
+}

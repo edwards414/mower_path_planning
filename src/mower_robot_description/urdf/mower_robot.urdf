@@ -54,7 +54,7 @@
   <visual>
     <origin xyz="0.0 0.1665 0.043" rpy="0 0 0"/>
     <geometry>
-      <mesh filename="../meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
+      <mesh filename="package://mower_robot_description/meshes/caster_yaw_link_1.stl" scale="0.001 0.001 0.001"/>
     </geometry>
     <material name="silver"/>
   </visual>

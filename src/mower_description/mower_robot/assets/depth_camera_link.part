@@ -1,0 +1,13 @@
+{
+    "configuration": "default",
+    "documentId": "4ced43830c4ff4955e236ea8",
+    "documentMicroversion": "9634fcdcf5d3152ac664b3ef",
+    "elementId": "6f0e6d3174e697baeb992c9a",
+    "fullConfiguration": "default",
+    "id": "M/pl3Z6eGPyCITwFc",
+    "isStandardContent": false,
+    "name": "depth_camera_link <1>",
+    "partId": "JFD",
+    "suppressed": false,
+    "type": "Part"
+}

@@ -1,0 +1,17 @@
+{
+    "url": "https://cad.onshape.com/documents/4ced43830c4ff4955e236ea8/w/6fb1b9520eae9230baf9061c/e/4d5e051e59e583b208867f10",
+    "output_format": "urdf",
+    "package_name": "mower_robot",
+    "set_zero_mass_to_fixed": true,
+    "joint_properties": {
+        "*": {
+            "max_effort": 10.0,
+            "max_velocity": 6.0,
+            "friction": 0.5
+        },
+        "wheel": {
+            "type": "continuous"
+        }
+    },
+    "geom_properties": {}
+}
