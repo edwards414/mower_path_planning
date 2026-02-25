@@ -19,7 +19,6 @@ controller_manager:
     mower_blade_controller:
       type: effort_controllers/JointGroupEffortController
 
-    
 diff_drive_controller:
   ros__parameters:
     # 左右輪 joint 名稱（對應 robot.urdf.xacro）
@@ -27,7 +26,7 @@ diff_drive_controller:
     right_wheel_names: ["right_wheel_joint"]
 
     # 車輪規格（單位：公尺）
-    wheel_separation: 0.23600   # 左右輪距
+    wheel_separation: 0.3500   # 左右輪距
     wheel_radius:     0.0900   # 車輪半徑
 
     # wheel_separation_multiplier / wheel_radius_multiplier
