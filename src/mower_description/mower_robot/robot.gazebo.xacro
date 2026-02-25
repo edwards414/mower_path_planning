@@ -35,46 +35,24 @@
   </gazebo>
 
   <!-- ============================================================ -->
-  <!--  1. Differential Drive Plugin                                -->
-  <!--     gz-sim-diff-drive-system                                 -->
-  <!--     訂閱: /cmd_vel                                           -->
-  <!--     發布: /odom, /tf                                         -->
+  <!--  1. gz_ros2_control Plugin                                   -->
+  <!--     取代舊的 diff_drive + joint_state_publisher plugins       -->
+  <!--     由 ros2_control 的 diff_drive_controller 負責:            -->
+  <!--       訂閱: /diff_drive_controller/cmd_vel (remapped /cmd_vel)-->
+  <!--       發布: /diff_drive_controller/odom   (remapped /odom)   -->
+  <!--             /tf (odom → base_footprint)                      -->
+  <!--             /joint_states (via joint_state_broadcaster)       -->
   <!-- ============================================================ -->
   <gazebo>
-    <plugin
-      filename="gz-sim-diff-drive-system"
-      name="gz::sim::systems::DiffDrive">
-      <!-- 左右輪 joint 名稱（對應 robot.urdf.xacro 的 joint name）-->
-      <left_joint>left_wheel_joint</left_joint>
-      <right_joint>right_wheel_joint</right_joint>
-
-      <!-- 車輪規格（單位: 公尺）-->
-      <wheel_separation>0.23600</wheel_separation>  <!-- 左右輪距 -->
-      <wheel_radius>0.05100</wheel_radius>           <!-- 車輪半徑 -->
-
-      <!-- Odometry 設定 -->
-      <odom_publish_frequency>50</odom_publish_frequency>
-
-      <!-- ROS topics -->
-      <topic>/cmd_vel</topic>
-      <odom_topic>/odom</odom_topic>
-      <tf_topic>/tf</tf_topic>
-
-      <!-- Frame 名稱 -->
-      <frame_id>odom</frame_id>
-      <child_frame_id>base_footprint</child_frame_id>
-    </plugin>
-  </gazebo>
-
-  <!-- ============================================================ -->
-  <!--  2. Joint State Publisher Plugin                             -->
-  <!--     發布所有 joint 的角度，給 robot_state_publisher 使用     -->
-  <!-- ============================================================ -->
-  <gazebo>
-    <plugin
-      filename="gz-sim-joint-state-publisher-system"
-      name="gz::sim::systems::JointStatePublisher">
-      <topic>/joint_states</topic>
+    <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <!-- 指向 controller_manager 參數檔，定義 diff_drive_controller 等 -->
+      <parameters>$(find mower_description)/config/controllers.yaml</parameters>
+      <!-- ↓ 在 controller_manager 層級做 remap（spawner 的 remappings= 無效！
+           因為 controller 是跑在 controller_manager 進程裡，不在 spawner 進程裡）-->
+      <ros>
+        <remapping>/diff_drive_controller/cmd_vel:=/cmd_vel</remapping>
+        <remapping>/diff_drive_controller/odom:=/odom</remapping>
+      </ros>
     </plugin>
   </gazebo>
 
@@ -189,17 +167,5 @@
     </sensor>
   </gazebo>
 
-  <!-- ============================================================ -->
-  <!--  5. ROS2 橋接 Plugin (gz_ros2_control 或 ros_gz_bridge)      -->
-  <!--     讓 gz-sim 的 topic 橋接到 ROS2                           -->
-  <!-- ============================================================ -->
-  <gazebo>
-    <plugin
-      filename="gz-sim-ros2-control-system"
-      name="gz_ros2_control::GazeboSimROS2ControlPlugin">
-      <!-- 如果你使用 ros2_control，在這裡指定 URDF 中的 controller -->
-      <!-- 如果只用 diff_drive plugin，可以刪除此 plugin -->
-    </plugin>
-  </gazebo>
 
 </robot>

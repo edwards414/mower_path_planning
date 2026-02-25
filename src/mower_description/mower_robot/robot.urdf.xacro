@@ -89,11 +89,12 @@
   </link>
 
   <!-- Joint: base_link → left_wheel_link -->
+  <!-- rpy x=+1.5708: 輪子朝外安裝，Z 軸向內，需用 0 0 -1 讓正速度=前進 -->
   <joint name="left_wheel_joint" type="continuous">
     <origin xyz="0.13253 0.165534 -0.00295275" rpy="1.5708 1.22081 -1.5708"/>
     <parent link="base_link"/>
     <child link="left_wheel_link"/>
-    <axis xyz="0 0 1"/>
+    <axis xyz="0 0 -1"/>
     <limit effort="10" velocity="6"/>
   </joint>
 
@@ -123,6 +124,7 @@
   </link>
 
   <!-- Joint: base_link → right_wheel_link -->
+  <!-- rpy x=-1.5708: 輪子朝外安裝（另一側），Z 軸向外，用 0 0 1 讓正速度=前進 -->
   <joint name="right_wheel_joint" type="continuous">
     <origin xyz="-0.10347 0.165534 -0.00295275" rpy="-1.5708 1.51106 -1.5708"/>
     <parent link="base_link"/>
@@ -388,5 +390,34 @@
     <axis xyz="0 0 1"/>
     <limit effort="10" velocity="6" lower="-3.14159" upper="3.14159"/>
   </joint>
+  <!-- ============================================================ -->
+  <!--  ros2_control Hardware Interface                             -->
+  <!--  使用 GazeboSystem plugin，讓 gz_ros2_control 與 Gazebo 溝通  -->
+  <!-- ============================================================ -->
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+
+    <!-- 左輪：velocity command + position/velocity state -->
+    <joint name="left_wheel_joint">
+      <command_interface name="velocity">
+        <param name="min">-6</param>
+        <param name="max">6</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 右輪：velocity command + position/velocity state -->
+    <joint name="right_wheel_joint">
+      <command_interface name="velocity">
+        <param name="min">-6</param>
+        <param name="max">6</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
 
 </robot>

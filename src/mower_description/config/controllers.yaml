@@ -1,0 +1,52 @@
+# ================================================================
+# ros2_control Controllers Configuration for mower_robot
+# ================================================================
+# 使用 diff_drive_controller 取代 gz-sim-diff-drive-system plugin
+# - 訂閱: /cmd_vel (geometry_msgs/Twist)
+# - 發布: /odom  (nav_msgs/Odometry)
+#          /tf   (odom → base_footprint)
+
+controller_manager:
+  ros__parameters:
+    update_rate: 50  # Hz
+
+    diff_drive_controller:
+      type: diff_drive_controller/DiffDriveController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+diff_drive_controller:
+  ros__parameters:
+    # 左右輪 joint 名稱（對應 robot.urdf.xacro）
+    left_wheel_names:  ["left_wheel_joint"]
+    right_wheel_names: ["right_wheel_joint"]
+
+    # 車輪規格（單位：公尺）
+    wheel_separation: 0.23600   # 左右輪距
+    wheel_radius:     0.0900   # 車輪半徑
+
+    # wheel_separation_multiplier / wheel_radius_multiplier
+    # 用於微調物理參數（不確定直接保持 1.0）
+    wheel_separation_multiplier: 1.0
+    left_wheel_radius_multiplier: 1.0
+    right_wheel_radius_multiplier: 1.0
+
+    # Odometry 設定
+    publish_rate: 50.0          # Hz，odom 發布頻率
+    odom_frame_id: odom
+    base_frame_id: base_footprint
+    pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+    twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+
+    # cmd_vel 設定
+    cmd_vel_timeout: 0.5        # 超過此時間沒有 cmd_vel 則停止
+
+    # 是否使用 stamped Twist（Jazzy 預設 false，與 nav2 相容）
+    use_stamped_vel: true
+
+    # Topic remapping（不改 topic 名稱，與原本 diff_drive plugin 相同）
+    # 預設發布 ~/cmd_vel → 在 launch 裡 remap 成 /cmd_vel
+
+joint_state_broadcaster:
+  ros__parameters: {}

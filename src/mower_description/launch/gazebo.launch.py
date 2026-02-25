@@ -77,10 +77,35 @@ def generate_launch_description():
     )
 
     # ─────────────────────────────────────────────────────────────
+    # 3. 啟動 ros2_control controllers
+    #    延遲 6 秒：等待 Gazebo 啟動(~3s) + spawn(~2s) + controller_manager 初始化(~1s)
+    #    controller_manager 由 gz_ros2_control plugin 在 Gazebo 內啟動，
+    #    必須在 spawn 完成後才能接受 spawner 請求。
+    # ─────────────────────────────────────────────────────────────
+    controllers_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                mower_desc_share,
+                'launch',
+                'controllers.launch.py'
+            )
+        ),
+        launch_arguments={
+            'use_sim_time': 'true',
+        }.items()
+    )
+
+    delayed_controllers = TimerAction(
+        period=6.0,   # Gazebo(3s) + spawn(2s) + controller_manager init(1s)
+        actions=[controllers_launch]
+    )
+
+    # ─────────────────────────────────────────────────────────────
     # 組合（resource path 必須在 gz_sim 之前 set）
     # ─────────────────────────────────────────────────────────────
     return LaunchDescription([
         set_gz_resource_path,
         gz_sim_launch,
         delayed_spawn,
+        delayed_controllers,   # ← 新增：啟動 diff_drive_controller + joint_state_broadcaster
     ])
