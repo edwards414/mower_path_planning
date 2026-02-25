@@ -56,6 +56,7 @@ setup(
                 'example_nav_through_poses = '
                 'nav2_gps_waypoint_follower.example_nav_through_poses:main'
             ),
+            'pub_map = nav2_gps_waypoint_follower.pub_map:main',
         ],
     },
 )

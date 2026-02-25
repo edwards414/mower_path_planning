@@ -85,9 +85,35 @@ def generate_launch_description():
         actions=[diff_drive_controller_spawner]
     )
 
+    # ─────────────────────────────────────────────────────────────────
+    # 3. mower_blade_controller (JointGroupEffortController)
+    #    控制 mower_joint（刀盤）的扭矩輸出
+    #    訂閱: /mower_blade_controller/commands (Float64MultiArray)
+    #    數值: [-10, 10] Nm
+    # ─────────────────────────────────────────────────────────────────
+    mower_blade_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        name='mower_blade_controller_spawner',
+        arguments=[
+            'mower_blade_controller',
+            '--controller-manager', '/controller_manager',
+            '--controller-manager-timeout', '30',
+        ],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+    )
+
+    # diff_drive 後 2 秒再啟動刀盤 controller
+    delayed_blade = TimerAction(
+        period=4.0,
+        actions=[mower_blade_controller_spawner]
+    )
+
     return LaunchDescription([
         declare_use_sim_time,
         joint_state_broadcaster_spawner,
         delayed_diff_drive,
+        delayed_blade,
     ])
 

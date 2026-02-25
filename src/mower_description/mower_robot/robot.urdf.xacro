@@ -383,12 +383,13 @@
   </joint>
 
   <!-- Joint: base_link → connector -->
-  <joint name="mower_joint" type="revolute">
+  <!-- continuous: 刀盤需要無限旋轉，不能用 revolute（有 -π~π 限制） -->
+  <joint name="mower_joint" type="continuous">
     <origin xyz="0.0145303 0.0155339 -0.0549528" rpy="0 -0 3.14159"/>
     <parent link="base_link"/>
     <child link="connector"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="6" lower="-3.14159" upper="3.14159"/>
+    <limit effort="100" velocity="6"/>
   </joint>
   <!-- ============================================================ -->
   <!--  ros2_control Hardware Interface                             -->
@@ -417,6 +418,15 @@
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 割草刀盤：effort command + effort state only -->
+    <joint name="mower_joint">
+      <command_interface name="effort">
+        <param name="min">-100</param>
+        <param name="max">100</param>
+      </command_interface>
+      <state_interface name="effort"/>
     </joint>
   </ros2_control>
 
