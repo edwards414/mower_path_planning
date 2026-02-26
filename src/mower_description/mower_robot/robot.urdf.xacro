@@ -391,43 +391,5 @@
     <axis xyz="0 0 1"/>
     <limit effort="100" velocity="6"/>
   </joint>
-  <!-- ============================================================ -->
-  <!--  ros2_control Hardware Interface                             -->
-  <!--  使用 GazeboSystem plugin，讓 gz_ros2_control 與 Gazebo 溝通  -->
-  <!-- ============================================================ -->
-  <ros2_control name="GazeboSystem" type="system">
-    <hardware>
-      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
-    </hardware>
-
-    <!-- 左輪：velocity command + position/velocity state -->
-    <joint name="left_wheel_joint">
-      <command_interface name="velocity">
-        <param name="min">-6</param>
-        <param name="max">6</param>
-      </command_interface>
-      <state_interface name="position"/>
-      <state_interface name="velocity"/>
-    </joint>
-
-    <!-- 右輪：velocity command + position/velocity state -->
-    <joint name="right_wheel_joint">
-      <command_interface name="velocity">
-        <param name="min">-6</param>
-        <param name="max">6</param>
-      </command_interface>
-      <state_interface name="position"/>
-      <state_interface name="velocity"/>
-    </joint>
-
-    <!-- 割草刀盤：effort command + effort state only -->
-    <joint name="mower_joint">
-      <command_interface name="effort">
-        <param name="min">-100</param>
-        <param name="max">100</param>
-      </command_interface>
-      <state_interface name="effort"/>
-    </joint>
-  </ros2_control>
 
 </robot>

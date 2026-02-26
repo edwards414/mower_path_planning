@@ -17,7 +17,11 @@ diff_controller:
     wheel_separation: 0.35
     wheel_radius: 0.18
     base_frame_id: base_link
+    odom_frame_id: odom
+
     use_stamped_vel: true
+    enable_odom_tf: false
+
     open_loop: true
 
     linear.x.has_velocity_limits: true

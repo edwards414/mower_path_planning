@@ -57,6 +57,47 @@
   </gazebo>
 
   <!-- ============================================================ -->
+  <!--  ros2_control Hardware Interface（Gazebo 模擬用）            -->
+  <!--  使用 GazeboSimSystem plugin，讓 gz_ros2_control 與 Gazebo 溝通
+  <!-- ============================================================ -->
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+
+    <!-- 左輪：velocity command + position/velocity state -->
+    <joint name="left_wheel_joint">
+      <command_interface name="velocity">
+        <param name="min">-6</param>
+        <param name="max">6</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 右輪：velocity command + position/velocity state -->
+    <joint name="right_wheel_joint">
+      <command_interface name="velocity">
+        <param name="min">-6</param>
+        <param name="max">6</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 割草刀盤：effort command + effort state only -->
+    <joint name="mower_joint">
+      <command_interface name="effort">
+        <param name="min">-100</param>
+        <param name="max">100</param>
+      </command_interface>
+      <state_interface name="effort"/>
+      <state_interface name="position"/>
+    </joint>
+  </ros2_control>
+
+
+  <!-- ============================================================ -->
   <!--  3. IMU Sensor（掛載在 imu_link 上）                         -->
   <!--     發布: /imu/data                                          -->
   <!-- ============================================================ -->

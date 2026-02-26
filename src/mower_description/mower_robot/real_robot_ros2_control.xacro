@@ -32,11 +32,5 @@
     </joint>
   </ros2_control>
 
-   <gazebo>
-    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
-      <use_sim_time>true</use_sim_time>
-      <parameters>$(find mower_controller)/controllers/diff_drive_controller.yaml</parameters>
-    </plugin>
-  </gazebo>
-  
+
 </robot>
