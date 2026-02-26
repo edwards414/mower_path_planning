@@ -12,9 +12,9 @@ def generate_launch_description():
 
     # Get URDF via xacro
     robot_description_path = os.path.join(
-        get_package_share_directory('mower_robot_description'),
-        'urdf',
-        'mower_robot.xacro')
+        get_package_share_directory('mower_description'),
+        'mower_robot',
+        'real_robot.xacro')
     robot_description_config = xacro.process_file(robot_description_path)
     robot_description = {'robot_description': robot_description_config.toxml()}
 
@@ -52,7 +52,7 @@ def generate_launch_description():
             package='controller_manager',
             executable='spawner',
             arguments=['diff_controller'],
-            output='screen',
+            output='screen'
         ),
 
     ])
