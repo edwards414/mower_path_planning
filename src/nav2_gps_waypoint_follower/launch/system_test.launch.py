@@ -11,8 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, TimerAction
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -58,6 +62,22 @@ def generate_launch_description():
         output='screen'
     )
 
+    # twist_mux：將多個輸入來源（nav、joy、keyboard 等）依優先權仲裁
+    # 輸出 /cmd_vel_out → remap 到 /diff_controller/cmd_vel 送給 diff_drive_controller
+    twist_mux_config = os.path.join(
+        get_package_share_directory('nav2_gps_waypoint_follower'),
+        'config',
+        'twist_mux_topics.yaml'
+    )
+    twist_mux = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[twist_mux_config],
+        remappings=[('/cmd_vel_out', '/diff_controller/cmd_vel')],
+    )
+
     # 使用多個TimerAction，每個間隔5秒
     timer_path_record = TimerAction(
         period=5.0,  # 5秒後啟動 path_record
@@ -95,6 +115,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        twist_mux,
         gps_waypoint_follower,
         timer_path_record,
         timer_map_manage,

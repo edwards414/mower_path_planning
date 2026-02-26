@@ -293,7 +293,7 @@ def generate_launch_description():
                         remappings=remappings
                         + [
                             ('/cmd_vel', '/cmd_vel_nav'),
-                            ('/cmd_vel_smoothed', '/cmd_vel'),
+                            ('/cmd_vel_smoothed', '/nav_cmd_vel'),
                         ],
                     ),
                     # ComposableNode(
