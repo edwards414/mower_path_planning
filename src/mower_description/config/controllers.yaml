@@ -48,6 +48,10 @@ diff_drive_controller:
     # 是否使用 stamped Twist（Jazzy 預設 false，與 nav2 相容）
     use_stamped_vel: true
 
+    # TF 發布設定：關閉 diff_drive_controller 的 TF 發布！
+    # ekf_filter_node_odom (publish_tf: true) 是唯一的 odom → base_footprint TF 來源
+    enable_odom_tf: false
+
     # Topic remapping（不改 topic 名稱，與原本 diff_drive plugin 相同）
     # 預設發布 ~/cmd_vel → 在 launch 裡 remap 成 /cmd_vel
 

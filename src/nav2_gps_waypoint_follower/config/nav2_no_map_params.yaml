@@ -35,6 +35,7 @@ bt_navigator:
 
 controller_server:
   ros__parameters:
+    enable_stamped_cmd_vel: true   # Nav2 Jazzy 預設使用 TwistStamped
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
@@ -162,6 +163,7 @@ smoother_server:
 
 behavior_server:
   ros__parameters:
+    enable_stamped_cmd_vel: true   # 與 controller_server 保持一致
     local_costmap_topic: local_costmap/costmap_raw
     global_costmap_topic: global_costmap/costmap_raw
     local_footprint_topic: local_costmap/published_footprint
@@ -210,7 +212,7 @@ velocity_smoother:
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-    enable_stamped_cmd_vel: false
+    enable_stamped_cmd_vel: true   # 使用 TwistStamped，與 diff_drive_controller use_stamped_vel: true 對應
 
 
 # collision_monitor:
