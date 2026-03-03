@@ -51,6 +51,20 @@ void StmComms::setMotorValues(int val_1, int val_2)
     }
 }
 
+void StmComms::setMowerBladeValue(int val)
+{
+    // Send motor command to the STM32 without waiting for response
+    std::stringstream ss;
+    ss << "@G " << val << "\r";
+    
+    try {
+        serial_conn_.Write(ss.str());
+        serial_conn_.DrainWriteBuffer();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(rclcpp::get_logger("StmComms"), "Error writing motor values: %s", e.what());
+    }
+}
+
 void StmComms::setLedOK()
 {
     std::stringstream ss;

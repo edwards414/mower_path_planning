@@ -58,7 +58,7 @@ def generate_launch_description():
             '-topic', 'robot_description',  # ← 從 topic 讀 URDF，不直接傳檔案
             '-x', x_pose,
             '-y', y_pose,
-            '-z', '0.10'
+            '-z', '0.10',
         ],
         output='screen',
     )

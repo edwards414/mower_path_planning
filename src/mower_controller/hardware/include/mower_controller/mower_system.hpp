@@ -63,6 +63,8 @@ private:
   Wheel wheel_left_;
   Wheel wheel_right_;
 
+  double mower_blade_cmd_{0.0};
+
   Config cfg_;
 
 };

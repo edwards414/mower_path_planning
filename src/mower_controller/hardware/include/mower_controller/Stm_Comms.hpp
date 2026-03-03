@@ -18,6 +18,7 @@ public:
     
     void setup(const std::string &serial_device, int32_t baud_rate, int32_t timeout_ms);
     void setMotorValues(int val_1, int val_2);
+    void setMowerBladeValue(int val);
     std::string sendMsg(const std::string &msg, bool print_output = false);
     bool is_connected() const;
     void setLedOK();

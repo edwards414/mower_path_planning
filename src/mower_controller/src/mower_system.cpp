@@ -1,6 +1,7 @@
 
 #include "mower_controller/mower_system.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -76,30 +77,45 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_deactivate(
 hardware_interface::return_type MowerSystemHardware::read(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
-   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
-   std::stringstream ss;
-   ss << "Reading states:";
-   ss << std::fixed << std::setprecision(2);
-   for (const auto & [name, descr] : joint_state_interfaces_)
-   {
-     if (descr.get_interface_name() == hardware_interface::HW_IF_POSITION)
-     {
-       // Simulate DiffBot wheels's movement as a first-order system
-       // Update the joint status: this is a revolute joint without any limit.
-       // Simply integrates
-       auto velo = get_command(descr.get_prefix_name() + "/" + hardware_interface::HW_IF_VELOCITY);
-       set_state(name, get_state(name) + period.seconds() * velo);
- 
-       ss << std::endl
-          << "\t position " << get_state(name) << " and velocity " << velo << " for '" << name
-          << "'!";
-     }
-   }
-   RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
-   // END: This part here is for exemplary purposes - Please do not copy to your production code
- 
+  // Open-loop feedback: echo the command back as state so that
+  // diff_drive_controller receives non-zero velocity readings.
+  wheel_left_.vel  = wheel_left_.cmd;
+  wheel_right_.vel = wheel_right_.cmd;
+
+  for (const auto & [name, descr] : joint_state_interfaces_)
+  {
+    const std::string joint = descr.get_prefix_name();
+
+    if (descr.get_interface_name() == hardware_interface::HW_IF_VELOCITY)
+    {
+      if (joint == wheel_left_.name)
+        set_state(name, wheel_left_.vel);
+      else if (joint == wheel_right_.name)
+        set_state(name, wheel_right_.vel);
+    }
+    else if (descr.get_interface_name() == hardware_interface::HW_IF_POSITION)
+    {
+      if (joint == wheel_left_.name)
+        set_state(name, get_state(name) + period.seconds() * wheel_left_.vel);
+      else if (joint == wheel_right_.name)
+        set_state(name, get_state(name) + period.seconds() * wheel_right_.vel);
+    }
+    else if (descr.get_interface_name() == hardware_interface::HW_IF_EFFORT)
+    {
+      if (joint == "mower_joint")
+        set_state(name, mower_blade_cmd_);
+    }
+  }
+
+  RCLCPP_INFO_THROTTLE(
+    get_logger(), *get_clock(), 500,
+    "Read states — left vel: %.3f rad/s, right vel: %.3f rad/s, blade effort: %.1f",
+    wheel_left_.vel, wheel_right_.vel, mower_blade_cmd_);
+
   return hardware_interface::return_type::OK;
 }
+
+
 
   hardware_interface::return_type MowerSystemHardware::write(
     const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
@@ -120,13 +136,21 @@ hardware_interface::return_type MowerSystemHardware::read(
       {
         wheel_right_.cmd = get_command(name);
       }
+      else if (name == "mower_joint/effort")
+      {
+        mower_blade_cmd_ = get_command(name);
+      }
     }
+    stm_comms_.setMotorValues(wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
+    int blade_val = static_cast<int>(std::clamp(mower_blade_cmd_, -100.0, 100.0));
+    stm_comms_.setMowerBladeValue(blade_val);
 
-  stm_comms_.setMotorValues(wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
 
-  RCLCPP_INFO(get_logger(), "Left wheel command: %f, Right wheel command: %f", wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
-  //  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
-  return hardware_interface::return_type::OK;
+    
+    RCLCPP_INFO(get_logger(), "Left wheel command: %f, Right wheel command: %f", wheel_left_.cmd * RADPS_TO_PWM, wheel_right_.cmd * RADPS_TO_PWM);
+    RCLCPP_INFO(get_logger(), "Mower blade command: %f", mower_blade_cmd_);
+    //  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+    return hardware_interface::return_type::OK;
   }
 
 

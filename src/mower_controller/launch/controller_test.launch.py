@@ -41,17 +41,24 @@ def generate_launch_description():
           }
         ),
         # 启动 joint_state_broadcaster
-        # Node(
-        #     package='controller_manager',
-        #     executable='spawner',
-        #     arguments=['joint_state_broadcaster'],
-        #     output='screen',
-        # ),
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['joint_state_broadcaster'],
+            output='screen',
+        ),
         # 启动 diff_controller
         Node(
             package='controller_manager',
             executable='spawner',
             arguments=['diff_controller'],
+            output='screen'
+        ),
+
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['mower_blade_controller'],
             output='screen'
         ),
 
