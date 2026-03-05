@@ -18,7 +18,8 @@ from boustrophedon_coverage_interfaces.srv import GetZoneList, ZoneMapList
 
 import cv2
 
-from nav_msgs.msg import OccupancyGrid
+from geometry_msgs.msg import Pose
+from nav_msgs.msg import MapMetaData, OccupancyGrid
 import numpy as np
 
 from path_record_interface.srv import ChennalPathList
@@ -103,6 +104,43 @@ class MapManage(Node):
 
         # 添加参数
         self.declare_parameter('chennal_width_m', 0.6)  # 通道宽度（米）
+
+        self.nav_base_map_pub = self.create_publisher(OccupancyGrid, '/map_grid', qos)
+        # 建一張簡單的 10m x 10m 地圖，解析度 0.1m
+        self.resolution = 0.1
+        self.width = 150
+        self.height = 100
+
+        self.map_msg = self.build_demo_map()
+
+        self.timer = self.create_timer(1.0, self.timer_cb)
+        self.get_logger().info(f'Publishing OccupancyGrid on /map_grid')
+
+    def build_demo_map(self) -> OccupancyGrid:
+        msg = OccupancyGrid()
+
+        msg.header.frame_id = 'map'
+        msg.info = MapMetaData()
+        msg.info.resolution = self.resolution
+        msg.info.width = self.width
+        msg.info.height = self.height
+
+        origin = Pose()
+        origin.position.x = -5.0
+        origin.position.y = -5.0
+        origin.position.z = 0.0
+        origin.orientation.w = 1.0
+        msg.info.origin = origin
+
+        # 0: free, 100: occupied, -1: unknown
+        grid = np.zeros((self.height, self.width), dtype=np.int8)
+
+        msg.data = grid.flatten().tolist()
+        return msg
+
+    def timer_cb(self):
+        self.map_msg.header.stamp = self.get_clock().now().to_msg()
+        self.nav_base_map_pub.publish(self.map_msg)
 
     def create_risk_map_srv(self, req, res):
         """創建風險地圖服務."""
