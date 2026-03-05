@@ -59,7 +59,7 @@
   <!-- ============================================================ -->
   <!--  ros2_control Hardware Interface（Gazebo 模擬用）            -->
   <!--  使用 GazeboSimSystem plugin，讓 gz_ros2_control 與 Gazebo 溝通
-  <!-- ============================================================ -->
+  ============================================================ -->
   <ros2_control name="GazeboSystem" type="system">
     <hardware>
       <plugin>gz_ros2_control/GazeboSimSystem</plugin>
