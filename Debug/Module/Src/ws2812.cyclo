@@ -1,0 +1,8 @@
+../Module/Src/ws2812.c:18:6:WS2812_Test	2
+../Module/Src/ws2812.c:44:6:ws2812_set_led_buf	4
+../Module/Src/ws2812.c:60:6:ws2812_clear_all	3
+../Module/Src/ws2812.c:74:6:ws2812_show_dual	4
+../Module/Src/ws2812.c:105:6:ws2812_flow_dual	2
+../Module/Src/ws2812.c:128:6:ws2812_turn_left_dual	2
+../Module/Src/ws2812.c:152:6:ws2812_turn_right_dual	2
+../Module/Src/ws2812.c:174:6:ws2812_all_on	2

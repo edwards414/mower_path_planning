@@ -1,0 +1,5 @@
+../Module/Src/motor.cpp:17:6:void MowerMotor_Init()	1
+../Module/Src/motor.cpp:60:6:void Motor_SetSpeed(uint16_t, uint8_t, uint16_t, uint8_t)	27
+../Module/Src/motor.cpp:87:10:uint16_t radps_to_pwm(float)	1
+../Module/Src/motor.cpp:93:6:void Grass_cutting_motor(uint16_t, uint8_t)	5
+../Module/Src/motor.cpp:106:6:void HAL_GPIO_EXTI_Callback(uint16_t)	5

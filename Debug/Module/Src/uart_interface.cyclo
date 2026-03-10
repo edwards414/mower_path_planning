@@ -1,0 +1,12 @@
+../Module/Src/uart_interface.cpp:10:6:void uart_server()	1
+../Module/Src/uart_interface.cpp:15:6:bool parse_packet(uint8_t*, uint16_t, Packet_t*)	17
+../Module/Src/uart_interface.cpp:66:6:void UartParserTask(void*)	4
+../Module/Src/uart_interface.cpp:91:6:bool parse_led_command(Packet_t*, ws2812_msg_t*)	14
+../Module/Src/uart_interface.cpp:149:6:void DispatcherTask(void*)	6
+../Module/Src/uart_interface.cpp:183:6:void LawerMowerMotorTask(void*)	4
+../Module/Src/uart_interface.cpp:215:6:void MotorTask(void*)	4
+../Module/Src/uart_interface.cpp:242:6:void LedTask(void*)	15
+../Module/Src/uart_interface.cpp:335:6:void UartTxTask(void*)	2
+../Module/Src/uart_interface.cpp:350:6:void HAL_UART_TxCpltCallback(UART_HandleTypeDef*)	2
+../Module/Src/uart_interface.cpp:357:5:int _write(int, char*, int)	4
+../Module/Src/uart_interface.cpp:383:6:void HAL_UART_ErrorCallback(UART_HandleTypeDef*)	2
