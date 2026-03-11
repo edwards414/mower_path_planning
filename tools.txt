@@ -137,6 +137,8 @@ ros2 run boustrophedon_coverage nav_action_client
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard
 
+ros2 run mower_teleop teleop_keyboard
+
 #--------------------
 
 [發起gps world 跟 turtlebot]
