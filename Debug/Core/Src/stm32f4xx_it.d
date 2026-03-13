@@ -29,8 +29,8 @@ Core/Src/stm32f4xx_it.o: ../Core/Src/stm32f4xx_it.c ../Core/Inc/main.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h \
  ../Core/Inc/stm32f4xx_it.h ../Module/Inc/uart_interface.hpp \
  ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h \
- ../Module/Inc/motor.hpp ../Core/Inc/tim.h ../Core/Inc/main.h \
- ../Core/Inc/gpio.h ../Core/Inc/usart.h ../Module/Inc/ws2812.h
+ ../Module/Inc/motor.hpp ../Core/Inc/gpio.h ../Core/Inc/main.h \
+ ../Core/Inc/tim.h ../Core/Inc/usart.h ../Module/Inc/ws2812.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
 ../Core/Inc/stm32f4xx_hal_conf.h:
@@ -64,8 +64,8 @@ Core/Src/stm32f4xx_it.o: ../Core/Src/stm32f4xx_it.c ../Core/Inc/main.h \
 ../Module/Inc/uart_interface.hpp:
 ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h:
 ../Module/Inc/motor.hpp:
-../Core/Inc/tim.h:
-../Core/Inc/main.h:
 ../Core/Inc/gpio.h:
+../Core/Inc/main.h:
+../Core/Inc/tim.h:
 ../Core/Inc/usart.h:
 ../Module/Inc/ws2812.h:

@@ -21,7 +21,7 @@ bool parse_packet(uint8_t *buf, uint16_t len, Packet_t *pkt) {
     return false;
 
   char *p = (char *)buf + 1;
-
+  printf("parse_packet command : %s ", buf);
   switch (*p) {
   case 'M':
     pkt->type = PKT_MOTOR;
@@ -66,12 +66,15 @@ bool parse_packet(uint8_t *buf, uint16_t len, Packet_t *pkt) {
 void UartParserTask(void *arg) {
   (void)arg;
 
+  // 在排程器啟動後才啟動 DMA 接收 + IDLE 中斷
+  // 確保 uartRxQueue 已建立，ISR 中的 osMessageQueuePut 才安全
   UartChunk_t chunk;
   uint8_t buf[UART_RX_DMA_BUF_SIZE + 1]; // +1 給字串結尾 0
   for (;;) {
     osMessageQueueGet(uartRxQueue, &chunk, NULL, osWaitForever);
-//     printf("uartparsertask is runnung\r\n"); /* 移除：避免高頻塞爆 TX queue
-//    // */ if (chunk.len > UART_RX_DMA_BUF_SIZE) continue;
+    //     printf("uartparsertask is runnung\r\n"); /* 移除：避免高頻塞爆 TX
+    //     queue
+    //    // */ if (chunk.len > UART_RX_DMA_BUF_SIZE) continue;
     if (chunk.len == 0 || chunk.len > UART_RX_DMA_BUF_SIZE)
       continue;
 
@@ -79,10 +82,13 @@ void UartParserTask(void *arg) {
     buf[chunk.len] = '\0'; // 安全終止
     //        HAL_UART_Transmit_DMA(&huart1, buf, chunk.len);
 
-    printf("buf %s \n", buf);
+    printf("[UART RX] len=%d, data=\"%s\"\r\n", chunk.len, buf);
     Packet_t pkt;
     if (parse_packet(buf, (uint16_t)chunk.len, &pkt)) {
-      osMessageQueuePut(dispatcherQueue, &pkt, 0, 0);
+      if(osMessageQueuePut(dispatcherQueue, &pkt, 0, 0) != osOK)
+      {
+    	  printf("dispatcherQueue error \r\n");
+      }
     }
   }
 }
@@ -153,26 +159,28 @@ void DispatcherTask(void *arg) {
 
   for (;;) {
     osMessageQueueGet(dispatcherQueue, &pkt, NULL, osWaitForever);
-    // printf("DispatcherTask is running\r\n"); /* 移除：避免高頻塞爆 TX queue
     // */
     switch (pkt.type) {
     case PKT_MOTOR:
-      osMessageQueuePut(motorQueue, &pkt, 0, 0);
+    	m_velocity_cmd.left_pwm = pkt.argv[0];
+		m_velocity_cmd.right_pwm = pkt.argv[1];
+		m_velocity_cmd.valid = true;
+		m_velocity_cmd.last_update_ms = HAL_GetTick();
       break;
 
-    case PKT_LED: {
-      ws2812_msg_t led_msg;
-      if (parse_led_command(&pkt, &led_msg)) {
-        osMessageQueuePut(ledQueue, &led_msg, 0, 0);
-        printf("LED cmd=%d, r=%d, g=%d, b=%d, delay=%d\r\n", led_msg.cmd,
-               led_msg.r, led_msg.g, led_msg.b, led_msg.delay_ms);
-      }
-      break;
-    }
-    case PKT_LAWER_MOWER_MOTOR:
-      osMessageQueuePut(LawerMowerMotorQueue, &pkt, 0, 0);
-      printf("Lawn Mower cmd sent: pwm=%d\r\n", pkt.argv[0]);
-      break; // 修复：添加缺失的 break
+//    case PKT_LED: {
+//      ws2812_msg_t led_msg;
+//      if (parse_led_command(&pkt, &led_msg)) {
+//        osMessageQueuePut(ledQueue, &led_msg, 0, 0);
+//        printf("LED cmd=%d, r=%d, g=%d, b=%d, delay=%d\r\n", led_msg.cmd,
+//               led_msg.r, led_msg.g, led_msg.b, led_msg.delay_ms);
+//      }
+//      break;
+//    }
+//    case PKT_LAWER_MOWER_MOTOR:
+//      osMessageQueuePut(LawerMowerMotorQueue, &pkt, 0, 0);
+//      printf("Lawn Mower cmd sent: pwm=%d\r\n", pkt.argv[0]);
+//      break; // 修复：添加缺失的 break
 
     default:
       break;
@@ -216,26 +224,9 @@ void MotorTask(void *arg) {
   (void)arg;
 
   printf("Motor task started!\r\n");
-  Packet_t pkt;
   for (;;) {
-    osMessageQueueGet(motorQueue, &pkt, NULL, osWaitForever);
-
-    if (pkt.type != PKT_MOTOR) { //|| pkt.argc < 2
-      printf("pkg type err \r\n");
-      continue;
-    }
-    int left = pkt.argv[0];
-    int right = pkt.argv[1];
-//    printf("motor_L %d  motor_R %d\r\n",left, right ); /* 移除：避免 TX queue
-    // 回堵 */
-
-    uint8_t dirL = (left >= 0) ? MOTOR_DIR_FWD : MOTOR_DIR_REV;
-    uint8_t dirR = (right >= 0) ? MOTOR_DIR_FWD : MOTOR_DIR_REV;
-
-    uint16_t pwmL = (uint16_t)fabsf(left);
-    uint16_t pwmR = (uint16_t)fabsf(right);
-
-    Motor_SetSpeed(pwmL, dirL, pwmR, dirR);
+	  control_update_50hz();
+	  osDelay(20);
   }
 }
 
@@ -340,7 +331,6 @@ void UartTxTask(void *arg) {
   for (;;) {
     if (osMessageQueueGet(uartTxQueue, &msg, NULL, osWaitForever) == osOK) {
       HAL_UART_Transmit_DMA(&huart1, msg.data, msg.len);
-
       // 等待 DMA 完成
       osThreadFlagsWait(0x01, osFlagsWaitAny, osWaitForever);
     }
@@ -371,28 +361,24 @@ int _write(int file, char *ptr, int len) {
   memcpy(msg.data, ptr, len);
 
   // 使用超时而不是 osWaitForever
-  if (osMessageQueuePut(uartTxQueue, &msg, 0, 100) != osOK) {
+  if (osMessageQueuePut(uartTxQueue, &msg, 0, 0) != osOK) {
     // 队列满，降级到阻塞发送
-    HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, 100);
+//        HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, 100);
     return len;
   }
 
   return len;
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1)
-    {
-        // Clear UART error flags
-        __HAL_UART_CLEAR_OREFLAG(huart);  // Overrun
-        __HAL_UART_CLEAR_PEFLAG(huart);   // Parity
-        __HAL_UART_CLEAR_FEFLAG(huart);   // Frame
-        __HAL_UART_CLEAR_NEFLAG(huart);   // Noise
-
-        // Optional: restart receive interrupt
-        HAL_UART_Receive_DMA(&huart1, uart_rx_dma, UART_RX_DMA_BUF_SIZE);
-    }
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
+    // Clear UART error flags
+    __HAL_UART_CLEAR_OREFLAG(huart); // Overrun
+    __HAL_UART_CLEAR_PEFLAG(huart);  // Parity
+    __HAL_UART_CLEAR_FEFLAG(huart);  // Frame
+    __HAL_UART_CLEAR_NEFLAG(huart);  // Noise
+    printf("UART error Callback\n");
+    // Optional: restart receive interrupt
+    HAL_UART_Receive_DMA(&huart1, uart_rx_dma, UART_RX_DMA_BUF_SIZE);
+  }
 }
-
-

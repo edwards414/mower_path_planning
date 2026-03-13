@@ -74,6 +74,11 @@ extern osMessageQueueId_t uartRxQueue, dispatcherQueue, motorQueue, uartTxQueue,
     ledQueue, LawerMowerMotorQueue;
 extern osThreadId_t uartTxTaskHandle;
 
+/* m_velocity_cmd is declared in motor.hpp as: extern volatile
+ * velocity_command_t m_velocity_cmd */
+
+void control_update_50hz(void); /* 50Hz 控制迴圈，由 MotorTask 呼叫 */
+
 void uart_server(void);
 
 void UartParserTask(void *arg);

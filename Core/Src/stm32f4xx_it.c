@@ -61,6 +61,7 @@ extern DMA_HandleTypeDef hdma_tim3_ch2;
 extern TIM_HandleTypeDef htim3;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 extern DMA_HandleTypeDef hdma_usart1_tx;
+extern UART_HandleTypeDef huart1;
 extern TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN EV */
@@ -218,6 +219,67 @@ void TIM3_IRQHandler(void)
   /* USER CODE BEGIN TIM3_IRQn 1 */
 
   /* USER CODE END TIM3_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART1_IRQn 0 */
+	// 先處理 IDLE
+
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
+	__HAL_UART_CLEAR_IDLEFLAG(&huart1);
+	uint16_t pos = UART_RX_DMA_BUF_SIZE - __HAL_DMA_GET_COUNTER(huart1.hdmarx);
+	if (pos != uart_last_pos) {
+	  UartChunk_t chunk;
+		printf("------\r\n");
+		printf("pos %d\n",pos);
+		printf("-----\r\n");
+	  if (pos > uart_last_pos) {
+		// 連續區段
+		chunk.start = uart_last_pos;
+		chunk.len = pos - uart_last_pos;
+		printf("IRQ uart1 v3\r\n");
+
+		if(osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK){
+			printf("data error put uart RX\n");
+		};
+
+	  } else {
+		printf("IRQ uart1 v3\r\n");
+		// 繞回：先送 tail
+		chunk.start = uart_last_pos;
+		chunk.len = UART_RX_DMA_BUF_SIZE - uart_last_pos;
+		if (chunk.len)
+		{
+			if( osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK)
+			{
+				printf("data error put uart RX\n");
+			}
+		}
+
+		// 再送 head
+		chunk.start = 0;
+		chunk.len = pos;
+		if (chunk.len)
+			{
+				if( osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK)
+				{
+					printf("data error put uart RX\n");
+				}
+			}
+	  }
+
+	  uart_last_pos = pos;
+	}
+  }
+  /* USER CODE END USART1_IRQn 0 */
+  HAL_UART_IRQHandler(&huart1);
+  /* USER CODE BEGIN USART1_IRQn 1 */
+
+  /* USER CODE END USART1_IRQn 1 */
 }
 
 /**

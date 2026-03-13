@@ -19,10 +19,9 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
-#include "cmsis_os.h"
-#include "main.h"
 #include "task.h"
-
+#include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -55,24 +54,24 @@ osMessageQueueId_t uartRxQueue, dispatcherQueue, motorQueue, uartTxQueue,
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
-    .name = "defaultTask",
-    .stack_size = 128 * 4,
-    .priority = (osPriority_t)osPriorityNormal,
+  .name = "defaultTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 const osThreadAttr_t uartParserAttr = {
-    .name = "uart_parser", .priority = osPriorityNormal, .stack_size = 1024};
+    .name = "uart_parser", .priority = osPriorityHigh, .stack_size = 1024};
 
 const osThreadAttr_t dispatcherAttr = {
-    .name = "dispatcher", .priority = osPriorityNormal, .stack_size = 1024};
+    .name = "dispatcher", .priority = osPriorityHigh, .stack_size = 1024};
 
 const osThreadAttr_t motorAttr = {
-    .name = "motor", .priority = osPriorityHigh, .stack_size = 1024};
+    .name = "motor", .priority = osPriorityNormal, .stack_size = 1024};
 
 const osThreadAttr_t uartTxAttr = {
-    .name = "uart_tx", .priority = osPriorityHigh, .stack_size = 2048};
+    .name = "uart_tx", .priority = osPriorityNormal, .stack_size = 2048};
 
 const osThreadAttr_t ledAttr = {
     .name = "led", .priority = osPriorityNormal, .stack_size = 1024};
@@ -88,10 +87,10 @@ void StartDefaultTask(void *argument);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /**
- * @brief  FreeRTOS initialization
- * @param  None
- * @retval None
- */
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
@@ -126,25 +125,25 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle =
-      osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-
+//
   uartParserHandle = osThreadNew(UartParserTask, NULL, &uartParserAttr);
   duspatcherHandle = osThreadNew(DispatcherTask, NULL, &dispatcherAttr);
   motorHandle = osThreadNew(MotorTask, NULL, &motorAttr);
   uartTxTaskHandle = osThreadNew(UartTxTask, NULL, &uartTxAttr);
-  LedTaskHandle = osThreadNew(LedTask, NULL, &ledAttr);
-  LawerMowerMotorHandle =
-      osThreadNew(LawerMowerMotorTask, NULL,
-                  &LawerMowerMotorAttr); // 修复：使用正确的变量名和属性
+//  LedTaskHandle = osThreadNew(LedTask, NULL, &ledAttr);
+//  LawerMowerMotorHandle = osThreadNew(LawerMowerMotorTask, NULL, &LawerMowerMotorAttr);
+
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
+
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -154,9 +153,11 @@ void MX_FREERTOS_Init(void) {
  * @retval None
  */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument) {
+void StartDefaultTask(void *argument)
+{
   /* USER CODE BEGIN StartDefaultTask */
   /* Infinite loop */
+	printf("start task \r\n");
   for (;;) {
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
     osDelay(1000);
@@ -168,3 +169,4 @@ void StartDefaultTask(void *argument) {
 /* USER CODE BEGIN Application */
 
 /* USER CODE END Application */
+
