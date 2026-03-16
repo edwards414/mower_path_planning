@@ -72,7 +72,7 @@ class MapManage(Node):
         )
 
         qos = QoSProfile(depth=1)
-        qos.durability = QoSDurabilityPolicy.VOLATILE
+        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL  # 讓晚加入的訂閱者也能收到最新一次訊息
         qos.reliability = QoSReliabilityPolicy.RELIABLE
 
         # 發布區
@@ -106,7 +106,8 @@ class MapManage(Node):
         self.declare_parameter('chennal_width_m', 0.6)  # 通道宽度（米）
 
         self.nav_base_map_pub = self.create_publisher(OccupancyGrid, '/map_grid', qos)
-        # 建一張簡單的 10m x 10m 地圖，解析度 0.1m
+        # 暫時地圖：500m x 500m，解析度 0.05m，原點置中
+        # 當 /create_free_space 被呼叫後，會自動換成根據實際 zone 計算的地圖
         self.resolution = 0.1
         self.width = 150
         self.height = 100
@@ -135,8 +136,16 @@ class MapManage(Node):
         # 0: free, 100: occupied, -1: unknown
         grid = np.zeros((self.height, self.width), dtype=np.int8)
 
+        # 畫一個邊界牆
+        grid[0, :] = 100
+        grid[-1, :] = 100
+        grid[:, 0] = 100
+        grid[:, -1] = 100
+
+
         msg.data = grid.flatten().tolist()
         return msg
+
 
     def timer_cb(self):
         self.map_msg.header.stamp = self.get_clock().now().to_msg()
@@ -328,10 +337,20 @@ class MapManage(Node):
             # 使用可靠QoS發布整體freespace地圖
             self.free_space_pub.publish(overall_freespace_map)
             self.free_space_inflated_pub.publish(overall_freespace_map_inflated)
+
+            # 同步更新 /map_grid：用根據實際 zone 計算的地圖取代暫時 demo 地圖
+            # 這樣 global costmap 邊界才會和實際作業區域一致，避免 out of bounds 警告
+            self.map_msg = overall_freespace_map
             self.get_logger().info(
                 f'成功創建自由空間，包含 {len(self.zone_map_list)} 個區域'
             )
             self.get_logger().info(f'成功創建 {len(self.zone_map_list)} 個ZoneMap對象')
+            self.get_logger().info(
+                f'/map_grid 已更新為實際 zone 地圖 '
+                f'({overall_freespace_map.info.width}x{overall_freespace_map.info.height} cells, '
+                f'origin=({overall_freespace_map.info.origin.position.x:.2f}, '
+                f'{overall_freespace_map.info.origin.position.y:.2f}))'
+            )
         else:
             self.get_logger().error('生成自由空間失敗')
 

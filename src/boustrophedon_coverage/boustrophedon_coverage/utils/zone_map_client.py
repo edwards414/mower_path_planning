@@ -47,7 +47,16 @@ class ZoneMapClient(Node):
         request = ZoneMapList.Request()  # 空请求
         future = self.client.call_async(request)
 
-        rclpy.spin_until_future_complete(self, future)
+        # 使用獨立的 executor 等待 future，避免與主節點的 spin 衝突
+        # （直接呼叫 rclpy.spin_until_future_complete 會導致 "Executor is already spinning"）
+        from rclpy.executors import SingleThreadedExecutor
+        executor = SingleThreadedExecutor()
+        executor.add_node(self)
+        try:
+            executor.spin_until_future_complete(future, timeout_sec=10.0)
+        finally:
+            executor.remove_node(self)
+            executor.shutdown()
 
         if future.result() is not None:
             response = future.result()

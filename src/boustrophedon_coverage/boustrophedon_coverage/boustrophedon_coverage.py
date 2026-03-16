@@ -35,6 +35,8 @@ from nav_msgs.msg import OccupancyGrid, Path
 import numpy as np
 
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
@@ -68,20 +70,31 @@ class CoveragePlanner(Node):
         self.declare_parameter('waypoint_spacing_m', 0.1)  # 路徑點間距
         self.declare_parameter('unknown_as_obstacle', True)  # 未知(-1)是否當作障礙
 
-        # qos setting
-        qos = QoSProfile(depth=1)
-        qos.durability = QoSDurabilityPolicy.VOLATILE
-        qos.reliability = QoSReliabilityPolicy.RELIABLE
+        # qos setting — 發布用
+        qos_vol = QoSProfile(depth=1)
+        qos_vol.durability = QoSDurabilityPolicy.VOLATILE
+        qos_vol.reliability = QoSReliabilityPolicy.RELIABLE
+
+        # 訂閱地圖用 TRANSIENT_LOCAL，讓晚加入也能收到最新地圖
+        qos_tl = QoSProfile(depth=1)
+        qos_tl.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos_tl.reliability = QoSReliabilityPolicy.RELIABLE
+
+        self.cb_group = ReentrantCallbackGroup()
 
         # 建立服務 service
         self.create_service(
-            Trigger, '/generate_coverage_path', self.generate_coverage_path_srv
+            Trigger, '/generate_coverage_path', self.generate_coverage_path_srv,
+            callback_group=self.cb_group
         )
         self.create_service(ZoneExecPath, '/zone_exec_path',
-                            self.zone_exec_path_srv)
-        self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv)
+                            self.zone_exec_path_srv,
+                            callback_group=self.cb_group)
+        self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv,
+                            callback_group=self.cb_group)
         self.create_service(Trigger, '/check_nav_status',
-                            self.check_nav_status_srv)
+                            self.check_nav_status_srv,
+                            callback_group=self.cb_group)
         # 创建回调组用于服务调用
         # 建立服務 client
         self.waypoint_active_client = self.create_client(
@@ -97,10 +110,10 @@ class CoveragePlanner(Node):
             MarkerArray, '/coverage_path_markers', 1
         )
         self.free_space_inflated_pub = self.create_publisher(
-            OccupancyGrid, '/free_space_inflated', qos
+            OccupancyGrid, '/free_space_inflated', qos_vol
         )
         self.risk_map_inflated_pub = self.create_publisher(
-            OccupancyGrid, '/risk_map_inflated', qos
+            OccupancyGrid, '/risk_map_inflated', qos_vol
         )
 
         # 訂閱地圖話題
@@ -111,15 +124,17 @@ class CoveragePlanner(Node):
 
         # 訂閱原始地圖
         self.sub_risk_map = self.create_subscription(
-            OccupancyGrid, '/risk_map', self.risk_map_callback, qos
+            OccupancyGrid, '/risk_map', self.risk_map_callback, qos_tl,
+            callback_group=self.cb_group
         )
 
-        # 訂閱膨脹後的地圖 - 這是您需要的關鍵訂閱
+        # 訂閱膨脹後的地圖 - TRANSIENT_LOCAL 確保晚加入也能收到
         self.sub_risk_map_inflated = self.create_subscription(
             OccupancyGrid,
             '/risk_map_inflated',
             self.risk_map_inflated_callback,
-            qos
+            qos_tl,
+            callback_group=self.cb_group
         )
 
         self.waypoint_active = False
@@ -376,9 +391,14 @@ def main(args=None):
     """Initialize and run the CoveragePlanner node."""
     rclpy.init(args=args)
     node = CoveragePlanner()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    try:
+        executor.spin()
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
