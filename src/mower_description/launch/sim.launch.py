@@ -14,7 +14,10 @@ def generate_launch_description():
     # 路徑設定
     # ─────────────────────────────────────────────────────────────
     mower_desc_share = get_package_share_directory('mower_description')
-    rviz_config_file = os.path.join(mower_desc_share, 'rviz', 'display.rviz')
+    nav_rviz_package_share = get_package_share_directory('nav2_gps_waypoint_follower')
+
+    # rviz_config_file = os.path.join(mower_desc_share, 'rviz', 'display.rviz')
+    rviz_config_file = os.path.join(nav_rviz_package_share, 'config', 'config.rviz')
 
     # ─────────────────────────────────────────────────────────────
     # 1. 啟動 Gazebo + spawn + controllers（完整仿真環境）

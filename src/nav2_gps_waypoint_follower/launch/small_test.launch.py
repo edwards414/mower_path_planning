@@ -78,7 +78,7 @@ def generate_launch_description():
         declare_params_file,
         robot_localization_cmd,
         navigation_cmd,
-        # path_record,
-        # map_manage,
-        # boustrophedon_coverage,
+        path_record,
+        map_manage,
+        boustrophedon_coverage,
     ])
