@@ -1,0 +1,19 @@
+services:
+  ublox:
+    build:
+      context: .
+      dockerfile: Dockerfile.gps
+    container_name: ublox_ros2
+
+    ipc: host
+    network_mode: host # ROS2 必要
+    devices:
+      - /dev/gps-rtk:/dev/ttyACM0
+    group_add:
+      - dialout
+    privileged: false
+
+    stdin_open: true
+    tty: true
+    # environment:
+    #   - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
