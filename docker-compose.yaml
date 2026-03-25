@@ -16,6 +16,6 @@ services:
     tty: true
     devices:
       - /dev/imu_usb:/dev/imu_usb
-      
+      - /dev/stmcom:/dev/stmcom
     # command: [sleep, infinity]
-    # command: ["ros2", "launch", "nav2_gps_waypoint_follower", "small_test.launch.py"]
+    command: [ "ros2", "launch", "nav2_gps_waypoint_follower", "mower.launch.py" ]
