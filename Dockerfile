@@ -28,7 +28,7 @@ COPY ./src ${WORKSPACE}/src
 # 安裝編譯期與執行期相依套件
 RUN apt-get update && \
     . /opt/ros/jazzy/setup.sh && \
-    rosdep install --from-paths src -i --rosdistro jazzy -y && \
+    rosdep install  --ignore-src --from-paths src -i --rosdistro jazzy -y && \
     rm -rf /var/lib/apt/lists/*
 # 修正了 =twist-mux 的錯字
 RUN apt-get update && apt-get install -y --no-install-recommends\
