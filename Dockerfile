@@ -7,7 +7,7 @@ FROM ros:jazzy-ros-base AS base
 ENV WORKSPACE=/mower_ws
 
 # 安裝必要工具
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends\
     python3-rosdep \
     python3-vcstool \
     python3-colcon-common-extensions \
@@ -32,7 +32,7 @@ RUN apt-get update && \
     rosdep install --from-paths src -i --rosdistro jazzy -y && \
     rm -rf /var/lib/apt/lists/*
 # 修正了 =twist-mux 的錯字
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends\
     ros-jazzy-xacro \
     ros-jazzy-nav2-bringup \
     ros-jazzy-ros2-control \
@@ -59,7 +59,8 @@ COPY --from=builder ${WORKSPACE}/src ${WORKSPACE}/src
 
 # 安裝 Runtime 需要的系統套件與 rosdep 依賴
 RUN apt-get update \
-    && apt-get install -y python3-opencv \
+    && apt-get install -y --no-install-recommends \
+    python3-opencv \
     # 安裝你在 Builder 額外裝的套件 (因為這是全新 Stage)
     ros-jazzy-xacro \
     ros-jazzy-nav2-bringup \
@@ -84,17 +85,17 @@ ARG GROUP_ID=1000
 # 建立與主機相同 UID/GID 的使用者
 RUN \
     if getent group $GROUP_ID > /dev/null; then \
-        OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
-        groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
+    OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
+    groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
     else \
-        groupadd --gid $GROUP_ID $USER_NAME; \
+    groupadd --gid $GROUP_ID $USER_NAME; \
     fi \
     && if getent passwd $USER_ID > /dev/null; then \
-        OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
-        usermod -l $USER_NAME $OLD_USER_NAME; \
-        usermod -d /home/$USER_NAME -m $USER_NAME; \
+    OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
+    usermod -l $USER_NAME $OLD_USER_NAME; \
+    usermod -d /home/$USER_NAME -m $USER_NAME; \
     else \
-        useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
+    useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
     fi \
     && apt-get update \
     && apt-get install -y sudo \
