@@ -1,9 +1,9 @@
 services:
   lawan_node:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    image: ghcr.io/edwards414/mower_path_planning:main
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # image: ghcr.io/edwards414/mower_path_planning:main
     # image: lawan_node:latest
     environment:
       # - ROS_DOMAIN_ID = 0
@@ -11,11 +11,15 @@ services:
     network_mode: host
     ipc: host
     pid: host
-
     stdin_open: true
     tty: true
     devices:
       - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom
-    # command: [sleep, infinity]
-    command: [ "ros2", "launch", "nav2_gps_waypoint_follower", "mower.launch.py" ]
+    command: ["sleep", "infinity"]   
+#  command: >
+#       bash -c "
+#       source /mower_ws/install/setup.bash &&
+#       ros2 launch nav2_gps_waypoint_follower mower.launch.py
+#       "
+    # command: [ "ros2", "launch", "nav2_gps_waypoint_follower", "mower.launch.py" ]
