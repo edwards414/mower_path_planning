@@ -71,8 +71,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 更新 rosdep 並安裝 src 裡面定義的「執行期」依賴
-RUN rosdep update && \
-    rosdep install --from-paths src --ignore-src --dependency-types=exec -y \
+RUN apt-get update && \
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src --dependency-types=exec --rosdistro jazzy -y \
     && rm -rf /var/lib/apt/lists/*
 
 ARG USER_NAME=mower
