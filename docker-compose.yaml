@@ -16,10 +16,3 @@ services:
     devices:
       - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom
-    command: ["sleep", "infinity"]   
-#  command: >
-#       bash -c "
-#       source /mower_ws/install/setup.bash &&
-#       ros2 launch nav2_gps_waypoint_follower mower.launch.py
-#       "
-    # command: [ "ros2", "launch", "nav2_gps_waypoint_follower", "mower.launch.py" ]

@@ -1,9 +1,6 @@
 build:  
 	colcon build --symlink-install
 
-deps:
-	rosdep install --from-paths ./ -i -y -r --rosdistro jazzy
-
 build-release:
 	colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
@@ -16,5 +13,6 @@ env:
 build_dev:
 	docker-compose -f .devcontainer/docker-compose.dev.yaml up -d
 
-
+deps:
+	rosdep install  --ignore-src --from-paths src -i --rosdistro jazzy -y
 

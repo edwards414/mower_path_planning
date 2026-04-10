@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, ExecuteProcess
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -40,8 +41,28 @@ def generate_launch_description():
         output='screen'
     )
 
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        output='screen',
+    )
+
+    teleop_joy = Node(
+        package='teleop_twist_joy',
+        executable='teleop_node',
+        name='teleop_twist_joy',
+        output='screen',
+        parameters=[{
+            'publish_stamped_twist': True,
+        }],
+        remappings=[('/cmd_vel', '/joy_cmd')],
+    )
+
     return LaunchDescription([
         mower_controller_launch,
         twist_mux_launch,
+        joy_node,
+        teleop_joy,
         # teleop_keyboard
     ])
