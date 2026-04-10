@@ -46,6 +46,10 @@ def generate_launch_description():
         executable='joy_node',
         name='joy_node',
         output='screen',
+        parameters=[{
+            'deadzone': 0.05,
+            'autorepeat_rate': 20.0,
+        }],
     )
 
     teleop_joy = Node(
@@ -55,6 +59,14 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'publish_stamped_twist': True,
+            'require_enable_button': False,
+            'enable_turbo_button': -1,
+            'axis_linear.x': 1,
+            'axis_angular.yaw': 3,
+            'scale_linear.x': 0.6,
+            'scale_linear_turbo.x': 0.6,
+            'scale_angular.yaw': 0.8,
+            'scale_angular_turbo.yaw': 0.8,
         }],
         remappings=[('/cmd_vel', '/joy_cmd')],
     )
