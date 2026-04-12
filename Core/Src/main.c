@@ -27,7 +27,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "motor.hpp"
-#include "uart_interface.hpp"
 #include "ws2812.h"
 
 /* USER CODE END Includes */
@@ -100,11 +99,9 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-  uart_server();
   MowerMotor_Init();
 
-  ws2812_all_on(50, 100, 0);
-  printf("Init finished\r\n");
+  ws2812_all_on(0, 255, 0);
   /* USER CODE END 2 */
 
   /* Init scheduler */

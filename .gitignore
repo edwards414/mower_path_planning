@@ -1,0 +1,19 @@
+# STM32CubeIDE build output directories
+/Debug/
+/Release/
+
+# Firmware binaries / linker outputs
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# Compiler intermediate files
+*.o
+*.d
+*.su
+*.cyclo
+
+# macOS metadata
+.DS_Store

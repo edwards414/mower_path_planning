@@ -1,6 +1,0 @@
-../Module/Src/motor.cpp:17:6:void MowerMotor_Init()	1
-../Module/Src/motor.cpp:61:7:float clampPwm(float)	3
-../Module/Src/motor.cpp:69:6:void motor_set_right_pwm(float)	14
-../Module/Src/motor.cpp:83:6:void motor_set_left_pwm(float)	14
-../Module/Src/motor.cpp:97:6:void control_update_50hz()	4
-../Module/Src/motor.cpp:116:6:void Grass_cutting_motor(uint16_t, uint8_t)	5

@@ -9,10 +9,10 @@
 #define INC_MOTOR_HPP_
 
 #include "gpio.h"
-#include "math.h"
 #include "stm32f4xx_hal.h"
 #include "tim.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #ifdef __cplusplus
@@ -36,22 +36,46 @@ typedef struct {
 } LawerMowerMoter;
 
 typedef struct {
-  uint16_t left_pwm;
-  uint16_t right_pwm;
+  int16_t left_command_permille;
+  int16_t right_command_permille;
+  uint16_t command_timeout_ms;
   bool valid;
+  uint8_t last_rx_seq;
   uint32_t last_update_ms;
+} motor_open_loop_command_t;
 
-} velocity_command_t;
+typedef struct {
+  int16_t commanded_left_permille;
+  int16_t commanded_right_permille;
+  int16_t applied_left_pwm;
+  int16_t applied_right_pwm;
+  uint16_t command_age_ms;
+  uint8_t flags;
+  uint8_t last_rx_seq;
+} motor_open_loop_status_t;
+
+#define MOTOR_PWM_MAX_COUNTS 200
+#define MOTOR_DEFAULT_COMMAND_TIMEOUT_MS 200U
+#define MOTOR_COMMAND_PERMILLE_LIMIT 1000
+
+#define MOTOR_STATUS_FLAG_COMMAND_VALID 0x01U
+#define MOTOR_STATUS_FLAG_COMMAND_TIMEOUT 0x02U
+#define MOTOR_STATUS_FLAG_DRIVER_ALARM 0x04U
 
 void MowerMotor_Init(void);
 
 void control_update_50hz(void);
+void Motor_SetOpenLoopCommand(int16_t left_command_permille,
+                              int16_t right_command_permille,
+                              uint16_t command_timeout_ms, uint8_t rx_seq);
+void Motor_GetStatusSnapshot(motor_open_loop_status_t *status);
+bool Motor_HasDriverAlarm(void);
 
 void motor_set_right_pwm(float pwm);
 void motor_set_left_pwm(float pwm);
 void Grass_cutting_motor(uint16_t pwm, uint8_t dir);
 
-extern volatile velocity_command_t m_velocity_cmd;
+extern volatile motor_open_loop_command_t g_motor_command;
 
 extern Motor motor_L;
 extern Motor motor_R;

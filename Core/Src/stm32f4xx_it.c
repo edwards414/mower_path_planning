@@ -229,26 +229,36 @@ void USART1_IRQHandler(void)
   /* USER CODE BEGIN USART1_IRQn 0 */
 	// 先處理 IDLE
 
+  if ((uartRxQueue == NULL) || (huart1.hdmarx == NULL)) {
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
+      __HAL_UART_CLEAR_IDLEFLAG(&huart1);
+    }
+    HAL_UART_IRQHandler(&huart1);
+    return;
+  }
+
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE)) {
 	__HAL_UART_CLEAR_IDLEFLAG(&huart1);
 	uint16_t pos = UART_RX_DMA_BUF_SIZE - __HAL_DMA_GET_COUNTER(huart1.hdmarx);
 	if (pos != uart_last_pos) {
 	  UartChunk_t chunk;
-		printf("------\r\n");
-		printf("pos %d\n",pos);
-		printf("-----\r\n");
+// printf removed
+
 	  if (pos > uart_last_pos) {
 		// 連續區段
 		chunk.start = uart_last_pos;
 		chunk.len = pos - uart_last_pos;
-		printf("IRQ uart1 v3\r\n");
+// printf removed
+
 
 		if(osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK){
-			printf("data error put uart RX\n");
+// printf removed
+
 		};
 
 	  } else {
-		printf("IRQ uart1 v3\r\n");
+// printf removed
+
 		// 繞回：先送 tail
 		chunk.start = uart_last_pos;
 		chunk.len = UART_RX_DMA_BUF_SIZE - uart_last_pos;
@@ -256,7 +266,8 @@ void USART1_IRQHandler(void)
 		{
 			if( osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK)
 			{
-				printf("data error put uart RX\n");
+// printf removed
+
 			}
 		}
 
@@ -267,7 +278,8 @@ void USART1_IRQHandler(void)
 			{
 				if( osMessageQueuePut(uartRxQueue, &chunk, 0, 0) != osOK)
 				{
-					printf("data error put uart RX\n");
+// printf removed
+
 				}
 			}
 	  }

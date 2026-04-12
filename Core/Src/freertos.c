@@ -45,10 +45,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-osThreadId_t uartParserHandle, duspatcherHandle, motorHandle, uartTxTaskHandle,
-    LedTaskHandle, LawerMowerMotorHandle;
-osMessageQueueId_t uartRxQueue, dispatcherQueue, motorQueue, uartTxQueue,
-    ledQueue, LawerMowerMotorQueue;
+osThreadId_t uartParserHandle, motorHandle, uartTxTaskHandle;
+osMessageQueueId_t uartRxQueue, uartTxQueue;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -62,23 +60,13 @@ const osThreadAttr_t defaultTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 const osThreadAttr_t uartParserAttr = {
-    .name = "uart_parser", .priority = osPriorityHigh, .stack_size = 1024};
-
-const osThreadAttr_t dispatcherAttr = {
-    .name = "dispatcher", .priority = osPriorityHigh, .stack_size = 1024};
+    .name = "uart_parser", .priority = osPriorityHigh, .stack_size = 2048};
 
 const osThreadAttr_t motorAttr = {
-    .name = "motor", .priority = osPriorityNormal, .stack_size = 1024};
+    .name = "motor", .priority = osPriorityNormal, .stack_size = 2048};
 
 const osThreadAttr_t uartTxAttr = {
-    .name = "uart_tx", .priority = osPriorityNormal, .stack_size = 2048};
-
-const osThreadAttr_t ledAttr = {
-    .name = "led", .priority = osPriorityNormal, .stack_size = 1024};
-
-const osThreadAttr_t LawerMowerMotorAttr = {.name = "LawerMowerMotor",
-                                            .priority = osPriorityNormal,
-                                            .stack_size = 1024};
+    .name = "uart_tx", .priority = osPriorityHigh, .stack_size = 4096};
 
 /* USER CODE END FunctionPrototypes */
 
@@ -110,17 +98,9 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
-  uartRxQueue = osMessageQueueNew(32, sizeof(UartChunk_t),
-                                  NULL); /* 加大：16->32，處理 burst */
-  dispatcherQueue =
-      osMessageQueueNew(16, sizeof(Packet_t), NULL);         /* 加大：8->16 */
-  motorQueue = osMessageQueueNew(8, sizeof(Packet_t), NULL); /* 加大：4->8 */
-  LawerMowerMotorQueue =
-      osMessageQueueNew(8, sizeof(Packet_t), NULL);            /* 加大：4->8 */
-  ledQueue = osMessageQueueNew(8, sizeof(ws2812_msg_t), NULL); /* 加大：4->8 */
-
-  uartTxQueue = osMessageQueueNew(UART_TX_QUEUE_LEN * 2, sizeof(UartMsg_t),
-                                  NULL); /* 加大 TX queue */
+  uartRxQueue = osMessageQueueNew(32, sizeof(UartChunk_t), NULL);
+  uartTxQueue =
+      osMessageQueueNew(UART_TX_QUEUE_LEN, sizeof(UartMsg_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -129,13 +109,9 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-//
-  uartParserHandle = osThreadNew(UartParserTask, NULL, &uartParserAttr);
-  duspatcherHandle = osThreadNew(DispatcherTask, NULL, &dispatcherAttr);
-  motorHandle = osThreadNew(MotorTask, NULL, &motorAttr);
   uartTxTaskHandle = osThreadNew(UartTxTask, NULL, &uartTxAttr);
-//  LedTaskHandle = osThreadNew(LedTask, NULL, &ledAttr);
-//  LawerMowerMotorHandle = osThreadNew(LawerMowerMotorTask, NULL, &LawerMowerMotorAttr);
+  uartParserHandle = osThreadNew(UartParserTask, NULL, &uartParserAttr);
+  motorHandle = osThreadNew(MotorTask, NULL, &motorAttr);
 
 
   /* USER CODE END RTOS_THREADS */
@@ -157,7 +133,6 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   /* Infinite loop */
-	printf("start task \r\n");
   for (;;) {
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
     osDelay(1000);

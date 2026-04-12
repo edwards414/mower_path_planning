@@ -6,7 +6,6 @@
  */
 
 #include "ws2812.h"
-#include <stdio.h>
 
 // 外部 DMA handle（用於調試）
 extern DMA_HandleTypeDef hdma_tim3_ch1_trig;
@@ -90,7 +89,6 @@ void ws2812_show_dual(void) {
 
   // 確保定時器在運行
   if (!(__HAL_TIM_GET_FLAG(&htim3, TIM_FLAG_UPDATE))) {
-    printf("[WS2812] Starting TIM3...\r\n");
     HAL_TIM_Base_Start(&htim3);
   }
 
