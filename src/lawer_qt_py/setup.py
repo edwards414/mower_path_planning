@@ -14,6 +14,7 @@ setup(
     install_requires=[
         'setuptools',
         'PyQt5',
+        'pyserial',
     ],
     zip_safe=True,
     maintainer='fxrbindi',
@@ -24,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'lawer_qt = lawer_qt_py.lawer_qt:main',
+            'stm32_uart_monitor = lawer_qt_py.stm32_uart_monitor:main',
         ],
     },
 )

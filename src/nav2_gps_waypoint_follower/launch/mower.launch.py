@@ -7,6 +7,11 @@ import os
 
 
 def generate_launch_description():
+    blade_teleop_config = os.path.join(
+        get_package_share_directory('mower_teleop'),
+        'config',
+        'blade_teleop.yaml'
+    )
 
     # mower_controller launch
     mower_controller_launch = IncludeLaunchDescription(
@@ -71,10 +76,19 @@ def generate_launch_description():
         remappings=[('/cmd_vel', '/joy_cmd')],
     )
 
+    blade_teleop_joy = Node(
+        package='mower_teleop',
+        executable='blade_teleop_joy',
+        name='blade_teleop_joy',
+        output='screen',
+        parameters=[blade_teleop_config],
+    )
+
     return LaunchDescription([
         mower_controller_launch,
         twist_mux_launch,
         joy_node,
         teleop_joy,
+        blade_teleop_joy,
         # teleop_keyboard
     ])

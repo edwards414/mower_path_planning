@@ -1,3 +1,6 @@
+from glob import glob
+import os
+
 from setuptools import find_packages, setup
 
 package_name = 'mower_teleop'
@@ -10,6 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', glob(os.path.join('config', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'teleop_keyboard = mower_teleop.teleop_keyboard:main',
+            'blade_teleop_joy = mower_teleop.blade_teleop_joy:main',
         ],
     },
 )
