@@ -16,6 +16,10 @@ services:
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
     network_mode: host
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_LOCALHOST_ONLY=1
+      - CYCLONEDDS_URI=file:///home/$USER_NAME/mower_ws/.devcontainer/zenoh/cyclonedds-localhost.xml
     # Avoid privileged mode here: the serial symlink /dev/stmcom is more
     # stable when we keep it as an explicit device mapping.
     devices:
