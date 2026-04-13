@@ -1,0 +1,15 @@
+ARG ROS_DISTRO=jazzy
+
+FROM tiryoh/ros2-desktop-vnc:${ROS_DISTRO}
+
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && apt-get install -y \
+    ros-${ROS_DISTRO}-rviz2 \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY .devcontainer/zenoh/rviz2.desktop /etc/xdg/autostart/rviz2.desktop
+COPY utiles/start-rviz-zenoh.sh /usr/local/bin/start-rviz-zenoh.sh
+
+RUN chmod +x /usr/local/bin/start-rviz-zenoh.sh

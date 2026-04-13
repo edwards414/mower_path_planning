@@ -1,0 +1,16 @@
+{
+  scouting: {
+    multicast: {
+      enabled: false,
+    },
+    gossip: {
+      enabled: false,
+    },
+  },
+
+  plugins: {
+    ros2dds: {
+      nodename: "zenoh_bridge_host",
+    },
+  },
+}

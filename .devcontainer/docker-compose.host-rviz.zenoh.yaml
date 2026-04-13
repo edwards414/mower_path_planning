@@ -1,0 +1,37 @@
+services:
+  rviz_host:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile.rviz.zenoh
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+    ports:
+      - "6081:80"
+    security_opt:
+      - seccomp=unconfined
+    shm_size: "2gb"
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///config/cyclonedds-localhost.xml
+      - RVIZ_CONFIG=/workspace/src/nav2_gps_waypoint_follower/config/config.rviz
+    volumes:
+      - ../:/workspace:ro
+      - ./zenoh/cyclonedds-localhost.xml:/config/cyclonedds-localhost.xml:ro
+
+  zenoh_bridge_host:
+    image: eclipse/zenoh-bridge-ros2dds:latest
+    network_mode: "service:rviz_host"
+    restart: unless-stopped
+    depends_on:
+      - rviz_host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///config/cyclonedds-localhost.xml
+    volumes:
+      - ./zenoh/bridge-ros2dds-host.json5:/config/bridge-ros2dds-host.json5:ro
+      - ./zenoh/cyclonedds-localhost.xml:/config/cyclonedds-localhost.xml:ro
+    command: ["-c", "/config/bridge-ros2dds-host.json5", "-e", "tcp/${ROBOT_IP}:7447"]

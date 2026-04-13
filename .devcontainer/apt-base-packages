@@ -9,3 +9,4 @@ libusb-1.0-0-dev
 libcurl4-openssl-dev
 libserial-dev
 pkg-config
+python3-serial

@@ -1,0 +1,23 @@
+services:
+  lawan_node_dev:
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///home/${USER_NAME}/mower_ws/.devcontainer/zenoh/cyclonedds-localhost.xml
+
+  zenoh_bridge_ros2dds:
+    image: eclipse/zenoh-bridge-ros2dds:latest
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - lawan_node_dev
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///config/cyclonedds-localhost.xml
+    volumes:
+      - ./zenoh/bridge-ros2dds-robot.json5:/config/bridge-ros2dds-robot.json5:ro
+      - ./zenoh/cyclonedds-localhost.xml:/config/cyclonedds-localhost.xml:ro
+    command: ["-c", "/config/bridge-ros2dds-robot.json5"]
