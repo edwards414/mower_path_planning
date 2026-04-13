@@ -16,13 +16,20 @@ services:
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
     network_mode: host
+    # Avoid privileged mode here: the serial symlink /dev/stmcom is more
+    # stable when we keep it as an explicit device mapping.
     devices:
       - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom # Interactive shell
-      - /dev/input/js0:/dev/input/js0
+    device_cgroup_rules:
+      - 'c 13:* rmw'
     group_add:
       - "996"
     stdin_open: true
     tty: true
     volumes:
       - ../:/home/$USER_NAME/mower_ws # mount workspace directory inside the container
+      - /dev/input:/dev/input
+      - /run/udev:/run/udev:ro
+    working_dir: /home/$USER_NAME/mower_ws # set the working directory inside the container
+    # command: source install/setup.bash && ros2 launch nav2_gps_waypoint_follower mower.launch.py # command to run when the container starts 
