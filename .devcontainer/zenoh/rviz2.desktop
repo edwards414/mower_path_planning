@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=RViz2
+Exec=/usr/local/bin/start-rviz-zenoh.sh
+X-GNOME-Autostart-enabled=true
