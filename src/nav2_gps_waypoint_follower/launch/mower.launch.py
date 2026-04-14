@@ -1,12 +1,64 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
+import xacro
 
 
 def generate_launch_description():
+    nav2_gps_waypoint_follower_dir = get_package_share_directory(
+        'nav2_gps_waypoint_follower'
+    )
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    enable_localization = LaunchConfiguration('enable_localization')
+    enable_navigation = LaunchConfiguration('enable_navigation')
+    nav_autostart = LaunchConfiguration('nav_autostart')
+    nav2_params_file = LaunchConfiguration('nav2_params_file')
+
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock if true',
+    )
+    declare_enable_localization = DeclareLaunchArgument(
+        'enable_localization',
+        default_value='true',
+        description='Launch dual EKF and navsat_transform',
+    )
+    declare_enable_navigation = DeclareLaunchArgument(
+        'enable_navigation',
+        default_value='true',
+        description='Launch the Nav2 stack',
+    )
+    declare_nav_autostart = DeclareLaunchArgument(
+        'nav_autostart',
+        default_value='false',
+        description='Automatically activate Nav2 lifecycle nodes',
+    )
+    declare_nav2_params_file = DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value=os.path.join(
+            nav2_gps_waypoint_follower_dir,
+            'config',
+            'nav2_no_map_params.yaml',
+        ),
+        description='Full path to the Nav2 parameters file',
+    )
+
+    robot_description_path = os.path.join(
+        get_package_share_directory('mower_description'),
+        'mower_robot',
+        'real_robot.xacro'
+    )
+    robot_description = {
+        'robot_description': xacro.process_file(robot_description_path).toxml()
+    }
+
     blade_teleop_config = os.path.join(
         get_package_share_directory('mower_teleop'),
         'config',
@@ -21,18 +73,51 @@ def generate_launch_description():
                 'launch',
                 'controller_test.launch.py'
             )
-        )
+        ),
+        launch_arguments={
+            'publish_robot_state_publisher': 'false',
+        }.items(),
     )
 
     # twist_mux launch
     twist_mux_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                get_package_share_directory('nav2_gps_waypoint_follower'),
+                nav2_gps_waypoint_follower_dir,
                 'launch',
                 'twist_mux.launch.py'
             )
         )
+    )
+
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                nav2_gps_waypoint_follower_dir,
+                'launch',
+                'dual_ekf_navsat.launch.py',
+            )
+        ),
+        condition=IfCondition(enable_localization),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items(),
+    )
+
+    navigation_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                nav2_gps_waypoint_follower_dir,
+                'launch',
+                'navigation.launch.py',
+            )
+        ),
+        condition=IfCondition(enable_navigation),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'params_file': nav2_params_file,
+            'autostart': nav_autostart,
+        }.items(),
     )
 
     # teleop keyboard
@@ -44,6 +129,35 @@ def generate_launch_description():
             'teleop_keyboard'
         ],
         output='screen'
+    )
+
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[robot_description, {'use_sim_time': use_sim_time}],
+    )
+
+    wit_ros2_imu_node = Node(
+        package='wit_ros2_imu',
+        executable='wit_ros2_imu',
+        name='imu',
+        output='screen',
+        remappings=[('imu/data_raw', 'imu/data')],
+    )
+
+    imu_z_flip_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='imu_z_flip_tf',
+        arguments=[
+            '--x', '0', '--y', '0', '--z', '0',
+            '--roll', '0', '--pitch', '0', '--yaw', '3.14159',
+            '--frame-id', 'imu_link',
+            '--child-frame-id', 'imu_link_corrected',
+        ],
+        output='screen',
     )
 
     joy_node = Node(
@@ -85,8 +199,18 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_use_sim_time,
+        declare_enable_localization,
+        declare_enable_navigation,
+        declare_nav_autostart,
+        declare_nav2_params_file,
+        robot_state_publisher,
+        wit_ros2_imu_node,
+        imu_z_flip_tf,
         mower_controller_launch,
         twist_mux_launch,
+        robot_localization_launch,
+        navigation_launch,
         joy_node,
         teleop_joy,
         blade_teleop_joy,

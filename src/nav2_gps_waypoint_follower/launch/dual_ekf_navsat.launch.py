@@ -51,7 +51,10 @@ def generate_launch_description():
                 name='ekf_filter_node_odom',
                 output='screen',
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
-                remappings=[('odometry/filtered', 'odometry/local')],
+                remappings=[
+                    ('odometry/filtered', 'odometry/local'),
+                    ('imu', 'imu/data'),
+                ],
             ),
             launch_ros.actions.Node(
                 package='robot_localization',
@@ -59,7 +62,10 @@ def generate_launch_description():
                 name='ekf_filter_node_map',
                 output='screen',
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
-                remappings=[('odometry/filtered', 'odometry/global')],
+                remappings=[
+                    ('odometry/filtered', 'odometry/global'),
+                    ('imu', 'imu/data'),
+                ],
             ),
             launch_ros.actions.Node(
                 package='robot_localization',
