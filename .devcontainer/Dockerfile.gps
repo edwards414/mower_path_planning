@@ -1,39 +1,17 @@
-FROM ros:foxy
+ARG ROS_DISTRO=jazzy
+
+FROM ros:${ROS_DISTRO}-ros-base AS gps_runtime_base
 
 ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-c"]
 
-# 基本工具
-RUN apt update && apt install -y \
-    git \
-    python3-colcon-common-extensions \
-    python3-rosdep \
-    build-essential \
+RUN apt-get update && apt-get install -y \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+    ros-${ROS_DISTRO}-ublox-gps \
     && rm -rf /var/lib/apt/lists/*
 
-RUN apt update && apt install -y \
-    libasio-dev \
-    ros-foxy-diagnostic-updater
+FROM gps_runtime_base AS gps_runtime
 
-# 初始化 rosdep
-RUN rosdep init || true
-RUN rosdep update
-
-# 建 workspace
-WORKDIR /root/ublox_ws/src
-
-# clone ublox
-RUN git clone -b foxy-devel https://github.com/KumarRobotics/ublox.git
-
-# 安裝依賴
-# WORKDIR /root/ublox_ws
-# RUN . /opt/ros/foxy/setup.sh && \
-#     rosdep install --from-paths src --ignore-src -r -y
-
-# # build
-# RUN . /opt/ros/foxy/setup.sh && colcon build
-
-# 預設環境
-RUN echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc && \
-    echo "source /root/ublox_ws/install/setup.bash" >> ~/.bashrc
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
 
 CMD ["bash"]
