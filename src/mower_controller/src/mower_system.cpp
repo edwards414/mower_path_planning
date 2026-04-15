@@ -90,6 +90,20 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
     return hardware_interface::CallbackReturn::ERROR;
   }
   stm_comms_.setLedOK();
+
+  wheel_left_.cmd = 0.0;
+  wheel_left_.vel = 0.0;
+  wheel_right_.cmd = 0.0;
+  wheel_right_.vel = 0.0;
+  mower_blade_cmd_ = 0.0;
+
+  for (const auto &[name, /*descr*/ _] : joint_state_interfaces_) {
+    set_state(name, 0.0);
+  }
+
+  for (const auto &[name, /*descr*/ _] : joint_command_interfaces_) {
+    set_command(name, 0.0);
+  }
   // END: This part here is for exemplary purposes - Please do not copy to your
   // production code
 
@@ -167,19 +181,25 @@ MowerSystemHardware::read(const rclcpp::Time & /*time*/,
     const std::string joint = descr.get_prefix_name();
 
     if (descr.get_interface_name() == hardware_interface::HW_IF_VELOCITY) {
-      if (joint == wheel_left_.name)
+      if (joint == cfg_.left_wheel_name)
         set_state(name, wheel_left_.vel);
-      else if (joint == wheel_right_.name)
+      else if (joint == cfg_.right_wheel_name)
         set_state(name, wheel_right_.vel);
+      else if (joint == "mower_joint")
+        set_state(name, 0.0);
     } else if (descr.get_interface_name() ==
                hardware_interface::HW_IF_POSITION) {
-      if (joint == wheel_left_.name)
+      if (joint == cfg_.left_wheel_name)
         set_state(name, get_state(name) + period.seconds() * wheel_left_.vel);
-      else if (joint == wheel_right_.name)
+      else if (joint == cfg_.right_wheel_name)
         set_state(name, get_state(name) + period.seconds() * wheel_right_.vel);
+      else if (joint == "mower_joint")
+        set_state(name, 0.0);
     } else if (descr.get_interface_name() == hardware_interface::HW_IF_EFFORT) {
       if (joint == "mower_joint")
         set_state(name, mower_blade_cmd_);
+      else
+        set_state(name, 0.0);
     }
   }
 

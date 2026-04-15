@@ -3,12 +3,18 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 import xacro
 
 
 def generate_launch_description():
+    publish_robot_state_publisher = LaunchConfiguration(
+        'publish_robot_state_publisher'
+    )
 
     # Get URDF via xacro
     robot_description_path = os.path.join(
@@ -25,9 +31,15 @@ def generate_launch_description():
         )
 
     return LaunchDescription([
+      DeclareLaunchArgument(
+        'publish_robot_state_publisher',
+        default_value='true',
+        description='Launch robot_state_publisher together with ros2_control',
+      ),
       Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
+        condition=IfCondition(publish_robot_state_publisher),
         parameters=[robot_description],
         output='screen'
         ),
