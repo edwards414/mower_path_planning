@@ -6,12 +6,19 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///home/${USER_NAME}/mower_ws/.devcontainer/zenoh/cyclonedds-localhost.xml
 
+  mower_bringup:
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///home/${USER_NAME}/mower_ws/.devcontainer/zenoh/cyclonedds-localhost.xml
+
   zenoh_bridge_ros2dds:
     image: eclipse/zenoh-bridge-ros2dds:latest
     network_mode: host
     restart: unless-stopped
     depends_on:
-      - lawan_node_dev
+      - mower_bringup
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_LOCALHOST_ONLY=1

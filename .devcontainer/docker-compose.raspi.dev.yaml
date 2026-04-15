@@ -37,3 +37,73 @@ services:
       - /run/udev:/run/udev:ro
     working_dir: /home/$USER_NAME/mower_ws # set the working directory inside the container
     # command: source install/setup.bash && ros2 launch nav2_gps_waypoint_follower mower.launch.py # command to run when the container starts 
+
+  mower_bringup:
+    image: lawan_node_dev
+    depends_on:
+      - lawan_node_dev
+    user: $USER_NAME
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_LOCALHOST_ONLY=1
+      - CYCLONEDDS_URI=file:///home/$USER_NAME/mower_ws/.devcontainer/zenoh/cyclonedds-localhost.xml
+      - ROS_DISTRO=${ROS_DISTRO:-jazzy}
+    devices:
+      - /dev/imu_usb:/dev/imu_usb
+      - /dev/stmcom:/dev/stmcom
+    device_cgroup_rules:
+      - 'c 13:* rmw'
+    group_add:
+      - "996"
+    stdin_open: true
+    tty: true
+    volumes:
+      - ../:/home/$USER_NAME/mower_ws
+      - /dev/input:/dev/input
+      - /run/udev:/run/udev:ro
+    working_dir: /home/$USER_NAME/mower_ws
+    command:
+      - bash
+      - -lc
+      - >
+        source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash &&
+        if [ ! -f install/setup.bash ]; then
+          echo "Missing install/setup.bash in workspace" >&2;
+          exit 1;
+        fi &&
+        source install/setup.bash &&
+        exec ros2 launch nav2_gps_waypoint_follower mower.launch.py
+
+  ublox:
+    build:
+      context: .
+      dockerfile: Dockerfile.gps
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+    container_name: ublox_ros2
+
+    ipc: host
+    network_mode: host # ROS2 必要
+    restart: unless-stopped
+    environment:
+      - ROS_DISTRO=${ROS_DISTRO:-jazzy}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_LOCALHOST_ONLY=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///config/cyclonedds-localhost.xml
+    devices:
+      - /dev/gps_rtk:/dev/ttyACM0
+    group_add:
+      - dialout
+    privileged: false
+    volumes:
+      - ./zenoh/cyclonedds-localhost.xml:/config/cyclonedds-localhost.xml:ro
+
+    stdin_open: true
+    tty: true
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/$$ROS_DISTRO/setup.bash && exec ros2 launch ublox_gps ublox_gps_node-launch.py

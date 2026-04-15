@@ -164,3 +164,68 @@ ros2 service call /lifecycle_manager_navigation/manage_nodes \
 4. 最後再啟動 coverage / waypoint / mission 節點
 
 這樣比開機直接 `nav_autostart:=true` 更安全，也比較好排查問題。
+
+## 樹莓派開機自動啟動
+
+repo 內已提供這些檔案：
+
+- [`utiles/start-raspi-mower-stack.sh`](/home/mower/Desktop/mower_path_planning/utiles/start-raspi-mower-stack.sh)
+- [`utiles/stop-raspi-mower-stack.sh`](/home/mower/Desktop/mower_path_planning/utiles/stop-raspi-mower-stack.sh)
+- [`utiles/raspi-mower-stack.service`](/home/mower/Desktop/mower_path_planning/utiles/raspi-mower-stack.service)
+
+這套做法會在開機後：
+
+1. 啟動 `.devcontainer/docker-compose.raspi.dev.yaml`
+2. 啟動 `.devcontainer/docker-compose.raspi.zenoh.yaml`
+3. 啟動 `mower_bringup` compose service
+4. 由 `mower_bringup` 容器直接執行 `ros2 launch nav2_gps_waypoint_follower mower.launch.py`
+
+### 安裝步驟
+
+先確定 image 已經手動 build 過至少一次：
+
+```bash
+docker compose \
+  -f .devcontainer/docker-compose.raspi.dev.yaml \
+  -f .devcontainer/docker-compose.raspi.zenoh.yaml \
+  build
+```
+
+安裝 service：
+
+```bash
+sudo cp utiles/raspi-mower-stack.service /etc/systemd/system/
+sudo chmod +x utiles/start-raspi-mower-stack.sh utiles/stop-raspi-mower-stack.sh
+sudo systemctl daemon-reload
+sudo systemctl enable raspi-mower-stack.service
+sudo systemctl start raspi-mower-stack.service
+```
+
+### 查看狀態
+
+```bash
+sudo systemctl status raspi-mower-stack.service
+journalctl -u raspi-mower-stack.service -f
+```
+
+查看 `mower.launch.py` log：
+
+```bash
+docker compose \
+  -f .devcontainer/docker-compose.raspi.dev.yaml \
+  -f .devcontainer/docker-compose.raspi.zenoh.yaml \
+  logs -f mower_bringup
+```
+
+### 停止自動啟動服務
+
+```bash
+sudo systemctl stop raspi-mower-stack.service
+sudo systemctl disable raspi-mower-stack.service
+```
+
+### 注意
+
+- 目前 service 內的 `User=mower` 與 repo 路徑 `/home/mower/Desktop/mower_path_planning` 是依照現在這台機器寫的
+- 如果你的樹莓派使用者名稱或 repo 路徑不同，請先修改 [`utiles/raspi-mower-stack.service`](/home/mower/Desktop/mower_path_planning/utiles/raspi-mower-stack.service)
+- `mower.launch.py` 現在是 `mower_bringup` service 的主程序，所以可直接用 `docker compose logs -f mower_bringup` 查看

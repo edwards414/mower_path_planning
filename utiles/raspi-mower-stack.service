@@ -1,0 +1,19 @@
+[Unit]
+Description=Mower docker stack and Nav2 bringup
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=mower
+SupplementaryGroups=docker
+WorkingDirectory=/home/mower/Desktop/mower_path_planning
+Environment=ROS_DISTRO=jazzy
+Environment=ROS_DOMAIN_ID=0
+ExecStart=/home/mower/Desktop/mower_path_planning/utiles/start-raspi-mower-stack.sh
+ExecStop=/home/mower/Desktop/mower_path_planning/utiles/stop-raspi-mower-stack.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
