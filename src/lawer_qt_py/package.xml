@@ -8,7 +8,9 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
   <depend>std_srvs</depend>
+  <depend>mower_interface</depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-serial</exec_depend>
 
