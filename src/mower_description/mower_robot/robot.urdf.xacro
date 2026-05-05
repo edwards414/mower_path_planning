@@ -34,7 +34,8 @@
   <link name="base_footprint"/>
 
   <joint name="base_footprint_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <!-- Rotate CAD frame so base_footprint +X is the mower forward direction. -->
+    <origin xyz="0 0 0" rpy="0 0 1.5708"/>
     <parent link="base_footprint"/>
     <child link="base_link"/>
   </joint>
