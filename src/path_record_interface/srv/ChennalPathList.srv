@@ -1,4 +1,0 @@
----
-bool success
-string message
-visualization_msgs/MarkerArray chennal_path_array

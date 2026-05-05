@@ -1,4 +1,0 @@
----
-bool success
-string message
-visualization_msgs/MarkerArray zone_list

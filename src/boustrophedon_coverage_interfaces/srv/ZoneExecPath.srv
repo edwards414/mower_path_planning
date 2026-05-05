@@ -1,4 +1,0 @@
-int32 zone_id
----
-bool success
-string message
