@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest src/mower_mission/test/test_cell_decomposition.py -v)",
+      "Bash(where pytest *)",
+      "Bash(python3 -m pytest --version)",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Bash(python -m pytest src/mower_mission/test/ -v)",
+      "Bash(gh run list*)",
+      "Bash(gh run view*)",
+      "Bash(gh auth status*)",
+      "Bash(gh workflow list*)",
+      "Bash(gh workflow view*)",
+      "PowerShell(gh auth status 2>&1)",
+      "PowerShell(git remote get-url origin)",
+      "Bash(gh api *)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(git -C \"D:/project/mower_path_planning\" remote -v)",
+      "PowerShell($env:GITHUB_TOKEN | Out-String | ForEach-Object { if \\($_.Trim\\(\\)\\) { \"GITHUB_TOKEN is set \\(length: $\\($_.Trim\\(\\).Length\\)\\)\" } else { \"GITHUB_TOKEN not set\" } })",
+      "PowerShell(gh run list --repo edwards414/mower_path_planning --limit 10 --json databaseId,displayTitle,conclusion,status,workflowName,headBranch,createdAt 2>&1)",
+      "PowerShell(gh run view 25354877714 --repo edwards414/mower_path_planning --log-failed 2>&1)",
+      "PowerShell(gh run view 25368347508 --repo edwards414/mower_path_planning --json status,conclusion,jobs 2>&1)",
+      "PowerShell(gh run view 25354877714 --repo edwards414/mower_path_planning --json jobs 2>&1)",
+      "PowerShell(gh api repos/edwards414/mower_path_planning/actions/jobs/74341961183/logs --hostname github.com 2>&1)",
+      "Bash(git add *)"
+    ]
+  }
+}
