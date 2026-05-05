@@ -71,3 +71,26 @@ class RoutePlan:
     estimated_turn_count: int = 0
     coverage_ratio: float = 0.0
     valid: bool = False
+
+
+@dataclass
+class SpiralSegment:
+    """One typed segment within a spiral coverage plan."""
+
+    points: list           # list[tuple[float, float]]
+    segment_type: str      # 'spiral' | 'bridge' | 'invalid'
+    component_id: int
+    valid: bool
+    reason: str = ''
+
+
+@dataclass
+class SpiralCoveragePlan:
+    """Full output of plan_spiral_coverage()."""
+
+    points: list           # flat list[tuple[float, float]] — all waypoints in order
+    segments: list         # list[SpiralSegment]
+    split_points: list     # list[tuple[float, float]] — end of each spiral segment
+    invalid_segments: list # list[tuple[int, int]] — (i, i+1) index pairs in points
+    coverage_mask: object  # np.ndarray bool (H×W)
+    debug: dict            # {'component_count': int, 'bridge_count': int}

@@ -1,8 +1,8 @@
 import numpy as np
 
 from mower_mission.coverage.path_validator import SafeMap, validate_path
-from mower_mission.path_generators.boustrophedon import (
-    _generate_coverage_boustrophedon_path,
+from mower_mission.path_generators.zigzag import (
+    _generate_coverage_zigzag_path,
 )
 
 
@@ -18,7 +18,7 @@ def test_segment_end_stops_before_first_unsafe_cell():
     )
 
     points, _split_points, invalid_segments = (
-        _generate_coverage_boustrophedon_path(
+        _generate_coverage_zigzag_path(
             safe_map=safe_map,
             strip_width_m=1.0,
             waypoint_spacing_m=1.0,

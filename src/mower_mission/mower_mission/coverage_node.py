@@ -18,10 +18,8 @@
 Boustrophedon coverage path planning module.
 
 This module implements a coverage path planning system for
-autonomous lawn mowers using the boustrophedon (back-and-forth)
-pattern. It integrates with ROS2 Nav2 for autonomous navigation.
-Multiple path generation modes are supported: boustrophedon,
-spiral, and zigzag patterns.
+autonomous lawn mowers using zigzag and spiral patterns. It integrates
+with ROS2 Nav2 for autonomous navigation.
 """
 
 from mower_interface.srv import ZoneExecPath
@@ -48,9 +46,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from .coverage.connector_planner import plan_connector
 from .coverage.path_validator import SafeMap, validate_path
 from .coverage.safe_map_filter import filter_safe_components
-from .path_generators.boustrophedon import (
-    _generate_coverage_boustrophedon_path
-)
+from .path_generators.speiral import _generate_coverage_spiral_path
+from .path_generators.zigzag import _generate_coverage_zigzag_path
 from .utils.nav_action_client import NavActionClient
 from .utils.path_utils import (
     _transform_coverage_path_points,
@@ -72,6 +69,7 @@ class CoveragePlanner(Node):
         self.declare_parameter('waypoint_spacing_m', 0.1)
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
+        self.declare_parameter('coverage_pattern', 'zigzag')
 
         qos_vol = QoSProfile(depth=1)
         qos_vol.durability = QoSDurabilityPolicy.VOLATILE
@@ -180,6 +178,15 @@ class CoveragePlanner(Node):
             self.get_logger().error('沒有可用的 zone map')
             return False
 
+        pattern = str(self.get_parameter('coverage_pattern').value).lower()
+        if pattern not in ('zigzag', 'spiral'):
+            self.get_logger().error(
+                f'unsupported coverage_pattern "{pattern}"; expected '
+                'zigzag or spiral'
+            )
+            return False
+        self.get_logger().info(f'coverage_pattern={pattern}')
+
         for i in range(len(self.zone_map_list)):
             info = self.zone_map_list[i].mask_map.info
             H, W = info.height, info.width
@@ -226,20 +233,24 @@ class CoveragePlanner(Node):
                 f'risk_cells={int(np.count_nonzero(risk_map_data != 0))}'
             )
 
-            coverage_pts, split_pts, invalid_segs = (
-                _generate_coverage_boustrophedon_path(
-                    safe_map=safe_map,
-                    strip_width_m=self.get_parameter('strip_width_m').value,
-                    waypoint_spacing_m=self.get_parameter(
-                        'waypoint_spacing_m').value,
-                    res=res,
-                    H=H,
-                    W=W,
-                    origin_x=ox,
-                    origin_y=oy,
-                    angle_deg=0.0,
-                )
+            _gen_kw = dict(
+                safe_map=safe_map,
+                strip_width_m=self.get_parameter('strip_width_m').value,
+                waypoint_spacing_m=self.get_parameter('waypoint_spacing_m').value,
+                res=res,
+                H=H,
+                W=W,
+                origin_x=ox,
+                origin_y=oy,
             )
+            if pattern == 'spiral':
+                coverage_pts, split_pts, invalid_segs = (
+                    _generate_coverage_spiral_path(**_gen_kw)
+                )
+            else:
+                coverage_pts, split_pts, invalid_segs = (
+                    _generate_coverage_zigzag_path(**_gen_kw, angle_deg=0.0)
+                )
 
             safe_map_struct = SafeMap(
                 grid=safe_map.astype(bool),

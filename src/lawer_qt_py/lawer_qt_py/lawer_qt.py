@@ -11,10 +11,10 @@ from rcl_interfaces.msg import (
 )
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QTextEdit, QGroupBox, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QTextEdit, QGroupBox,
                              QScrollArea, QLabel, QSpinBox, QDoubleSpinBox,
-                             QCheckBox, QFormLayout)
+                             QCheckBox, QFormLayout, QComboBox)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 from datetime import datetime
@@ -26,6 +26,7 @@ COVERAGE_PARAMETER_DEFAULTS = {
     'waypoint_spacing_m': 0.1,
     'unknown_as_obstacle': True,
     'inflate_radius_m': 0.55,
+    'coverage_pattern': 'zigzag',
 }
 
 
@@ -186,6 +187,9 @@ class ParameterSetThread(QThread):
         elif param['type'] == 'bool':
             value.type = ParameterType.PARAMETER_BOOL
             value.bool_value = bool(param['value'])
+        elif param['type'] == 'string':
+            value.type = ParameterType.PARAMETER_STRING
+            value.string_value = str(param['value'])
         else:
             raise ValueError(f"Unsupported parameter type: {param['type']}")
 
@@ -384,6 +388,13 @@ class LawerQtWindow(QMainWindow):
         param_layout.addRow("unknown_as_obstacle:",
                             self.unknown_as_obstacle_checkbox)
 
+        self.coverage_pattern_combo = QComboBox()
+        self.coverage_pattern_combo.addItems(['zigzag', 'spiral'])
+        self.coverage_pattern_combo.setCurrentText(
+            COVERAGE_PARAMETER_DEFAULTS['coverage_pattern'])
+        self.coverage_pattern_combo.setFont(QFont('Arial', 10))
+        param_layout.addRow("覆蓋模式:", self.coverage_pattern_combo)
+
         layout.addWidget(param_widget)
 
         button_widget = QWidget()
@@ -431,6 +442,14 @@ class LawerQtWindow(QMainWindow):
     
     def call_service(self, service_name, button_text):
         """调用ROS2服务"""
+        if service_name == "/generate_coverage_path":
+            self.generate_coverage_path_with_current_parameters(button_text)
+            return
+
+        self.start_service_call(service_name, button_text)
+
+    def start_service_call(self, service_name, button_text):
+        """启动ROS2服务调用线程"""
         self.log_message(f"正在调用服务: {service_name} ({button_text})", "INFO")
         
         # 创建并启动服务调用线程
@@ -438,7 +457,37 @@ class LawerQtWindow(QMainWindow):
         self.service_thread.result_signal.connect(self.on_service_result)
         self.service_thread.start()
 
-    def apply_coverage_parameters(self):
+    def generate_coverage_path_with_current_parameters(self, button_text):
+        """先套用当前覆盖参数，再生成覆盖路径."""
+        pattern = self.coverage_pattern_combo.currentText()
+        self.log_message(
+            f"生成 Coverage Path 前先套用目前覆蓋模式: {pattern}",
+            "INFO"
+        )
+
+        def on_complete(success, messages):
+            if success:
+                self.log_message(
+                    "覆盖参数已套用，开始生成 Coverage Path",
+                    "INFO"
+                )
+                self.start_service_call("/generate_coverage_path", button_text)
+                return
+
+            failed = [
+                f"{service_name}: {message}"
+                for service_name, ok, message in messages
+                if not ok
+            ]
+            self.log_message(
+                "覆盖参数套用失败，已取消生成 Coverage Path: "
+                + "; ".join(failed),
+                "ERROR"
+            )
+
+        self.apply_coverage_parameters(on_complete=on_complete)
+
+    def apply_coverage_parameters(self, on_complete=None):
         """套用覆盖路径相关参数"""
         coverage_params = [
             {
@@ -456,6 +505,11 @@ class LawerQtWindow(QMainWindow):
                 'type': 'bool',
                 'value': self.unknown_as_obstacle_checkbox.isChecked(),
             },
+            {
+                'name': 'coverage_pattern',
+                'type': 'string',
+                'value': self.coverage_pattern_combo.currentText(),
+            },
         ]
         map_params = [
             {
@@ -471,9 +525,26 @@ class LawerQtWindow(QMainWindow):
         ]
 
         self.log_message("正在套用覆盖参数", "INFO")
+        pending = None
+        if on_complete is not None:
+            pending = {
+                'remaining': len(targets),
+                'success': True,
+                'messages': [],
+            }
+
+            def handle_parameter_result(service_name, success, message):
+                pending['remaining'] -= 1
+                pending['success'] = pending['success'] and success
+                pending['messages'].append((service_name, success, message))
+                if pending['remaining'] == 0:
+                    on_complete(pending['success'], pending['messages'])
+
         for service_name, params in targets:
             thread = ParameterSetThread(service_name, params)
             thread.result_signal.connect(self.on_parameter_result)
+            if on_complete is not None:
+                thread.result_signal.connect(handle_parameter_result)
             thread.finished.connect(
                 lambda thread=thread: self.cleanup_parameter_thread(thread)
             )
@@ -490,6 +561,8 @@ class LawerQtWindow(QMainWindow):
             COVERAGE_PARAMETER_DEFAULTS['inflate_radius_m'])
         self.unknown_as_obstacle_checkbox.setChecked(
             COVERAGE_PARAMETER_DEFAULTS['unknown_as_obstacle'])
+        self.coverage_pattern_combo.setCurrentText(
+            COVERAGE_PARAMETER_DEFAULTS['coverage_pattern'])
         self.log_message("覆盖参数输入值已还原为当前程式预设", "INFO")
 
     def cleanup_parameter_thread(self, thread):
@@ -584,4 +657,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
