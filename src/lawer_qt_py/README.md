@@ -23,7 +23,6 @@
 - 生成多個Zone的Freespace
 - 生成多個Zone的Riskspace
 - 建立Chennal Map
-- 建立BCD
 - 取得Record Zone List
 
 ### Boustrophedon Coverage
