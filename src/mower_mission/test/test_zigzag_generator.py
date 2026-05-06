@@ -121,6 +121,20 @@ def test_split_points_are_in_point_list():
         assert sp in pt_set, f'Split point {sp} not found in points'
 
 
+def test_adjacent_strips_use_u_turn_points():
+    """Adjacent reverse-direction strips should be joined by a rounded U-turn."""
+    grid = np.ones((20, 20), dtype=bool)
+    pts, split_pts, invalid_segs = _call(grid)
+
+    assert invalid_segs == []
+    assert split_pts[0] in pts
+    assert not (split_pts[0] == pytest.approx((0.15, 1.95)))
+    assert any(
+        0.15 < x < 0.35 and y > 1.85
+        for x, y in pts
+    ), 'Expected an interior U-turn arc between the first two strips'
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Invalid segment detection
 # ──────────────────────────────────────────────────────────────────────────────

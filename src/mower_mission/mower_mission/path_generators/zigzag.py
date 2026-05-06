@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from ..coverage.path_validator import SafeMap, validate_path
@@ -49,7 +51,7 @@ def _generate_coverage_zigzag_path(
         midcols = list(range(strip_cols // 2, W, strip_cols))
 
         spacing = waypoint_spacing_m
-        points = []
+        runs: list[list[tuple[float, float]]] = []
         reverse = False
 
         for mc in midcols:
@@ -75,11 +77,21 @@ def _generate_coverage_zigzag_path(
                 else:
                     ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
                 ys = ys[::-1] if reverse else ys
-                for y in ys:
-                    points.append((x, y))
-
-                coverage_split_points.append((x, y))
+                runs.append([(x, y) for y in ys])
             reverse = not reverse
+
+        safe_map_struct = SafeMap(
+            grid=safe_map.astype(bool),
+            resolution=res,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+        points, coverage_split_points = _build_path_with_u_turns(
+            runs,
+            safe_map_struct,
+            waypoint_spacing_m=max(res, spacing),
+            res=res,
+        )
 
         invalid_segments = _find_invalid_segments(
             points, safe_map, res, origin_x, origin_y
@@ -153,6 +165,189 @@ def _generate_coverage_zigzag_path(
         points, safe_map, res, origin_x, origin_y
     )
     return points, coverage_split_points, invalid_segments
+
+
+def _build_path_with_u_turns(
+    runs: list[list[tuple[float, float]]],
+    safe_map: SafeMap,
+    waypoint_spacing_m: float,
+    res: float,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Join adjacent zigzag runs with safe U-turns when there is room."""
+    if not runs:
+        return [], []
+
+    points: list[tuple[float, float]] = []
+    split_points: list[tuple[float, float]] = []
+    current_run = list(runs[0])
+
+    for next_run_raw in runs[1:]:
+        next_run = list(next_run_raw)
+        u_turn = _make_u_turn(
+            current_run,
+            next_run,
+            safe_map,
+            waypoint_spacing_m,
+            res,
+        )
+        if u_turn is None:
+            _extend_unique(points, current_run)
+            if current_run:
+                split_points.append(current_run[-1])
+            current_run = next_run
+            continue
+
+        current_prefix, turn_points, next_suffix = u_turn
+        _extend_unique(points, current_prefix)
+        _extend_unique(points, turn_points)
+        if turn_points:
+            split_points.append(turn_points[-1])
+        current_run = next_suffix
+
+    _extend_unique(points, current_run)
+    if current_run:
+        split_points.append(current_run[-1])
+
+    return points, split_points
+
+
+def _make_u_turn(
+    current_run: list[tuple[float, float]],
+    next_run: list[tuple[float, float]],
+    safe_map: SafeMap,
+    waypoint_spacing_m: float,
+    res: float,
+) -> tuple[
+    list[tuple[float, float]],
+    list[tuple[float, float]],
+    list[tuple[float, float]],
+] | None:
+    """Return adjusted runs and a rounded U-turn, or None if unsafe."""
+    if len(current_run) < 2 or len(next_run) < 2:
+        return None
+
+    incoming_dy = current_run[-1][1] - current_run[0][1]
+    outgoing_dy = next_run[-1][1] - next_run[0][1]
+    if abs(incoming_dy) < res or abs(outgoing_dy) < res:
+        return None
+    if incoming_dy * outgoing_dy >= 0:
+        return None
+
+    start = current_run[-1]
+    end = next_run[0]
+    lane_gap = abs(end[0] - start[0])
+    if lane_gap < res * 0.5:
+        return None
+    if abs(start[1] - end[1]) > max(waypoint_spacing_m, res) * 1.5:
+        return None
+
+    radius = lane_gap / 2.0
+    boundary_y = (start[1] + end[1]) / 2.0
+    top_turn = incoming_dy > 0.0
+    center_y = boundary_y - radius if top_turn else boundary_y + radius
+
+    current_prefix = _trim_run_to_turn_y(
+        current_run,
+        center_y,
+        keep_below=top_turn,
+    )
+    next_suffix = _trim_run_from_turn_y(
+        next_run,
+        center_y,
+        skip_above=top_turn,
+    )
+    turn_start = (start[0], center_y)
+    turn_end = (end[0], center_y)
+    current_prefix = _with_endpoint(current_prefix, turn_start)
+    next_suffix = _with_startpoint(next_suffix, turn_end)
+
+    samples = max(
+        3,
+        int(math.ceil((math.pi * radius) / max(waypoint_spacing_m, res))) + 1,
+    )
+    turn_points = []
+    for idx in range(samples):
+        t = idx / (samples - 1)
+        x = start[0] + (end[0] - start[0]) * t
+        arc_offset = radius * math.sin(math.pi * t)
+        y = center_y + arc_offset if top_turn else center_y - arc_offset
+        turn_points.append((x, y))
+
+    validation_points = []
+    if current_prefix:
+        validation_points.append(current_prefix[-1])
+    validation_points.extend(turn_points)
+    if len(next_suffix) > 1:
+        validation_points.append(next_suffix[1])
+
+    if not validate_path(validation_points, safe_map).valid:
+        return None
+
+    return current_prefix, turn_points, next_suffix
+
+
+def _trim_run_to_turn_y(
+    run: list[tuple[float, float]],
+    turn_y: float,
+    keep_below: bool,
+) -> list[tuple[float, float]]:
+    if keep_below:
+        return [pt for pt in run if pt[1] <= turn_y]
+    return [pt for pt in run if pt[1] >= turn_y]
+
+
+def _trim_run_from_turn_y(
+    run: list[tuple[float, float]],
+    turn_y: float,
+    skip_above: bool,
+) -> list[tuple[float, float]]:
+    if skip_above:
+        return [pt for pt in run if pt[1] <= turn_y]
+    return [pt for pt in run if pt[1] >= turn_y]
+
+
+def _with_endpoint(
+    points: list[tuple[float, float]],
+    endpoint: tuple[float, float],
+) -> list[tuple[float, float]]:
+    adjusted = list(points)
+    _append_unique(adjusted, endpoint)
+    return adjusted
+
+
+def _with_startpoint(
+    points: list[tuple[float, float]],
+    startpoint: tuple[float, float],
+) -> list[tuple[float, float]]:
+    adjusted = list(points)
+    if adjusted and _same_point(adjusted[0], startpoint):
+        return adjusted
+    return [startpoint] + adjusted
+
+
+def _extend_unique(
+    points: list[tuple[float, float]],
+    new_points: list[tuple[float, float]],
+):
+    for pt in new_points:
+        _append_unique(points, pt)
+
+
+def _append_unique(
+    points: list[tuple[float, float]],
+    point: tuple[float, float],
+):
+    if points and _same_point(points[-1], point):
+        return
+    points.append(point)
+
+
+def _same_point(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    tol: float = 1e-9,
+) -> bool:
+    return abs(p0[0] - p1[0]) <= tol and abs(p0[1] - p1[1]) <= tol
 
 
 def _find_invalid_segments(

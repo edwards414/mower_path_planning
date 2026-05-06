@@ -66,7 +66,7 @@ class CoveragePlanner(Node):
             [Parameter('use_sim_time', Parameter.Type.BOOL, True)])
         self.get_logger().info('boustrophedon_coverage 初始化')
         self.declare_parameter('strip_width_m', 0.2)
-        self.declare_parameter('waypoint_spacing_m', 0.1)
+        self.declare_parameter('waypoint_spacing_m', 0.2)
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
