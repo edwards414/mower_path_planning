@@ -24,6 +24,9 @@ import numpy as np
 from ..coverage.path_validator import SafeMap, validate_path
 
 
+MIN_U_TURN_RADIUS_M = 0.35
+
+
 def _generate_coverage_zigzag_path(
     safe_map: np.ndarray,
     strip_width_m: float,
@@ -242,6 +245,9 @@ def _make_u_turn(
         return None
 
     radius = lane_gap / 2.0
+    if radius < MIN_U_TURN_RADIUS_M:
+        return None
+
     boundary_y = (start[1] + end[1]) / 2.0
     top_turn = incoming_dy > 0.0
     center_y = boundary_y - radius if top_turn else boundary_y + radius

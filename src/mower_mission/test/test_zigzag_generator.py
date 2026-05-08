@@ -39,6 +39,20 @@ def _call(grid):
     )
 
 
+def _call_with_spacing(grid, strip_width_m, waypoint_spacing_m=SPACING):
+    H, W = grid.shape
+    return _generate_coverage_zigzag_path(
+        safe_map=grid,
+        strip_width_m=strip_width_m,
+        waypoint_spacing_m=waypoint_spacing_m,
+        res=RES,
+        H=H,
+        W=W,
+        origin_x=OX,
+        origin_y=OY,
+    )
+
+
 def _pt_to_cell(x, y):
     col = int((x - OX) / RES)
     row = int((y - OY) / RES)
@@ -121,16 +135,30 @@ def test_split_points_are_in_point_list():
         assert sp in pt_set, f'Split point {sp} not found in points'
 
 
-def test_adjacent_strips_use_u_turn_points():
-    """Adjacent reverse-direction strips should be joined by a rounded U-turn."""
+def test_tight_adjacent_strips_do_not_use_tiny_u_turns():
+    """Very tight strips should not produce physically impossible U-turns."""
     grid = np.ones((20, 20), dtype=bool)
     pts, split_pts, invalid_segs = _call(grid)
 
     assert invalid_segs == []
     assert split_pts[0] in pts
-    assert not (split_pts[0] == pytest.approx((0.15, 1.95)))
+    assert split_pts[0] == pytest.approx((0.15, 1.95))
+
+
+def test_wide_adjacent_strips_use_u_turn_points():
+    """Adjacent reverse-direction strips should be joined by a rounded U-turn."""
+    grid = np.ones((30, 30), dtype=bool)
+    pts, split_pts, invalid_segs = _call_with_spacing(
+        grid,
+        strip_width_m=0.8,
+        waypoint_spacing_m=0.2,
+    )
+
+    assert invalid_segs == []
+    assert split_pts[0] in pts
+    assert not (split_pts[0] == pytest.approx((0.45, 2.95)))
     assert any(
-        0.15 < x < 0.35 and y > 1.85
+        0.45 < x < 1.25 and y > 2.4
         for x, y in pts
     ), 'Expected an interior U-turn arc between the first two strips'
 

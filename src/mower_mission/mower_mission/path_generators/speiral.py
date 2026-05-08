@@ -165,37 +165,48 @@ def _onion_layer_spiral(
     spacing_cells = max(1, int(round(point_spacing_m / res)))
     max_dist = int(dist[comp_mask].max())
 
-    points: list[tuple[float, float]] = []
+    path_cells: list[tuple[int, int]] = []
     previous_cell: tuple[int, int] | None = None
 
-    for contour_mask in _iter_spiral_centerlines(
+    for layer_mask in _iter_spiral_layer_masks(
         comp_mask,
         dist,
         layer_step,
         max_dist,
     ):
-        contour_parts = _connected_components(contour_mask, H, W, diagonal=True)
-        contour_parts = _sort_layer_parts(contour_parts, previous_cell)
+        boundary_loops = _boundary_cell_loops(layer_mask, H, W)
+        boundary_loops = _sort_cell_paths(boundary_loops, previous_cell)
 
-        for part_mask in contour_parts:
-            contour_cells = np.argwhere(part_mask)
-            ordered_cells = _order_cells_by_continuity(
-                contour_cells,
+        for loop_cells in boundary_loops:
+            ordered_cells = _rotate_path_near_previous(
+                loop_cells,
                 previous_cell,
             )
             sampled_cells = _sample_cells_by_spacing(
                 ordered_cells,
                 spacing_cells,
+                comp_mask,
             )
+            if not sampled_cells:
+                continue
 
-            for r, c in sampled_cells:
-                points.append((
-                    origin_x + (c + 0.5) * res,
-                    origin_y + (r + 0.5) * res,
-                ))
-                previous_cell = (int(r), int(c))
+            if previous_cell is not None and previous_cell != sampled_cells[0]:
+                bridge_cells = _astar(
+                    previous_cell, sampled_cells[0], comp_mask, H, W,
+                )
+                if bridge_cells:
+                    _append_cell_path(path_cells, bridge_cells)
 
-    return points
+            _append_cell_path(path_cells, sampled_cells)
+            previous_cell = sampled_cells[-1]
+
+    return [
+        (
+            origin_x + (c + 0.5) * res,
+            origin_y + (r + 0.5) * res,
+        )
+        for r, c in path_cells
+    ]
 
 
 # ── Connected components ──────────────────────────────────────────────────────
@@ -240,19 +251,19 @@ def _connected_components(
 
 # ── Layer ordering ────────────────────────────────────────────────────────────
 
-def _iter_spiral_centerlines(
+def _iter_spiral_layer_masks(
     comp_mask: np.ndarray,
     dist: np.ndarray,
     layer_step: int,
     max_dist: int,
 ) -> list[np.ndarray]:
-    """Return one-cell centerlines for each inward spiral layer.
+    """Return inward offset masks for each spiral layer.
 
-    Earlier versions traversed every cell in a layer band.  That made RViz show
-    a dense block of arrows.  A mower path should follow the strip centerline;
-    the strip width accounts for the covered area around that line.
+    The path follows the boundary of each eroded mask, which gives an ordered
+    offset contour.  This avoids the long greedy jumps that happen when all
+    cells with the same distance value are sorted as an unordered cloud.
     """
-    contour_masks: list[np.ndarray] = []
+    layer_masks: list[np.ndarray] = []
     used_distances: set[int] = set()
 
     for layer_start in range(0, max_dist + 1, layer_step):
@@ -270,123 +281,257 @@ def _iter_spiral_centerlines(
             continue
         used_distances.add(target_dist)
 
-        contour_mask = (dist == target_dist) & comp_mask
-        if np.any(contour_mask):
-            contour_masks.append(contour_mask)
+        layer_mask = (dist >= target_dist) & comp_mask
+        if np.any(layer_mask):
+            layer_masks.append(layer_mask)
 
-    return contour_masks
+    return layer_masks
 
 
-def _sort_layer_parts(
-    layer_parts: list[np.ndarray],
+def _boundary_cell_loops(
+    mask: np.ndarray,
+    H: int,
+    W: int,
+) -> list[list[tuple[int, int]]]:
+    """Trace ordered safe-cell loops around the boundary of a bool mask."""
+    edges_by_start: dict[
+        tuple[int, int],
+        list[tuple[tuple[int, int], tuple[int, int]]],
+    ] = {}
+    all_edges: list[
+        tuple[tuple[int, int], tuple[int, int], tuple[int, int]]
+    ] = []
+
+    def is_inside(row: int, col: int) -> bool:
+        return 0 <= row < H and 0 <= col < W and bool(mask[row, col])
+
+    def add_edge(
+        start: tuple[int, int],
+        end: tuple[int, int],
+        inside_cell: tuple[int, int],
+    ) -> None:
+        all_edges.append((start, end, inside_cell))
+        edges_by_start.setdefault(start, []).append((end, inside_cell))
+
+    for r, c in np.argwhere(mask):
+        r = int(r)
+        c = int(c)
+        if not is_inside(r - 1, c):
+            add_edge((r, c), (r, c + 1), (r, c))
+        if not is_inside(r, c + 1):
+            add_edge((r, c + 1), (r + 1, c + 1), (r, c))
+        if not is_inside(r + 1, c):
+            add_edge((r + 1, c + 1), (r + 1, c), (r, c))
+        if not is_inside(r, c - 1):
+            add_edge((r + 1, c), (r, c), (r, c))
+
+    visited: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    loops: list[list[tuple[int, int]]] = []
+
+    for start, end, inside_cell in all_edges:
+        edge_key = (start, end)
+        if edge_key in visited:
+            continue
+
+        first_start = start
+        current_start = start
+        current_end = end
+        current_cell = inside_cell
+        loop_cells: list[tuple[int, int]] = []
+
+        while (current_start, current_end) not in visited:
+            visited.add((current_start, current_end))
+            loop_cells.append(current_cell)
+
+            candidates = [
+                (next_end, next_cell)
+                for next_end, next_cell in edges_by_start.get(current_end, [])
+                if (current_end, next_end) not in visited
+            ]
+            if not candidates:
+                break
+
+            current_start, previous_end = current_end, current_start
+            current_end, current_cell = _choose_next_boundary_edge(
+                previous_end,
+                current_start,
+                candidates,
+            )
+            if current_start == first_start and current_end == end:
+                break
+
+        loop = _dedupe_consecutive_cells(loop_cells)
+        if len(loop) > 1 and loop[-1] != loop[0]:
+            loop.append(loop[0])
+        if loop:
+            loops.append(loop)
+
+    return loops
+
+
+def _choose_next_boundary_edge(
+    previous_vertex: tuple[int, int],
+    current_vertex: tuple[int, int],
+    candidates: list[tuple[tuple[int, int], tuple[int, int]]],
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Pick the smoothest outgoing boundary edge at a shared vertex."""
+    in_vec = (
+        current_vertex[0] - previous_vertex[0],
+        current_vertex[1] - previous_vertex[1],
+    )
+
+    def turn_cost(
+        candidate: tuple[tuple[int, int], tuple[int, int]],
+    ) -> tuple[int, int, tuple[int, int]]:
+        next_vertex, _cell = candidate
+        out_vec = (
+            next_vertex[0] - current_vertex[0],
+            next_vertex[1] - current_vertex[1],
+        )
+        # Prefer continuing straight, then right/left turns, then reversing.
+        dot = in_vec[0] * out_vec[0] + in_vec[1] * out_vec[1]
+        cross = in_vec[0] * out_vec[1] - in_vec[1] * out_vec[0]
+        if dot > 0:
+            rank = 0
+        elif cross != 0:
+            rank = 1
+        else:
+            rank = 2
+        return rank, abs(cross), next_vertex
+
+    return min(candidates, key=turn_cost)
+
+
+def _dedupe_consecutive_cells(
+    cells: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    deduped: list[tuple[int, int]] = []
+    for cell in cells:
+        if not deduped or deduped[-1] != cell:
+            deduped.append(cell)
+    return deduped
+
+
+def _sort_cell_paths(
+    paths: list[list[tuple[int, int]]],
     previous_cell: tuple[int, int] | None,
-) -> list[np.ndarray]:
-    """Order disconnected pieces of one layer.
-
-    With no previous cell, use the largest loop first.  Once a layer has an
-    exit cell, visit the nearest next loop so inter-loop transitions stay short.
-    """
+) -> list[list[tuple[int, int]]]:
     if previous_cell is None:
-        return sorted(layer_parts, key=lambda m: int(m.sum()), reverse=True)
+        return sorted(paths, key=len, reverse=True)
 
-    pr, pc = previous_cell
-
-    def distance_to_previous(mask: np.ndarray) -> int:
-        cells = np.argwhere(mask)
-        dists = np.abs(cells[:, 0] - pr) + np.abs(cells[:, 1] - pc)
-        return int(dists.min())
-
-    return sorted(layer_parts, key=distance_to_previous)
+    return sorted(
+        paths,
+        key=lambda path: min(_cell_dist(cell, previous_cell) for cell in path),
+    )
 
 
-def _order_cells_by_continuity(
-    cells: np.ndarray,
+def _rotate_path_near_previous(
+    path: list[tuple[int, int]],
     previous_cell: tuple[int, int] | None,
 ) -> list[tuple[int, int]]:
-    """Order contour cells by walking to neighbouring cells first."""
-    if len(cells) == 0:
+    if not path:
         return []
 
-    remaining: set[tuple[int, int]] = {
-        (int(r), int(c)) for r, c in cells
-    }
+    closed = len(path) > 1 and path[0] == path[-1]
+    base = path[:-1] if closed else list(path)
+    if not base:
+        return []
+
     if previous_cell is None:
-        start = min(remaining)
+        start_idx = min(range(len(base)), key=lambda i: base[i])
     else:
-        start = min(
-            remaining,
-            key=lambda rc: _cell_dist(rc, previous_cell),
+        start_idx = min(
+            range(len(base)),
+            key=lambda i: _cell_dist(base[i], previous_cell),
         )
 
-    ordered: list[tuple[int, int]] = [start]
-    remaining.remove(start)
-    current = start
+    rotated = base[start_idx:] + base[:start_idx]
+    if closed and rotated:
+        rotated.append(rotated[0])
+    elif previous_cell is not None and len(rotated) > 1:
+        reversed_path = list(reversed(rotated))
+        if _cell_dist(reversed_path[0], previous_cell) < _cell_dist(
+            rotated[0], previous_cell,
+        ):
+            rotated = reversed_path
+    return rotated
 
-    while remaining:
-        neighbours = [
-            (current[0] + dr, current[1] + dc)
-            for dr, dc in (
-                (-1, 0), (0, 1), (1, 0), (0, -1),
-                (-1, 1), (1, 1), (1, -1), (-1, -1),
-            )
-            if (current[0] + dr, current[1] + dc) in remaining
-        ]
-        if neighbours:
-            next_cell = min(
-                neighbours,
-                key=lambda rc: (_turn_cost(ordered, rc), rc[0], rc[1]),
-            )
-        else:
-            next_cell = min(
-                remaining,
-                key=lambda rc: (_cell_dist(rc, current), rc[0], rc[1]),
-            )
 
-        ordered.append(next_cell)
-        remaining.remove(next_cell)
-        current = next_cell
-
-    return ordered
+def _append_cell_path(
+    target: list[tuple[int, int]],
+    cells: list[tuple[int, int]],
+) -> None:
+    for cell in cells:
+        cell = (int(cell[0]), int(cell[1]))
+        if target and target[-1] == cell:
+            continue
+        target.append(cell)
 
 
 def _cell_dist(a: tuple[int, int], b: tuple[int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
-def _turn_cost(
-    ordered: list[tuple[int, int]],
-    candidate: tuple[int, int],
-) -> int:
-    if len(ordered) < 2:
-        return 0
-    r0, c0 = ordered[-2]
-    r1, c1 = ordered[-1]
-    r2, c2 = candidate
-    prev = (r1 - r0, c1 - c0)
-    nxt = (r2 - r1, c2 - c1)
-    return 0 if prev == nxt else 1
-
-
 def _sample_cells_by_spacing(
     ordered_cells: list[tuple[int, int]],
     spacing_cells: int,
+    traversable_mask: np.ndarray | None = None,
 ) -> list[tuple[int, int]]:
-    """Subsample ordered cells by grid distance while keeping the layer end."""
+    """Subsample ordered cells by path distance while keeping safe chords."""
     if not ordered_cells:
         return []
 
     sampled = [ordered_cells[0]]
-    last_r, last_c = ordered_cells[0]
-    for r, c in ordered_cells[1:]:
-        dist = abs(r - last_r) + abs(c - last_c)
-        if dist >= spacing_cells:
-            sampled.append((r, c))
-            last_r, last_c = r, c
+    chunk = [ordered_cells[0]]
+    travelled = 0
+    previous = ordered_cells[0]
 
-    if sampled[-1] != ordered_cells[-1]:
-        sampled.append(ordered_cells[-1])
+    for cell in ordered_cells[1:]:
+        travelled += _cell_dist(previous, cell)
+        chunk.append(cell)
+        previous = cell
+        if travelled >= spacing_cells:
+            _append_sample_chunk(sampled, chunk, traversable_mask)
+            chunk = [sampled[-1]]
+            travelled = 0
+
+    if chunk[-1] != sampled[-1]:
+        _append_sample_chunk(sampled, chunk, traversable_mask)
 
     return sampled
+
+
+def _append_sample_chunk(
+    sampled: list[tuple[int, int]],
+    chunk: list[tuple[int, int]],
+    traversable_mask: np.ndarray | None,
+) -> None:
+    target = chunk[-1]
+    if (
+        traversable_mask is None
+        or _cell_segment_safe(sampled[-1], target, traversable_mask)
+    ):
+        if sampled[-1] != target:
+            sampled.append(target)
+        return
+
+    for cell in chunk[1:]:
+        if sampled[-1] != cell:
+            sampled.append(cell)
+
+
+def _cell_segment_safe(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    traversable_mask: np.ndarray,
+) -> bool:
+    H, W = traversable_mask.shape
+    for r, c in _line_cells(start, end):
+        if r < 0 or r >= H or c < 0 or c >= W:
+            return False
+        if not traversable_mask[r, c]:
+            return False
+    return True
 
 
 def _mark_covered_cells(

@@ -49,6 +49,15 @@ def _pt_to_cell(x, y):
     return row, col
 
 
+def _max_segment_distance(points):
+    if len(points) < 2:
+        return 0.0
+    return max(
+        float(np.hypot(x1 - x0, y1 - y0))
+        for (x0, y0), (x1, y1) in zip(points, points[1:])
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Return contract
 # ──────────────────────────────────────────────────────────────────────────────
@@ -158,15 +167,32 @@ def test_split_points_are_in_point_list():
 # Invalid segment detection
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_unsafe_transition_reported():
-    """An obstacle that forces a cross-gap jump must produce invalid_segments."""
+def test_connected_obstacle_transitions_are_bridged_safely():
+    """A connected safe region should route around an obstacle, not jump it."""
     grid = np.ones((20, 20), dtype=bool)
-    grid[5:15, 8:12] = False   # central obstacle — outer ring forces a gap jump
+    grid[5:15, 8:12] = False   # central obstacle with safe corridors around it
+    pts, _, invalid_segs = _call(grid)
+    assert invalid_segs == []
+    assert _max_segment_distance(pts) <= STRIP * 1.75
+
+
+def test_disconnected_transition_reported():
+    """Disconnected safe islands still produce invalid transition segments."""
+    grid = np.ones((20, 20), dtype=bool)
+    grid[:, 8:12] = False
     pts, _, invalid_segs = _call(grid)
     if len(pts) >= 2:
-        assert len(invalid_segs) > 0, (
-            'Expected invalid segments when spiral must cross the obstacle gap'
-        )
+        assert len(invalid_segs) > 0
+
+
+def test_concave_region_avoids_long_greedy_jumps():
+    """C-shaped maps should not contain long same-layer straight jumps."""
+    grid = np.zeros((60, 60), dtype=bool)
+    grid[5:55, 5:55] = True
+    grid[15:45, 20:55] = False
+    pts, _, invalid_segs = _call(grid)
+    assert invalid_segs == []
+    assert _max_segment_distance(pts) <= STRIP * 1.75
 
 
 def test_clear_rectangle_no_invalid_segments():
