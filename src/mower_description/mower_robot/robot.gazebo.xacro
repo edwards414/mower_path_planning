@@ -34,6 +34,14 @@
     <mu2>0.01</mu2>
   </gazebo>
 
+  <gazebo reference="back_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="depth_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
   <!-- ============================================================ -->
   <!--  1. gz_ros2_control Plugin                                   -->
   <!--     取代舊的 diff_drive + joint_state_publisher plugins       -->
@@ -45,11 +53,14 @@
   <!-- ============================================================ -->
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <robot_param>robot_description</robot_param>
+      <robot_param_node>robot_state_publisher</robot_param_node>
       <!-- 指向 controller_manager 參數檔，定義 diff_drive_controller 等 -->
       <parameters>$(find mower_description)/config/controllers.yaml</parameters>
       <!-- ↓ 在 controller_manager 層級做 remap（spawner 的 remappings= 無效！
            因為 controller 是跑在 controller_manager 進程裡，不在 spawner 進程裡）-->
       <ros>
+        <remapping>~/robot_description:=/robot_description</remapping>
         <remapping>/diff_drive_controller/cmd_vel:=/cmd_vel</remapping>
         <remapping>/diff_drive_controller/odom:=/odom</remapping>
       </ros>
@@ -205,6 +216,96 @@
           </vertical>
         </velocity_sensing>
       </navsat>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  5. Back Camera Sensor（掛載在 back_camera_link 上）          -->
+  <!--     發布 gz topics: /back_camera/image_raw,                  -->
+  <!--                    /back_camera/camera_info                  -->
+  <!-- ============================================================ -->
+  <gazebo reference="back_camera_link">
+    <sensor name="back_camera_sensor" type="camera">
+      <always_on>true</always_on>
+      <update_rate>15</update_rate>
+      <visualize>true</visualize>
+      <topic>back_camera/image_raw</topic>
+      <gz_frame_id>back_camera_link</gz_frame_id>
+      <camera name="back_camera">
+        <camera_info_topic>back_camera/camera_info</camera_info_topic>
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>10.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.005</stddev>
+        </noise>
+        <distortion>
+          <k1>0.0</k1>
+          <k2>0.0</k2>
+          <k3>0.0</k3>
+          <p1>0.0</p1>
+          <p2>0.0</p2>
+          <center>0.5 0.5</center>
+        </distortion>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================ -->
+  <!--  6. Front Depth Camera Sensor（掛載在 depth_camera_link 上）  -->
+  <!--     發布 gz topics: /front_depth_camera/image_raw,           -->
+  <!--                    /front_depth_camera/depth_image,          -->
+  <!--                    /front_depth_camera/camera_info,          -->
+  <!--                    /front_depth_camera/points                -->
+  <!-- ============================================================ -->
+  <gazebo reference="depth_camera_link">
+    <sensor name="front_depth_camera_sensor" type="rgbd_camera">
+      <always_on>true</always_on>
+      <update_rate>15</update_rate>
+      <visualize>true</visualize>
+      <topic>front_depth_camera</topic>
+      <gz_frame_id>depth_camera_link</gz_frame_id>
+      <camera name="front_depth_camera">
+        <camera_info_topic>front_depth_camera/camera_info</camera_info_topic>
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.08</near>
+          <far>8.0</far>
+        </clip>
+        <depth_camera>
+          <clip>
+            <near>0.08</near>
+            <far>8.0</far>
+          </clip>
+        </depth_camera>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.005</stddev>
+        </noise>
+        <distortion>
+          <k1>0.0</k1>
+          <k2>0.0</k2>
+          <k3>0.0</k3>
+          <p1>0.0</p1>
+          <p2>0.0</p2>
+          <center>0.5 0.5</center>
+        </distortion>
+      </camera>
     </sensor>
   </gazebo>
 
