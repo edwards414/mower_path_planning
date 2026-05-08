@@ -1,9 +1,0 @@
-# Goal
-nav_msgs/Path path
-geometry_msgs/Pose[] coverage_split_points
----
-# Result
-bool success
----
-# Feedback
-string feedback
