@@ -47,13 +47,13 @@ SOF0 = 0xA5
 SOF1 = 0x5A
 PROTOCOL_VERSION = 0x01
 FRAME_TYPE_MOTOR_COMMAND = 0x01
-FRAME_TYPE_LAWER_COMMAND = 0x02
+FRAME_TYPE_MOWER_COMMAND = 0x02
 FRAME_TYPE_WS2812_COMMAND = 0x03
 FRAME_TYPE_MOTOR_STATUS = 0x81
-FRAME_TYPE_LAWER_STATUS = 0x82
+FRAME_TYPE_MOWER_STATUS = 0x82
 FRAME_TYPE_WS2812_STATUS = 0x83
 MOTOR_STATUS_PAYLOAD_SIZE = 12
-LAWER_STATUS_PAYLOAD_SIZE = 8
+MOWER_STATUS_PAYLOAD_SIZE = 8
 WS2812_STATUS_PAYLOAD_SIZE = 8
 MIN_FRAME_SIZE = 8
 COMMAND_VALID_MASK = 0x01
@@ -87,7 +87,7 @@ class MotorStatus:
 
 
 @dataclass
-class LawerMotorStatus:
+class MowerMotorStatus:
     seq: int
     commanded_permille: int
     applied_pwm: int
@@ -169,10 +169,10 @@ def ws2812_mode_name(mode: int) -> str:
 def frame_type_name(frame_type: int) -> str:
     return {
         FRAME_TYPE_MOTOR_COMMAND: "0x01 MOTOR_CMD",
-        FRAME_TYPE_LAWER_COMMAND: "0x02 LAWER_CMD",
+        FRAME_TYPE_MOWER_COMMAND: "0x02 MOWER_CMD",
         FRAME_TYPE_WS2812_COMMAND: "0x03 WS2812_CMD",
         FRAME_TYPE_MOTOR_STATUS: "0x81 MOTOR_STATUS",
-        FRAME_TYPE_LAWER_STATUS: "0x82 LAWER_STATUS",
+        FRAME_TYPE_MOWER_STATUS: "0x82 MOWER_STATUS",
         FRAME_TYPE_WS2812_STATUS: "0x83 WS2812_STATUS",
     }.get(frame_type, f"0x{frame_type:02X}")
 
@@ -218,7 +218,7 @@ def build_motor_command_frame(
     return build_frame(FRAME_TYPE_MOTOR_COMMAND, seq, payload)
 
 
-def build_lawer_command_frame(
+def build_mower_command_frame(
     seq: int,
     command_permille: int,
     command_timeout_ms: int,
@@ -230,7 +230,7 @@ def build_lawer_command_frame(
         0,
         0,
     )
-    return build_frame(FRAME_TYPE_LAWER_COMMAND, seq, payload)
+    return build_frame(FRAME_TYPE_MOWER_COMMAND, seq, payload)
 
 
 def build_ws2812_command_frame(
@@ -283,11 +283,11 @@ def decode_motor_status(seq: int, payload: bytes) -> MotorStatus:
     )
 
 
-def decode_lawer_status(seq: int, payload: bytes) -> LawerMotorStatus:
-    if len(payload) != LAWER_STATUS_PAYLOAD_SIZE:
+def decode_mower_status(seq: int, payload: bytes) -> MowerMotorStatus:
+    if len(payload) != MOWER_STATUS_PAYLOAD_SIZE:
         raise ValueError(
             f"unexpected 0x82 payload size {len(payload)}, "
-            f"expected {LAWER_STATUS_PAYLOAD_SIZE}"
+            f"expected {MOWER_STATUS_PAYLOAD_SIZE}"
         )
 
     (
@@ -298,7 +298,7 @@ def decode_lawer_status(seq: int, payload: bytes) -> LawerMotorStatus:
         last_rx_seq,
     ) = struct.unpack("<hhHBB", payload)
 
-    return LawerMotorStatus(
+    return MowerMotorStatus(
         seq=seq,
         commanded_permille=commanded_permille,
         applied_pwm=applied_pwm,
@@ -405,7 +405,7 @@ class FrameParser:
 class SerialMonitorThread(QThread):
     connection_changed = pyqtSignal(bool, str)
     motor_status_received = pyqtSignal(object)
-    lawer_status_received = pyqtSignal(object)
+    mower_status_received = pyqtSignal(object)
     ws2812_status_received = pyqtSignal(object)
     frame_count_changed = pyqtSignal(dict)
     frame_activity_changed = pyqtSignal(str, str, int, str)
@@ -454,13 +454,13 @@ class SerialMonitorThread(QThread):
         )
         return seq
 
-    def queue_lawer_command(
+    def queue_mower_command(
         self,
         command_permille: int,
         command_timeout_ms: int,
     ) -> int:
         seq = self._next_sequence()
-        frame = build_lawer_command_frame(
+        frame = build_mower_command_frame(
             seq=seq,
             command_permille=command_permille,
             command_timeout_ms=command_timeout_ms,
@@ -471,7 +471,7 @@ class SerialMonitorThread(QThread):
         )
         self._tx_queue.put(
             TxFrame(
-                frame_type=FRAME_TYPE_LAWER_COMMAND,
+                frame_type=FRAME_TYPE_MOWER_COMMAND,
                 seq=seq,
                 raw_bytes=frame,
                 description=description,
@@ -602,8 +602,8 @@ class SerialMonitorThread(QThread):
         try:
             if frame.frame_type == FRAME_TYPE_MOTOR_STATUS:
                 self.motor_status_received.emit(decode_motor_status(frame.seq, frame.payload))
-            elif frame.frame_type == FRAME_TYPE_LAWER_STATUS:
-                self.lawer_status_received.emit(decode_lawer_status(frame.seq, frame.payload))
+            elif frame.frame_type == FRAME_TYPE_MOWER_STATUS:
+                self.mower_status_received.emit(decode_mower_status(frame.seq, frame.payload))
             elif frame.frame_type == FRAME_TYPE_WS2812_STATUS:
                 self.ws2812_status_received.emit(decode_ws2812_status(frame.seq, frame.payload))
             else:
@@ -688,8 +688,8 @@ class Stm32UartMonitorWindow(QMainWindow):
                 ("applied_right_pwm", "Applied Right PWM"),
             ],
         )
-        self.lawer_panel = ValuePanel(
-            "0x82 Lawer Motor Status",
+        self.mower_panel = ValuePanel(
+            "0x82 Mower Motor Status",
             [
                 ("last_update", "Last Update"),
                 ("status_seq", "Status Seq"),
@@ -715,7 +715,7 @@ class Stm32UartMonitorWindow(QMainWindow):
         self.log_panel = self._build_log_group()
 
         status_layout.addWidget(self.motor_panel, 0, 0, 2, 1)
-        status_layout.addWidget(self.lawer_panel, 0, 1)
+        status_layout.addWidget(self.mower_panel, 0, 1)
         status_layout.addWidget(self.ws2812_panel, 1, 1)
         status_layout.addWidget(self.log_panel, 0, 2, 2, 1)
         status_layout.setColumnStretch(0, 2)
@@ -798,7 +798,7 @@ class Stm32UartMonitorWindow(QMainWindow):
             ("last_tx_type", "Last TX Type"),
             ("last_tx_seq", "Last TX Seq"),
             ("motor_frames", "0x81 Count"),
-            ("lawer_frames", "0x82 Count"),
+            ("mower_frames", "0x82 Count"),
             ("ws2812_frames", "0x83 Count"),
             ("unknown_frames", "Unknown Count"),
             ("last_raw_frame", "Last Raw Frame"),
@@ -828,7 +828,7 @@ class Stm32UartMonitorWindow(QMainWindow):
         group.setLayout(layout)
 
         layout.addWidget(self._build_motor_command_box(), 0, 0)
-        layout.addWidget(self._build_lawer_command_box(), 0, 1)
+        layout.addWidget(self._build_mower_command_box(), 0, 1)
         layout.addWidget(self._build_ws2812_command_box(), 0, 2)
         layout.setColumnStretch(0, 2)
         layout.setColumnStretch(1, 1)
@@ -881,8 +881,8 @@ class Stm32UartMonitorWindow(QMainWindow):
 
         return group
 
-    def _build_lawer_command_box(self) -> QGroupBox:
-        group = QGroupBox("0x02 Lawer Command")
+    def _build_mower_command_box(self) -> QGroupBox:
+        group = QGroupBox("0x02 Mower Command")
         group.setFont(QFont("Arial", 10, QFont.Bold))
 
         layout = QFormLayout()
@@ -890,13 +890,13 @@ class Stm32UartMonitorWindow(QMainWindow):
         layout.setSpacing(8)
         group.setLayout(layout)
 
-        self.lawer_command_spin = self._build_spinbox(-1000, 1000, 0, 50)
-        self.lawer_timeout_spin = self._build_spinbox(0, 5000, DEFAULT_COMMAND_TIMEOUT_MS, 10)
+        self.mower_command_spin = self._build_spinbox(-1000, 1000, 0, 50)
+        self.mower_timeout_spin = self._build_spinbox(0, 5000, DEFAULT_COMMAND_TIMEOUT_MS, 10)
 
         send_button = QPushButton("Send")
-        send_button.clicked.connect(self._send_lawer_once)
+        send_button.clicked.connect(self._send_mower_once)
         stop_button = QPushButton("Stop")
-        stop_button.clicked.connect(self._stop_lawer_motor)
+        stop_button.clicked.connect(self._stop_mower_motor)
 
         button_row = QWidget()
         button_layout = QHBoxLayout()
@@ -906,8 +906,8 @@ class Stm32UartMonitorWindow(QMainWindow):
         button_layout.addWidget(send_button)
         button_layout.addWidget(stop_button)
 
-        layout.addRow("Command", self.lawer_command_spin)
-        layout.addRow("Timeout (ms)", self.lawer_timeout_spin)
+        layout.addRow("Command", self.mower_command_spin)
+        layout.addRow("Timeout (ms)", self.mower_timeout_spin)
         layout.addRow(button_row)
 
         return group
@@ -1033,11 +1033,11 @@ class Stm32UartMonitorWindow(QMainWindow):
             return None
         return monitor.queue_motor_command(left, right, timeout_ms)
 
-    def _queue_lawer_command(self, command: int, timeout_ms: int) -> Optional[int]:
+    def _queue_mower_command(self, command: int, timeout_ms: int) -> Optional[int]:
         monitor = self._connected_monitor()
         if monitor is None:
             return None
-        return monitor.queue_lawer_command(command, timeout_ms)
+        return monitor.queue_mower_command(command, timeout_ms)
 
     def _queue_ws2812_command(
         self,
@@ -1114,23 +1114,23 @@ class Stm32UartMonitorWindow(QMainWindow):
         if seq is not None:
             self.log_event("INFO", f"Queued 0x01 motor stop seq={seq}")
 
-    def _send_lawer_once(self) -> None:
-        seq = self._queue_lawer_command(
-            command=self.lawer_command_spin.value(),
-            timeout_ms=self.lawer_timeout_spin.value(),
+    def _send_mower_once(self) -> None:
+        seq = self._queue_mower_command(
+            command=self.mower_command_spin.value(),
+            timeout_ms=self.mower_timeout_spin.value(),
         )
         if seq is not None:
             self.log_event(
                 "INFO",
-                f"Queued 0x02 lawer command seq={seq} "
-                f"command={self.lawer_command_spin.value()}",
+                f"Queued 0x02 mower command seq={seq} "
+                f"command={self.mower_command_spin.value()}",
             )
 
-    def _stop_lawer_motor(self) -> None:
-        self.lawer_command_spin.setValue(0)
-        seq = self._queue_lawer_command(0, self.lawer_timeout_spin.value())
+    def _stop_mower_motor(self) -> None:
+        self.mower_command_spin.setValue(0)
+        seq = self._queue_mower_command(0, self.mower_timeout_spin.value())
         if seq is not None:
-            self.log_event("INFO", f"Queued 0x02 lawer stop seq={seq}")
+            self.log_event("INFO", f"Queued 0x02 mower stop seq={seq}")
 
     def _send_ws2812_once(self) -> None:
         seq = self._queue_ws2812_command(
@@ -1184,7 +1184,7 @@ class Stm32UartMonitorWindow(QMainWindow):
         )
         self._monitor_thread.connection_changed.connect(self._set_connected_state)
         self._monitor_thread.motor_status_received.connect(self._update_motor_status)
-        self._monitor_thread.lawer_status_received.connect(self._update_lawer_status)
+        self._monitor_thread.mower_status_received.connect(self._update_mower_status)
         self._monitor_thread.ws2812_status_received.connect(self._update_ws2812_status)
         self._monitor_thread.frame_count_changed.connect(self._update_frame_counts)
         self._monitor_thread.frame_activity_changed.connect(self._update_frame_activity)
@@ -1223,7 +1223,7 @@ class Stm32UartMonitorWindow(QMainWindow):
         for label in self.summary_labels.values():
             label.setText("-")
         self.summary_labels["motor_frames"].setText("0")
-        self.summary_labels["lawer_frames"].setText("0")
+        self.summary_labels["mower_frames"].setText("0")
         self.summary_labels["ws2812_frames"].setText("0")
         self.summary_labels["unknown_frames"].setText("0")
         self.summary_labels["last_tx_time"].setText("-")
@@ -1232,12 +1232,12 @@ class Stm32UartMonitorWindow(QMainWindow):
 
     def _clear_status_panels(self) -> None:
         self.motor_panel.set_all_defaults()
-        self.lawer_panel.set_all_defaults()
+        self.mower_panel.set_all_defaults()
         self.ws2812_panel.set_all_defaults()
 
     def _update_frame_counts(self, counts: Dict[str, int]) -> None:
         self.summary_labels["motor_frames"].setText(str(counts.get("0x81", 0)))
-        self.summary_labels["lawer_frames"].setText(str(counts.get("0x82", 0)))
+        self.summary_labels["mower_frames"].setText(str(counts.get("0x82", 0)))
         self.summary_labels["ws2812_frames"].setText(str(counts.get("0x83", 0)))
 
         known_total = (
@@ -1274,17 +1274,17 @@ class Stm32UartMonitorWindow(QMainWindow):
         self.motor_panel.set_value("applied_left_pwm", str(status.applied_left_pwm))
         self.motor_panel.set_value("applied_right_pwm", str(status.applied_right_pwm))
 
-    def _update_lawer_status(self, status: LawerMotorStatus) -> None:
+    def _update_mower_status(self, status: MowerMotorStatus) -> None:
         flag_text, color = flags_text_and_color(status.flags)
-        self.lawer_panel.set_value("last_update", now_text())
-        self.lawer_panel.set_value("status_seq", str(status.seq))
-        self.lawer_panel.set_value("last_rx_seq", str(status.last_rx_seq))
-        self.lawer_panel.set_value(
+        self.mower_panel.set_value("last_update", now_text())
+        self.mower_panel.set_value("status_seq", str(status.seq))
+        self.mower_panel.set_value("last_rx_seq", str(status.last_rx_seq))
+        self.mower_panel.set_value(
             "flags", f"{flag_text} ({','.join(decode_flags(status.flags))})", color
         )
-        self.lawer_panel.set_value("command_age_ms", str(status.command_age_ms))
-        self.lawer_panel.set_value("commanded", str(status.commanded_permille))
-        self.lawer_panel.set_value("applied_pwm", str(status.applied_pwm))
+        self.mower_panel.set_value("command_age_ms", str(status.command_age_ms))
+        self.mower_panel.set_value("commanded", str(status.commanded_permille))
+        self.mower_panel.set_value("applied_pwm", str(status.applied_pwm))
 
     def _update_ws2812_status(self, status: Ws2812Status) -> None:
         flag_text, color = flags_text_and_color(status.flags)

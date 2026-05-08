@@ -1,4 +1,4 @@
-# Lawer Qt Python - ROS2 服务控制面板
+# Mower Qt - ROS2 服务控制面板
 
 这是一个使用PyQt5开发的ROS2服务控制GUI应用程序。
 
@@ -44,7 +44,7 @@ sudo apt-get install python3-pyqt5
 
 ```bash
 cd /home/fxrbindi/Desktop/car_ws
-colcon build --packages-select lawer_qt_py
+colcon build --packages-select mower_qt
 source install/setup.bash
 ```
 
@@ -52,10 +52,10 @@ source install/setup.bash
 
 ```bash
 # 方法1：直接运行
-ros2 run lawer_qt_py lawer_qt
+ros2 run mower_qt mower_qt
 
 # 方法2：作为Python模块运行
-python3 -m lawer_qt_py.lawer_qt
+python3 -m mower_qt.mower_qt
 ```
 
 ## 使用说明
@@ -89,6 +89,6 @@ pip3 install PyQt5 --upgrade
 
 ### 权限问题
 ```bash
-chmod +x src/lawer_qt_py/lawer_qt_py/lawer_qt.py
+chmod +x src/mower_qt/mower_qt/mower_qt.py
 ```
 

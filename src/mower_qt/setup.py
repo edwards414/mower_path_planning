@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'lawer_qt_py'
+package_name = 'mower_qt'
 
 setup(
     name=package_name,
@@ -24,8 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'lawer_qt = lawer_qt_py.lawer_qt:main',
-            'stm32_uart_monitor = lawer_qt_py.stm32_uart_monitor:main',
+            'mower_qt = mower_qt.mower_qt:main',
+            'stm32_uart_monitor = mower_qt.stm32_uart_monitor:main',
         ],
     },
 )

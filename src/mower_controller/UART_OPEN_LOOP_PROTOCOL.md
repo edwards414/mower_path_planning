@@ -2,7 +2,7 @@
 
 這份文件是給 `ros2_control` / serial bridge 端對接 STM32 使用。
 
-本版除了主行走馬達 `0x01 / 0x81` 已接上執行邏輯之外，`lawer_motor` 與 `ws2812` 這次先把 binary frame 格式定義好，方便 ROS2 端同步改封包。這兩組 frame 的 runtime handler 目前還沒有接進獨立 task。
+本版除了主行走馬達 `0x01 / 0x81` 已接上執行邏輯之外，`mower_motor` 與 `ws2812` 這次先把 binary frame 格式定義好，方便 ROS2 端同步改封包。這兩組 frame 的 runtime handler 目前還沒有接進獨立 task。
 
 ## 目的
 
@@ -42,10 +42,10 @@
 | Type | Direction | Meaning |
 |---|---|---|
 | `0x01` | Host -> STM32 | 開環左右輪命令 |
-| `0x02` | Host -> STM32 | `lawer_motor` 開環命令 |
+| `0x02` | Host -> STM32 | `mower_motor` 開環命令 |
 | `0x03` | Host -> STM32 | `ws2812` 模式命令 |
 | `0x81` | STM32 -> Host | 狀態回傳 |
-| `0x82` | STM32 -> Host | `lawer_motor` 狀態回傳格式 |
+| `0x82` | STM32 -> Host | `mower_motor` 狀態回傳格式 |
 | `0x83` | STM32 -> Host | `ws2812` 狀態回傳格式 |
 
 ## `0x01` Motor Open-Loop Command
@@ -72,7 +72,7 @@ Host 端建議:
 - 發送頻率建議 `20Hz ~ 50Hz`
 - `command_timeout_ms` 建議設成 `150 ~ 300ms`
 
-## `0x02` Lawer Motor Open-Loop Command
+## `0x02` Mower Motor Open-Loop Command
 
 Payload 長度固定 `8` bytes。
 
@@ -88,7 +88,7 @@ Payload 長度固定 `8` bytes。
 - `-1000` = 全反轉
 - `0` = 停止
 - `1000` = 全正轉
-- 這是 `lawer_motor` 的開環 duty / PWM 命令
+- 這是 `mower_motor` 的開環 duty / PWM 命令
 
 ## `0x03` WS2812 Command
 
@@ -142,7 +142,7 @@ Payload 長度固定 `12` bytes。
 - `applied_*_pwm` 是 STM32 實際輸出的 PWM counts，不是輪速
 - 如果 timeout 或 alarm 發生，`applied_*_pwm` 會被拉成 `0`
 
-## `0x82` Lawer Motor Status
+## `0x82` Mower Motor Status
 
 Payload 長度固定 `8` bytes。
 

@@ -380,7 +380,7 @@ ros2 run mower_mission coverage_node
 - `Dockerfile`
 - `Makefile`
 - `docker-compose.yaml`
-- `src/lawer_qt_py/*`
+- `src/mower_qt/*`
 - `src/nav_robot/*`
 - `src/mower_description/launch/gazebo.launch.py`
 - `src/mower_description/launch/sim.launch.py`

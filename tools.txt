@@ -21,7 +21,7 @@ node[nav2_gps_waypoint_follower]:
 
     ros2 launch nav2_gps_waypoint_follower small_test.launch.py
   ros2 launch nav2_gps_waypoint_follower rviz.launch.py
-    ros2 run lawer_qt_py lawer_qt
+    ros2 run mower_qt mower_qt
 
 
 node[boustrophedon_coverage]:
@@ -116,7 +116,7 @@ node[boustrophedon_coverage]:
 
   launch:
 
- # ros2 run lawer_qt_window lawer_qt_window_node
+ # ros2 run mower_qt mower_qt
 
 
 ros2 run nav2_action_interfaces nav_action_server_node.py

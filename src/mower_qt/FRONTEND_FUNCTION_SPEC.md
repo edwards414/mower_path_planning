@@ -1,21 +1,21 @@
-# Lawer Qt Service Console Frontend Function Spec
+# Mower Qt Service Console Frontend Function Spec
 
 ## 1. 文件目的
 
-本文件提供前端開發使用，描述目前 `lawer_qt_py` 套件中的 `lawer_qt` 工具功能，並整理成可轉換為 Web Frontend 或新版 GUI 的功能規格。
+本文件提供前端開發使用，描述目前 `mower_qt` 套件中的 `mower_qt` 工具功能，並整理成可轉換為 Web Frontend 或新版 GUI 的功能規格。
 
 本文件主要根據以下來源整理：
 
 - `tools.txt`
-- `src/lawer_qt_py`
+- `src/mower_qt`
 
 另外為了避免接口定義與實際後端不一致，本文有交叉比對目前專案中的 service 實作。
 
 ## 2. 功能範圍
 
-本文件目前只保留 `lawer_qt` 對應的前端規格：
+本文件目前只保留 `mower_qt` 對應的前端規格：
 
-1. `lawer_qt`
+1. `mower_qt`
    - ROS2 服務控制台
    - 用途是把一組 ROS2 service 操作做成按鈕介面
 
@@ -32,12 +32,12 @@
 | 路徑記錄 | `ros2 run path_record path_record` | 提供區域記錄、risk zone、channel path 等服務 |
 | 地圖處理 | `ros2 run maphub map_manage` | 提供 free space、risk map、channel map 等服務 |
 | 覆蓋路徑 | `ros2 run boustrophedon_coverage boustrophedon_coverage` | 提供 coverage path 生成與執行服務 |
-| 控制面板 | `ros2 run lawer_qt_py lawer_qt` | 啟動 ROS2 服務控制台 |
+| 控制面板 | `ros2 run mower_qt mower_qt` | 啟動 ROS2 服務控制台 |
 
 前端要注意：
 
 - 若後端節點未啟動，service 呼叫會失敗。
-- `lawer_qt` 目前的行為是先等待 service 3 秒，送出後最多等 5 秒回應。
+- `mower_qt` 目前的行為是先等待 service 3 秒，送出後最多等 5 秒回應。
 
 ## 4. 前端資訊架構
 
@@ -144,7 +144,7 @@
 | test system | `ros2 launch nav2_gps_waypoint_follower system_test.launch.py` |
 | small test | `ros2 launch nav2_gps_waypoint_follower small_test.launch.py` |
 | rviz | `ros2 launch nav2_gps_waypoint_follower rviz.launch.py` |
-| 控制面板 | `ros2 run lawer_qt_py lawer_qt` |
+| 控制面板 | `ros2 run mower_qt mower_qt` |
 
 若前端不是跑在本機，這些啟動指令不應直接做成前端按鈕，而應由後端代理執行。
 
@@ -168,7 +168,7 @@
 | `/get_chennal_path_list` 類型 | `tools.txt` 和桌面版 UI 都把它當 `Trigger` | 實際是 `path_record_interface/srv/ChennalPathList` |
 | `Waypoint Pub` | 桌面版 UI 把它當 service `/waypoint_pub` | 目前 source 只看到 `waypoint_pub` 可執行節點，沒看到對應 service，前端先不要當 service button 做 |
 | `ZoneExecPath` 範例 | 某些文件示例曾用字串型 `zone_1` | 目前 `.srv` 定義是 `int32 zone_id`，前端請用整數 |
-| 拼字 | 目前後端存在 `lawer`、`chennal`、`cencel` 等命名 | 前端顯示文案可修正，但 API 名稱必須保留原拼字 |
+| 拼字 | 目前後端存在 `chennal`、`cencel` 等命名 | 前端顯示文案可修正，但 API 名稱必須保留原拼字 |
 
 ## 8. 最小可交付版本建議
 
