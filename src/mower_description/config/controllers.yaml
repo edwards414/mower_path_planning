@@ -56,7 +56,13 @@ diff_drive_controller:
     # 預設發布 ~/cmd_vel → 在 launch 裡 remap 成 /cmd_vel
 
 joint_state_broadcaster:
-  ros__parameters: {}
+  ros__parameters:
+    joints:
+      - left_wheel_joint
+      - right_wheel_joint
+      - mower_joint
+    interfaces:
+      - position
 
 # ================================================================
 # mower_blade_controller - effort_controllers/JointGroupEffortController

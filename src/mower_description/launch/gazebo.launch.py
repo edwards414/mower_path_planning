@@ -16,7 +16,7 @@ def generate_launch_description():
     # 路徑設定
     # ─────────────────────────────────────────────────────────────
     mower_desc_share = get_package_share_directory('mower_description')
-    nav2_gps_share   = get_package_share_directory('nav2_gps_waypoint_follower')
+    nav2_gps_share = get_package_share_directory('mower_bringup')
     world_file        = os.path.join(nav2_gps_share, 'worlds', 'mower_world.world')
 
     # ─────────────────────────────────────────────────────────────

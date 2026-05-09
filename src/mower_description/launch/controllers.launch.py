@@ -48,7 +48,9 @@ def generate_launch_description():
         arguments=[
             'joint_state_broadcaster',
             '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', '30',  # 等候 controller_manager 最長 30 秒
+            '--controller-manager-timeout', '60',
+            '--service-call-timeout', '60',
+            '--switch-timeout', '60',
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen',
@@ -70,7 +72,9 @@ def generate_launch_description():
         arguments=[
             'diff_drive_controller',
             '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', '30',
+            '--controller-manager-timeout', '60',
+            '--service-call-timeout', '60',
+            '--switch-timeout', '60',
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         # NOTE: remappings 在這裡無效！
@@ -79,9 +83,14 @@ def generate_launch_description():
         output='screen',
     )
 
+    delayed_joint_state_broadcaster = TimerAction(
+        period=3.0,
+        actions=[joint_state_broadcaster_spawner]
+    )
+
     # joint_state_broadcaster 先啟動，2 秒後再啟動 diff_drive_controller
     delayed_diff_drive = TimerAction(
-        period=2.0,
+        period=5.0,
         actions=[diff_drive_controller_spawner]
     )
 
@@ -98,7 +107,9 @@ def generate_launch_description():
         arguments=[
             'mower_blade_controller',
             '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', '30',
+            '--controller-manager-timeout', '60',
+            '--service-call-timeout', '60',
+            '--switch-timeout', '60',
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen',
@@ -106,13 +117,13 @@ def generate_launch_description():
 
     # diff_drive 後 2 秒再啟動刀盤 controller
     delayed_blade = TimerAction(
-        period=4.0,
+        period=7.0,
         actions=[mower_blade_controller_spawner]
     )
 
     return LaunchDescription([
         declare_use_sim_time,
-        joint_state_broadcaster_spawner,
+        delayed_joint_state_broadcaster,
         delayed_diff_drive,
         delayed_blade,
     ])
