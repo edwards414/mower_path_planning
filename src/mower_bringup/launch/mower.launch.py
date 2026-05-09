@@ -15,6 +15,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     enable_localization = LaunchConfiguration('enable_localization')
     enable_navigation = LaunchConfiguration('enable_navigation')
+    enable_apriltag_docking = LaunchConfiguration('enable_apriltag_docking')
     nav_autostart = LaunchConfiguration('nav_autostart')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
 
@@ -32,6 +33,11 @@ def generate_launch_description():
         'enable_navigation',
         default_value='true',
         description='Launch the Nav2 stack',
+    )
+    declare_enable_apriltag_docking = DeclareLaunchArgument(
+        'enable_apriltag_docking',
+        default_value='false',
+        description='Launch rear-camera AprilTag docking detector',
     )
     declare_nav_autostart = DeclareLaunchArgument(
         'nav_autostart',
@@ -116,6 +122,20 @@ def generate_launch_description():
         }.items(),
     )
 
+    apriltag_docking_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                mower_bringup_dir,
+                'launch',
+                'apriltag_docking.launch.py',
+            )
+        ),
+        condition=IfCondition(enable_apriltag_docking),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items(),
+    )
+
     teleop_keyboard = ExecuteProcess(
         cmd=[
             'ros2',
@@ -197,6 +217,7 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_enable_localization,
         declare_enable_navigation,
+        declare_enable_apriltag_docking,
         declare_nav_autostart,
         declare_nav2_params_file,
         robot_state_publisher,
@@ -206,6 +227,7 @@ def generate_launch_description():
         twist_mux_launch,
         robot_localization_launch,
         navigation_launch,
+        apriltag_docking_launch,
         joy_node,
         teleop_joy,
         blade_teleop_joy,

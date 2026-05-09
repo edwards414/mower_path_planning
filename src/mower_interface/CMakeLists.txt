@@ -30,4 +30,12 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+ament_export_dependencies(
+  rosidl_default_runtime
+  std_msgs
+  geometry_msgs
+  nav_msgs
+  visualization_msgs
+  action_msgs
+)
 ament_package()

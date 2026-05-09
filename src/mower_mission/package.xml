@@ -7,15 +7,20 @@
   <maintainer email="edwards940428@gmail.com">fxrbindi</maintainer>
   <license>Apache-2.0</license>
 
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>mower_interface</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

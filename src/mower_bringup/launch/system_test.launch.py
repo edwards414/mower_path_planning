@@ -77,8 +77,8 @@ def generate_launch_description():
         cmd=['ros2', 'run', 'mower_mission', 'coverage_node'],
         output='screen'
     )
-    nav_robot = ExecuteProcess(
-        cmd=['ros2', 'run', 'nav_robot', 'nav_robot'],
+    nav_action_server = ExecuteProcess(
+        cmd=['ros2', 'run', 'mower_mission', 'nav_action_server'],
         output='screen'
     )
     load_zone_list = ExecuteProcess(
@@ -109,7 +109,7 @@ def generate_launch_description():
         name='twist_mux',
         output='screen',
         parameters=[twist_mux_config],
-        remappings=[('/cmd_vel_out', '/diff_controller/cmd_vel')],
+        remappings=[('/cmd_vel_out', '/cmd_vel')],
     )
 
     timer_path_record = TimerAction(
@@ -125,6 +125,11 @@ def generate_launch_description():
     timer_boustrophedon_coverage = TimerAction(
         period=15.0,
         actions=[boustrophedon_coverage]
+    )
+
+    timer_nav_action_server = TimerAction(
+        period=18.0,
+        actions=[nav_action_server]
     )
 
     timer_load_zone_list = TimerAction(
@@ -156,6 +161,7 @@ def generate_launch_description():
         timer_path_record,
         timer_map_manage,
         timer_boustrophedon_coverage,
+        timer_nav_action_server,
         timer_load_zone_list,
         timer_create_free_space,
         timer_create_risk_map,

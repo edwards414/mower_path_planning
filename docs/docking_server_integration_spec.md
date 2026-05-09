@@ -555,6 +555,37 @@ ros2 topic echo /mower_docking_state
 ros2 topic echo /detected_dock_pose
 ```
 
+後相機 AprilTag docking detector：
+
+```bash
+ros2 launch mower_bringup apriltag_docking.launch.py \
+  image_topic:=/back_camera/image_raw \
+  camera_info_topic:=/back_camera/camera_info \
+  camera_frame:=back_camera_link
+```
+
+或用 Makefile：
+
+```bash
+make apriltag-docking
+```
+
+整套實車 launch 若要一起開 AprilTag：
+
+```bash
+ros2 launch mower_bringup mower.launch.py enable_apriltag_docking:=true
+```
+
+RViz / topic 檢查：
+
+```text
+/rear_apriltag/detections      # apriltag_ros 偵測結果
+/tf home_dock_tag              # AprilTag TF
+/detected_dock_pose            # 給 Nav2 docking 的 PoseStamped
+/back_camera/image_raw         # Gazebo / rear camera image
+/back_camera/camera_info       # Camera calibration info
+```
+
 ### 12.3 Action smoke test
 
 ```bash

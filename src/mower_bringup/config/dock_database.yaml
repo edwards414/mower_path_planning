@@ -1,0 +1,6 @@
+docks:
+  home_dock:
+    type: "mower_reverse_dock"
+    frame: "map"
+    pose: [0.0, 0.0, 0.0]
+    id: "home_dock"

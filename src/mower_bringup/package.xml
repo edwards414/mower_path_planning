@@ -8,7 +8,9 @@
   <license>Apache-2.0</license>
 
   <depend>nav2_bringup</depend>
+  <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>joy</exec_depend>
+  <exec_depend>opennav_docking</exec_depend>
   <exec_depend condition="$MOWER_BUILD_TARGET != 'sim'">mower_controller</exec_depend>
   <exec_depend>mower_description</exec_depend>
   <exec_depend>mower_teleop</exec_depend>
@@ -19,7 +21,8 @@
   <exec_depend>wit_ros2_imu</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>mower_mission</exec_depend>
-  <exec_depend>nav_robot</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>rosapi</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
