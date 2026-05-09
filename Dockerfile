@@ -1,115 +1,137 @@
+ARG ROS_DISTRO=jazzy
+ARG WORKSPACE=/mower_ws
+
 ##############################################
 # Stage 1: Base
 ##############################################
-FROM ros:jazzy-ros-base AS base
+FROM ros:${ROS_DISTRO}-ros-base AS base
 
-# 改用 ENV 確保變數跨階段存活（但僅限繼承的 stage）
-ENV WORKSPACE=/mower_ws
+ARG ROS_DISTRO
+ARG WORKSPACE
 
-# 安裝必要工具
-RUN apt-get update && apt-get install -y --no-install-recommends\
-    python3-rosdep \
-    python3-vcstool \
-    python3-colcon-common-extensions \
-    build-essential  \
-    libusb-1.0-0-dev \
-    libcurl4-openssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV WORKSPACE=${WORKSPACE}
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR ${WORKSPACE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        git \
+        libcurl4-openssl-dev \
+        libusb-1.0-0-dev \
+        make \
+        pkg-config \
+        python-is-python3 \
+        python3-colcon-common-extensions \
+        python3-pip \
+        python3-rosdep \
+        python3-vcstool \
+        sudo \
+        wget \
+    && if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi \
+    && rosdep update \
+    && rm -rf /var/lib/apt/lists/*
 
 ##############################################
 # Stage 2: Builder
 ##############################################
 FROM base AS builder
 
-COPY ./src ${WORKSPACE}/src
+ARG ROS_DISTRO
+ARG WORKSPACE
 
-# 安裝編譯期與執行期相依套件
-RUN apt-get update && \
-    . /opt/ros/jazzy/setup.sh && \
-    rosdep install  --ignore-src --from-paths src -i --rosdistro jazzy -y && \
-    rm -rf /var/lib/apt/lists/*
-# 修正了 =twist-mux 的錯字
-RUN apt-get update && apt-get install -y --no-install-recommends\
-    ros-jazzy-xacro \
-    ros-jazzy-nav2-bringup \
-    ros-jazzy-ros2-control \
-    ros-jazzy-ros2-controllers \
-    ros-jazzy-twist-mux \
+COPY ./src ${WORKSPACE}/src
+COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh
+
+RUN apt-get update \
+    && source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && rosdep install --ignore-src --from-paths src -i --rosdistro ${ROS_DISTRO} -y \
     && rm -rf /var/lib/apt/lists/*
 
-# 建置 colcon
-RUN . /opt/ros/jazzy/setup.sh && \
-    colcon build --event-handlers console_cohesion+
+# Do not use --symlink-install here, otherwise the runtime stage will
+# inherit broken links after copying only the install tree.
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && rosdep keys --from-paths src --ignore-src --dependency-types=exec --rosdistro ${ROS_DISTRO} \
+        | sort -u \
+        | while read -r key; do \
+            rosdep resolve --rosdistro ${ROS_DISTRO} "${key}" \
+                | awk '/^#apt$/{getline; print}'; \
+        done \
+        | tr ' ' '\n' \
+        | sed -e '/^[[:space:]]*$/d' \
+        | sort -u \
+        > /tmp/runtime-apt-packages.txt
 
 ##############################################
 # Stage 3: Runtime
 ##############################################
-FROM ros:jazzy-ros-base AS runtime
+FROM ros:${ROS_DISTRO}-ros-base AS runtime
 
-ENV WORKSPACE=/mower_ws
-WORKDIR ${WORKSPACE}
-
-# 1. 複製編譯好的 install 目錄
-COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
-# 2. 為了讓 rosdep 能安裝執行期依賴，必須複製 src (建置完若想極致縮小體積可刪除)
-COPY --from=builder ${WORKSPACE}/src ${WORKSPACE}/src
-
-# 安裝 Runtime 需要的系統套件與 rosdep 依賴
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    python3-opencv \
-    # 安裝你在 Builder 額外裝的套件 (因為這是全新 Stage)
-    ros-jazzy-xacro \
-    ros-jazzy-nav2-bringup \
-    ros-jazzy-ros2-control \
-    ros-jazzy-ros2-controllers \
-    ros-jazzy-twist-mux \
-    libusb-1.0-0 \
-    libcurl4 \
-    && rm -rf /var/lib/apt/lists/*
-
-# 更新 rosdep 並安裝 src 裡面定義的「執行期」依賴
-RUN apt-get update && \
-    rosdep update && \
-    rosdep install --from-paths src --ignore-src --dependency-types=exec --rosdistro jazzy -y \
-    && rm -rf /var/lib/apt/lists/*
-
+ARG ROS_DISTRO
+ARG WORKSPACE
 ARG USER_NAME=mower
 ARG USER_ID=1000
 ARG GROUP_NAME=mower
 ARG GROUP_ID=1000
 
-# 建立與主機相同 UID/GID 的使用者
-RUN \
-    if getent group $GROUP_ID > /dev/null; then \
-    OLD_GROUP_NAME=$(getent group $GROUP_ID | cut -d: -f1); \
-    groupmod --new-name $USER_NAME $OLD_GROUP_NAME; \
-    else \
-    groupadd --gid $GROUP_ID $USER_NAME; \
-    fi \
-    && if getent passwd $USER_ID > /dev/null; then \
-    OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
-    usermod -l $USER_NAME $OLD_USER_NAME; \
-    usermod -d /home/$USER_NAME -m $USER_NAME; \
-    else \
-    useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
-    fi \
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV WORKSPACE=${WORKSPACE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR ${WORKSPACE}
+
+COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
+COPY --from=builder /tmp/runtime-apt-packages.txt /tmp/runtime-apt-packages.txt
+COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && apt-get update \
-    && apt-get install -y sudo \
-    && rm -rf /var/lib/apt/lists/* \
-    && echo $USER_NAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USER_NAME \
-    && chmod 0440 /etc/sudoers.d/$USER_NAME
+    && { \
+        printf '%s\n' libcurl4 libusb-1.0-0; \
+        cat /tmp/runtime-apt-packages.txt; \
+    } \
+        | sort -u \
+        | xargs -r apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* /tmp/runtime-apt-packages.txt
 
-# 將使用者加入 video (攝影機) 以及 dialout (STM32/USB Serial) 群組
-# RUN 預設就是 root，所以不需要加 sudo
-RUN usermod --append --groups video,dialout $USER_NAME
+RUN if getent group ${GROUP_ID} > /dev/null; then \
+        existing_group="$(getent group ${GROUP_ID} | cut -d: -f1)"; \
+        if [ "${existing_group}" != "${GROUP_NAME}" ]; then groupmod --new-name ${GROUP_NAME} "${existing_group}"; fi; \
+    elif getent group ${GROUP_NAME} > /dev/null; then \
+        groupmod --gid ${GROUP_ID} ${GROUP_NAME}; \
+    else \
+        groupadd --gid ${GROUP_ID} ${GROUP_NAME}; \
+    fi \
+    && if getent passwd ${USER_ID} > /dev/null; then \
+        existing_user="$(getent passwd ${USER_ID} | cut -d: -f1)"; \
+        if [ "${existing_user}" != "${USER_NAME}" ]; then usermod --login ${USER_NAME} "${existing_user}"; fi; \
+        usermod --home /home/${USER_NAME} --move-home ${USER_NAME} || true; \
+        usermod --gid ${GROUP_ID} --shell /bin/bash ${USER_NAME}; \
+    elif id -u ${USER_NAME} >/dev/null 2>&1; then \
+        usermod --uid ${USER_ID} --gid ${GROUP_ID} --shell /bin/bash ${USER_NAME}; \
+    else \
+        useradd --uid ${USER_ID} --gid ${GROUP_ID} --create-home --shell /bin/bash ${USER_NAME}; \
+    fi \
+    && usermod --append --groups video,dialout ${USER_NAME} \
+    && chown -R ${USER_ID}:${GROUP_ID} ${WORKSPACE} /home/${USER_NAME}
 
-# 設定使用者的 bashrc (加入 ROS 核心與 Workspace 的 source)
-RUN echo "source /opt/ros/jazzy/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    echo "source ${WORKSPACE}/install/setup.bash" >> /home/${USER_NAME}/.bashrc && \
-    chown $USER_ID:$GROUP_ID /home/${USER_NAME}/.bashrc
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc \
+    && echo "source ${WORKSPACE}/install/setup.bash" >> /home/${USER_NAME}/.bashrc \
+    && chown ${USER_ID}:${GROUP_ID} /home/${USER_NAME}/.bashrc
 
-# 非常重要：切換到該使用者，確保 Container 預設以一般帳號啟動
-USER $USER_NAME
+USER ${USER_NAME}
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["ros2", "launch", "mower_bringup", "mower.launch.py"]

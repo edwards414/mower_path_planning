@@ -9,8 +9,11 @@ on:
       - 'v*'
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build.yml'
       - 'src/**'
       - 'utils/**'
+      - 'docker-compose.yaml'
       - '.devcontainer/Dockerfile'
       - '.devcontainer/Dockerfile.gazebo'
       - '.devcontainer/apt-*-packages'
@@ -20,8 +23,11 @@ on:
       - 'main'
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build.yml'
       - 'src/**'
       - 'utils/**'
+      - 'docker-compose.yaml'
       - '.devcontainer/Dockerfile'
       - '.devcontainer/Dockerfile.gazebo'
       - '.devcontainer/apt-*-packages'
@@ -76,6 +82,15 @@ jobs:
       - name: Set lower case repo name
         run: echo "REPOSITORY_LC=${REPOSITORY_LC,,}" >> $GITHUB_ENV
 
+      - name: Free runner disk space
+        if: runner.os == 'Linux'
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -97,7 +112,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || matrix.name == 'runtime'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -112,8 +127,50 @@ jobs:
           build-args: ${{ matrix.build_args }}
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || matrix.push_platforms }}
           push: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/') }}
+          load: ${{ github.event_name == 'pull_request' && matrix.name == 'runtime' && !contains(github.event.pull_request.labels.*.name, 'push-image') }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Select runtime image tag
+        id: runtime-image
+        if: github.event_name == 'pull_request' && matrix.name == 'runtime'
+        shell: bash
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test runtime image
+        if: github.event_name == 'pull_request' && matrix.name == 'runtime'
+        run: |
+          docker run --rm "${{ steps.runtime-image.outputs.tag }}" bash -lc '
+            set -euo pipefail
+            test -d "${WORKSPACE}/install"
+            test ! -e "${WORKSPACE}/src"
+            source /opt/ros/${ROS_DISTRO}/setup.bash
+            source "${WORKSPACE}/install/setup.bash"
+            ros2 pkg prefix mower_bringup >/dev/null
+            ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
+          '
+
+      - name: Build runtime ARM64 release target
+        if: github.event_name == 'pull_request' && matrix.name == 'runtime'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          build-args: ${{ matrix.build_args }}
+          platforms: linux/arm64
+          push: false
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}
+            type=gha,scope=${{ matrix.name }}-arm64-pr
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-arm64-pr
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

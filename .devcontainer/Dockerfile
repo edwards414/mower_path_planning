@@ -1,9 +1,14 @@
 ARG ROS_DISTRO=jazzy
+ARG WORKSPACE=/home/fxrbindi/mower_ws
 ##############################################
 # Stage 1: Base
 ##############################################
 FROM ros:${ROS_DISTRO}-ros-base AS base
+
+ARG ROS_DISTRO
+ARG WORKSPACE
 ENV ROS_DISTRO=${ROS_DISTRO}
+ENV WORKSPACE=${WORKSPACE}
 
 # 复制包列表文件
 COPY apt-base-packages /tmp/apt-base-packages 
@@ -12,7 +17,9 @@ COPY apt-base-packages /tmp/apt-base-packages
 
 RUN apt-get update && \
     apt-get install -y gettext-base && \
-    apt-get install -y $(cut -d# -f1 </tmp/apt-base-packages | envsubst) && \
+    sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-base-packages | \
+    envsubst | \
+    xargs -r apt-get install -y && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -24,19 +31,29 @@ WORKDIR ${WORKSPACE}
 # Stage 2: Builder
 ##############################################
 FROM base AS builder
+
+ARG ROS_DISTRO
+ARG WORKSPACE
 ENV ROS_DISTRO=${ROS_DISTRO}
+ENV WORKSPACE=${WORKSPACE}
 # 复制 CV 包列表文件
 COPY apt-cv-packages /tmp/apt-cv-packages
 
 RUN apt-get update && \
-    apt-get install -y $(cut -d# -f1 </tmp/apt-cv-packages | envsubst) \
+    sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-cv-packages | \
+    envsubst | \
+    xargs -r apt-get install -y \
     && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
 
 ##############################################
 # Stage 3: dev
 ##############################################
 FROM builder AS dev
-ARG ROS_DISTRO=${ROS_DISTRO}
+
+ARG ROS_DISTRO
+ARG WORKSPACE
+ENV ROS_DISTRO=${ROS_DISTRO}
+ENV WORKSPACE=${WORKSPACE}
 
 # 复制开发包列表文件
 COPY apt-dev-packages /tmp/apt-dev-packages
@@ -44,7 +61,9 @@ COPY apt-dev-packages /tmp/apt-dev-packages
 # 安装 gettext-base 以提供 envsubst 命令，然后安装开发包
 RUN apt-get update && \
     apt-get install -y gettext-base && \
-    apt-get install -y $(cut -d# -f1 </tmp/apt-dev-packages | envsubst) && \
+    sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-dev-packages | \
+    envsubst | \
+    xargs -r apt-get install -y && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 

@@ -4,9 +4,9 @@ wget
 curl
 git
 python3-pip
-python-is-python3
-libusb-1.0-0-dev
+python3-numpy
 libcurl4-openssl-dev
+# Provides pkg-config module "libserial" for mower_controller.
 libserial-dev
 pkg-config
 python3-serial

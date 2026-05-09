@@ -20,9 +20,16 @@ services:
         GROUP_ID: $GROUP_ID
       target: dev # must match the stage name in Dockerfile
     user: $USER_NAME # will login as your usename
+    environment:
+      ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
     networks:
       - rosnet
-    # devices: 
+    ports:
+      - "9090:9090" # rosbridge_websocket — Flutter app integration
+    # devices:
     #   - /dev/imu_usb:/dev/imu_usb
     #   - /dev/stmcom:/dev/stmcom # Interactive shell
     stdin_open: true
@@ -35,15 +42,39 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile.gazebo
+    init: true
     networks:
       - rosnet
-
+    environment:
+      ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      QT_X11_NO_MITSHM: "1"
+      __GL_SYNC_TO_VBLANK: "0"
+      vblank_mode: "0"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
     security_opt:
       - seccomp=unconfined
+    ipc: host
     working_dir: /home/$USER_NAME/mower_ws
     ports:
       - "6080:80" # noVNC web interface
     volumes:
-      - ../:/home/$USER_NAME/mower_ws
+      - ../:/home/$USER_NAME/mower_ws:cached
     privileged: true # Gazebo 可能需要硬體加速
-    shm_size: '2gb' # 增加共享記憶體以提升 Gazebo 效能
+    shm_size: '12gb' # 增加共享記憶體以提升 Gazebo 效能
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

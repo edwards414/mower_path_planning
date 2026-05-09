@@ -5,12 +5,27 @@ ARG ROS_DISTRO=jazzy
 ##############################################
 FROM tiryoh/ros2-desktop-vnc:${ROS_DISTRO}
 
-RUN apt-get update && apt-get install -y \
-    ros-${ROS_DISTRO}-turtlebot3* \
+ARG ROS_DISTRO
+ENV ROS_DISTRO=${ROS_DISTRO}
+SHELL ["/bin/bash", "-c"]
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ros-${ROS_DISTRO}-ros2-control \
     ros-${ROS_DISTRO}-ros2-controllers \
+    ros-${ROS_DISTRO}-rclpy \
+    ros-${ROS_DISTRO}-ros-gz-sim \
+    ros-${ROS_DISTRO}-ros-gz-bridge \
+    ros-${ROS_DISTRO}-ros-gz-image \
     ros-${ROS_DISTRO}-gz-ros2-control \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+    ros-${ROS_DISTRO}-nav2-bringup \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV ROS_LOCALHOST_ONLY=0
+ENV QT_X11_NO_MITSHM=1
+ENV __GL_SYNC_TO_VBLANK=0
 RUN mkdir -p /home/fxrbindi/mower_ws/src
 
 # COPY src/nav2_gps_waypoint_follower /home/fxrbindi/mower_ws/src/nav2_gps_waypoint_follower
@@ -18,8 +33,6 @@ RUN mkdir -p /home/fxrbindi/mower_ws/src
 
 WORKDIR /home/fxrbindi/mower_ws
 
-# Set shell to bash to use source
-SHELL ["/bin/bash", "-c"]
 RUN source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build 
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
