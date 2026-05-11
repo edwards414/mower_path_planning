@@ -2,6 +2,7 @@ COMPOSE_DEV := docker compose -f .devcontainer/docker-compose.dev.yaml
 CONTAINER_WS := /home/$${USER_NAME:-fxrbindi}/mower_ws
 CONTAINER_ROS_ENV := cd $(CONTAINER_WS) && source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
 LOCAL_ROS_ENV := source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
+SIM_PACKAGES_SKIP := mower_controller mower_coverage_core
 
 .PHONY: run mower_qt mission mission-docking-temp apriltag-docking mower_teleop teleop-keyboard blade-teleop-joy
 
@@ -12,7 +13,7 @@ build-release:
 	colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 build-sim:
-	MOWER_BUILD_TARGET=sim colcon build --symlink-install --packages-skip mower_controller
+	MOWER_BUILD_TARGET=sim colcon build --symlink-install --packages-skip $(SIM_PACKAGES_SKIP)
 
 clean:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$root=(Resolve-Path '.').Path; $$targets=@('build','install','log','logs'); foreach ($$name in $$targets) { $$path=Join-Path $$root $$name; if ((Test-Path -LiteralPath $$path) -and ((Resolve-Path -LiteralPath $$path).Path.StartsWith($$root))) { Remove-Item -LiteralPath $$path -Recurse -Force } }"
