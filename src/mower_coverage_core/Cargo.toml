@@ -1,0 +1,19 @@
+[package]
+name = "mower_coverage_core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Coverage path planning core for autonomous lawn mower (PyO3 extension)"
+
+[lib]
+name = "mower_coverage_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+numpy = "0.21"
+ndarray = "0.15"
+ordered-float = "4"
+
+[dev-dependencies]
+approx = "0.5"
