@@ -24,7 +24,15 @@
       "PowerShell(gh run view 25368347508 --repo edwards414/mower_path_planning --json status,conclusion,jobs 2>&1)",
       "PowerShell(gh run view 25354877714 --repo edwards414/mower_path_planning --json jobs 2>&1)",
       "PowerShell(gh api repos/edwards414/mower_path_planning/actions/jobs/74341961183/logs --hostname github.com 2>&1)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(xargs cat)",
+      "Bash(rustup --version)",
+      "Bash(python3 -m pytest src/mower_mission/test/ -q --tb=short)",
+      "Bash(python3 -m maturin develop)",
+      "Bash(python3 -m maturin build --release)",
+      "Bash(pip3 install *)",
+      "Bash(python3 -c \"import mower_coverage_core; print\\(mower_coverage_core.py_health_check\\(\\)\\)\")",
+      "Bash(python3 -m pytest src/mower_mission/test/test_backend_parity.py -v --tb=short)"
     ]
   }
 }
