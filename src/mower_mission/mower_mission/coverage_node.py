@@ -43,11 +43,8 @@ from std_srvs.srv import SetBool, Trigger
 
 from visualization_msgs.msg import Marker, MarkerArray
 
-from .coverage.connector_planner import plan_connector
-from .coverage.path_validator import SafeMap, validate_path
-from .coverage.safe_map_filter import filter_safe_components
-from .path_generators.speiral import _generate_coverage_spiral_path
-from .path_generators.zigzag import _generate_coverage_zigzag_path
+from .coverage.path_validator import SafeMap
+from .coverage_backend.factory import create_backend
 from .utils.nav_action_client import NavActionClient
 from .utils.path_utils import (
     _transform_coverage_path_points,
@@ -70,6 +67,13 @@ class CoveragePlanner(Node):
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
+        self.declare_parameter('coverage_backend', 'python')
+        self.declare_parameter('allow_backend_fallback', True)
+
+        self._backend = create_backend(
+            name=str(self.get_parameter('coverage_backend').value),
+            allow_fallback=bool(self.get_parameter('allow_backend_fallback').value),
+        )
 
         qos_vol = QoSProfile(depth=1)
         qos_vol.durability = QoSDurabilityPolicy.VOLATILE
@@ -206,7 +210,7 @@ class CoveragePlanner(Node):
                 mask_map_inflated_data == 0, risk_map_data == 0
             ).astype(np.uint8)
             safe_map, component_sizes, kept_component_sizes = (
-                filter_safe_components(
+                self._backend.filter_safe_components(
                     safe_map,
                     resolution=res,
                     min_area_m2=self.get_parameter(
@@ -245,11 +249,11 @@ class CoveragePlanner(Node):
             )
             if pattern == 'spiral':
                 coverage_pts, split_pts, invalid_segs = (
-                    _generate_coverage_spiral_path(**_gen_kw)
+                    self._backend.generate_spiral_path(**_gen_kw)
                 )
             else:
                 coverage_pts, split_pts, invalid_segs = (
-                    _generate_coverage_zigzag_path(**_gen_kw, angle_deg=0.0)
+                    self._backend.generate_zigzag_path(**_gen_kw, angle_deg=0.0)
                 )
 
             safe_map_struct = SafeMap(
@@ -267,7 +271,7 @@ class CoveragePlanner(Node):
                 )
                 raw_coverage_pts = coverage_pts
                 coverage_pts, connector_viz, unresolved = self._apply_connectors(
-                    coverage_pts, invalid_segs, safe_map_struct, i
+                    coverage_pts, invalid_segs, safe_map_struct, i, self._backend
                 )
                 if unresolved:
                     self._publish_invalid_segments(
@@ -286,7 +290,7 @@ class CoveragePlanner(Node):
                         self.zone_map_list[i].mask_map.header.frame_id or 'map'
                     )
 
-            final_validation = validate_path(coverage_pts, safe_map_struct)
+            final_validation = self._backend.validate_path(coverage_pts, safe_map_struct)
             if not final_validation.valid:
                 self._publish_invalid_segments(
                     coverage_pts, final_validation.invalid_segments, i,
@@ -476,6 +480,7 @@ class CoveragePlanner(Node):
         invalid_segs: list,
         safe_map_struct: SafeMap,
         zone_idx: int,
+        backend=None,
     ) -> tuple[list, list[list], list[tuple[int, int]]]:
         """Replace each invalid direct connection with an A* planned path.
 
@@ -495,7 +500,8 @@ class CoveragePlanner(Node):
             if (i, i + 1) not in invalid_set:
                 continue
 
-            connector = plan_connector(pt, points[i + 1], safe_map_struct)
+            _backend = backend if backend is not None else self._backend
+            connector = _backend.plan_connector(pt, points[i + 1], safe_map_struct)
             if connector and len(connector) > 2:
                 for cp in connector[1:-1]:   # skip endpoints (already in pts)
                     new_points.append(cp)
