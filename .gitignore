@@ -3,6 +3,10 @@ turtlebot3_gazebo_gps/
 **/__pycache__/
 boustrophedon_coverage/boustrophedon_coverage/__pycache__/
 **/*.pyc
+**/.pytest_cache/
+**/*.egg-info/
+**/target/
+.DS_Store
 /build/
 /install/
 /log/
