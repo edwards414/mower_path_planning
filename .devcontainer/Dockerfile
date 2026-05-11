@@ -109,6 +109,16 @@ RUN \
 # Add user to video group to allow access to webcam
 RUN sudo usermod --append --groups video $USER_NAME
 
+# Install Rust toolchain (system-wide) and maturin for PyO3/maturin builds
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --no-modify-path && \
+    chmod -R a+rX /usr/local/rustup /usr/local/cargo && \
+    pip3 install --break-system-packages maturin
+
 RUN rosdep update
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc
