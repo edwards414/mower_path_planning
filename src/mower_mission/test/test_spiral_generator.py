@@ -11,12 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Unit tests for path_generators/speiral.py (TDD — written before impl)."""
+"""Unit tests for path_generators/spiral.py."""
 
 import numpy as np
 import pytest
 
-from mower_mission.path_generators.speiral import (
+from mower_mission.path_generators.spiral import (
     _generate_coverage_spiral_path,
     plan_spiral_coverage,
 )

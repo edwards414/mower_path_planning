@@ -42,7 +42,7 @@ class PythonBackend:
         self, safe_map, strip_width_m, waypoint_spacing_m,
         res, H, W, origin_x, origin_y,
     ):
-        from ..path_generators.speiral import _generate_coverage_spiral_path
+        from ..path_generators.spiral import _generate_coverage_spiral_path
         return _generate_coverage_spiral_path(
             safe_map=safe_map,
             strip_width_m=strip_width_m,
