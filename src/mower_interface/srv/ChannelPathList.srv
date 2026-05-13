@@ -1,0 +1,4 @@
+---
+bool success
+string message
+visualization_msgs/MarkerArray channel_path_array

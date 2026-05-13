@@ -18,7 +18,7 @@ import math
 
 import os
 
-from mower_interface.srv import GetZoneList
+from mower_interface.srv import ChannelPathList, GetZoneList
 
 from geometry_msgs.msg import Point, PoseStamped
 
@@ -74,6 +74,10 @@ class PathRecorder(Node):
             Path, '/chennal_path', 10)
         self.chennal_path_array_pub = self.create_publisher(
             MarkerArray, '/chennal_path_array', polygon_qos)
+        self.channel_path_pub = self.create_publisher(
+            Path, '/channel_path', 10)
+        self.channel_path_array_pub = self.create_publisher(
+            MarkerArray, '/channel_path_array', polygon_qos)
 
         self.timer_period = 0.1
         self.timer = self.create_timer(
@@ -94,6 +98,10 @@ class PathRecorder(Node):
             Trigger, '/record_zone_end', self.record_zone_end_srv)
 
         self.create_service(
+            Trigger, '/channel_record_start', self.chennal_record_start_srv)
+        self.create_service(
+            Trigger, '/channel_record_end', self.chennal_record_end_srv)
+        self.create_service(
             Trigger, '/chennal_record_start', self.chennal_record_start_srv)
         self.create_service(
             Trigger, '/chennal_record_end', self.chennal_record_end_srv)
@@ -105,6 +113,9 @@ class PathRecorder(Node):
             self.get_record_zone_list_srv)
         self.create_service(
             GetZoneList, '/get_risk_zone_list', self.get_risk_zone_list_srv)
+        self.create_service(
+            ChannelPathList, '/get_channel_path_list',
+            self.get_channel_path_list_srv)
         self.create_service(
             ChennalPathList, '/get_chennal_path_list',
             self.get_chennal_path_list_srv)
@@ -399,6 +410,7 @@ class PathRecorder(Node):
                 self.chennal_path.header.stamp = (
                     self.get_clock().now().to_msg())
                 self.chennal_path_pub.publish(self.chennal_path)
+                self.channel_path_pub.publish(self.chennal_path)
 
     def record_zone_start_srv(self, req, res):
         """記錄區域起始點."""
@@ -458,11 +470,11 @@ class PathRecorder(Node):
         if self._save_chennal_path_list():
             success_count += 1
         else:
-            error_messages.append('储存 chennal 路径列表失败')
+            error_messages.append('储存 channel 路径列表失败')
 
         if success_count == 3:
             res.success = True
-            res.message = '成功储存所有列表（普通区域 + 风险区域 + chennal 路径）'
+            res.message = '成功储存所有列表（普通区域 + 风险区域 + channel 路径）'
         elif success_count > 0:
             res.success = True
             res.message = f'部分成功储存列表。错误: {"; ".join(error_messages)}'
@@ -489,15 +501,22 @@ class PathRecorder(Node):
         else:
             error_messages.append('載入風險區域列表失敗')
 
-        if success_count == 2:
+        if self._load_chennal_path_list():
+            success_count += 1
+            self.chennal_path_array_pub.publish(self.chennal_path_array)
+            self.channel_path_array_pub.publish(self.chennal_path_array)
+        else:
+            error_messages.append('載入 channel 路徑列表失敗')
+
+        if success_count == 3:
             res.success = True
-            res.message = '成功載入所有區域列表（普通區域 + 風險區域）'
-        elif success_count == 1:
+            res.message = '成功載入所有列表（普通區域 + 風險區域 + channel 路徑）'
+        elif success_count > 0:
             res.success = True
-            res.message = f'部分成功載入區域列表。错误: {"; ".join(error_messages)}'
+            res.message = f'部分成功載入列表。错误: {"; ".join(error_messages)}'
         else:
             res.success = False
-            res.message = f'載入區域列表失敗: {"; ".join(error_messages)}'
+            res.message = f'載入列表失敗: {"; ".join(error_messages)}'
 
         return res
 
@@ -770,8 +789,16 @@ class PathRecorder(Node):
                                color=(0.0, 1.0, 0.0),
                                scale=0.1))
             self.chennal_path_array_pub.publish(self.chennal_path_array)
+            self.channel_path_array_pub.publish(self.chennal_path_array)
         res.success = True
         res.message = '成功結束記錄 chennal 路徑'
+        return res
+
+    def get_channel_path_list_srv(self, req, res):
+        """獲取 channel 路徑列表."""
+        res.success = True
+        res.message = '成功獲取 channel 路徑列表'
+        res.channel_path_array = self.chennal_path_array
         return res
 
     def get_chennal_path_list_srv(self, req, res):
