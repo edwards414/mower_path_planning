@@ -37,6 +37,12 @@ def generate_launch_description():
         output='screen',
     )
 
+    nav_action_server = Node(
+        package='mower_mission',
+        executable='nav_action_server',
+        output='screen',
+    )
+
     docking_manager_node = Node(
         package='mower_mission',
         executable='docking_manager_node',
@@ -57,6 +63,7 @@ def generate_launch_description():
         path_record_node,
         map_manage_node,
         coverage_node,
+        nav_action_server,
         docking_manager_node,
         temp_dock_pose_publisher,
     ])

@@ -31,6 +31,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 
 from std_msgs.msg import ColorRGBA
+from std_srvs.srv import Trigger
 
 from visualization_msgs.msg import Marker
 
@@ -256,7 +257,20 @@ class NavActionServer(Node):
         )
         self.coverage_split_points = []
         self.recent_nav2_logs = deque(maxlen=40)
+        self._active_goal_handle = None
+        self._active_task_name = None
+        self._external_cancel_requested = False
+        self._nav_state = 'idle'
+        self._last_feedback_message = 'last_feedback=None'
+        self._last_status_message = 'Navigation idle'
         self.create_subscription(Log, '/rosout', self._rosout_callback, 100)
+        self.create_service(Trigger, '/cancel_nav2', self.cancel_nav2_srv)
+        self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv)
+        self.create_service(
+            Trigger,
+            '/check_nav_status',
+            self.check_nav_status_srv,
+        )
 
     def _rosout_callback(self, msg: Log):
         if msg.level < Log.WARN:
@@ -298,6 +312,81 @@ class NavActionServer(Node):
                     fields.append(f'{name}={value}')
         return ', '.join(fields) if fields else f'last_feedback={feedback}'
 
+    def _set_nav_state(self, state: str, message: str):
+        self._nav_state = state
+        self._last_status_message = message
+
+    def cancel_nav2_srv(self, req, res):
+        """Cancel the Nav2 task owned by this action server."""
+        if self._nav_state not in ('running', 'canceling'):
+            res.success = True
+            res.message = 'No active Nav2 task to cancel'
+            return res
+
+        self._external_cancel_requested = True
+        task_name = self._active_task_name or 'Nav2 task'
+        try:
+            self.navigator.cancelTask()
+        except Exception as exc:
+            res.success = False
+            res.message = f'Failed to request Nav2 cancel: {exc}'
+            self.get_logger().error(res.message)
+            return res
+
+        self._set_nav_state('canceling', f'Cancel requested for {task_name}')
+        res.success = True
+        res.message = self._last_status_message
+        self.get_logger().warn(res.message)
+        return res
+
+    def check_nav_status_srv(self, req, res):
+        """Return status for the Nav2 task owned by this action server."""
+        if self._nav_state in ('running', 'canceling'):
+            try:
+                is_complete = self.navigator.isTaskComplete()
+                feedback = self.navigator.getFeedback()
+            except Exception as exc:
+                res.success = False
+                res.message = f'Navigation status unavailable: {exc}'
+                return res
+
+            if feedback is not None:
+                self._last_feedback_message = self._feedback_summary(feedback)
+
+            if is_complete:
+                result = self.navigator.getResult()
+                if result == TaskResult.SUCCEEDED:
+                    self._set_nav_state(
+                        'completed',
+                        f'{self._active_task_name or "Navigation"} completed',
+                    )
+                elif result == TaskResult.CANCELED:
+                    self._set_nav_state(
+                        'canceled',
+                        f'{self._active_task_name or "Navigation"} canceled',
+                    )
+                else:
+                    self._set_nav_state(
+                        'failed',
+                        f'{self._active_task_name or "Navigation"} failed: '
+                        f'{result}',
+                    )
+                self._active_goal_handle = None
+                self._active_task_name = None
+
+            if not is_complete:
+                res.success = False
+                res.message = (
+                    f'Navigation {self._nav_state}: '
+                    f'{self._active_task_name or "unknown task"}, '
+                    f'{self._last_feedback_message}'
+                )
+                return res
+
+        res.success = self._nav_state in ('idle', 'completed', 'canceled')
+        res.message = self._last_status_message
+        return res
+
     def _feedback_distance(self, feedback) -> float | None:
         """Return remaining distance for FollowPath or NavigateToPose feedback."""
         for name in ('distance_to_goal', 'distance_remaining'):
@@ -337,15 +426,28 @@ class NavActionServer(Node):
     ) -> bool:
         started_at = monotonic()
         last_feedback = None
+        self._active_goal_handle = goal_handle
+        self._active_task_name = task_name
+        self._set_nav_state('running', f'Navigation running: {task_name}')
         while not self.navigator.isTaskComplete():
-            if goal_handle.is_cancel_requested:
-                self.get_logger().warn(f'{task_name} 已取消')
+            if goal_handle.is_cancel_requested or self._external_cancel_requested:
+                cancel_source = (
+                    'external service'
+                    if self._external_cancel_requested
+                    else 'action client'
+                )
+                self.get_logger().warn(f'{task_name} 已取消 ({cancel_source})')
                 self.navigator.cancelTask()
                 goal_handle.canceled()
+                self._external_cancel_requested = False
+                self._active_goal_handle = None
+                self._active_task_name = None
+                self._set_nav_state('canceled', f'{task_name} canceled')
                 return False
             feedback = self.navigator.getFeedback()
             if feedback:
                 last_feedback = feedback
+                self._last_feedback_message = self._feedback_summary(feedback)
                 self.get_logger().info(f'{task_name} 反饋: {feedback}')
                 distance = self._feedback_distance(feedback)
                 if (
@@ -365,7 +467,18 @@ class NavActionServer(Node):
 
         result = self.navigator.getResult()
         if result == TaskResult.SUCCEEDED:
+            self._set_nav_state('completed', f'{task_name} completed')
+            self._active_goal_handle = None
+            self._active_task_name = None
             return True
+
+        if result == TaskResult.CANCELED:
+            goal_handle.canceled()
+            self._external_cancel_requested = False
+            self._active_goal_handle = None
+            self._active_task_name = None
+            self._set_nav_state('canceled', f'{task_name} canceled')
+            return False
 
         elapsed = monotonic() - started_at
         task_error = self._navigator_task_error()
@@ -376,6 +489,12 @@ class NavActionServer(Node):
             f'{feedback_summary}，{task_error}，{nav2_log_summary}'
         )
         goal_handle.abort()
+        self._active_goal_handle = None
+        self._active_task_name = None
+        self._set_nav_state(
+            'failed',
+            f'{task_name} failed: {result}, {task_error}',
+        )
         return False
 
     def _abort_goal(self, goal_handle, message: str):
@@ -397,6 +516,7 @@ class NavActionServer(Node):
 
         """
         self.get_logger().info('執行目標')
+        self._external_cancel_requested = False
         path = goal_handle.request.path
         coverage_split_points = goal_handle.request.coverage_split_points
 
@@ -485,12 +605,16 @@ class NavActionServer(Node):
                 return result
 
         goal_handle.succeed()
+        self._active_goal_handle = None
+        self._active_task_name = None
+        self._set_nav_state('completed', 'Coverage navigation completed')
         result = Waypoint.Result()
         result.success = True
         return result
 
     def execute_callback(self, goal_handle):
         self.get_logger().info('Executing goal')
+        self._external_cancel_requested = False
         path = goal_handle.request.path
         self.get_logger().info(f'path length: {len(path.poses)}')
 
@@ -547,12 +671,17 @@ class NavActionServer(Node):
                 self.controller_id,
                 self.goal_checker_id,
             )
-            while not self.navigator.isTaskComplete():
-                feedback = self.navigator.getFeedback()
-                self.get_logger().info(
-                    f'Feedback: {self._feedback_summary(feedback)}'
-                )
+            if not self._wait_for_nav_task(
+                goal_handle,
+                f'Follow path segment {i + 1}',
+            ):
+                result = Waypoint.Result()
+                result.success = False
+                return result
         goal_handle.succeed()
+        self._active_goal_handle = None
+        self._active_task_name = None
+        self._set_nav_state('completed', 'Navigation completed')
         result = Waypoint.Result()
         result.success = True
         return result

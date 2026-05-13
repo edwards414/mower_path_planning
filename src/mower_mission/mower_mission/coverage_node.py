@@ -26,8 +26,6 @@ from mower_interface.srv import ZoneExecPath
 
 from geometry_msgs.msg import Point
 
-from nav2_simple_commander.robot_navigator import BasicNavigator
-
 from nav_msgs.msg import OccupancyGrid, Path
 
 import numpy as np
@@ -92,12 +90,6 @@ class CoveragePlanner(Node):
         self.create_service(ZoneExecPath, '/zone_exec_path',
                             self.zone_exec_path_srv,
                             callback_group=self.cb_group)
-        self.create_service(Trigger, '/cencel_nav2', self.cancel_nav2_srv,
-                            callback_group=self.cb_group)
-        self.create_service(Trigger, '/check_nav_status',
-                            self.check_nav_status_srv,
-                            callback_group=self.cb_group)
-
         self.waypoint_active_client = self.create_client(
             SetBool,
             '/record_path_status',
@@ -141,7 +133,6 @@ class CoveragePlanner(Node):
         )
 
         self.waypoint_active = False
-        self.nav = BasicNavigator()
         self.coverage_path = Path()
         self.coverage_split_points = []
         self.zone_map_list = []
@@ -607,23 +598,6 @@ class CoveragePlanner(Node):
             res.success = False
             res.message = 'Zone not found'
 
-        return res
-
-    def cancel_nav2_srv(self, req, res):
-        """Cancel the current navigation task."""
-        self.nav.cancelTask()
-        res.success = True
-        res.message = 'Nav2 canceled'
-        return res
-
-    def check_nav_status_srv(self, req, res):
-        """Check the status of the current navigation task."""
-        res.success = self.nav.isTaskComplete()
-        if res.success:
-            res.message = 'Navigation completed'
-        else:
-            feedback = self.nav.getFeedback()
-            res.message = f'Navigation in progress: {feedback}'
         return res
 
     def record_path_status_srv(self, req, res):
