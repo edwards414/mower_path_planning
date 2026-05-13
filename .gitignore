@@ -10,4 +10,5 @@ boustrophedon_coverage/boustrophedon_coverage/__pycache__/
 /build/
 /install/
 /log/
+.cache/
 *.env

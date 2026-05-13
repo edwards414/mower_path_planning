@@ -15,7 +15,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -77,19 +82,38 @@ def generate_launch_description():
         ),
         description='Full path to the Nav2 parameters file',
     )
-
-    gazebo_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(mower_bringup_dir, 'launch', 'gps_world.launch.py')
+    declare_world = DeclareLaunchArgument(
+        'world',
+        default_value='mower_world.world',
+        description=(
+            'World: bare filename (looked up under mower_bringup/worlds/), '
+            'absolute path, or a built-in Gazebo world name (e.g. empty.sdf)'
         ),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'x_pose': x_pose,
-            'y_pose': y_pose,
-            'publish_robot_state_publisher': 'true',
-            'launch_controllers': 'true',
-        }.items(),
     )
+
+    def _build_gazebo_cmd(context):
+        world_value = LaunchConfiguration('world').perform(context)
+        if not os.path.isabs(world_value) and not any(
+            sep in world_value for sep in ('/', '\\')
+        ):
+            candidate = os.path.join(mower_bringup_dir, 'worlds', world_value)
+            if os.path.isfile(candidate):
+                world_value = candidate
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(mower_bringup_dir, 'launch', 'gps_world.launch.py')
+            ),
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'x_pose': x_pose,
+                'y_pose': y_pose,
+                'publish_robot_state_publisher': 'true',
+                'launch_controllers': 'true',
+                'gz_args': f'-v 4 -r {world_value}',
+            }.items(),
+        )]
+
+    gazebo_cmd = OpaqueFunction(function=_build_gazebo_cmd)
 
     localization_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -155,6 +179,7 @@ def generate_launch_description():
         declare_nav2_params_file,
         declare_x_pose,
         declare_y_pose,
+        declare_world,
         gazebo_cmd,
         delayed_rviz,
         delayed_localization,

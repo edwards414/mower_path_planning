@@ -27,6 +27,9 @@
   <material name="silver_material">
     <color rgba="0.6 0.6 0.6 1"/>
   </material>
+  <material name="camera_direction_material">
+    <color rgba="0 0.85 1 0.75"/>
+  </material>
 
   <!-- ============================================================ -->
   <!--  base_footprint（Nav2 必要）                                  -->
@@ -264,6 +267,57 @@
     <origin xyz="0.0145303 0.218752 0.0620472" rpy="-1.5708 -0 0"/>
     <parent link="base_link"/>
     <child link="back_camera_link"/>
+  </joint>
+
+  <link name="back_camera_rotated_frame">
+    <visual name="back_camera_direction_center">
+      <origin xyz="0.35 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.7 0.018 0.018"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_left">
+      <origin xyz="0.267 0.225 0" rpy="0 0 0.6981"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_right">
+      <origin xyz="0.267 -0.225 0" rpy="0 0 -0.6981"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_top">
+      <origin xyz="0.296 0 0.187" rpy="0 -0.561 0"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_bottom">
+      <origin xyz="0.296 0 -0.187" rpy="0 0.561 0"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_tip">
+      <origin xyz="0.7 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.025"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+  </link>
+
+  <joint name="back_camera_rotated_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+    <parent link="back_camera_link"/>
+    <child link="back_camera_rotated_frame"/>
   </joint>
 
   <!-- ============================================================ -->

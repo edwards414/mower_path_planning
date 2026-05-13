@@ -229,8 +229,9 @@
       <always_on>true</always_on>
       <update_rate>15</update_rate>
       <visualize>true</visualize>
+      <pose>0 0 0 1.5708 -1.5708 0</pose>
       <topic>back_camera/image_raw</topic>
-      <gz_frame_id>back_camera_link</gz_frame_id>
+      <gz_frame_id>back_camera_rotated_frame</gz_frame_id>
       <camera name="back_camera">
         <camera_info_topic>back_camera/camera_info</camera_info_topic>
         <horizontal_fov>1.3962634</horizontal_fov>
@@ -272,6 +273,7 @@
       <always_on>true</always_on>
       <update_rate>15</update_rate>
       <visualize>true</visualize>
+      <pose>0 0 0 0 0 0</pose>
       <topic>front_depth_camera</topic>
       <gz_frame_id>depth_camera_link</gz_frame_id>
       <camera name="front_depth_camera">

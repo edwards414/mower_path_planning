@@ -31,11 +31,16 @@ def generate_launch_description():
     #           └── assets/
     #               └── blade_hub.stl   ← 實際 STL 位置
     # ─────────────────────────────────────────────────────────────
-    gz_resource_path = os.path.dirname(mower_desc_share)   # .../share （parent）
+    gz_resource_paths = [
+        os.path.dirname(mower_desc_share),   # .../share （parent）
+    ]
+    existing_gz_resource_path = os.environ.get('GZ_SIM_RESOURCE_PATH')
+    if existing_gz_resource_path:
+        gz_resource_paths.append(existing_gz_resource_path)
 
     set_gz_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
-        value=gz_resource_path,
+        value=os.pathsep.join(gz_resource_paths),
     )
 
     # ─────────────────────────────────────────────────────────────

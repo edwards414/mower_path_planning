@@ -62,10 +62,16 @@ def generate_launch_description():
 
     mower_bringup_dir = get_package_share_directory('mower_bringup')
     mower_description_dir = get_package_share_directory('mower_description')
+    gz_resource_paths = [
+        os.path.dirname(mower_description_dir),
+    ]
+    existing_gz_resource_path = os.environ.get('GZ_SIM_RESOURCE_PATH')
+    if existing_gz_resource_path:
+        gz_resource_paths.append(existing_gz_resource_path)
 
     set_gz_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
-        value=os.path.dirname(mower_description_dir),
+        value=os.pathsep.join(gz_resource_paths),
     )
 
     world_file = os.path.join(

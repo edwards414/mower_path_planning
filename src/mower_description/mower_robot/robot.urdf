@@ -2,6 +2,9 @@
 <!-- Generated using onshape-to-robot -->
 <!-- Onshape https://cad.onshape.com/documents/4ced43830c4ff4955e236ea8/w/6fb1b9520eae9230baf9061c/e/4d5e051e59e583b208867f10 -->
 <robot name="mower_robot">
+  <material name="camera_direction_material">
+    <color rgba="0 0.85 1 0.75"/>
+  </material>
   <!-- Link base_link -->
   <link name="base_link">
     <inertial>
@@ -223,6 +226,55 @@
     <axis xyz="0 0 1"/>
     <limit effort="10" velocity="6"/>
     <joint_properties friction="0.5"/>
+  </joint>
+  <link name="back_camera_rotated_frame">
+    <visual name="back_camera_direction_center">
+      <origin xyz="0.35 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.7 0.018 0.018"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_left">
+      <origin xyz="0.267 0.225 0" rpy="0 0 0.6981"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_right">
+      <origin xyz="0.267 -0.225 0" rpy="0 0 -0.6981"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_top">
+      <origin xyz="0.296 0 0.187" rpy="0 -0.561 0"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_bottom">
+      <origin xyz="0.296 0 -0.187" rpy="0 0.561 0"/>
+      <geometry>
+        <box size="0.7 0.014 0.014"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+    <visual name="back_camera_direction_tip">
+      <origin xyz="0.7 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.025"/>
+      </geometry>
+      <material name="camera_direction_material"/>
+    </visual>
+  </link>
+  <joint name="back_camera_rotated_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 1.5708"/>
+    <parent link="back_camera_link"/>
+    <child link="back_camera_rotated_frame"/>
   </joint>
   <!-- Link imu_link -->
   <link name="imu_link">

@@ -4,7 +4,11 @@ CONTAINER_ROS_ENV := cd $(CONTAINER_WS) && source /opt/ros/$${ROS_DISTRO:-jazzy}
 LOCAL_ROS_ENV := source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
 SIM_PACKAGES_SKIP := mower_controller mower_coverage_core
 
-.PHONY: run mower_qt mission mission-docking-temp apriltag-docking mower_teleop teleop-keyboard blade-teleop-joy
+.PHONY: \
+	build build-release build-sim clean rviz open_rviz run mower_qt mission \
+	mission-docking-temp apriltag-docking mower_teleop teleop-keyboard \
+	blade-teleop-joy sim-containers sim-prefetch-gazebo-models sim-gazebo \
+	sim-gazebo-empty sim-coverage-system sim-coverage-test env build_dev deps
 
 build:  
 	colcon build --symlink-install
@@ -45,14 +49,17 @@ teleop-keyboard:
 blade-teleop-joy:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_teleop blade_teleop_joy'
 
-test-system:
-	ros2 launch nav2_gps_waypoint_follower test_system.launch.py
-
 sim-containers:
 	$(COMPOSE_DEV) up -d gazebo lawan_node_dev
 
+sim-prefetch-gazebo-models: sim-containers
+	$(COMPOSE_DEV) exec gazebo bash workspace/prefetch_gazebo_models.sh
+
 sim-gazebo:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim.launch.py use_sim_time:=true use_rviz:=true enable_localization:=false enable_navigation:=false'
+
+sim-gazebo-empty:
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true world:=empty.world'
 
 sim-coverage-system:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=false use_sim_time:=true use_rviz:=false'
