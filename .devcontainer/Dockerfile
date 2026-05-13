@@ -116,7 +116,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain stable --no-modify-path && \
-    chmod -R a+rX /usr/local/rustup /usr/local/cargo && \
+    chown -R $USER_NAME:$USER_NAME /usr/local/rustup /usr/local/cargo && \
     pip3 install --break-system-packages maturin
 
 RUN rosdep update
