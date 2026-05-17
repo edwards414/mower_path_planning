@@ -36,7 +36,7 @@ services:
       - /dev/input:/dev/input
       - /run/udev:/run/udev:ro
     working_dir: /home/$USER_NAME/mower_ws # set the working directory inside the container
-    # command: source install/setup.bash && ros2 launch nav2_gps_waypoint_follower mower.launch.py # command to run when the container starts 
+    # command: source install/setup.bash && ros2 launch mower_bringup mower.launch.py # command to run when the container starts
 
   mower_bringup:
     image: lawan_node_dev
@@ -74,7 +74,7 @@ services:
           exit 1;
         fi &&
         source install/setup.bash &&
-        exec ros2 launch nav2_gps_waypoint_follower mower.launch.py
+        exec ros2 launch mower_bringup mower.launch.py
 
   ublox:
     build:

@@ -15,9 +15,9 @@ services:
       - ROS_LOCALHOST_ONLY=1
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///config/cyclonedds-localhost.xml
-      - RVIZ_CONFIG=/workspace/src/nav2_gps_waypoint_follower/config/config.rviz
+      - RVIZ_CONFIG=/workspace/src/mower_bringup/config/config.rviz
       - WORKSPACE_SETUP=/workspace/install/setup.bash
-      - LAWER_QT_AUTOSTART=${LAWER_QT_AUTOSTART:-true}
+      - MOWER_QT_AUTOSTART=${MOWER_QT_AUTOSTART:-true}
     working_dir: /workspace
     volumes:
       - ../:/workspace:ro

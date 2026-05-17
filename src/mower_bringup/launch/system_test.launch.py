@@ -81,6 +81,10 @@ def generate_launch_description():
         cmd=['ros2', 'run', 'mower_mission', 'nav_action_server'],
         output='screen'
     )
+    flutter_adapter = ExecuteProcess(
+        cmd=['ros2', 'run', 'mower_mission', 'flutter_adapter_node'],
+        output='screen'
+    )
     load_zone_list = ExecuteProcess(
         cmd=['ros2', 'service', 'call', '/load_zone_list', 'std_srvs/srv/Trigger'],
         output='screen'
@@ -132,6 +136,11 @@ def generate_launch_description():
         actions=[nav_action_server]
     )
 
+    timer_flutter_adapter = TimerAction(
+        period=19.0,
+        actions=[flutter_adapter]
+    )
+
     timer_load_zone_list = TimerAction(
         period=20.0,
         actions=[load_zone_list]
@@ -162,6 +171,7 @@ def generate_launch_description():
         timer_map_manage,
         timer_boustrophedon_coverage,
         timer_nav_action_server,
+        timer_flutter_adapter,
         timer_load_zone_list,
         timer_create_free_space,
         timer_create_risk_map,

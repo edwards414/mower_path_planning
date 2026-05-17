@@ -1,5 +1,5 @@
 [Desktop Entry]
 Type=Application
-Name=Lawer Qt
-Exec=/usr/local/bin/start-lawer-qt-zenoh.sh
+Name=Mower Qt
+Exec=/usr/local/bin/start-mower-qt-zenoh.sh
 X-GNOME-Autostart-enabled=true

@@ -85,7 +85,7 @@ The stack starts:
 `rviz2` uses `config.rviz` from:
 
 ```text
-/workspace/src/nav2_gps_waypoint_follower/config/config.rviz
+/workspace/src/mower_bringup/config/config.rviz
 ```
 
 The `.env` file values used by this stack are:

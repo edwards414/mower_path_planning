@@ -15,6 +15,6 @@ COPY .devcontainer/zenoh/rviz2.desktop /etc/xdg/autostart/rviz2.desktop
 COPY .devcontainer/zenoh/lawer_qt.desktop /etc/xdg/autostart/lawer_qt.desktop
 COPY .devcontainer/zenoh/lawer_qt.desktop /usr/share/applications/lawer_qt.desktop
 COPY utiles/start-rviz-zenoh.sh /usr/local/bin/start-rviz-zenoh.sh
-COPY utiles/start-lawer-qt-zenoh.sh /usr/local/bin/start-lawer-qt-zenoh.sh
+COPY utiles/start-mower-qt-zenoh.sh /usr/local/bin/start-mower-qt-zenoh.sh
 
-RUN chmod +x /usr/local/bin/start-rviz-zenoh.sh /usr/local/bin/start-lawer-qt-zenoh.sh
+RUN chmod +x /usr/local/bin/start-rviz-zenoh.sh /usr/local/bin/start-mower-qt-zenoh.sh

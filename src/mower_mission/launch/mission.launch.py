@@ -43,6 +43,13 @@ def generate_launch_description():
         output='screen',
     )
 
+    flutter_adapter_node = Node(
+        package='mower_mission',
+        executable='flutter_adapter_node',
+        name='flutter_adapter',
+        output='screen',
+    )
+
     docking_manager_node = Node(
         package='mower_mission',
         executable='docking_manager_node',
@@ -64,6 +71,7 @@ def generate_launch_description():
         map_manage_node,
         coverage_node,
         nav_action_server,
+        flutter_adapter_node,
         docking_manager_node,
         temp_dock_pose_publisher,
     ])
