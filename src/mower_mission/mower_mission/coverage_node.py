@@ -51,6 +51,7 @@ from .utils.path_utils import (
 from .utils.zone_map_client import ZoneMapClient
 
 
+
 class CoveragePlanner(Node):
     """CoveragePlanner class."""
 
@@ -61,7 +62,6 @@ class CoveragePlanner(Node):
             [Parameter('use_sim_time', Parameter.Type.BOOL, True)])
         self.get_logger().info('boustrophedon_coverage 初始化')
         self.declare_parameter('strip_width_m', 0.8)
-        self.declare_parameter('waypoint_spacing_m', 0.2)
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
@@ -231,7 +231,6 @@ class CoveragePlanner(Node):
             _gen_kw = dict(
                 safe_map=safe_map,
                 strip_width_m=self.get_parameter('strip_width_m').value,
-                waypoint_spacing_m=self.get_parameter('waypoint_spacing_m').value,
                 res=res,
                 H=H,
                 W=W,
@@ -244,7 +243,7 @@ class CoveragePlanner(Node):
                 )
             else:
                 coverage_pts, split_pts, invalid_segs = (
-                    self._backend.generate_zigzag_path(**_gen_kw, angle_deg=0.0)
+                    self._backend.generate_zigzag_path(**_gen_kw)
                 )
 
             safe_map_struct = SafeMap(

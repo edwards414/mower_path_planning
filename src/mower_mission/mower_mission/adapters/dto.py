@@ -101,7 +101,6 @@ def params_to_coverage_settings(coverage_params: dict[str, Any],
     """Compose CoverageSettings DTO from parameter snapshots."""
     return {
         'stripWidthM': coverage_params.get('strip_width_m'),
-        'waypointSpacingM': coverage_params.get('waypoint_spacing_m'),
         'inflateRadiusM': map_params.get('inflate_radius_m'),
         'unknownAsObstacle': coverage_params.get('unknown_as_obstacle'),
         'coveragePattern': coverage_params.get('coverage_pattern'),

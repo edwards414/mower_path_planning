@@ -37,20 +37,17 @@ class CoverageBackend(Protocol):
         self,
         safe_map: np.ndarray,
         strip_width_m: float,
-        waypoint_spacing_m: float,
         res: float,
         H: int,
         W: int,
         origin_x: float,
         origin_y: float,
-        angle_deg: float = 0.0,
     ) -> tuple[list, list, list]: ...
 
     def generate_spiral_path(
         self,
         safe_map: np.ndarray,
         strip_width_m: float,
-        waypoint_spacing_m: float,
         res: float,
         H: int,
         W: int,

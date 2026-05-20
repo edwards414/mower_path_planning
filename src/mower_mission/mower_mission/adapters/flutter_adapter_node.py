@@ -52,7 +52,6 @@ _MARKER_TOPICS = [
 
 _COVERAGE_PARAM_NAMES = [
     'strip_width_m',
-    'waypoint_spacing_m',
     'unknown_as_obstacle',
     'coverage_pattern',
 ]

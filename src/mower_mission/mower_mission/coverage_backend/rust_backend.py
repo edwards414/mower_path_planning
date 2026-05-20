@@ -43,13 +43,13 @@ class RustBackend:
         return [tuple(p) for p in result]
 
     def generate_zigzag_path(
-        self, safe_map, strip_width_m, waypoint_spacing_m,
-        res, H, W, origin_x, origin_y, angle_deg=0.0,
+        self, safe_map, strip_width_m,
+        res, H, W, origin_x, origin_y,
     ):
         grid = np.ascontiguousarray(np.asarray(safe_map, dtype=bool))
         pts, split_pts, inv_segs = self._core.py_generate_coverage_zigzag_path(
-            grid, strip_width_m, waypoint_spacing_m, res, H, W,
-            origin_x, origin_y, angle_deg,
+            grid, strip_width_m, strip_width_m, res, H, W,
+            origin_x, origin_y, 0.0,
         )
         return (
             [tuple(p) for p in pts],
@@ -58,12 +58,12 @@ class RustBackend:
         )
 
     def generate_spiral_path(
-        self, safe_map, strip_width_m, waypoint_spacing_m,
+        self, safe_map, strip_width_m,
         res, H, W, origin_x, origin_y,
     ):
         grid = np.ascontiguousarray(np.asarray(safe_map, dtype=bool))
         pts, split_pts, inv_segs = self._core.py_generate_coverage_spiral_path(
-            grid, strip_width_m, waypoint_spacing_m, res, H, W,
+            grid, strip_width_m, strip_width_m, res, H, W,
             origin_x, origin_y,
         )
         return (

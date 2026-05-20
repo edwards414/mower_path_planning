@@ -17,8 +17,6 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from ..coverage.path_validator import SafeMap, validate_path
@@ -30,13 +28,11 @@ MIN_U_TURN_RADIUS_M = 0.35
 def _generate_coverage_zigzag_path(
     safe_map: np.ndarray,
     strip_width_m: float,
-    waypoint_spacing_m: float,
     res: float,
     H: int,
     W: int,
     origin_x: float,
     origin_y: float,
-    angle_deg: float = 0.0,
 ) -> tuple[
     list[tuple[float, float]],
     list[tuple[float, float]],
@@ -47,123 +43,51 @@ def _generate_coverage_zigzag_path(
     This is the single implementation for the old "boustrophedon" naming and
     the current UI-facing "zigzag" naming.
     """
-    angle_rad = np.deg2rad(angle_deg)
-    coverage_split_points = []
-    if abs(angle_rad) < 1e-6:
-        strip_cols = max(1, int(round(strip_width_m / res)))
-        midcols = list(range(strip_cols // 2, W, strip_cols))
-
-        spacing = waypoint_spacing_m
-        runs: list[list[tuple[float, float]]] = []
-        reverse = False
-
-        for mc in midcols:
-            segments = []
-            start = None
-            for i in range(H):
-                ok = bool(safe_map[i, mc])
-                is_last = i == H - 1
-                if ok and start is None:
-                    start = i
-                if (not ok or is_last) and start is not None:
-                    end = i - 1 if (not ok) else i
-                    segments.append((start, end))
-                    start = None
-
-            segs = segments[::-1] if reverse else segments
-            for s, e in segs:
-                y0 = origin_y + (s + 0.5) * res
-                y1 = origin_y + (e + 0.5) * res
-                x = origin_x + (mc + 0.5) * res
-                if y1 >= y0:
-                    ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
-                else:
-                    ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
-                ys = ys[::-1] if reverse else ys
-                runs.append([(x, y) for y in ys])
-            reverse = not reverse
-
-        safe_map_struct = SafeMap(
-            grid=safe_map.astype(bool),
-            resolution=res,
-            origin_x=origin_x,
-            origin_y=origin_y,
-        )
-        points, coverage_split_points = _build_path_with_u_turns(
-            runs,
-            safe_map_struct,
-            waypoint_spacing_m=max(res, spacing),
-            res=res,
-        )
-
-        invalid_segments = _find_invalid_segments(
-            points, safe_map, res, origin_x, origin_y
-        )
-        return points, coverage_split_points, invalid_segments
-
-    yy, xx = np.indices((H, W))
-    xs = origin_x + (xx + 0.5) * res
-    ys = origin_y + (yy + 0.5) * res
-    coords = np.stack([xs, ys], axis=-1)
-    center_x = origin_x + W * res / 2
-    center_y = origin_y + H * res / 2
-    c = np.cos(-angle_rad)
-    s = np.sin(-angle_rad)
-    rotM = np.array([[c, -s], [s, c]])
-    coords_rot = coords - np.array([center_x, center_y])
-    coords_rot = coords_rot @ rotM.T
-    coords_rot = coords_rot + np.array([center_x, center_y])
-    all_rot_points = coords_rot[safe_map.astype(bool)]
-    minx, maxx = np.min(all_rot_points[:, 0]), np.max(all_rot_points[:, 0])
-    width_rot = maxx - minx
-    n_strips = max(1, int(np.floor(width_rot / strip_width_m)))
-    strip_centers_x = np.linspace(
-        minx + strip_width_m / 2,
-        maxx - strip_width_m / 2,
-        n_strips,
-    )
-    points = []
+    waypoint_spacing_m = strip_width_m
+    spacing = waypoint_spacing_m
+    strip_cols = max(1, int(round(strip_width_m / res)))
+    midcols = list(range(strip_cols // 2, W, strip_cols))
+    runs: list[list[tuple[float, float]]] = []
     reverse = False
-    for scx in strip_centers_x:
-        dist_to_strip = np.abs(all_rot_points[:, 0] - scx)
-        mask = dist_to_strip <= strip_width_m / 2
-        candidates = all_rot_points[mask]
-        if len(candidates) == 0:
-            reverse = not reverse
-            continue
-        sort_order = np.argsort(candidates[:, 1])
-        if reverse:
-            sort_order = sort_order[::-1]
-        ordered = candidates[sort_order]
-        prev_pt = None
-        strip_last_point = None
-        for pt in ordered:
-            if prev_pt is not None:
-                dist = np.linalg.norm(pt - prev_pt)
-                if dist < max(res, waypoint_spacing_m) * 0.5:
-                    continue
-            prev_pt = pt
-            strip_last_point = pt
-            points.append(tuple(pt))
-        if strip_last_point is not None:
-            coverage_split_points.append(tuple(strip_last_point))
-        reverse = not reverse
-    if angle_deg != 0.0:
-        c_inv = np.cos(angle_rad)
-        s_inv = np.sin(angle_rad)
-        rotMinv = np.array([[c_inv, -s_inv], [s_inv, c_inv]])
-        points_np = np.array(points) - np.array([center_x, center_y])
-        points_np = points_np @ rotMinv.T
-        points_np = points_np + np.array([center_x, center_y])
-        points = [tuple(pt) for pt in points_np]
-        if len(coverage_split_points) > 0:
-            split_points_np = np.array(coverage_split_points) - np.array(
-                [center_x, center_y]
-            )
-            split_points_np = split_points_np @ rotMinv.T
-            split_points_np = split_points_np + np.array([center_x, center_y])
-            coverage_split_points = [tuple(pt) for pt in split_points_np]
 
+    for mc in midcols:
+        segments = []
+        start = None
+        for i in range(H):
+            ok = bool(safe_map[i, mc])
+            is_last = i == H - 1
+            if ok and start is None:
+                start = i
+            if (not ok or is_last) and start is not None:
+                end = i - 1 if (not ok) else i
+                segments.append((start, end))
+                start = None
+
+        segs = segments[::-1] if reverse else segments
+        for s, e in segs:
+            y0 = origin_y + (s + 0.5) * res
+            y1 = origin_y + (e + 0.5) * res
+            x = origin_x + (mc + 0.5) * res
+            if y1 >= y0:
+                ys = list(np.arange(y0, y1, max(res, spacing))) + [y1]
+            else:
+                ys = list(np.arange(y0, y1, -max(res, spacing))) + [y1]
+            ys = ys[::-1] if reverse else ys
+            runs.append([(x, y) for y in ys])
+        reverse = not reverse
+
+    safe_map_struct = SafeMap(
+        grid=safe_map.astype(bool),
+        resolution=res,
+        origin_x=origin_x,
+        origin_y=origin_y,
+    )
+    points, coverage_split_points = _build_path_with_u_turns(
+        runs,
+        safe_map_struct,
+        waypoint_spacing_m=max(res, spacing),
+        res=res,
+    )
     invalid_segments = _find_invalid_segments(
         points, safe_map, res, origin_x, origin_y
     )

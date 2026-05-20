@@ -22,31 +22,28 @@ class PythonBackend:
         return plan_connector(start, end, safe_map, boundary_weight)
 
     def generate_zigzag_path(
-        self, safe_map, strip_width_m, waypoint_spacing_m,
-        res, H, W, origin_x, origin_y, angle_deg=0.0,
+        self, safe_map, strip_width_m,
+        res, H, W, origin_x, origin_y,
     ):
         from ..path_generators.zigzag import _generate_coverage_zigzag_path
         return _generate_coverage_zigzag_path(
             safe_map=safe_map,
             strip_width_m=strip_width_m,
-            waypoint_spacing_m=waypoint_spacing_m,
             res=res,
             H=H,
             W=W,
             origin_x=origin_x,
             origin_y=origin_y,
-            angle_deg=angle_deg,
         )
 
     def generate_spiral_path(
-        self, safe_map, strip_width_m, waypoint_spacing_m,
+        self, safe_map, strip_width_m,
         res, H, W, origin_x, origin_y,
     ):
         from ..path_generators.spiral import _generate_coverage_spiral_path
         return _generate_coverage_spiral_path(
             safe_map=safe_map,
             strip_width_m=strip_width_m,
-            waypoint_spacing_m=waypoint_spacing_m,
             res=res,
             H=H,
             W=W,
