@@ -121,4 +121,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
 
 RUN rosdep update
 
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc && \
+    echo "export CARGO_HOME=/usr/local/cargo" >> /home/${USER_NAME}/.bashrc && \
+    echo "export RUSTUP_HOME=/usr/local/rustup" >> /home/${USER_NAME}/.bashrc && \
+    echo "export PATH=/usr/local/cargo/bin:\$PATH" >> /home/${USER_NAME}/.bashrc

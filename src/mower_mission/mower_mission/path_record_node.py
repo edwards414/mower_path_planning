@@ -18,7 +18,7 @@ import math
 
 import os
 
-from mower_interface.srv import ChannelPathList, GetZoneList
+from mower_interface.srv import ChannelPathList, ChannelRoute, GetZoneList
 
 from geometry_msgs.msg import Point, PoseStamped
 
@@ -119,6 +119,9 @@ class PathRecorder(Node):
         self.create_service(
             ChennalPathList, '/get_chennal_path_list',
             self.get_chennal_path_list_srv)
+        self.create_service(
+            ChannelRoute, '/get_channel_route',
+            self.get_channel_route_srv)
 
         self.risk_path = Path()
         self.risk_path.header.frame_id = self.get_parameter(
@@ -807,6 +810,194 @@ class PathRecorder(Node):
         res.message = '成功獲取 chennal 路徑列表'
         res.chennal_path_array = self.chennal_path_array
         return res
+
+    # ── Channel Router ────────────────────────────────────────────────────────
+
+    def get_channel_route_srv(self, req, res):
+        """返回連接兩個 zone 的通道路徑，方向保證從 zone_from 走向 zone_to."""
+        zone_from_id = req.zone_from_id
+        zone_to_id = req.zone_to_id
+        proximity_m = float(req.proximity_m) if req.proximity_m > 0.0 else 1.5
+        self.get_logger().info(
+            f'get_channel_route: zone_from={zone_from_id}, '
+            f'zone_to={zone_to_id}, proximity={proximity_m:.2f}m'
+        )
+
+        if not self.chennal_path_array.markers:
+            res.success = False
+            res.message = '尚無通道數據，請先錄製或載入通道路徑'
+            res.channel_path = Path()
+            res.matched_channel_id = -1
+            return res
+
+        result = self._find_channel_for_zones(
+            zone_from_id, zone_to_id, proximity_m
+        )
+        if result is None:
+            res.success = False
+            res.message = (
+                f'找不到連接 zone {zone_from_id} → zone {zone_to_id} 的通道，'
+                f'共搜尋 {len(self.chennal_path_array.markers)} 條通道'
+            )
+            res.channel_path = Path()
+            res.matched_channel_id = -1
+            return res
+
+        channel_path, channel_id = result
+        res.success = True
+        res.message = (
+            f'找到通道 #{channel_id}，'
+            f'連接 zone {zone_from_id} → zone {zone_to_id}，'
+            f'共 {len(channel_path.poses)} 個路徑點'
+        )
+        res.channel_path = channel_path
+        res.matched_channel_id = channel_id
+        return res
+
+    def _find_channel_for_zones(self, zone_from_id, zone_to_id, proximity_m=1.5):
+        """
+        搜尋 chennal_path_array 中連接兩個 zone 的通道.
+
+        判斷邏輯：通道起點/終點需落在對應 zone 內部，
+        或距其邊界 proximity_m 以內。
+        返回 (Path, channel_id) 或 None。
+        路徑方向保證：從 zone_from 端出發走向 zone_to 端。
+        """
+        zone_from_pts = self._get_zone_polygon(zone_from_id)
+        zone_to_pts = self._get_zone_polygon(zone_to_id)
+
+        if zone_from_pts is None:
+            self.get_logger().error(
+                f'找不到 zone {zone_from_id} 的多邊形數據'
+            )
+            return None
+        if zone_to_pts is None:
+            self.get_logger().error(
+                f'找不到 zone {zone_to_id} 的多邊形數據'
+            )
+            return None
+
+        for marker in self.chennal_path_array.markers:
+            if len(marker.points) < 2:
+                continue
+
+            start = marker.points[0]
+            end = marker.points[-1]
+
+            start_near_from = self._point_near_zone(
+                start.x, start.y, zone_from_pts, proximity_m
+            )
+            end_near_to = self._point_near_zone(
+                end.x, end.y, zone_to_pts, proximity_m
+            )
+            if start_near_from and end_near_to:
+                self.get_logger().info(
+                    f'通道 #{marker.id}: start 近 zone {zone_from_id}，'
+                    f'end 近 zone {zone_to_id}，正向匹配'
+                )
+                return self._channel_marker_to_path(marker), marker.id
+
+            start_near_to = self._point_near_zone(
+                start.x, start.y, zone_to_pts, proximity_m
+            )
+            end_near_from = self._point_near_zone(
+                end.x, end.y, zone_from_pts, proximity_m
+            )
+            if start_near_to and end_near_from:
+                self.get_logger().info(
+                    f'通道 #{marker.id}: start 近 zone {zone_to_id}，'
+                    f'end 近 zone {zone_from_id}，反向匹配，翻轉路徑'
+                )
+                return self._channel_marker_to_path(marker, reverse=True), marker.id
+
+        return None
+
+    def _get_zone_polygon(self, zone_id):
+        """從 record_zone_list 取得指定 zone_id 的多邊形點列表."""
+        for marker in self.record_zone_list.markers:
+            if marker.id == zone_id:
+                return [(p.x, p.y) for p in marker.points]
+        return None
+
+    def _point_near_zone(self, x, y, polygon_pts, proximity_m):
+        """
+        判斷點是否在 zone 內部或距邊界 proximity_m 以內.
+        """
+        if self._point_in_polygon(x, y, polygon_pts):
+            return True
+        return self._min_dist_to_polygon(x, y, polygon_pts) <= proximity_m
+
+    @staticmethod
+    def _point_in_polygon(x, y, polygon_pts):
+        """Ray-casting point-in-polygon test."""
+        n = len(polygon_pts)
+        if n < 3:
+            return False
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon_pts[i]
+            xj, yj = polygon_pts[j]
+            if ((yi > y) != (yj > y) and
+                    x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    @staticmethod
+    def _min_dist_to_polygon(x, y, polygon_pts):
+        """返回點到多邊形各邊的最小距離."""
+        min_dist = float('inf')
+        n = len(polygon_pts)
+        for i in range(n):
+            x1, y1 = polygon_pts[i]
+            x2, y2 = polygon_pts[(i + 1) % n]
+            dx, dy = x2 - x1, y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq == 0:
+                d = math.hypot(x - x1, y - y1)
+            else:
+                t = max(0.0, min(
+                    1.0, ((x - x1) * dx + (y - y1) * dy) / seg_len_sq
+                ))
+                d = math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+            if d < min_dist:
+                min_dist = d
+        return min_dist
+
+    def _channel_marker_to_path(self, marker, reverse=False):
+        """將通道 Marker (LINE_STRIP) 轉換為帶航向角的 nav_msgs/Path."""
+        path = Path()
+        path.header.frame_id = self.get_parameter('frame_id').value
+        path.header.stamp = self.get_clock().now().to_msg()
+
+        points = (
+            list(reversed(marker.points)) if reverse else list(marker.points)
+        )
+        n = len(points)
+        for i, pt in enumerate(points):
+            pose = PoseStamped()
+            pose.header.frame_id = path.header.frame_id
+            pose.header.stamp = path.header.stamp
+            pose.pose.position.x = pt.x
+            pose.pose.position.y = pt.y
+            pose.pose.position.z = 0.0
+
+            if i < n - 1:
+                dx = points[i + 1].x - pt.x
+                dy = points[i + 1].y - pt.y
+            elif i > 0:
+                dx = pt.x - points[i - 1].x
+                dy = pt.y - points[i - 1].y
+            else:
+                dx, dy = 1.0, 0.0
+
+            yaw = math.atan2(dy, dx)
+            pose.pose.orientation.z = math.sin(yaw / 2.0)
+            pose.pose.orientation.w = math.cos(yaw / 2.0)
+            path.poses.append(pose)
+
+        return path
 
     def _save_chennal_path_list(self):
         """内部方法：保存 chennal 路径列表."""

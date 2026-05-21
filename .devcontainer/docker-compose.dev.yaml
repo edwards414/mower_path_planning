@@ -25,6 +25,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      ROS_LOG_DIR: /tmp/ros-logs
     networks:
       - rosnet
     ports:
@@ -50,6 +51,7 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      ROS_LOG_DIR: /tmp/ros-logs
       QT_X11_NO_MITSHM: "1"
       __GL_SYNC_TO_VBLANK: "0"
       vblank_mode: "0"
@@ -73,10 +75,10 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

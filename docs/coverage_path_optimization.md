@@ -14,20 +14,20 @@ _generate_coverage_boustrophedon_path(
     W=W,
     origin_x=ox,
     origin_y=oy,
-    angle_deg=0.0,
+    angle_deg=zigzag_angle_deg,
 )
 ```
 
-雖然 `boustrophedon.py` 已支援 `angle_deg`，但目前主流程固定傳入：
+`zigzag_angle_deg` 目前由 `/boustrophedon_coverage` 參數指定：
 
 ```python
-angle_deg = 0.0
+angle_deg = zigzag_angle_deg
 ```
 
 因此目前覆蓋路徑屬於：
 
 ```text
-固定方向條帶掃描 coverage path
+可指定掃描角度的條帶掃描 coverage path
 ```
 
 還不是完整的 Boustrophedon cellular decomposition。
@@ -226,11 +226,11 @@ next segment start 安全
 
 ---
 
-## 7.3 掃描方向固定 0 度
+## 7.3 掃描方向由參數指定
 
-目前 `angle_deg` 固定為 0.0。
+目前 `angle_deg` 由 `zigzag_angle_deg` 指定。
 
-這代表所有地圖都使用相同掃描方向。
+這代表使用者可以手動為不同地圖設定掃描方向。
 
 問題是不同形狀場地適合不同掃描角度，例如：
 
@@ -665,13 +665,13 @@ cell 間再做 nearest neighbor / graph ordering
 
 # 14. 第三階段優化：掃描角度選擇
 
-目前固定：
+目前可由參數指定：
 
 ```python
-angle_deg = 0.0
+angle_deg = zigzag_angle_deg
 ```
 
-建議改為測試多個候選角度：
+後續仍可改為測試多個候選角度：
 
 ```python
 candidate_angles = [0, 15, 30, 45, 60, 75, 90]

@@ -5,15 +5,17 @@ from math import ceil
 
 import numpy as np
 
-_NEIGHBOURS_8 = [
+# 4-connectivity matches the spiral planner's own component decomposition.
+# Using 8-connectivity here caused a mismatch: a region connected only via a
+# diagonal pinch point was kept as one component by the filter, but then split
+# into two 4-disconnected components inside the spiral planner.  The resulting
+# inter-component A* bridge always failed, producing an unresolvable invalid
+# segment and aborting coverage planning.
+_NEIGHBOURS_4 = [
     (-1, 0),
     (1, 0),
     (0, -1),
     (0, 1),
-    (-1, -1),
-    (-1, 1),
-    (1, -1),
-    (1, 1),
 ]
 
 
@@ -71,7 +73,7 @@ def _connected_components(safe: np.ndarray) -> list[list[tuple[int, int]]]:
             while q:
                 rr, cc = q.popleft()
                 cells.append((rr, cc))
-                for dr, dc in _NEIGHBOURS_8:
+                for dr, dc in _NEIGHBOURS_4:
                     nr, nc = rr + dr, cc + dc
                     if nr < 0 or nr >= H or nc < 0 or nc >= W:
                         continue

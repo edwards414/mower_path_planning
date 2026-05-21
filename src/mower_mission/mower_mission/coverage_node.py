@@ -22,7 +22,11 @@ autonomous lawn mowers using zigzag and spiral patterns. It integrates
 with ROS2 Nav2 for autonomous navigation.
 """
 
-from mower_interface.srv import ZoneExecPath
+import threading
+
+from mower_interface.action import Waypoint
+from mower_interface.srv import ChannelRoute, ZoneExecPath, ZoneSequence
+from rclpy.action import ActionClient
 
 from geometry_msgs.msg import Point
 
@@ -96,6 +100,27 @@ class CoveragePlanner(Node):
         )
         self._action_client_split_path = NavActionClient()
         self.zone_map_client = ZoneMapClient()
+
+        self._nav_follow_path_client = ActionClient(
+            self, Waypoint, 'nav_action_follow_path'
+        )
+        self._channel_route_client = self.create_client(
+            ChannelRoute, '/get_channel_route',
+            callback_group=self.cb_group
+        )
+        self._sequence_thread = None
+        self._sequence_cancel = threading.Event()
+
+        self.create_service(
+            ZoneSequence, '/run_zone_sequence',
+            self.run_zone_sequence_srv,
+            callback_group=self.cb_group
+        )
+        self.create_service(
+            Trigger, '/stop_zone_sequence',
+            self.stop_zone_sequence_srv,
+            callback_group=self.cb_group
+        )
 
         self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
         self.path_marker_pub = self.create_publisher(
@@ -598,6 +623,191 @@ class CoveragePlanner(Node):
             res.message = 'Zone not found'
 
         return res
+
+    # ── Zone Sequence Mission ─────────────────────────────────────────────────
+
+    def run_zone_sequence_srv(self, req, res):
+        """啟動多 zone 任務序列：覆蓋 → 走通道 → 覆蓋 → ..."""
+        if self._sequence_thread and self._sequence_thread.is_alive():
+            res.success = False
+            res.message = '已有任務序列執行中，請先呼叫 /stop_zone_sequence'
+            return res
+
+        zone_ids = list(req.zone_ids)
+        if not zone_ids:
+            res.success = False
+            res.message = 'zone_ids 不可為空'
+            return res
+
+        missing = [
+            z for z in zone_ids
+            if self._get_zone_map(z) is None
+            or not self._get_zone_map(z).path.poses
+        ]
+        if missing:
+            res.success = False
+            res.message = (
+                f'以下 zone 尚無覆蓋路徑，請先呼叫 /generate_coverage_path: '
+                f'{missing}'
+            )
+            return res
+
+        proximity_m = (
+            float(req.channel_proximity_m) if req.channel_proximity_m > 0 else 1.5
+        )
+        self._sequence_cancel.clear()
+        self._sequence_thread = threading.Thread(
+            target=self._run_sequence,
+            args=(zone_ids, proximity_m),
+            daemon=True,
+        )
+        self._sequence_thread.start()
+
+        res.success = True
+        res.message = (
+            f'任務序列已啟動: zones={zone_ids}, '
+            f'channel_proximity={proximity_m:.2f}m'
+        )
+        return res
+
+    def stop_zone_sequence_srv(self, req, res):
+        """取消正在執行的任務序列."""
+        self._sequence_cancel.set()
+        res.success = True
+        res.message = (
+            '已送出取消請求，序列將在當前步驟完成後停止'
+            if self._sequence_thread and self._sequence_thread.is_alive()
+            else '目前無執行中的任務序列'
+        )
+        return res
+
+    def _run_sequence(self, zone_ids, channel_proximity_m):
+        """背景執行緒：依序完成多個 zone 覆蓋，zone 間走通道銜接."""
+        self.get_logger().info(f'任務序列開始: zones={zone_ids}')
+
+        for i, zone_id in enumerate(zone_ids):
+            if self._sequence_cancel.is_set():
+                self.get_logger().warn(f'任務序列在 zone {zone_id} 前已取消')
+                return
+
+            zone_map = self._get_zone_map(zone_id)
+
+            self.get_logger().info(
+                f'[{i + 1}/{len(zone_ids)}] 執行 zone {zone_id} 覆蓋路徑，'
+                f'共 {len(zone_map.path.poses)} 個路徑點'
+            )
+            ok = self._blocking_action_call(
+                zone_map.path, list(zone_map.coverage_split_points)
+            )
+            if not ok:
+                self.get_logger().error(
+                    f'Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止'
+                )
+                return
+
+            self.get_logger().info(f'Zone {zone_id} 覆蓋完成')
+
+            if self._sequence_cancel.is_set() or i >= len(zone_ids) - 1:
+                continue
+
+            next_zone_id = zone_ids[i + 1]
+            self.get_logger().info(
+                f'尋找通道: zone {zone_id} → zone {next_zone_id}'
+            )
+
+            route_req = ChannelRoute.Request()
+            route_req.zone_from_id = zone_id
+            route_req.zone_to_id = next_zone_id
+            route_req.proximity_m = channel_proximity_m
+            route_res = self._blocking_service_call(
+                self._channel_route_client, route_req
+            )
+
+            if route_res is None or not route_res.success:
+                msg = route_res.message if route_res else '服務呼叫超時'
+                self.get_logger().error(
+                    f'取得通道路徑失敗: {msg}，任務序列中止'
+                )
+                return
+
+            self.get_logger().info(
+                f'走通道 #{route_res.matched_channel_id} '
+                f'(zone {zone_id} → zone {next_zone_id})，'
+                f'共 {len(route_res.channel_path.poses)} 個路徑點'
+            )
+            ok = self._blocking_action_call(route_res.channel_path, [])
+            if not ok:
+                self.get_logger().error(
+                    f'通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止'
+                )
+                return
+
+            self.get_logger().info(
+                f'通道 zone {zone_id} → zone {next_zone_id} 完成'
+            )
+
+        self.get_logger().info(f'任務序列全部完成: zones={zone_ids}')
+
+    def _get_zone_map(self, zone_id):
+        """從 zone_map_list 查找指定 zone_id 的 ZoneMap."""
+        for z in self.zone_map_list:
+            if z.zone_id == zone_id:
+                return z
+        return None
+
+    def _blocking_action_call(self, path, coverage_split_points, timeout_s=600.0):
+        """送出 nav_action_follow_path goal 並阻塞直到完成，回傳是否成功."""
+        goal = Waypoint.Goal()
+        goal.path = path
+        goal.coverage_split_points = list(coverage_split_points)
+
+        done = threading.Event()
+        result_box = [False]
+
+        def _on_goal(future):
+            handle = future.result()
+            if not handle.accepted:
+                self.get_logger().warn('Nav goal 被 action server 拒絕')
+                done.set()
+                return
+            handle.get_result_async().add_done_callback(_on_result)
+
+        def _on_result(future):
+            result_box[0] = future.result().result.success
+            done.set()
+
+        self._nav_follow_path_client.wait_for_server()
+        self._nav_follow_path_client.send_goal_async(goal).add_done_callback(
+            _on_goal
+        )
+
+        if not done.wait(timeout=timeout_s):
+            self.get_logger().error(f'Nav action 超時（{timeout_s:.0f}s）')
+            return False
+        return result_box[0]
+
+    def _blocking_service_call(self, client, req, timeout_s=10.0):
+        """呼叫 ROS2 service 並阻塞直到收到回應，回傳 response 或 None."""
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('Service 不可用')
+            return None
+
+        done = threading.Event()
+        result_box = [None]
+
+        def _cb(future):
+            try:
+                result_box[0] = future.result()
+            except Exception as e:
+                self.get_logger().error(f'Service call 異常: {e}')
+            done.set()
+
+        client.call_async(req).add_done_callback(_cb)
+
+        if not done.wait(timeout=timeout_s):
+            self.get_logger().error(f'Service call 超時（{timeout_s:.0f}s）')
+            return None
+        return result_box[0]
 
     def record_path_status_srv(self, req, res):
         """Record the status of the path."""

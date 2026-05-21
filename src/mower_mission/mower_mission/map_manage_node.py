@@ -283,6 +283,11 @@ class MapManage(Node):
     def _generate_risk_map(self, risk_zones):
         """根據基礎地圖和風險區域生成風險地圖."""
         try:
+            if self.base_map is None:
+                self.get_logger().error(
+                    '風險地圖需要先建立自由空間（請先呼叫 /create_free_space）'
+                )
+                return None
             risk_map = OccupancyGrid()
             risk_map.header = self.base_map.header
             risk_map.header.frame_id = 'map'

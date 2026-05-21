@@ -31,6 +31,8 @@ def generate_launch_description():
     launch_sim = LaunchConfiguration('launch_sim')
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
+    coverage_backend = LaunchConfiguration('coverage_backend')
+    zigzag_angle_deg = LaunchConfiguration('zigzag_angle_deg')
 
     declare_launch_sim = DeclareLaunchArgument(
         'launch_sim',
@@ -47,8 +49,24 @@ def generate_launch_description():
         default_value='true',
         description='Launch RViz when launch_sim is true',
     )
+    declare_coverage_backend = DeclareLaunchArgument(
+        'coverage_backend',
+        default_value='python',
+        description='Coverage algorithm backend: "python" or "rust"',
+    )
+    declare_zigzag_angle_deg = DeclareLaunchArgument(
+        'zigzag_angle_deg',
+        default_value='0.0',
+        description='Zigzag scan angle in degrees, from 0 to 180',
+    )
 
     mower_bringup_dir = get_package_share_directory('mower_bringup')
+
+    rosbridge_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(mower_bringup_dir, 'launch', 'rosbridge.launch.py')
+        ),
+    )
 
     sim_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -74,7 +92,13 @@ def generate_launch_description():
         output='screen'
     )
     boustrophedon_coverage = ExecuteProcess(
-        cmd=['ros2', 'run', 'mower_mission', 'coverage_node'],
+        cmd=[
+            'ros2', 'run', 'mower_mission', 'coverage_node',
+            '--ros-args',
+            '-p', ['coverage_backend:=', coverage_backend],
+            '-p', ['zigzag_angle_deg:=', zigzag_angle_deg],
+            '-p', 'allow_backend_fallback:=false',
+        ],
         output='screen'
     )
     nav_action_server = ExecuteProcess(
@@ -165,6 +189,9 @@ def generate_launch_description():
         declare_launch_sim,
         declare_use_sim_time,
         declare_use_rviz,
+        declare_coverage_backend,
+        declare_zigzag_angle_deg,
+        rosbridge_launch,
         twist_mux,
         sim_launch,
         timer_path_record,

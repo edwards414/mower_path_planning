@@ -4,12 +4,15 @@ use ndarray::{Array2, ArrayView2};
 use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
 use pyo3::prelude::*;
 
-const NEIGHBOURS_8: [(i32, i32); 8] =
-    [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)];
+// 4-connectivity matches the spiral planner's own component decomposition,
+// preventing a mismatch where an 8-connected "pinch point" region appears as
+// one component to the filter but two components inside the spiral planner,
+// which causes the inter-component A* bridge to fail.
+const NEIGHBOURS_4: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
 
 // ── Internal ───────────────────────────────────────────────────────────────────
 
-pub fn connected_components_8(safe: ArrayView2<bool>) -> Vec<Vec<(usize, usize)>> {
+pub fn connected_components_4_filter(safe: ArrayView2<bool>) -> Vec<Vec<(usize, usize)>> {
     let h = safe.nrows();
     let w = safe.ncols();
     let mut seen = Array2::<bool>::default((h, w));
@@ -27,7 +30,7 @@ pub fn connected_components_8(safe: ArrayView2<bool>) -> Vec<Vec<(usize, usize)>
 
             while let Some((rr, cc)) = queue.pop_front() {
                 cells.push((rr, cc));
-                for &(dr, dc) in &NEIGHBOURS_8 {
+                for &(dr, dc) in &NEIGHBOURS_4 {
                     let nr = rr as i32 + dr;
                     let nc = cc as i32 + dc;
                     if nr < 0 || nr >= h as i32 || nc < 0 || nc >= w as i32 {
@@ -57,7 +60,7 @@ pub fn filter_safe_components_rs(
 ) -> (Array2<bool>, Vec<usize>, Vec<usize>) {
     let h = safe.nrows();
     let w = safe.ncols();
-    let components = connected_components_8(safe);
+    let components = connected_components_4_filter(safe);
     let all_sizes: Vec<usize> = components.iter().map(|c| c.len()).collect();
 
     if components.is_empty() {

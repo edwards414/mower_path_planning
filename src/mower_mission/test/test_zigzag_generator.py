@@ -25,7 +25,7 @@ STRIP = 0.2
 SPACING = 0.1
 
 
-def _call(grid):
+def _call(grid, angle_deg=0.0):
     H, W = grid.shape
     return _generate_coverage_zigzag_path(
         safe_map=grid,
@@ -36,6 +36,7 @@ def _call(grid):
         W=W,
         origin_x=OX,
         origin_y=OY,
+        angle_deg=angle_deg,
     )
 
 
@@ -90,6 +91,23 @@ def test_accepts_uint8_safe_map():
     pts, split_pts, invalid_segs = _call(grid)
     assert len(pts) >= 2
     assert len(split_pts) >= 1
+    assert invalid_segs == []
+
+
+def test_rotated_angle_returns_nonempty():
+    grid = np.ones((20, 20), dtype=bool)
+    pts, split_pts, invalid_segs = _call(grid, angle_deg=45.0)
+    assert len(pts) >= 2
+    assert len(split_pts) >= 1
+    assert invalid_segs == []
+    assert pts != _call(grid, angle_deg=0.0)[0]
+
+
+def test_rotated_empty_map_returns_empty():
+    grid = np.zeros((10, 10), dtype=bool)
+    pts, split_pts, invalid_segs = _call(grid, angle_deg=180.0)
+    assert pts == []
+    assert split_pts == []
     assert invalid_segs == []
 
 

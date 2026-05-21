@@ -8,9 +8,30 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 ament_get_python_install_dir(PYTHON_INSTALL_DIR)
 _ament_cmake_python_register_environment_hook()
 
-# Build the maturin wheel at CMake configure time
+# Locate cargo so we can pass it explicitly to maturin's subprocess environment.
+# cmake's execute_process does not always inherit the login-shell PATH, so cargo
+# (installed at /usr/local/cargo/bin by the devcontainer Dockerfile) may be
+# missing from the subprocess PATH even when the interactive shell can find it.
+find_program(CARGO_EXECUTABLE cargo
+  HINTS /usr/local/cargo/bin $ENV{CARGO_HOME}/bin $ENV{HOME}/.cargo/bin
+)
+if(NOT CARGO_EXECUTABLE)
+  message(FATAL_ERROR "cargo not found. "
+    "Install the Rust toolchain: "
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh")
+endif()
+get_filename_component(_cargo_bin_dir "${CARGO_EXECUTABLE}" DIRECTORY)
+
+# Build the maturin wheel at CMake configure time.
+# Explicitly extend PATH with the cargo bin directory so that maturin's
+# internal `cargo metadata` / `cargo build` invocations can find the toolchain
+# regardless of how cmake was launched (interactive shell vs. colcon subprocess).
 execute_process(
-  COMMAND ${Python3_EXECUTABLE} -m maturin build --release
+  COMMAND ${CMAKE_COMMAND} -E env
+          "PATH=${_cargo_bin_dir}:$ENV{PATH}"
+          "CARGO_HOME=$ENV{CARGO_HOME}"
+          "RUSTUP_HOME=$ENV{RUSTUP_HOME}"
+          ${Python3_EXECUTABLE} -m maturin build --release
           --out "${CMAKE_CURRENT_BINARY_DIR}/wheels"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   RESULT_VARIABLE _maturin_result

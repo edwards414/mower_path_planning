@@ -345,7 +345,11 @@ pub fn generate_coverage_zigzag_path_rs(
             continue;
         }
 
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap()
+                .then_with(|| a.0.partial_cmp(&b.0).unwrap())
+        });
         if reverse {
             candidates.reverse();
         }

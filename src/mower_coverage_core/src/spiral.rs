@@ -608,12 +608,10 @@ pub fn plan_spiral_coverage_rs(
                         let wp = (origin_x + (c as f64 + 0.5) * res, origin_y + (r as f64 + 0.5) * res);
                         all_points.push(wp);
                     }
-                } else {
-                    // Invalid bridge — still emit direct line (matches Python 'invalid' segment)
-                    let goal_pt = (origin_x + (goal_rc.1 as f64 + 0.5) * res,
-                                   origin_y + (goal_rc.0 as f64 + 0.5) * res);
-                    all_points.push(goal_pt);
                 }
+                // If A* bridge fails (genuinely disconnected regions), emit nothing.
+                // Emitting a direct fallback waypoint creates a known-invalid segment
+                // that the ConnectorPlanner also cannot resolve, causing planning failure.
             }
         }
 

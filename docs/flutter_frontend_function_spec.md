@@ -208,6 +208,7 @@ MapManage 參數：
 |---|---|---:|---|
 | `strip_width_m` | `/boustrophedon_coverage` | `0.8` | double input，0.01-5.0 m |
 | `waypoint_spacing_m` | `/boustrophedon_coverage` | `0.2` | double input，0.01-2.0 m |
+| `zigzag_angle_deg` | `/boustrophedon_coverage` | `0.0` | double input，0-180 deg |
 | `unknown_as_obstacle` | `/boustrophedon_coverage` | `true` | switch |
 | `min_safe_component_area_m2` | `/boustrophedon_coverage` | `0.05` | advanced double input |
 | `coverage_pattern` | `/boustrophedon_coverage` | `zigzag` | segmented control: `zigzag`, `spiral` |
@@ -601,4 +602,3 @@ MVP 驗收：
 | service progress | Trigger 多半立即回應 | 完成狀態要看 topic 更新 |
 | direct manual control | 沒有手機專用安全 service | 建議先只做監看或透過 adapter 加安全層 |
 | API 拼字 | `chennal`, `cencel` | UI 文案可修正，API 名稱不可改 |
-

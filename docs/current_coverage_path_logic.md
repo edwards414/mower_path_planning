@@ -221,11 +221,11 @@ _generate_coverage_boustrophedon_path(
     W=W,
     origin_x=ox,
     origin_y=oy,
-    angle_deg=0.0,
+    angle_deg=zigzag_angle_deg,
 )
 ```
 
-雖然 `boustrophedon.py` 支援 `angle_deg`，但目前主流程固定傳入 `0.0`。
+`zigzag_angle_deg` 是 `/boustrophedon_coverage` 參數，允許範圍為 `0.0` 到 `180.0`。
 
 ### 5.1 條帶欄位選擇
 
@@ -485,15 +485,15 @@ risk_map_data == 0
 
 沒有額外處理 unknown cell。
 
-### 10.5 angle_deg 支援存在但主流程固定為 0
+### 10.5 angle_deg 支援
 
-`boustrophedon.py` 有非零角度掃描分支，但 `coverage_node.py` 固定使用：
+`zigzag.py` 有非零角度掃描分支，`coverage_node.py` 會使用：
 
 ```python
-angle_deg=0.0
+angle_deg=zigzag_angle_deg
 ```
 
-目前沒有從參數選擇最佳掃描角。
+目前角度由參數指定，尚未自動選擇最佳掃描角。
 
 ### 10.6 `/coverage_path` 目前沒有直接發布
 

@@ -234,6 +234,7 @@ def test_params_to_coverage_settings_full():
     coverage_params = {
         'strip_width_m': 0.8,
         'waypoint_spacing_m': 0.2,
+        'zigzag_angle_deg': 45.0,
         'unknown_as_obstacle': True,
         'coverage_pattern': 'zigzag',
     }
@@ -242,6 +243,7 @@ def test_params_to_coverage_settings_full():
     assert dto == {
         'stripWidthM': 0.8,
         'waypointSpacingM': 0.2,
+        'zigzagAngleDeg': 45.0,
         'inflateRadiusM': 0.55,
         'unknownAsObstacle': True,
         'coveragePattern': 'zigzag',
@@ -253,6 +255,7 @@ def test_params_to_coverage_settings_missing_keys_yield_none():
     assert dto == {
         'stripWidthM': None,
         'waypointSpacingM': None,
+        'zigzagAngleDeg': None,
         'inflateRadiusM': None,
         'unknownAsObstacle': None,
         'coveragePattern': None,

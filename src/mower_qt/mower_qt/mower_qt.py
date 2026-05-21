@@ -36,6 +36,7 @@ def ensure_rclpy_initialized():
 COVERAGE_PARAMETER_DEFAULTS = {
     'strip_width_m': 0.8,
     'waypoint_spacing_m': 0.2,
+    'zigzag_angle_deg': 0.0,
     'unknown_as_obstacle': True,
     'inflate_radius_m': 0.55,
     'coverage_pattern': 'zigzag',
@@ -466,6 +467,15 @@ class MowerQtWindow(QMainWindow):
         self.coverage_pattern_combo.setFont(QFont('Arial', 10))
         param_layout.addRow("覆蓋模式:", self.coverage_pattern_combo)
 
+        self.zigzag_angle_spinbox = self.create_double_spinbox(
+            COVERAGE_PARAMETER_DEFAULTS['zigzag_angle_deg'],
+            minimum=0.0,
+            maximum=180.0,
+            step=5.0,
+        )
+        param_layout.addRow("Zigzag 角度 angle_deg (°):",
+                            self.zigzag_angle_spinbox)
+
         layout.addWidget(param_widget)
 
         button_widget = QWidget()
@@ -606,6 +616,11 @@ class MowerQtWindow(QMainWindow):
                 'value': self.waypoint_spacing_spinbox.value(),
             },
             {
+                'name': 'zigzag_angle_deg',
+                'type': 'double',
+                'value': self.zigzag_angle_spinbox.value(),
+            },
+            {
                 'name': 'unknown_as_obstacle',
                 'type': 'bool',
                 'value': self.unknown_as_obstacle_checkbox.isChecked(),
@@ -662,6 +677,8 @@ class MowerQtWindow(QMainWindow):
             COVERAGE_PARAMETER_DEFAULTS['strip_width_m'])
         self.waypoint_spacing_spinbox.setValue(
             COVERAGE_PARAMETER_DEFAULTS['waypoint_spacing_m'])
+        self.zigzag_angle_spinbox.setValue(
+            COVERAGE_PARAMETER_DEFAULTS['zigzag_angle_deg'])
         self.inflate_radius_spinbox.setValue(
             COVERAGE_PARAMETER_DEFAULTS['inflate_radius_m'])
         self.unknown_as_obstacle_checkbox.setChecked(

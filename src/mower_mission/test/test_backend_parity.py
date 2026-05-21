@@ -182,11 +182,12 @@ class TestConnectorPlannerParity:
 # ── Zigzag generator parity ────────────────────────────────────────────────────
 
 class TestZigzagParity:
-    def _call(self, backend, grid):
+    def _call(self, backend, grid, angle_deg=0.0):
         H, W = grid.shape
         return backend.generate_zigzag_path(
             grid, strip_width_m=0.2, waypoint_spacing_m=0.1,
             res=RES, H=H, W=W, origin_x=OX, origin_y=OY,
+            angle_deg=angle_deg,
         )
 
     def test_empty_map_both_empty(self, py, rs):
@@ -205,6 +206,14 @@ class TestZigzagParity:
         assert np.allclose(py_pts, rs_pts, atol=1e-9), 'Point coordinates differ'
         assert py_sp == rs_sp
         assert py_is == rs_is
+
+    def test_rotated_open_grid_runs_for_both_backends(self, py, rs):
+        g = np.ones((20, 20), dtype=bool)
+        py_pts, py_sp, py_is = self._call(py, g, angle_deg=45.0)
+        rs_pts, rs_sp, rs_is = self._call(rs, g, angle_deg=45.0)
+        assert len(py_pts) >= 2 and len(rs_pts) >= 2
+        assert len(py_sp) >= 1 and len(rs_sp) >= 1
+        assert py_is == [] and rs_is == []
 
     def test_all_rust_waypoints_on_safe_cells(self, py, rs):
         """Waypoints must not land on obstacle cells (segments may still be invalid)."""

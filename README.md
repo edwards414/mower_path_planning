@@ -203,6 +203,7 @@ backward compatibility:
 
 - `strip_width_m`: mower cutting strip width, default `0.8`
 - `waypoint_spacing_m`: generated waypoint spacing, default `0.2`
+- `zigzag_angle_deg`: zigzag scan angle in degrees, default `0.0`, range `0.0`-`180.0`
 - `unknown_as_obstacle`: treat unknown cells as obstacles, default `true`
 - `min_safe_component_area_m2`: minimum retained safe component area, default `0.05`
 - `coverage_pattern`: `zigzag` or `spiral`

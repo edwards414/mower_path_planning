@@ -1,0 +1,5 @@
+int32[] zone_ids
+float32 channel_proximity_m
+---
+bool success
+string message
