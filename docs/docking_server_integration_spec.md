@@ -534,7 +534,7 @@ colcon build --packages-select mower_bringup mower_mission mower_interface
 ### 12.2 Launch 檢查
 
 ```bash
-ros2 launch mower_bringup navigation.launch.py use_sim_time:=true
+ros2 launch mower_nav2 navigation.launch.py use_sim_time:=true
 ros2 lifecycle get /docking_server
 ros2 action list | grep dock
 ```

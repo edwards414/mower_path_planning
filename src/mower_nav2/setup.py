@@ -2,7 +2,7 @@ from glob import glob
 import os
 from setuptools import find_packages, setup
 
-package_name = 'mower_bringup'
+package_name = 'mower_nav2'
 
 setup(
     name=package_name,
@@ -22,7 +22,7 @@ setup(
     zip_safe=True,
     maintainer='fxrbindi',
     maintainer_email='edwards940428@gmail.com',
-    description='Mower bringup: top-level launch files for real robot, RViz, twist_mux, and sim+nav2 integration',
+    description='Mower Nav2 stack: navigation, localization, GPS waypoint follower, and Nav2 params',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

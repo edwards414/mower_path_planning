@@ -61,10 +61,10 @@ sim-prefetch-gazebo-models: sim-containers
 	$(COMPOSE_DEV) exec gazebo bash workspace/prefetch_gazebo_models.sh
 
 sim-gazebo:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim.launch.py use_sim_time:=true use_rviz:=true enable_localization:=false enable_navigation:=false'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_sim sim.launch.py use_sim_time:=true use_rviz:=true'
 
 sim-gazebo-empty:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true world:=empty.world'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim_with_nav.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true world:=empty.world'
 
 sim-coverage-system:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=false use_sim_time:=true use_rviz:=false coverage_backend:=python zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'

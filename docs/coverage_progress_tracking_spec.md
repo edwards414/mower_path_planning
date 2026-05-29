@@ -499,7 +499,7 @@ colcon build --packages-select mower_interface mower_mission
 Terminal A：
 
 ```bash
-ros2 launch mower_bringup navigation.launch.py use_sim_time:=true
+ros2 launch mower_nav2 navigation.launch.py use_sim_time:=true
 ```
 
 Terminal B：

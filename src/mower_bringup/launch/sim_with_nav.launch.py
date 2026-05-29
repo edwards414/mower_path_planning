@@ -18,7 +18,6 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    OpaqueFunction,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -35,6 +34,10 @@ def generate_launch_description():
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     x_pose = LaunchConfiguration('x_pose')
     y_pose = LaunchConfiguration('y_pose')
+    world = LaunchConfiguration('world')
+
+    mower_sim_dir = get_package_share_directory('mower_sim')
+    mower_nav2_dir = get_package_share_directory('mower_nav2')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
@@ -61,6 +64,15 @@ def generate_launch_description():
         default_value='true',
         description='Automatically activate Nav2 lifecycle nodes',
     )
+    declare_nav2_params_file = DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value=os.path.join(
+            mower_nav2_dir,
+            'config',
+            'nav2_no_map_params.yaml',
+        ),
+        description='Full path to the Nav2 parameters file',
+    )
     declare_x_pose = DeclareLaunchArgument(
         'x_pose',
         default_value='0.0',
@@ -71,54 +83,32 @@ def generate_launch_description():
         default_value='0.0',
         description='Initial mower y position in Gazebo',
     )
-
-    mower_bringup_dir = get_package_share_directory('mower_bringup')
-    declare_nav2_params_file = DeclareLaunchArgument(
-        'nav2_params_file',
-        default_value=os.path.join(
-            mower_bringup_dir,
-            'config',
-            'nav2_no_map_params.yaml',
-        ),
-        description='Full path to the Nav2 parameters file',
-    )
     declare_world = DeclareLaunchArgument(
         'world',
         default_value='mower_world.world',
         description=(
-            'World: bare filename (looked up under mower_bringup/worlds/), '
+            'World: bare filename (looked up under mower_sim/worlds/), '
             'absolute path, or a built-in Gazebo world name (e.g. empty.sdf)'
         ),
     )
 
-    def _build_gazebo_cmd(context):
-        world_value = LaunchConfiguration('world').perform(context)
-        if not os.path.isabs(world_value) and not any(
-            sep in world_value for sep in ('/', '\\')
-        ):
-            candidate = os.path.join(mower_bringup_dir, 'worlds', world_value)
-            if os.path.isfile(candidate):
-                world_value = candidate
-        return [IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(mower_bringup_dir, 'launch', 'gps_world.launch.py')
-            ),
-            launch_arguments={
-                'use_sim_time': use_sim_time,
-                'x_pose': x_pose,
-                'y_pose': y_pose,
-                'publish_robot_state_publisher': 'true',
-                'launch_controllers': 'true',
-                'gz_args': f'-v 4 -r {world_value}',
-            }.items(),
-        )]
-
-    gazebo_cmd = OpaqueFunction(function=_build_gazebo_cmd)
+    sim_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(mower_sim_dir, 'launch', 'sim.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'use_rviz': use_rviz,
+            'x_pose': x_pose,
+            'y_pose': y_pose,
+            'world': world,
+        }.items(),
+    )
 
     localization_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                mower_bringup_dir,
+                mower_nav2_dir,
                 'launch',
                 'dual_ekf_navsat.launch.py',
             )
@@ -137,7 +127,7 @@ def generate_launch_description():
     navigation_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                mower_bringup_dir,
+                mower_nav2_dir,
                 'launch',
                 'navigation.launch.py',
             )
@@ -155,21 +145,6 @@ def generate_launch_description():
         actions=[navigation_cmd],
     )
 
-    rviz_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(mower_bringup_dir, 'launch', 'rviz.launch.py')
-        ),
-        condition=IfCondition(use_rviz),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-        }.items(),
-    )
-
-    delayed_rviz = TimerAction(
-        period=8.0,
-        actions=[rviz_cmd],
-    )
-
     return LaunchDescription([
         declare_use_sim_time,
         declare_use_rviz,
@@ -180,8 +155,7 @@ def generate_launch_description():
         declare_x_pose,
         declare_y_pose,
         declare_world,
-        gazebo_cmd,
-        delayed_rviz,
+        sim_cmd,
         delayed_localization,
         delayed_navigation,
     ])

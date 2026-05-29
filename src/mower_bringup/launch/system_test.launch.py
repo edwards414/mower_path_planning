@@ -73,7 +73,7 @@ def generate_launch_description():
             os.path.join(
                 mower_bringup_dir,
                 'launch',
-                'sim.launch.py',
+                'sim_with_nav.launch.py',
             )
         ),
         condition=IfCondition(launch_sim),

@@ -60,7 +60,7 @@ def generate_launch_description():
         description='Launch controllers after the mower is spawned',
     )
 
-    mower_bringup_dir = get_package_share_directory('mower_bringup')
+    mower_sim_dir = get_package_share_directory('mower_sim')
     mower_description_dir = get_package_share_directory('mower_description')
     gz_resource_paths = [
         os.path.dirname(mower_description_dir),
@@ -75,7 +75,7 @@ def generate_launch_description():
     )
 
     world_file = os.path.join(
-        mower_bringup_dir,
+        mower_sim_dir,
         'worlds',
         'mower_world.world'
     )

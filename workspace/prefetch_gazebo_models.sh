@@ -13,7 +13,7 @@ set -u
 
 world_file=${WORLD_FILE:-}
 if [[ -z "${world_file}" ]]; then
-  world_file="$(ros2 pkg prefix mower_bringup)/share/mower_bringup/worlds/mower_world.world"
+  world_file="$(ros2 pkg prefix mower_sim)/share/mower_sim/worlds/mower_world.world"
 fi
 
 export GZ_FUEL_CACHE_PATH="${GZ_FUEL_CACHE_PATH:-${HOME}/.gz/fuel}"

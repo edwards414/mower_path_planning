@@ -42,7 +42,7 @@ def generate_launch_description():
 
     sim_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(mower_bringup_dir, 'launch', 'sim.launch.py')
+            os.path.join(mower_bringup_dir, 'launch', 'sim_with_nav.launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,

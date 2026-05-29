@@ -165,7 +165,7 @@ ros2 launch mower_bringup mower.launch.py use_sim_time:=false
 Simulation bringup:
 
 ```bash
-ros2 launch mower_bringup sim.launch.py use_sim_time:=true
+ros2 launch mower_bringup sim_with_nav.launch.py use_sim_time:=true
 ```
 
 Mission services:

@@ -16,8 +16,8 @@ def generate_launch_description():
     # 路徑設定
     # ─────────────────────────────────────────────────────────────
     mower_desc_share = get_package_share_directory('mower_description')
-    nav2_gps_share = get_package_share_directory('mower_bringup')
-    world_file        = os.path.join(nav2_gps_share, 'worlds', 'mower_world.world')
+    mower_sim_share = get_package_share_directory('mower_sim')
+    world_file        = os.path.join(mower_sim_share, 'worlds', 'mower_world.world')
 
     # ─────────────────────────────────────────────────────────────
     # GZ_SIM_RESOURCE_PATH：

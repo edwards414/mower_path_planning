@@ -20,7 +20,7 @@ import os
 
 
 def generate_launch_description():
-    mower_bringup_dir = get_package_share_directory('mower_bringup')
+    mower_nav2_dir = get_package_share_directory('mower_nav2')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
@@ -29,7 +29,7 @@ def generate_launch_description():
     )
     declare_params_file = DeclareLaunchArgument(
         'params_file',
-        default_value=os.path.join(mower_bringup_dir, 'config', 'nav2_no_map_params.yaml'),
+        default_value=os.path.join(mower_nav2_dir, 'config', 'nav2_no_map_params.yaml'),
         description='Full path to the ROS 2 parameters file'
     )
 
@@ -52,7 +52,7 @@ def generate_launch_description():
     robot_localization_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                mower_bringup_dir, 'launch', 'dual_ekf_navsat.launch.py'
+                mower_nav2_dir, 'launch', 'dual_ekf_navsat.launch.py'
             )
         ),
         launch_arguments={
@@ -62,7 +62,7 @@ def generate_launch_description():
 
     navigation_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(mower_bringup_dir, 'launch', 'navigation.launch.py')
+            os.path.join(mower_nav2_dir, 'launch', 'navigation.launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,

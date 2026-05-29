@@ -2,7 +2,7 @@ from glob import glob
 import os
 from setuptools import find_packages, setup
 
-package_name = 'mower_bringup'
+package_name = 'mower_sim'
 
 setup(
     name=package_name,
@@ -16,13 +16,14 @@ setup(
             'share/' + package_name + '/launch',
             glob(os.path.join('launch', '*launch.[pxy][yma]*'))
         ),
-        ('share/' + package_name + '/config', glob(os.path.join('config', '*'))),
+        ('share/' + package_name + '/worlds', glob(os.path.join('worlds', '*'))),
+        ('share/' + package_name + '/urdf', glob(os.path.join('urdf', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='fxrbindi',
     maintainer_email='edwards940428@gmail.com',
-    description='Mower bringup: top-level launch files for real robot, RViz, twist_mux, and sim+nav2 integration',
+    description='Mower simulation: Gazebo worlds, URDF assets, and sim-only launch files',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

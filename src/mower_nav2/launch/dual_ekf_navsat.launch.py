@@ -30,9 +30,9 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    mower_bringup_dir = get_package_share_directory('mower_bringup')
+    mower_nav2_dir = get_package_share_directory('mower_nav2')
     rl_params_file = os.path.join(
-        mower_bringup_dir, 'config', 'dual_ekf_navsat_params.yaml')
+        mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml')
     return LaunchDescription(
         [
             declare_use_sim_time,

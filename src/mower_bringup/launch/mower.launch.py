@@ -11,6 +11,7 @@ import xacro
 
 def generate_launch_description():
     mower_bringup_dir = get_package_share_directory('mower_bringup')
+    mower_nav2_dir = get_package_share_directory('mower_nav2')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     enable_localization = LaunchConfiguration('enable_localization')
@@ -47,7 +48,7 @@ def generate_launch_description():
     declare_nav2_params_file = DeclareLaunchArgument(
         'nav2_params_file',
         default_value=os.path.join(
-            mower_bringup_dir,
+            mower_nav2_dir,
             'config',
             'nav2_no_map_params.yaml',
         ),
@@ -95,7 +96,7 @@ def generate_launch_description():
     robot_localization_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                mower_bringup_dir,
+                mower_nav2_dir,
                 'launch',
                 'dual_ekf_navsat.launch.py',
             )
@@ -109,7 +110,7 @@ def generate_launch_description():
     navigation_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                mower_bringup_dir,
+                mower_nav2_dir,
                 'launch',
                 'navigation.launch.py',
             )
