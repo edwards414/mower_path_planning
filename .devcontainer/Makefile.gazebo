@@ -1,0 +1,29 @@
+# Sim-only Makefile, baked into the standalone Gazebo image at
+# /home/fxrbindi/mower_ws/Makefile. It only carries targets that actually work
+# inside this image — the repo-root Makefile has many that need docker compose,
+# Windows PowerShell, or packages that aren't copied into the sim image.
+ROS_DISTRO ?= jazzy
+WS  := /home/fxrbindi/mower_ws
+SRC := source /opt/ros/$(ROS_DISTRO)/setup.bash && source $(WS)/install/setup.bash
+
+.DEFAULT_GOAL := help
+.PHONY: help sim sim-empty build rviz clean
+
+help:  ## 顯示可用指令
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+sim:  ## 啟動 Gazebo + 機器人 + RViz
+	bash -lc '$(SRC) && ros2 launch mower_sim sim.launch.py use_sim_time:=true use_rviz:=true'
+
+sim-empty:  ## 空世界 (empty.world)
+	bash -lc '$(SRC) && ros2 launch mower_sim sim.launch.py world:=empty.world use_rviz:=true'
+
+build:  ## 重新編譯 mower_sim / mower_description / mower_bringup
+	bash -lc 'source /opt/ros/$(ROS_DISTRO)/setup.bash && cd $(WS) && colcon build'
+
+rviz:  ## 只開 RViz
+	bash -lc '$(SRC) && ros2 launch mower_bringup rviz.launch.py'
+
+clean:  ## 清掉 build/ install/ log/
+	rm -rf $(WS)/build $(WS)/install $(WS)/log
