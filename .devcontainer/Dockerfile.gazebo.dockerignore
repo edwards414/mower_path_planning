@@ -1,0 +1,48 @@
+# Per-Dockerfile ignore for .devcontainer/Dockerfile.gazebo (BuildKit feature).
+# When present, this REPLACES the root .dockerignore for the gazebo build, so it
+# must restate every exclusion we still want. The key difference from the root
+# .dockerignore: src/mower_sim/ is NOT excluded here, because the sim image is
+# built from it.
+#
+# Patterns are evaluated relative to the build context root (the repo root),
+# even though this file lives next to the Dockerfile.
+
+.git
+.github
+.claude
+.vscode
+
+build/
+install/
+log/
+logs/
+workspace/
+zone_record/
+
+# The sim image only needs mower_sim + mower_description + mower_bringup.
+# Exclude every other source package to keep the build context small.
+src/mower_controller/
+src/mower_coverage_core/
+src/mower_interface/
+src/mower_mission/
+src/mower_nav2/
+src/mower_qt/
+src/mower_teleop/
+src/turtlebot3_mapviz/
+src/wit_ros2_imu/
+
+# Rust build output (not needed for the sim packages; large and host-specific)
+**/target/
+
+**/__pycache__/
+**/.pytest_cache/
+**/pytest-cache-files-*/
+**/*.pyc
+**/*.pyo
+
+**/.venv/
+**/venv/
+**/env/
+
+*.tmp
+*.log

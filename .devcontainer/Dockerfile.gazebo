@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 ARG ROS_DISTRO=jazzy
 
 ##############################################
@@ -9,36 +10,64 @@ ARG ROS_DISTRO
 ENV ROS_DISTRO=${ROS_DISTRO}
 SHELL ["/bin/bash", "-c"]
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ros-${ROS_DISTRO}-ros2-control \
-    ros-${ROS_DISTRO}-ros2-controllers \
-    ros-${ROS_DISTRO}-rclpy \
-    ros-${ROS_DISTRO}-ros-gz-sim \
-    ros-${ROS_DISTRO}-ros-gz-bridge \
-    ros-${ROS_DISTRO}-ros-gz-image \
-    ros-${ROS_DISTRO}-gz-ros2-control \
-    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
-    ros-${ROS_DISTRO}-nav2-bringup \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Sim runtime apt deps. NOTE: nav2-bringup is intentionally NOT installed — the
+# sim launch chain (sim.launch.py -> gps_world + spawn_mowerbot + rviz) never
+# touches Nav2, and the mower_bringup launches that do need it also require the
+# mower_nav2 package, which isn't baked into this image. rclpy ships with the
+# base ROS install, so it's omitted too.
+#
+# BuildKit cache mounts keep apt's download cache between builds, so re-running
+# this layer doesn't re-fetch every .deb. The cache mounts live outside the
+# image layer, so there's no need to apt-get clean / rm the lists afterwards.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-ros2-control \
+        ros-${ROS_DISTRO}-ros2-controllers \
+        ros-${ROS_DISTRO}-ros-gz-sim \
+        ros-${ROS_DISTRO}-ros-gz-bridge \
+        ros-${ROS_DISTRO}-ros-gz-image \
+        ros-${ROS_DISTRO}-gz-ros2-control \
+        ros-${ROS_DISTRO}-rmw-cyclonedds-cpp
 
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV ROS_LOCALHOST_ONLY=0
 ENV QT_X11_NO_MITSHM=1
 ENV __GL_SYNC_TO_VBLANK=0
-RUN mkdir -p /home/fxrbindi/mower_ws/src
-
-# COPY src/nav2_gps_waypoint_follower /home/fxrbindi/mower_ws/src/nav2_gps_waypoint_follower
-# COPY src/lawer_qt_py /home/fxrbindi/mower_ws/src/lawer_qt_py
-
 WORKDIR /home/fxrbindi/mower_ws
 
-RUN source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build 
+# Sim-only workspace: copy just the packages needed to run the Gazebo
+# simulation, not the whole robot stack. Runtime closure of
+# `ros2 launch mower_sim sim.launch.py`:
+#   mower_sim         -> sim.launch.py / gps_world.launch.py + worlds/urdf
+#   mower_description -> robot xacro, controllers.yaml, spawn_mowerbot.launch.py
+#   mower_bringup     -> rviz.launch.py + config/config.rviz
+# Everything else (ros_gz_*, robot_state_publisher, rviz2, ros2_control,
+# urdf, xacro) comes from the apt packages above + the desktop base image.
+#
+# NOTE: the root .dockerignore excludes src/mower_sim/, so this build relies
+# on the per-Dockerfile ignore file .devcontainer/Dockerfile.gazebo.dockerignore
+# (a BuildKit feature) to make mower_sim available in the build context.
+COPY src/mower_sim         src/mower_sim
+COPY src/mower_description  src/mower_description
+COPY src/mower_bringup      src/mower_bringup
 
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
-    echo "source /home/fxrbindi/mower_ws/install/setup.bash" >> ~/.bashrc
+# Cache mount on build/ gives incremental colcon rebuilds; install/ stays a real
+# image layer. Do NOT add --symlink-install: the runtime relies on a real install
+# tree, not symlinks back into a (cache-mounted, non-persistent) build/ dir.
+RUN --mount=type=cache,target=/home/fxrbindi/mower_ws/build \
+    source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build
 
+# Convenience Makefile for use inside the container (VNC terminal / docker exec):
+#   make / make help -> list targets   |   make sim -> launch the full sim
+# Copied after the build so editing it doesn't bust the colcon layer cache.
+COPY .devcontainer/Makefile.gazebo Makefile
 
-
+# Source ROS + this workspace for every interactive shell (VNC terminal or
+# `docker exec`), regardless of which user the desktop runs as.
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /etc/bash.bashrc \
+    && echo "source /home/fxrbindi/mower_ws/install/setup.bash" >> /etc/bash.bashrc
 
 CMD ["/bin/bash"]

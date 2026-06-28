@@ -65,7 +65,11 @@ services:
     ports:
       - "6080:80" # noVNC web interface
     volumes:
-      - ../:/home/$USER_NAME/mower_ws:cached
+      # Standalone sim image: the workspace (mower_sim + mower_description +
+      # mower_bringup) is baked into the image by Dockerfile.gazebo, so the
+      # full-repo bind mount is intentionally disabled. Re-enable this line if
+      # you want live host source instead of the baked build.
+      # - ../:/home/$USER_NAME/mower_ws:cached
       - ../.cache/gz/fuel:/home/ubuntu/.gz/fuel
     privileged: true # Gazebo 可能需要硬體加速
     shm_size: '12gb' # 增加共享記憶體以提升 Gazebo 效能
