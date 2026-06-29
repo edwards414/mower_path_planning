@@ -19,7 +19,7 @@ RUN apt-get update && \
     apt-get install -y gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-base-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -42,7 +42,7 @@ COPY apt-cv-packages /tmp/apt-cv-packages
 RUN apt-get update && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-cv-packages | \
     envsubst | \
-    xargs -r apt-get install -y \
+    xargs -r apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
 
 ##############################################
@@ -63,7 +63,7 @@ RUN apt-get update && \
     apt-get install -y gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-dev-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 
