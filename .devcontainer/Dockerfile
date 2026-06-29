@@ -10,8 +10,15 @@ ARG WORKSPACE
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV WORKSPACE=${WORKSPACE}
 
+# systemd-resolved is only ever pulled in as a Recommends here, and its postinst
+# cannot relink /etc/resolv.conf during a buildx build ("Device or resource
+# busy"), which aborts the image build with exit 12. Pin it out so it is never
+# installed in any stage (this file lives in base and is inherited by builder/dev).
+RUN printf 'Package: systemd-resolved\nPin: release *\nPin-Priority: -1\n' \
+    > /etc/apt/preferences.d/no-systemd-resolved
+
 # 复制包列表文件
-COPY apt-base-packages /tmp/apt-base-packages 
+COPY apt-base-packages /tmp/apt-base-packages
 
 # 安裝必要工具
 
@@ -19,7 +26,7 @@ RUN apt-get update && \
     apt-get install -y gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-base-packages | \
     envsubst | \
-    xargs -r apt-get install -y --no-install-recommends && \
+    xargs -r apt-get install -y && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -42,7 +49,7 @@ COPY apt-cv-packages /tmp/apt-cv-packages
 RUN apt-get update && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-cv-packages | \
     envsubst | \
-    xargs -r apt-get install -y --no-install-recommends \
+    xargs -r apt-get install -y \
     && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
 
 ##############################################
@@ -63,7 +70,7 @@ RUN apt-get update && \
     apt-get install -y gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-dev-packages | \
     envsubst | \
-    xargs -r apt-get install -y --no-install-recommends && \
+    xargs -r apt-get install -y && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 
