@@ -1,0 +1,39 @@
+# QoS overrides for `ros2 bag play` so latched (TRANSIENT_LOCAL) layers reach a
+# late-joining subscriber (the app connecting after replay started). Without
+# this, a VOLATILE replay publisher can't satisfy the app's transient_local
+# subscription and the map layers never show.
+/robot/online:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/free_space_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/risk_map_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/map_grid:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/chennal_map_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/coverage_settings:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/zone_summaries:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local

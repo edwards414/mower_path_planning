@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ChannelPathList.srv"
   "srv/ChennalPathList.srv"
   "srv/ChannelRoute.srv"
+  "srv/ImportImageMask.srv"
   "srv/ZoneSequence.srv"
   "action/Waypoint.action"
   DEPENDENCIES std_msgs geometry_msgs nav_msgs visualization_msgs action_msgs

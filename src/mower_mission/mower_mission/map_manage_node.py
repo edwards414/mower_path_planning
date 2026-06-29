@@ -11,11 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import math
 import copy
+import math
 
 from mower_interface.msg import ZoneMap
-from mower_interface.srv import GetZoneList, ZoneMapList
+from mower_interface.srv import GetZoneList, ImportImageMask, ZoneMapList
 
 import cv2
 
@@ -39,6 +39,12 @@ from rclpy.qos import (
 
 from std_srvs.srv import Trigger
 
+from mower_mission.image_mask_import import (
+    decode_u8_mask,
+    rasterize_image_masks,
+    yaw_from_quaternion,
+)
+
 
 class MapManage(Node):
 
@@ -57,6 +63,9 @@ class MapManage(Node):
 
         self.create_service(Trigger, '/create_risk_map', self.create_risk_map_srv)
         self.create_service(Trigger, '/create_free_space', self.create_free_space_srv)
+        self.create_service(
+            ImportImageMask, '/import_image_mask', self.import_image_mask_srv
+        )
 
         self.create_service(Trigger, '/create_chennal_map', self.create_chennal_map_srv)
         self.create_service(
@@ -90,6 +99,10 @@ class MapManage(Node):
         self.zone_list = []
         self.zone_map_list = []
         self.base_map = None
+        # Robot-collected freespace (from /create_free_space), persisted
+        # separately so /import_image_mask never overwrites it — used to clip
+        # the imported image mask to the real drivable area.
+        self.collected_free_space = None
         self.risk_map = None
         self.chennal_map = None
 
@@ -158,8 +171,16 @@ class MapManage(Node):
                     inflate_radius_m,
                 )
 
+            # Keep /free_space_inflated = collected freespace (the app's
+            # alignment background) when it exists; only fall back to base_map
+            # (which after an import holds the clipped image map) otherwise.
+            free_space_source = (
+                self.collected_free_space
+                if self.collected_free_space is not None
+                else self.base_map
+            )
             free_space_inflated = self._create_free_space_inflated(
-                self.base_map,
+                free_space_source,
                 inflate_radius_m,
             )
             if free_space_inflated is not None:
@@ -225,6 +246,247 @@ class MapManage(Node):
     def timer_cb(self):
         self.map_msg.header.stamp = self.get_clock().now().to_msg()
         self.nav_base_map_pub.publish(self.map_msg)
+
+    def import_image_mask_srv(self, req, res):
+        """Import an app-generated black/white mask as the active zone map."""
+        try:
+            free_map, risk_map, zone_map, area_m2 = self._create_image_mask_maps(
+                req
+            )
+        except ValueError as exc:
+            res.success = False
+            res.message = str(exc)
+            res.zone_id = int(req.zone_id)
+            res.area_m2 = 0.0
+            return res
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'import image mask failed: {exc!r}')
+            res.success = False
+            res.message = '圖片 mask 匯入失敗'
+            res.zone_id = int(req.zone_id)
+            res.area_m2 = 0.0
+            return res
+
+        free_space_inflated = self._create_free_space_inflated(free_map)
+        risk_map_inflated = self._create_risk_map_inflated(risk_map)
+        zone_map.mask_map_inflated = self._create_free_space_inflated(
+            zone_map.mask_map
+        )
+
+        self.zone_map_list = [zone_map]
+        self.base_map = free_map
+        self.risk_map = risk_map
+        self.map_msg = free_map
+
+        self.free_space_pub.publish(free_map)
+        if self.collected_free_space is None:
+            # Fallback (no collected freespace): publish the image-derived
+            # inflated map as before. When collected freespace exists, leave the
+            # latched /free_space_inflated alone — the app uses it as the
+            # pre-submit alignment background and it should stay = collected.
+            self.free_space_inflated_pub.publish(free_space_inflated)
+        self.risk_map_pub.publish(risk_map)
+        self.risk_map_inflated_pub.publish(risk_map_inflated)
+        self.nav_base_map_pub.publish(free_map)
+
+        res.success = True
+        res.message = '圖片 mask 匯入成功'
+        res.zone_id = zone_map.zone_id
+        res.area_m2 = area_m2
+        self.get_logger().info(
+            f'imported image mask zone={zone_map.zone_id}, '
+            f'area={area_m2:.2f} m^2, size={free_map.info.width}x'
+            f'{free_map.info.height}'
+        )
+        return res
+
+    def _create_image_mask_maps(self, req):
+        if req.mask_encoding != 'base64_u8_row_major':
+            raise ValueError('mask_encoding must be base64_u8_row_major')
+
+        width = int(req.width)
+        height = int(req.height)
+        resolution = float(req.resolution_m)
+        if width <= 0 or height <= 0:
+            raise ValueError('圖片 mask 尺寸無效')
+        if resolution <= 0.0:
+            raise ValueError('resolution_m must be > 0')
+
+        free_mask = self._decode_u8_mask(
+            req.free_mask_data, width, height, field_name='free_mask_data'
+        )
+        risk_mask = self._decode_u8_mask(
+            req.risk_mask_data,
+            width,
+            height,
+            field_name='risk_mask_data',
+            optional=True,
+        )
+
+        if np.count_nonzero(free_mask == 255) == 0:
+            raise ValueError('free_mask_data 沒有可割草白色區域')
+
+        free_grid, risk_grid, origin_x, origin_y = self._rasterize_image_masks(
+            free_mask=free_mask,
+            risk_mask=risk_mask,
+            resolution=resolution,
+            robot_x=float(req.robot_pose_map.position.x),
+            robot_y=float(req.robot_pose_map.position.y),
+            robot_yaw=self._yaw_from_quaternion(req.robot_pose_map.orientation),
+            start_x=float(req.start_x_m),
+            start_y=float(req.start_y_m),
+            image_heading=float(req.image_heading_rad),
+        )
+
+        # Clip the imported mask to the robot-collected freespace so the mowable
+        # region is image_free ∩ collected_freespace (risk is removed later by
+        # coverage_node). No-op when no freespace was ever collected.
+        had_collected = self.collected_free_space is not None
+        free_grid = self._clip_free_grid_to_collected(
+            free_grid, origin_x, origin_y, resolution
+        )
+        if had_collected and np.count_nonzero(free_grid == 0) == 0:
+            raise ValueError('圖片與採集的 freespace 沒有重疊，無法產生路徑')
+
+        header = copy.deepcopy(req.robot_pose_header)
+        header.frame_id = header.frame_id or 'map'
+        header.stamp = self.get_clock().now().to_msg()
+
+        free_map = self._occupancy_grid_from_array(
+            free_grid,
+            header=header,
+            resolution=resolution,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+        risk_map = self._occupancy_grid_from_array(
+            risk_grid,
+            header=copy.deepcopy(header),
+            resolution=resolution,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+
+        zone_map = ZoneMap()
+        zone_map.header = copy.deepcopy(header)
+        zone_map.zone_id = int(req.zone_id) if int(req.zone_id) > 0 else 9001
+        zone_map.mask_map = copy.deepcopy(free_map)
+        area_m2 = float(np.count_nonzero(free_grid == 0)) * resolution * resolution
+        return free_map, risk_map, zone_map, area_m2
+
+    def _clip_free_grid_to_collected(self, free_grid, origin_x, origin_y, resolution):
+        """Intersect an image free_grid with the robot-collected freespace.
+
+        Both use the OccupancyGrid convention 0=free, 100=occupied. A cell stays
+        free (0) only where it is free in BOTH grids; everything else becomes 100.
+        The grids may differ in origin/resolution, so the collected grid is
+        nearest-cell resampled into the image grid (same pattern as
+        coverage_node._resample_risk_map_to_zone): each image cell centre ->
+        world metres -> floor into the collected grid. Out-of-bounds or unknown
+        (value != 0) collected cells are treated as occupied / not-free.
+
+        Returns ``free_grid`` unchanged when no freespace has been collected.
+        """
+        collected = self.collected_free_space
+        if collected is None:
+            return free_grid
+
+        img_h, img_w = free_grid.shape
+        col_h = int(collected.info.height)
+        col_w = int(collected.info.width)
+        col_res = collected.info.resolution
+        col_ox = collected.info.origin.position.x
+        col_oy = collected.info.origin.position.y
+        collected_data = np.asarray(
+            collected.data, dtype=np.int16
+        ).reshape(col_h, col_w)
+
+        # image cell centre -> world metres -> collected grid index
+        yy, xx = np.indices((img_h, img_w))
+        world_x = origin_x + (xx + 0.5) * resolution
+        world_y = origin_y + (yy + 0.5) * resolution
+        col_cols = np.floor((world_x - col_ox) / col_res).astype(np.int64)
+        col_rows = np.floor((world_y - col_oy) / col_res).astype(np.int64)
+
+        inside = (
+            (col_rows >= 0)
+            & (col_rows < col_h)
+            & (col_cols >= 0)
+            & (col_cols < col_w)
+        )
+        collected_free = np.zeros((img_h, img_w), dtype=bool)
+        collected_free[inside] = (
+            collected_data[col_rows[inside], col_cols[inside]] == 0
+        )
+
+        return np.where(
+            (free_grid == 0) & collected_free, 0, 100
+        ).astype(np.int8)
+
+    @staticmethod
+    def _decode_u8_mask(
+        encoded,
+        width,
+        height,
+        *,
+        field_name,
+        optional=False,
+    ):
+        return decode_u8_mask(
+            encoded,
+            width,
+            height,
+            field_name=field_name,
+            optional=optional,
+        )
+
+    @staticmethod
+    def _yaw_from_quaternion(q):
+        return yaw_from_quaternion(q)
+
+    @staticmethod
+    def _rasterize_image_masks(
+        *,
+        free_mask,
+        risk_mask,
+        resolution,
+        robot_x,
+        robot_y,
+        robot_yaw,
+        start_x,
+        start_y,
+        image_heading,
+    ):
+        return rasterize_image_masks(
+            free_mask=free_mask,
+            risk_mask=risk_mask,
+            resolution=resolution,
+            robot_x=robot_x,
+            robot_y=robot_y,
+            robot_yaw=robot_yaw,
+            start_x=start_x,
+            start_y=start_y,
+            image_heading=image_heading,
+        )
+
+    @staticmethod
+    def _occupancy_grid_from_array(grid, *, header, resolution, origin_x, origin_y):
+        msg = OccupancyGrid()
+        msg.header = header
+        msg.header.frame_id = msg.header.frame_id or 'map'
+        msg.info = MapMetaData()
+        msg.info.resolution = resolution
+        msg.info.width = int(grid.shape[1])
+        msg.info.height = int(grid.shape[0])
+
+        origin = Pose()
+        origin.position.x = float(origin_x)
+        origin.position.y = float(origin_y)
+        origin.position.z = 0.0
+        origin.orientation.w = 1.0
+        msg.info.origin = origin
+        msg.data = grid.astype(np.int8).flatten().tolist()
+        return msg
 
     def create_risk_map_srv(self, req, res):
         """創建風險地圖服務."""
@@ -420,6 +682,9 @@ class MapManage(Node):
             overall_freespace_map
         )
         self.base_map = overall_freespace_map
+        # Persist the collected freespace so a later /import_image_mask clips to
+        # it (this field is NOT overwritten by import, unlike base_map).
+        self.collected_free_space = overall_freespace_map
         self.free_space_pub.publish(overall_freespace_map)
         self.free_space_inflated_pub.publish(overall_freespace_map_inflated)
         self.map_msg = overall_freespace_map
@@ -429,6 +694,10 @@ class MapManage(Node):
 
     def _create_zone_maps_and_freespace(self, zone_list):
         self.zone_map_list = []
+        # Invalidate any previously collected freespace; it is re-set on success
+        # in _handle_zone_list_response. Prevents a failed/empty re-record from
+        # leaving a stale clip mask behind.
+        self.collected_free_space = None
 
         if not zone_list.markers:
             self.get_logger().warn('沒有區域數據')

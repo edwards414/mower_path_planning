@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
          glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'config'),
+         glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -33,6 +35,7 @@ setup(
             'battery_simulator_node = '
             'mower_mission.battery_simulator_node:main',
             'map_manage_node = mower_mission.map_manage_node:main',
+            'heartbeat_node = mower_mission.heartbeat_node:main',
             'path_record_node = mower_mission.path_record_node:main',
             'temp_dock_pose_publisher = '
             'mower_mission.temp_dock_pose_publisher:main',

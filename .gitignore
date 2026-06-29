@@ -12,3 +12,8 @@ boustrophedon_coverage/boustrophedon_coverage/__pycache__/
 /log/
 .cache/
 *.env
+
+# recorded bags (regenerate via 'make record') + stray logs
+bags/
+*.log
+_*.log

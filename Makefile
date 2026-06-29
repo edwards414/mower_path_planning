@@ -7,7 +7,7 @@ ZIGZAG_ANGLE_DEG ?= 0.0
 
 .PHONY: \
 	build build-release build-sim build-rust-core clean rviz open_rviz run \
-	bringup mower_qt mission mission-docking-temp apriltag-docking mower_teleop \
+	bringup mower_qt mission mission-coverage record replay mission-docking-temp apriltag-docking mower_teleop \
 	teleop-keyboard blade-teleop-joy sim-containers sim-prefetch-gazebo-models \
 	sim-gazebo sim-gazebo-empty sim-coverage-system sim-coverage-system-rust \
 	sim-coverage-test env build_dev deps
@@ -46,6 +46,32 @@ bringup:
 
 mission:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_mission mission.launch.py'
+
+# mission + auto-drive coverage (load_zone_list -> create_free_space ->
+# create_risk_map -> generate_coverage_path) so a path is ready for the app.
+mission-coverage:
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_mission mission.launch.py auto_coverage:=true'
+
+# ── Record / replay real data ───────────────────────────────────────────────
+# Record the app-facing topics from a LIVE real run (run this while your real
+# sim-coverage stack + sim are up, then Ctrl-C):  make record BAG=bags/my_run
+# Replay the recorded REAL data on a dedicated domain (app connects to 9090):
+#   make replay BAG=bags/my_run
+REPLAY_DOMAIN ?= 7
+BAG ?= bags/real_scene
+APP_TOPICS := /robot/online /adapter/robot_pose \
+	/adapter/map_layers/free_space_inflated /adapter/map_layers/risk_map_inflated \
+	/adapter/map_layers/map_grid /adapter/map_layers/chennal_map_inflated \
+	/adapter/marker_layers/zones /adapter/marker_layers/risk_zones \
+	/adapter/marker_layers/channels /adapter/marker_layers/coverage_path \
+	/adapter/marker_layers/invalid_segments /adapter/marker_layers/connectors \
+	/adapter/coverage_settings /adapter/zone_summaries
+
+record:
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 bag record -o $(BAG) $(APP_TOPICS)'
+
+replay:
+	bash -lc 'export ROS_DOMAIN_ID=$(REPLAY_DOMAIN) && export ROS_LOCALHOST_ONLY=1 && $(LOCAL_ROS_ENV) && ros2 launch mower_mission replay.launch.py bag:=$(BAG)'
 
 mission-docking-temp:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_mission mission.launch.py launch_temp_dock_pose_publisher:=true'

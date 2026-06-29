@@ -1,0 +1,17 @@
+int32 zone_id
+std_msgs/Header robot_pose_header
+geometry_msgs/Pose robot_pose_map
+uint32 width
+uint32 height
+float64 resolution_m
+float64 start_x_m
+float64 start_y_m
+float64 image_heading_rad
+string mask_encoding
+string free_mask_data
+string risk_mask_data
+---
+bool success
+string message
+int32 zone_id
+float64 area_m2
