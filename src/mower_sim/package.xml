@@ -9,7 +9,11 @@
 
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>mower_description</exec_depend>
-  <exec_depend>mower_bringup</exec_depend>
+  <!-- NOTE: do NOT exec_depend on mower_bringup here. mower_bringup already
+       exec_depends on mower_sim, and a two-way dependency makes colcon abort
+       with a topological-ordering error. sim.launch.py still includes
+       mower_bringup/launch/rviz.launch.py at runtime; that resolves fine in a
+       from-source workspace where all packages are installed together. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
