@@ -7,7 +7,7 @@ ZIGZAG_ANGLE_DEG ?= 0.0
 
 .PHONY: \
 	build build-release build-sim build-rust-core clean rviz open_rviz run \
-	mower_qt mission mission-docking-temp apriltag-docking mower_teleop \
+	bringup mower_qt mission mission-docking-temp apriltag-docking mower_teleop \
 	teleop-keyboard blade-teleop-joy sim-containers sim-prefetch-gazebo-models \
 	sim-gazebo sim-gazebo-empty sim-coverage-system sim-coverage-system-rust \
 	sim-coverage-test env build_dev deps
@@ -25,7 +25,11 @@ build-rust-core:
 	bash -lc '$(LOCAL_ROS_ENV) && colcon build --symlink-install --packages-select mower_coverage_core'
 
 clean:
+ifeq ($(OS),Windows_NT)
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$root=(Resolve-Path '.').Path; $$targets=@('build','install','log','logs'); foreach ($$name in $$targets) { $$path=Join-Path $$root $$name; if ((Test-Path -LiteralPath $$path) -and ((Resolve-Path -LiteralPath $$path).Path.StartsWith($$root))) { Remove-Item -LiteralPath $$path -Recurse -Force } }"
+else
+	rm -rf build install log logs
+endif
 
 rviz: open_rviz
 
@@ -36,6 +40,9 @@ run: mower_qt
 
 mower_qt:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_qt mower_qt'
+
+bringup:
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup mower.launch.py'
 
 mission:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_mission mission.launch.py'
