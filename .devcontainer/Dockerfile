@@ -95,14 +95,18 @@ RUN \
     # === 處理使用者 ===
     # 檢查該 UID 是否已存在
     && if getent passwd $USER_ID > /dev/null; then \
-    # 若存在：取得原使用者名稱，重新命名並移動家目錄
+    # 若存在（如 Ubuntu 24.04 內建的 UID 1000 ubuntu 使用者）：重新命名並設定家目錄路徑。
+    # 不用 -m 搬移，因為 WORKDIR 已先建出 /home/$USER_NAME，搬移會因目標已存在而失敗。
     OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
     usermod -l $USER_NAME $OLD_USER_NAME; \
-    usermod -d /home/$USER_NAME -m $USER_NAME; \
+    usermod -d /home/$USER_NAME $USER_NAME; \
     else \
     # 若不存在：建立新使用者（指定 shell、UID、GID、建立家目錄）
     useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
     fi \
+    # 確保家目錄存在且屬於該使用者（WORKDIR 可能已用 root 先建出來）
+    && mkdir -p /home/$USER_NAME \
+    && chown -R $USER_ID:$GROUP_ID /home/$USER_NAME \
     # === 設定 sudo 權限 ===
     && apt-get update \
     && apt-get install -y --no-install-recommends sudo \
