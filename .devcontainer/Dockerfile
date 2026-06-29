@@ -23,10 +23,10 @@ COPY apt-base-packages /tmp/apt-base-packages
 # 安裝必要工具
 
 RUN apt-get update && \
-    apt-get install -y gettext-base && \
+    apt-get install -y --no-install-recommends gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-base-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -49,7 +49,7 @@ COPY apt-cv-packages /tmp/apt-cv-packages
 RUN apt-get update && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-cv-packages | \
     envsubst | \
-    xargs -r apt-get install -y \
+    xargs -r apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
 
 ##############################################
@@ -67,10 +67,10 @@ COPY apt-dev-packages /tmp/apt-dev-packages
 
 # 安装 gettext-base 以提供 envsubst 命令，然后安装开发包
 RUN apt-get update && \
-    apt-get install -y gettext-base && \
+    apt-get install -y --no-install-recommends gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-dev-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 
@@ -105,7 +105,7 @@ RUN \
     fi \
     # === 設定 sudo 權限 ===
     && apt-get update \
-    && apt-get install -y sudo \
+    && apt-get install -y --no-install-recommends sudo \
     # 允許該使用者以 root 權限執行任何指令且不需密碼
     && echo $USER_NAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USER_NAME \
     # 設定 sudoers 檔案權限為 0440（僅 root 可讀）
