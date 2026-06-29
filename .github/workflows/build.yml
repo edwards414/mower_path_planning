@@ -160,8 +160,11 @@ jobs:
             set -euo pipefail
             test -d "${WORKSPACE}/install"
             test ! -e "${WORKSPACE}/src"
+            # ROS setup scripts reference unset vars; relax -u only while sourcing.
+            set +u
             source /opt/ros/${ROS_DISTRO}/setup.bash
             source "${WORKSPACE}/install/setup.bash"
+            set -u
             ros2 pkg prefix mower_bringup >/dev/null
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
           '
