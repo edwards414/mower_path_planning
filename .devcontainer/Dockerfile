@@ -10,16 +10,23 @@ ARG WORKSPACE
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV WORKSPACE=${WORKSPACE}
 
+# systemd-resolved is only ever pulled in as a Recommends here, and its postinst
+# cannot relink /etc/resolv.conf during a buildx build ("Device or resource
+# busy"), which aborts the image build with exit 12. Pin it out so it is never
+# installed in any stage (this file lives in base and is inherited by builder/dev).
+RUN printf 'Package: systemd-resolved\nPin: release *\nPin-Priority: -1\n' \
+    > /etc/apt/preferences.d/no-systemd-resolved
+
 # 复制包列表文件
-COPY apt-base-packages /tmp/apt-base-packages 
+COPY apt-base-packages /tmp/apt-base-packages
 
 # 安裝必要工具
 
 RUN apt-get update && \
-    apt-get install -y gettext-base && \
+    apt-get install -y --no-install-recommends gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-base-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-base-packages
 
 RUN rosdep update 
@@ -42,7 +49,7 @@ COPY apt-cv-packages /tmp/apt-cv-packages
 RUN apt-get update && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-cv-packages | \
     envsubst | \
-    xargs -r apt-get install -y \
+    xargs -r apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /tmp/apt-cv-packages
 
 ##############################################
@@ -60,10 +67,10 @@ COPY apt-dev-packages /tmp/apt-dev-packages
 
 # 安装 gettext-base 以提供 envsubst 命令，然后安装开发包
 RUN apt-get update && \
-    apt-get install -y gettext-base && \
+    apt-get install -y --no-install-recommends gettext-base && \
     sed -e 's/#.*//' -e 's/\r$//' -e '/^[[:space:]]*$/d' /tmp/apt-dev-packages | \
     envsubst | \
-    xargs -r apt-get install -y && \
+    xargs -r apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* /tmp/apt-dev-packages
 
 
@@ -88,17 +95,21 @@ RUN \
     # === 處理使用者 ===
     # 檢查該 UID 是否已存在
     && if getent passwd $USER_ID > /dev/null; then \
-    # 若存在：取得原使用者名稱，重新命名並移動家目錄
+    # 若存在（如 Ubuntu 24.04 內建的 UID 1000 ubuntu 使用者）：重新命名並設定家目錄路徑。
+    # 不用 -m 搬移，因為 WORKDIR 已先建出 /home/$USER_NAME，搬移會因目標已存在而失敗。
     OLD_USER_NAME=$(getent passwd $USER_ID | cut -d: -f1); \
     usermod -l $USER_NAME $OLD_USER_NAME; \
-    usermod -d /home/$USER_NAME -m $USER_NAME; \
+    usermod -d /home/$USER_NAME $USER_NAME; \
     else \
     # 若不存在：建立新使用者（指定 shell、UID、GID、建立家目錄）
     useradd -s /bin/bash --uid $USER_ID --gid $GROUP_ID -m $USER_NAME; \
     fi \
+    # 確保家目錄存在且屬於該使用者（WORKDIR 可能已用 root 先建出來）
+    && mkdir -p /home/$USER_NAME \
+    && chown -R $USER_ID:$GROUP_ID /home/$USER_NAME \
     # === 設定 sudo 權限 ===
     && apt-get update \
-    && apt-get install -y sudo \
+    && apt-get install -y --no-install-recommends sudo \
     # 允許該使用者以 root 權限執行任何指令且不需密碼
     && echo $USER_NAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USER_NAME \
     # 設定 sudoers 檔案權限為 0440（僅 root 可讀）

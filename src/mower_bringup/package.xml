@@ -7,7 +7,6 @@
   <maintainer email="edwards940428@gmail.com">fxrbindi</maintainer>
   <license>Apache-2.0</license>
 
-  <exec_depend>mower_sim</exec_depend>
   <exec_depend>mower_nav2</exec_depend>
   <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>joy</exec_depend>

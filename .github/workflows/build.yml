@@ -128,8 +128,17 @@ jobs:
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || matrix.push_platforms }}
           push: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/') }}
           load: ${{ github.event_name == 'pull_request' && matrix.name == 'runtime' && !contains(github.event.pull_request.labels.*.name, 'push-image') }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # Always keep the fast GitHub Actions cache. Additionally publish a
+          # GHCR registry cache for the runtime target (only when GHCR login has
+          # run: pushes, tags, or PRs labeled push-image) so local
+          # `docker buildx` builds can reuse the same builder layers via
+          # --cache-from. The expression collapses to an empty line otherwise.
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}
+            ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.name }}
+            ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -151,8 +160,11 @@ jobs:
             set -euo pipefail
             test -d "${WORKSPACE}/install"
             test ! -e "${WORKSPACE}/src"
+            # ROS setup scripts reference unset vars; relax -u only while sourcing.
+            set +u
             source /opt/ros/${ROS_DISTRO}/setup.bash
             source "${WORKSPACE}/install/setup.bash"
+            set -u
             ros2 pkg prefix mower_bringup >/dev/null
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
           '

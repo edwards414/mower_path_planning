@@ -10,6 +10,14 @@ logs/
 workspace/
 zone_record/
 
+# Packages excluded from the production image (sim / GUI / visualization only)
+src/mower_sim/
+src/mower_qt/
+src/turtlebot3_mapviz/
+
+# Rust build output (rebuilt inside the image; large and host-specific)
+**/target/
+
 **/__pycache__/
 **/.pytest_cache/
 **/pytest-cache-files-*/
