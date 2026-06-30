@@ -18,7 +18,8 @@ import math
 
 import os
 
-from mower_interface.srv import ChannelPathList, ChannelRoute, GetZoneList
+from mower_interface.srv import ChannelPathList, ChannelRoute, EditZone, \
+    GetZoneList
 
 from geometry_msgs.msg import Point, PoseStamped
 
@@ -110,6 +111,9 @@ class PathRecorder(Node):
         # 因為 *_end 服務一律會把多邊形 append 進清單，沒有丟棄的途徑。
         self.create_service(
             Trigger, '/record_cancel', self.record_cancel_srv)
+
+        # App 直接編輯物件：新增（用 app 畫的多邊形）/ 刪除（依 id）/ 更新（依 id 換頂點）。
+        self.create_service(EditZone, '/edit_zone', self.edit_zone_srv)
 
         self.create_service(
             Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
@@ -496,6 +500,114 @@ class PathRecorder(Node):
             res.message = '目前沒有進行中的記錄'
         else:
             res.message = f'已取消 {cancelled} 記錄'
+        self.get_logger().info(res.message)
+        return res
+
+    def _marker_from_xy(self, ns, marker_id, color, scale, pts, closed):
+        """以原始 (x, y) 點建立一個 LINE_STRIP marker。"""
+        marker = Marker()
+        marker.header.frame_id = self.get_parameter('frame_id').value
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = ns
+        marker.id = int(marker_id)
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = scale
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
+        marker.points = []
+        for (x, y) in pts:
+            p = Point()
+            p.x = float(x)
+            p.y = float(y)
+            p.z = 0.0
+            marker.points.append(p)
+        if closed and len(pts) >= 3:
+            fx, fy = pts[0]
+            lx, ly = pts[-1]
+            if math.hypot(fx - lx, fy - ly) > 1e-6:
+                p = Point()
+                p.x = float(fx)
+                p.y = float(fy)
+                p.z = 0.0
+                marker.points.append(p)
+        return marker
+
+    def edit_zone_srv(self, req, res):
+        """App 直接編輯物件：新增 / 刪除 / 更新（工作區 / 禁入區 / 通道）。"""
+        kind = req.kind
+        if kind == 'zone':
+            mlist = self.record_zone_list
+            pubs = [self.zone_list_pub]
+            save = self._save_zone_list
+            ns, color, scale, closed = 'zones', (0.6, 0.0, 1.0, 0.5), 0.02, True
+        elif kind == 'risk':
+            mlist = self.risk_zone_list
+            pubs = [self.risk_zone_list_pub]
+            save = self._save_risk_zone_list
+            ns, color, scale, closed = \
+                'risk_zones', (1.0, 0.0, 0.0, 0.8), 0.03, True
+        elif kind == 'channel':
+            mlist = self.chennal_path_array
+            pubs = [self.chennal_path_array_pub, self.channel_path_array_pub]
+            save = self._save_chennal_path_list
+            ns, color, scale, closed = \
+                'channels', (0.0, 0.7, 1.0, 0.8), 0.03, False
+        else:
+            res.success = False
+            res.message = f'未知 kind: {kind}（要 zone/risk/channel）'
+            return res
+
+        op = req.op
+        pts = [(p.x, p.y) for p in req.points]
+        min_pts = 3 if closed else 2
+
+        if op == 'delete':
+            before = len(mlist.markers)
+            mlist.markers = [m for m in mlist.markers if m.id != req.id]
+            if len(mlist.markers) == before:
+                res.success = False
+                res.message = f'找不到 {kind} id={req.id}'
+                return res
+            res.id = req.id
+            res.message = f'已刪除 {kind} id={req.id}'
+        elif op == 'add':
+            if len(pts) < min_pts:
+                res.success = False
+                res.message = f'{kind} 頂點不足（{len(pts)} < {min_pts}）'
+                return res
+            new_id = max((m.id for m in mlist.markers), default=0) + 1
+            mlist.markers.append(
+                self._marker_from_xy(ns, new_id, color, scale, pts, closed))
+            res.id = new_id
+            res.message = f'已新增 {kind} id={new_id}'
+        elif op == 'update':
+            if len(pts) < min_pts:
+                res.success = False
+                res.message = f'{kind} 頂點不足（{len(pts)} < {min_pts}）'
+                return res
+            target = next((m for m in mlist.markers if m.id == req.id), None)
+            if target is None:
+                res.success = False
+                res.message = f'找不到 {kind} id={req.id}'
+                return res
+            rebuilt = self._marker_from_xy(ns, req.id, color, scale, pts, closed)
+            target.points = rebuilt.points
+            target.header.stamp = self.get_clock().now().to_msg()
+            res.id = req.id
+            res.message = f'已更新 {kind} id={req.id}'
+        else:
+            res.success = False
+            res.message = f'未知 op: {op}（要 add/delete/update）'
+            return res
+
+        for pub in pubs:
+            pub.publish(mlist)
+        try:
+            save()
+        except Exception as e:
+            self.get_logger().warn(f'edit_zone 存檔失敗: {e}')
+
+        res.success = True
         self.get_logger().info(res.message)
         return res
 
