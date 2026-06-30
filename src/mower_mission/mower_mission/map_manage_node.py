@@ -273,21 +273,39 @@ class MapManage(Node):
             zone_map.mask_map
         )
 
+        # The image is only a RANGE LIMITER. zone_map.mask_map already holds
+        # image_free ∩ collected_freespace (see _create_image_mask_maps), so the
+        # coverage PATH is the intersection no matter which freespace we keep as
+        # base_map / display.
         self.zone_map_list = [zone_map]
-        self.base_map = free_map
+        # Risk always comes from the image so the image's risk mask applies to
+        # this mission. coverage_node resamples /risk_map_inflated onto the zone
+        # grid, and the zone grid IS the image grid, so image-grid risk is exact
+        # even when base_map keeps the (different) collected grid below.
         self.risk_map = risk_map
-        self.map_msg = free_map
 
-        self.free_space_pub.publish(free_map)
         if self.collected_free_space is None:
-            # Fallback (no collected freespace): publish the image-derived
-            # inflated map as before. When collected freespace exists, leave the
-            # latched /free_space_inflated alone — the app uses it as the
-            # pre-submit alignment background and it should stay = collected.
+            # No collected freespace -> image-only behavior (UNCHANGED): the
+            # image becomes the base / free-space / display map.
+            self.base_map = free_map
+            self.map_msg = free_map
+            self.free_space_pub.publish(free_map)
             self.free_space_inflated_pub.publish(free_space_inflated)
+            self.nav_base_map_pub.publish(free_map)
+        else:
+            # Collected freespace exists -> KEEP it. Do NOT republish
+            # /free_space, /free_space_inflated or /map_grid with the image: the
+            # latched collected layers stay (green display preserved), and
+            # base_map/map_msg keep the collected grid that create_risk_map /
+            # create_chennal_map / refresh_inflated_maps / the /map_grid timer
+            # rely on. The coverage path is still image ∩ collected via the
+            # zone map above. (Re-asserts collected as a safety net.)
+            self.base_map = self.collected_free_space
+            self.map_msg = self.collected_free_space
+
+        # Risk is published from the IMAGE in both branches.
         self.risk_map_pub.publish(risk_map)
         self.risk_map_inflated_pub.publish(risk_map_inflated)
-        self.nav_base_map_pub.publish(free_map)
 
         res.success = True
         res.message = '圖片 mask 匯入成功'
