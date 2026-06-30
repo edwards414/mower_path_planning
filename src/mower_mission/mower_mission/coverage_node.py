@@ -32,6 +32,8 @@ from geometry_msgs.msg import Point
 
 from nav_msgs.msg import OccupancyGrid, Path
 
+import cv2
+
 import numpy as np
 
 import rclpy
@@ -69,12 +71,19 @@ class CoveragePlanner(Node):
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
-        self.declare_parameter('coverage_backend', 'python')
+        self.declare_parameter('coverage_backend', 'rust')
         self.declare_parameter('allow_backend_fallback', True)
+        # Custom (image-mission) coverage: trace each zone's outer contour as a
+        # perimeter pass so the uploaded shape's outline is mowed. The app sets
+        # this true only while a custom mission is active.
+        self.declare_parameter('boundary_ring', False)
 
         self._backend = create_backend(
             name=str(self.get_parameter('coverage_backend').value),
             allow_fallback=bool(self.get_parameter('allow_backend_fallback').value),
+        )
+        self.get_logger().info(
+            f'coverage backend: {type(self._backend).__name__}'
         )
 
         qos_vol = QoSProfile(depth=1)
@@ -323,6 +332,21 @@ class CoveragePlanner(Node):
                 map_header=self.zone_map_list[i].mask_map.header
             )
 
+            # Custom missions: prepend an outer-contour perimeter pass so the
+            # uploaded shape's outline is mowed before the area is filled.
+            if bool(self.get_parameter('boundary_ring').value):
+                ring_pts = self._outer_boundary_ring(safe_map, res, ox, oy)
+                if ring_pts:
+                    ring_path = _transform_coverage_path_points(
+                        points=ring_pts,
+                        map_header=self.zone_map_list[i].mask_map.header,
+                    )
+                    coverage_path.poses = ring_path.poses + coverage_path.poses
+                    self.get_logger().info(
+                        f'zone {self.zone_map_list[i].zone_id}: added boundary '
+                        f'ring ({len(ring_pts)} pts)'
+                    )
+
             coverage_split_points = _transform_coverage_split_points(
                 points=split_pts,
                 map_header=self.zone_map_list[i].mask_map.header,
@@ -412,6 +436,27 @@ class CoveragePlanner(Node):
         empty_path.header.frame_id = 'map'
         empty_path.header.stamp = self.get_clock().now().to_msg()
         self.path_pub.publish(empty_path)
+
+    def _outer_boundary_ring(self, safe_map, res, origin_x, origin_y):
+        """Outer contour of the safe region as a closed ring of world (x, y)
+        points — used as a perimeter pass so a custom shape's outline is mowed.
+        Returns [] if no contour is found."""
+        contours, _ = cv2.findContours(
+            safe_map.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        if not contours:
+            return []
+        contour = max(contours, key=cv2.contourArea)
+        pts = [
+            (
+                origin_x + (float(col) + 0.5) * res,
+                origin_y + (float(row) + 0.5) * res,
+            )
+            for col, row in contour[:, 0, :]
+        ]
+        if len(pts) >= 2:
+            pts.append(pts[0])  # close the loop
+        return pts
 
     def _risk_map_data_for_zone(self, zone_map: OccupancyGrid):
         """Return risk data aligned to a zone map grid."""

@@ -79,7 +79,10 @@ def generate_launch_description():
     coverage_node = Node(
         package='mower_mission',
         executable='coverage_node',
-        name='coverage_node',
+        # Node name must stay 'boustrophedon_coverage': the flutter_adapter
+        # (/boustrophedon_coverage/get_parameters), the Flutter app + mower_qt
+        # (/boustrophedon_coverage/set_parameters) and system_test all target it.
+        name='boustrophedon_coverage',
         output='screen',
     )
 

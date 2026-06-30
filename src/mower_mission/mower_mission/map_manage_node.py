@@ -71,6 +71,10 @@ class MapManage(Node):
         self.create_service(
             ZoneMapList, '/get_zone_map_list_srv', self.get_zone_map_list_srv
         )
+        self.create_service(
+            Trigger, '/restore_free_space_coverage',
+            self.restore_free_space_srv,
+        )
 
         self.service_callback_group = ReentrantCallbackGroup()
         self.get_risk_zone_list_client = self.create_client(
@@ -105,6 +109,11 @@ class MapManage(Node):
         self.collected_free_space = None
         self.risk_map = None
         self.chennal_map = None
+        # Image-mission swap-out: /import_image_mask backs up the freespace zone
+        # maps + risk here so the app can restore them (discarding the image)
+        # when switching back to zigzag/spiral via /restore_free_space_coverage.
+        self._free_zone_backup = None
+        self._free_risk_backup = None
 
         self.get_chennal_path_list_client = self.create_client(
             ChennalPathList, '/get_chennal_path_list',
@@ -269,14 +278,20 @@ class MapManage(Node):
 
         free_space_inflated = self._create_free_space_inflated(free_map)
         risk_map_inflated = self._create_risk_map_inflated(risk_map)
-        zone_map.mask_map_inflated = self._create_free_space_inflated(
-            zone_map.mask_map
-        )
+        # Custom (image) coverage uses NO inflation so the swept path hugs the
+        # uploaded shape: the area is already clipped to freespace, and the
+        # outer-contour ring (coverage_node boundary_ring) traces the edge.
+        zone_map.mask_map_inflated = copy.deepcopy(zone_map.mask_map)
 
         # The image is only a RANGE LIMITER. zone_map.mask_map already holds
         # image_free ∩ collected_freespace (see _create_image_mask_maps), so the
         # coverage PATH is the intersection no matter which freespace we keep as
         # base_map / display.
+        # Back up the freespace zone maps + risk (only once, so a re-import does
+        # not clobber it) so /restore_free_space_coverage can bring them back.
+        if self._free_zone_backup is None:
+            self._free_zone_backup = self.zone_map_list
+            self._free_risk_backup = self.risk_map
         self.zone_map_list = [zone_map]
         # Risk always comes from the image so the image's risk mask applies to
         # this mission. coverage_node resamples /risk_map_inflated onto the zone
@@ -316,6 +331,30 @@ class MapManage(Node):
             f'area={area_m2:.2f} m^2, size={free_map.info.width}x'
             f'{free_map.info.height}'
         )
+        return res
+
+    def restore_free_space_srv(self, req, res):
+        """Discard the imported image coverage and restore the freespace zone
+        maps + risk active before /import_image_mask. Called by the app when it
+        switches back to zigzag/spiral so coverage uses the full freespace."""
+        if self._free_zone_backup is None:
+            res.success = True
+            res.message = '目前已是自由空間覆蓋'
+            return res
+        self.zone_map_list = self._free_zone_backup
+        self.risk_map = self._free_risk_backup
+        self._free_zone_backup = None
+        self._free_risk_backup = None
+        # Republish the freespace risk so coverage_node resamples it (the image
+        # risk was published on /risk_map_inflated during the import).
+        if self.risk_map is not None:
+            self.risk_map_pub.publish(self.risk_map)
+            risk_inflated = self._create_risk_map_inflated(self.risk_map)
+            if risk_inflated is not None:
+                self.risk_map_inflated_pub.publish(risk_inflated)
+        res.success = True
+        res.message = '已還原為完整自由空間覆蓋'
+        self.get_logger().info('restored freespace coverage (image discarded)')
         return res
 
     def _create_image_mask_maps(self, req):

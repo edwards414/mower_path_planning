@@ -51,7 +51,7 @@ def generate_launch_description():
     )
     declare_coverage_backend = DeclareLaunchArgument(
         'coverage_backend',
-        default_value='python',
+        default_value='rust',
         description='Coverage algorithm backend: "python" or "rust"',
     )
     declare_zigzag_angle_deg = DeclareLaunchArgument(
