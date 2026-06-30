@@ -1,7 +1,9 @@
 COMPOSE_DEV := docker compose -f .devcontainer/docker-compose.dev.yaml
 CONTAINER_WS := /home/$${USER_NAME:-fxrbindi}/mower_ws
 CONTAINER_ROS_ENV := cd $(CONTAINER_WS) && source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
-LOCAL_ROS_ENV := source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
+# Raise CycloneDDS participant-index limit (default ~9 exhausts domain 0 once
+# the full stack + gazebo run). Respects an externally-set CYCLONEDDS_URI.
+LOCAL_ROS_ENV := export CYCLONEDDS_URI=$${CYCLONEDDS_URI:-file://$$(pwd)/.devcontainer/cyclonedds.xml} && source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
 SIM_PACKAGES_SKIP := mower_controller mower_coverage_core
 ZIGZAG_ANGLE_DEG ?= 0.0
 

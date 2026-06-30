@@ -26,6 +26,10 @@ services:
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       ROS_LOG_DIR: /tmp/ros-logs
+      # Raise the per-host participant-index limit so the full mission stack +
+      # rosbridge + gazebo can all create participants on domain 0 (default ~9
+      # causes "Failed to find a free participant index for domain 0").
+      CYCLONEDDS_URI: file:///home/${USER_NAME}/mower_ws/.devcontainer/cyclonedds.xml
     networks:
       - rosnet
     ports:
@@ -52,6 +56,7 @@ services:
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       ROS_LOG_DIR: /tmp/ros-logs
+      CYCLONEDDS_URI: file:///home/${USER_NAME}/mower_ws/.devcontainer/cyclonedds.xml
       QT_X11_NO_MITSHM: "1"
       __GL_SYNC_TO_VBLANK: "0"
       vblank_mode: "0"
