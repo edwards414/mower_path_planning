@@ -106,6 +106,11 @@ class PathRecorder(Node):
         self.create_service(
             Trigger, '/chennal_record_end', self.chennal_record_end_srv)
 
+        # 取消目前進行中的記錄（不收尾、不加入清單）。App 的「取消」按鈕用這個，
+        # 因為 *_end 服務一律會把多邊形 append 進清單，沒有丟棄的途徑。
+        self.create_service(
+            Trigger, '/record_cancel', self.record_cancel_srv)
+
         self.create_service(
             Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
         self.create_service(
@@ -453,6 +458,45 @@ class PathRecorder(Node):
 
         res.success = True
         res.message = f'成功記錄區域結束點 #{len(self.record_zone_list.markers)}'
+        return res
+
+    def record_cancel_srv(self, req, res):
+        """取消目前進行中的記錄：停止取樣、清空 in-progress 路徑，不加入清單。"""
+        frame_id = self.get_parameter('frame_id').value
+        cancelled = None
+
+        if self.record_zone_status:
+            self.record_zone_status = False
+            self.path = Path()
+            self.path.header.frame_id = frame_id
+            self.record_zone_marker = Marker()
+            self.zone_marker_pub.publish(self.record_zone_marker)
+            cancelled = 'zone'
+
+        if self.risk_zone_status:
+            self.risk_zone_status = False
+            self.risk_path = Path()
+            self.risk_path.header.frame_id = frame_id
+            self.risk_zone_marker = Marker()
+            self.risk_zone_marker_pub.publish(self.risk_zone_marker)
+            cancelled = 'risk'
+
+        if self.chennal_record_status:
+            self.chennal_record_status = False
+            self.chennal_path = Path()
+            self.chennal_path.header.frame_id = frame_id
+            self.chennal_path_pub.publish(self.chennal_path)
+            self.channel_path_pub.publish(self.chennal_path)
+            cancelled = 'channel'
+
+        self.last_robot_pos = None
+
+        res.success = True
+        if cancelled is None:
+            res.message = '目前沒有進行中的記錄'
+        else:
+            res.message = f'已取消 {cancelled} 記錄'
+        self.get_logger().info(res.message)
         return res
 
     def save_zone_list_srv(self, req, res):
