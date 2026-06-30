@@ -3,12 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    ExecuteProcess,
-    IncludeLaunchDescription,
-    TimerAction,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -44,25 +39,18 @@ def generate_launch_description():
                     ' ready (uses saved zones in zone_record/).',
     )
 
-    # Auto-coverage sequence (only when auto_coverage:=true). Staggered timers
-    # give each async step time to finish before the next: create_free_space is
-    # async, create_risk_map needs the free space first, generate_coverage_path
-    # needs /risk_map_inflated. Gaps are generous on purpose.
-    def _trigger(service, period):
-        return TimerAction(
-            period=period,
-            actions=[ExecuteProcess(
-                cmd=['ros2', 'service', 'call', service,
-                     'std_srvs/srv/Trigger', '{}'],
-                output='screen',
-            )],
-            condition=IfCondition(auto_coverage),
-        )
-
-    auto_load_zones = _trigger('/load_zone_list', 8.0)
-    auto_free_space = _trigger('/create_free_space', 12.0)
-    auto_risk_map = _trigger('/create_risk_map', 18.0)
-    auto_coverage_path = _trigger('/generate_coverage_path', 24.0)
+    # Auto-coverage driver (only when auto_coverage:=true). A node that
+    # sequences load_zone_list -> create_free_space -> create_risk_map ->
+    # generate_coverage_path, WAITING for each async step to finish (e.g.
+    # /free_space_inflated, /risk_map_inflated) before the next — robust to
+    # node-startup timing, unlike fixed timers.
+    auto_coverage_node = Node(
+        package='mower_mission',
+        executable='auto_coverage_node',
+        name='auto_coverage',
+        output='screen',
+        condition=IfCondition(auto_coverage),
+    )
 
     # rosbridge + rosapi so the Flutter app can connect to `make mission`.
     rosbridge_launch = IncludeLaunchDescription(
@@ -151,8 +139,5 @@ def generate_launch_description():
         docking_manager_node,
         heartbeat_node,
         temp_dock_pose_publisher,
-        auto_load_zones,
-        auto_free_space,
-        auto_risk_map,
-        auto_coverage_path,
+        auto_coverage_node,
     ])
