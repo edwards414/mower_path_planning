@@ -10,10 +10,12 @@ All ROS-free conversion logic lives in `mower_mission.adapters.dto`.
 from __future__ import annotations
 
 import json
+import math
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from mower_interface.srv import ZoneMapList
 from nav_msgs.msg import OccupancyGrid
+from robot_localization.srv import ToLL
 import rclpy
 from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
@@ -56,6 +58,8 @@ _COVERAGE_PARAM_NAMES = [
     'coverage_pattern',
 ]
 _MAP_PARAM_NAMES = ['inflate_radius_m']
+
+_DATUM_PROBE_M = 10.0  # metres along map +X used to derive the datum bearing
 
 
 def _latched_qos() -> QoSProfile:
@@ -126,6 +130,19 @@ class FlutterAdapter(Node):
             ZoneMapList, '/get_zone_map_list_srv'
         )
         self.create_timer(0.5, self._publish_zone_summaries)
+
+        # Map datum (geo-reference for the satellite base map). Prefer the live
+        # navsat_transform datum (toLL); fall back to configured lat/lon when
+        # GPS is unavailable (e.g. the sim GPS has no usable fix).
+        self.declare_parameter('map_datum_fallback_lat', 23.6939508)
+        self.declare_parameter('map_datum_fallback_lon', 120.5376539)
+        self.declare_parameter('map_datum_fallback_bearing_deg', 0.0)
+        self._map_datum_pub = self.create_publisher(
+            String, '/adapter/map_datum', latched
+        )
+        self._toll_client = self.create_client(ToLL, '/toLL')
+        self._datum_locked = False
+        self.create_timer(2.0, self._publish_map_datum)
 
     # ── topic relays ─────────────────────────────────────────────────────────
 
@@ -251,6 +268,87 @@ class FlutterAdapter(Node):
             return
         summaries = zone_map_list_to_summaries(response.zone_map_list)
         self._zone_summary_pub.publish(String(data=json.dumps(summaries)))
+
+    # ── map datum (satellite geo-reference) ──────────────────────────────────
+
+    def _publish_map_datum(self) -> None:
+        # Once navsat gives a real datum we lock it (latched pub keeps it live).
+        if self._datum_locked:
+            return
+        if not self._toll_client.service_is_ready():
+            self._publish_fallback_datum()
+            return
+        req = ToLL.Request()
+        req.map_point = Point(x=0.0, y=0.0, z=0.0)
+        self._toll_client.call_async(req).add_done_callback(self._on_datum_origin)
+
+    def _on_datum_origin(self, future) -> None:
+        try:
+            res = future.result()
+        except Exception:  # noqa: BLE001
+            res = None
+        if res is None or (
+            abs(res.ll_point.latitude) < 1e-6
+            and abs(res.ll_point.longitude) < 1e-6
+        ):
+            # navsat datum not established (no valid GPS fix) → fallback.
+            self._publish_fallback_datum()
+            return
+        lat0 = res.ll_point.latitude
+        lon0 = res.ll_point.longitude
+        req = ToLL.Request()
+        req.map_point = Point(x=_DATUM_PROBE_M, y=0.0, z=0.0)
+        self._toll_client.call_async(req).add_done_callback(
+            lambda fut: self._on_datum_bearing(fut, lat0, lon0)
+        )
+
+    def _on_datum_bearing(self, future, lat0: float, lon0: float) -> None:
+        try:
+            res = future.result()
+        except Exception:  # noqa: BLE001
+            res = None
+        if res is None:
+            self._publish_fallback_datum()
+            return
+        bearing = self._bearing_to_north(
+            lat0, lon0, res.ll_point.latitude, res.ll_point.longitude
+        )
+        self._publish_datum(lat0, lon0, bearing, 'navsat')
+        self._datum_locked = True
+        self.get_logger().info(
+            f'map datum from navsat: ({lat0:.6f}, {lon0:.6f}), '
+            f'bearing {math.degrees(bearing):.1f} deg'
+        )
+
+    def _publish_fallback_datum(self) -> None:
+        lat = float(self.get_parameter('map_datum_fallback_lat').value)
+        lon = float(self.get_parameter('map_datum_fallback_lon').value)
+        bearing = math.radians(
+            float(self.get_parameter('map_datum_fallback_bearing_deg').value)
+        )
+        self._publish_datum(lat, lon, bearing, 'fallback')
+
+    def _publish_datum(
+        self, lat: float, lon: float, bearing_rad: float, source: str
+    ) -> None:
+        self._map_datum_pub.publish(String(data=json.dumps({
+            'origin_lat': lat,
+            'origin_lon': lon,
+            'bearing_rad': bearing_rad,
+            'source': source,
+        })))
+
+    @staticmethod
+    def _bearing_to_north(
+        lat0: float, lon0: float, lat1: float, lon1: float
+    ) -> float:
+        """Bearing of the map +X axis clockwise from true north, derived from
+        two toLL samples taken along map +X."""
+        mlat = 111320.0
+        mlon = 111320.0 * math.cos(math.radians(lat0))
+        east = (lon1 - lon0) * mlon
+        north = (lat1 - lat0) * mlat
+        return math.atan2(east, north)
 
 
 def main(args=None) -> None:

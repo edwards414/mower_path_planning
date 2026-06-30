@@ -71,7 +71,10 @@ def generate_launch_description():
                 output='screen',
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
                 remappings=[
-                    ('imu/data', 'imu/data'),
+                    # navsat_transform subscribes to `imu` (not `imu/data`); the
+                    # old ('imu/data','imu/data') was a no-op so it never got IMU
+                    # yaw → datum never established → toLL returned 0.
+                    ('imu', 'imu/data'),
                     ('gps/fix', 'gps/fix'),
                     ('gps/filtered', 'gps/filtered'),
                     ('odometry/gps', 'odometry/gps'),
