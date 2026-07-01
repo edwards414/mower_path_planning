@@ -73,9 +73,11 @@ class CoveragePlanner(Node):
         self.declare_parameter('coverage_pattern', 'zigzag')
         self.declare_parameter('coverage_backend', 'rust')
         self.declare_parameter('allow_backend_fallback', True)
-        # Custom (image-mission) coverage: trace each zone's outer contour as a
-        # perimeter pass so the uploaded shape's outline is mowed. The app sets
-        # this true only while a custom mission is active.
+        # boundary_ring: when true, trace each zone's outer contour as a
+        # perimeter pass (mowed before the area fill). User-controllable from the
+        # planning UI (PyQt checkbox / Flutter); custom image missions may also
+        # enable it automatically. Global flag — its value persists across
+        # missions, so reset to false for normal missions if no ring is wanted.
         self.declare_parameter('boundary_ring', False)
 
         self._backend = create_backend(

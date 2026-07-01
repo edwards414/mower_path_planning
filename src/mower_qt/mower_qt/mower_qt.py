@@ -40,6 +40,7 @@ COVERAGE_PARAMETER_DEFAULTS = {
     'unknown_as_obstacle': True,
     'inflate_radius_m': 0.55,
     'coverage_pattern': 'zigzag',
+    'boundary_ring': False,
 }
 
 DOCKING_STATUS_SERVICE = "/mower_docking_status"
@@ -467,6 +468,12 @@ class MowerQtWindow(QMainWindow):
         self.coverage_pattern_combo.setFont(QFont('Arial', 10))
         param_layout.addRow("覆蓋模式:", self.coverage_pattern_combo)
 
+        self.boundary_ring_checkbox = QCheckBox("沿 zone 邊界先割一圈")
+        self.boundary_ring_checkbox.setChecked(
+            COVERAGE_PARAMETER_DEFAULTS['boundary_ring'])
+        self.boundary_ring_checkbox.setFont(QFont('Arial', 10))
+        param_layout.addRow("boundary_ring:", self.boundary_ring_checkbox)
+
         self.zigzag_angle_spinbox = self.create_double_spinbox(
             COVERAGE_PARAMETER_DEFAULTS['zigzag_angle_deg'],
             minimum=0.0,
@@ -630,6 +637,11 @@ class MowerQtWindow(QMainWindow):
                 'type': 'string',
                 'value': self.coverage_pattern_combo.currentText(),
             },
+            {
+                'name': 'boundary_ring',
+                'type': 'bool',
+                'value': self.boundary_ring_checkbox.isChecked(),
+            },
         ]
         map_params = [
             {
@@ -685,6 +697,8 @@ class MowerQtWindow(QMainWindow):
             COVERAGE_PARAMETER_DEFAULTS['unknown_as_obstacle'])
         self.coverage_pattern_combo.setCurrentText(
             COVERAGE_PARAMETER_DEFAULTS['coverage_pattern'])
+        self.boundary_ring_checkbox.setChecked(
+            COVERAGE_PARAMETER_DEFAULTS['boundary_ring'])
         self.log_message("覆盖参数输入值已还原为当前程式预设", "INFO")
 
     def cleanup_parameter_thread(self, thread):

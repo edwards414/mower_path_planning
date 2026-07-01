@@ -56,6 +56,7 @@ _COVERAGE_PARAM_NAMES = [
     'strip_width_m',
     'unknown_as_obstacle',
     'coverage_pattern',
+    'boundary_ring',
 ]
 _MAP_PARAM_NAMES = ['inflate_radius_m']
 
