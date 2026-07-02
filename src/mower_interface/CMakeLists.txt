@@ -24,6 +24,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ImportImageMask.srv"
   "srv/ZoneSequence.srv"
   "srv/EditZone.srv"
+  "srv/SiteOp.srv"
   "action/Waypoint.action"
   DEPENDENCIES std_msgs geometry_msgs nav_msgs visualization_msgs action_msgs
 )
