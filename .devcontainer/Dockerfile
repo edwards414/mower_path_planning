@@ -136,25 +136,3 @@ RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashr
     echo "export CARGO_HOME=/usr/local/cargo" >> /home/${USER_NAME}/.bashrc && \
     echo "export RUSTUP_HOME=/usr/local/rustup" >> /home/${USER_NAME}/.bashrc && \
     echo "export PATH=/usr/local/cargo/bin:\$PATH" >> /home/${USER_NAME}/.bashrc
-
-
-##############################################
-# Stage: gps_runtime (輕量 ublox GPS driver)
-# 直接 FROM ros-base,不繼承 base/builder/dev,
-# 因此不含 CV/Rust/使用者等包袱,image 保持精簡。
-##############################################
-FROM ros:${ROS_DISTRO}-ros-base AS gps_runtime
-
-ARG ROS_DISTRO
-ENV ROS_DISTRO=${ROS_DISTRO}
-ENV DEBIAN_FRONTEND=noninteractive
-SHELL ["/bin/bash", "-c"]
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
-    ros-${ROS_DISTRO}-ublox-gps \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
-
-CMD ["bash"]

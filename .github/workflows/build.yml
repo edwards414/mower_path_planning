@@ -72,6 +72,14 @@ jobs:
             build_args: ""
             push_platforms: linux/amd64
 
+          - name: gps
+            dockerfile: Dockerfile
+            context: .
+            target: gps_runtime
+            image_suffix: -gps
+            build_args: ""
+            push_platforms: linux/arm64
+
     env:
       REPOSITORY_LC: ${{ github.repository }}
 

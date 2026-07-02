@@ -78,7 +78,7 @@ services:
 
   ublox:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
       target: gps_runtime
       args:
