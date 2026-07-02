@@ -329,25 +329,69 @@ class CoveragePlanner(Node):
                 )
                 return False
 
+            # Optionally prepend an outer-contour perimeter pass ("boundary
+            # ring") so the zone's outline is mowed before the area is filled.
+            # Merge it into the point list BEFORE transforming and re-run the
+            # same validation + connector planning as the fill: otherwise the
+            # straight jump from the ring back to the fill's start (and any ring
+            # segment grazing an inflated risk region) can cut across risk zones.
+            if bool(self.get_parameter('boundary_ring').value):
+                ring_pts = self._outer_boundary_ring(safe_map, res, ox, oy)
+                if ring_pts:
+                    coverage_pts = ring_pts + coverage_pts
+                    self.get_logger().info(
+                        f'zone {self.zone_map_list[i].zone_id}: added boundary '
+                        f'ring ({len(ring_pts)} pts); re-validating combined path'
+                    )
+                    ring_validation = self._backend.validate_path(
+                        coverage_pts, safe_map_struct
+                    )
+                    if ring_validation.invalid_segments:
+                        raw_ring_pts = coverage_pts
+                        coverage_pts, ring_conn_viz, ring_unresolved = (
+                            self._apply_connectors(
+                                coverage_pts,
+                                ring_validation.invalid_segments,
+                                safe_map_struct, i, self._backend,
+                            )
+                        )
+                        if ring_unresolved:
+                            self._publish_invalid_segments(
+                                raw_ring_pts, ring_unresolved, i,
+                                self.zone_map_list[i].mask_map.header.frame_id
+                                or 'map'
+                            )
+                            self.get_logger().error(
+                                f'zone {self.zone_map_list[i].zone_id}: '
+                                f'{len(ring_unresolved)} unsafe boundary-ring '
+                                'connector(s) unresolved; coverage path not '
+                                'published'
+                            )
+                            return False
+                        if ring_conn_viz:
+                            self._publish_connectors(
+                                ring_conn_viz, i,
+                                self.zone_map_list[i].mask_map.header.frame_id
+                                or 'map'
+                            )
+                    ring_final = self._backend.validate_path(
+                        coverage_pts, safe_map_struct
+                    )
+                    if not ring_final.valid:
+                        self._publish_invalid_segments(
+                            coverage_pts, ring_final.invalid_segments, i,
+                            self.zone_map_list[i].mask_map.header.frame_id or 'map'
+                        )
+                        self.get_logger().error(
+                            f'zone {self.zone_map_list[i].zone_id}: boundary-ring '
+                            f'path unsafe: {ring_final.message}; not published'
+                        )
+                        return False
+
             coverage_path = _transform_coverage_path_points(
                 points=coverage_pts,
                 map_header=self.zone_map_list[i].mask_map.header
             )
-
-            # Custom missions: prepend an outer-contour perimeter pass so the
-            # uploaded shape's outline is mowed before the area is filled.
-            if bool(self.get_parameter('boundary_ring').value):
-                ring_pts = self._outer_boundary_ring(safe_map, res, ox, oy)
-                if ring_pts:
-                    ring_path = _transform_coverage_path_points(
-                        points=ring_pts,
-                        map_header=self.zone_map_list[i].mask_map.header,
-                    )
-                    coverage_path.poses = ring_path.poses + coverage_path.poses
-                    self.get_logger().info(
-                        f'zone {self.zone_map_list[i].zone_id}: added boundary '
-                        f'ring ({len(ring_pts)} pts)'
-                    )
 
             coverage_split_points = _transform_coverage_split_points(
                 points=split_pts,
