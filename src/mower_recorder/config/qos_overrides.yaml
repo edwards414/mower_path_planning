@@ -1,0 +1,55 @@
+# rosbag2 QoS overrides (--qos-profile-overrides-path).
+# Latched / TRANSIENT_LOCAL publishers must be recorded with matching durability,
+# otherwise (a) the recorder captures nothing for them, and (b) on `ros2 bag play`
+# a late-joining subscriber (the app via rosbridge) never receives them.
+# These mirror what the Flutter app requests (transient_local) and what
+# flutter_adapter_node / map_manage_node publish.
+
+# -- App-facing latched layers (needed for replay -> app) --
+/adapter/map_datum:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/map_grid:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/free_space_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/risk_map_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/adapter/map_layers/chennal_map_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/robot/online:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+
+# -- Raw latched maps (engineering) --
+/risk_map_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/free_space_inflated:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+/tf_static:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: transient_local

@@ -16,3 +16,16 @@ services:
     devices:
       - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom
+
+  # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.
+  # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
+  # No USB camera yet: mediamtx.yml serves synthetic ffmpeg test patterns.
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    # When a real USB/v4l2 camera is attached, expose it to the container:
+    # devices:
+    #   - /dev/video0:/dev/video0

@@ -21,3 +21,8 @@ _*.log
 # Recorded rosbags and live logs (data, not source)
 bags/
 _rb_live.log
+
+# R2 secrets (mower_recorder)
+.env
+src/mower_recorder/config/r2.env
+.secrets/

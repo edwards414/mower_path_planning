@@ -1,0 +1,58 @@
+# mower_recorder — recording profile.
+# Check names against your robot: ros2 topic list
+
+# ── Always-on full record ────────────────────────────────────────────────────
+topics:
+  # -- App-facing (/adapter/*) --------------------------------------------------
+  # These are what the Flutter app actually subscribes to (JSON std_msgs/String,
+  # republished by flutter_adapter_node). Recording THESE means a plain
+  # `ros2 bag play` drives the app directly — no sim, no Nav2, not even
+  # flutter_adapter needed on replay. The map_layers + map_datum are latched
+  # (see qos_overrides.yaml) so a late-joining app still gets them.
+  - /adapter/robot_pose                          # geometry_msgs/PoseStamped
+  - /adapter/map_datum
+  - /adapter/coverage_settings
+  - /adapter/zone_summaries
+  - /adapter/map_layers/map_grid
+  - /adapter/map_layers/free_space_inflated
+  - /adapter/map_layers/risk_map_inflated
+  - /adapter/map_layers/chennal_map_inflated
+  - /adapter/marker_layers/coverage_path
+  - /adapter/marker_layers/zones
+  - /adapter/marker_layers/channels
+  - /adapter/marker_layers/connectors
+  - /adapter/marker_layers/invalid_segments
+  - /adapter/marker_layers/risk_zones
+  - /robot/online                                # heartbeat (latched)
+  - /battery_state
+
+  # -- Engineering / raw (for Foxglove + post-mortem, NOT needed by the app) -----
+  - /odom
+  - /tf
+  - /tf_static
+  - /cmd_vel
+  - /fix                                         # GPS (sensor_msgs/NavSatFix)
+  - /imu/data
+  - /risk_map_inflated                           # raw OccupancyGrid (latched)
+  - /free_space_inflated                         # raw OccupancyGrid (latched)
+  - /navigate_to_pose/_action/feedback
+  - /navigate_to_pose/_action/status
+  - /graph_snapshot                              # node/topic/service state
+  - /graph_events
+  - /diagnostics
+  - /rosout                                      # all node + service logs
+
+# ── Snapshot (heavy) topics — buffered in RAM, flushed only on fault ──────────
+# Cameras are NOT here: record video via the WebRTC/MediaMTX pipeline and
+# correlate by timestamp. Bag = telemetry/state; video = its own stream.
+snapshot_topics:
+  - /global_costmap/costmap
+  - /local_costmap/costmap
+  - /plan
+
+# ── Settings ─────────────────────────────────────────────────────────────────
+compression: true
+max_bag_size_mb: 512
+max_bag_duration_s: 3600
+enable_snapshot: true
+snapshot_max_cache_mb: 256

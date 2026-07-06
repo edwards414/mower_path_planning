@@ -62,6 +62,53 @@ def generate_launch_description():
         )
     )
 
+    # ── Bag recorder ─────────────────────────────────────────────────────────
+    # Auto-record every mission (mower_recorder) and auto-upload to R2 when on
+    # WiFi/dock. Turn off with record:=false.
+    record = LaunchConfiguration('record')
+    declare_record = DeclareLaunchArgument(
+        'record',
+        default_value='true',
+        description='Auto-record this mission + auto-upload to R2 '
+                    '(record:=false to skip).',
+    )
+    robot_id = LaunchConfiguration('robot_id')
+    declare_robot_id = DeclareLaunchArgument('robot_id', default_value='mower')
+    output_root = LaunchConfiguration('output_root')
+    declare_output_root = DeclareLaunchArgument(
+        'output_root', default_value='~/mower_bags')
+    r2_env_file = LaunchConfiguration('r2_env_file')
+    declare_r2_env_file = DeclareLaunchArgument(
+        'r2_env_file',
+        default_value='',
+        description="Gitignored .env with R2 creds; '' = read R2_* env vars.",
+    )
+    git_repo_dir = LaunchConfiguration('git_repo_dir')
+    declare_git_repo_dir = DeclareLaunchArgument(
+        'git_repo_dir', default_value='')
+
+    # Gracefully skip if mower_recorder isn't built.
+    recorder_entries = []
+    try:
+        recorder_entries.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('mower_recorder'),
+                    'launch', 'record.launch.py',
+                )
+            ),
+            condition=IfCondition(record),
+            launch_arguments={
+                'robot_id': robot_id,
+                'output_root': output_root,
+                'autostart': 'true',
+                'r2_env_file': r2_env_file,
+                'git_repo_dir': git_repo_dir,
+            }.items(),
+        ))
+    except Exception:
+        pass
+
     path_record_node = Node(
         package='mower_mission',
         executable='path_record_node',
@@ -133,7 +180,13 @@ def generate_launch_description():
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
         declare_auto_coverage,
+        declare_record,
+        declare_robot_id,
+        declare_output_root,
+        declare_r2_env_file,
+        declare_git_repo_dir,
         rosbridge_launch,
+        *recorder_entries,
         path_record_node,
         map_manage_node,
         coverage_node,

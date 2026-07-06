@@ -71,7 +71,7 @@ controller_server:
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: false
       #RPP
-      desired_linear_vel: 0.2
+      desired_linear_vel: 0.26   # match velocity_smoother max_velocity [0.26]; was 0.2 (~23% of straight-row throughput unused)
       lookahead_dist: 0.25
       min_lookahead_dist: 0.2
       max_lookahead_dist: 0.35

@@ -13,6 +13,7 @@
 # limitations under the License.
 import copy
 import math
+import threading
 
 from mower_interface.msg import ZoneMap
 from mower_interface.srv import GetZoneList, ImportImageMask, ZoneMapList
@@ -545,59 +546,64 @@ class MapManage(Node):
         msg.data = grid.astype(np.int8).flatten().tolist()
         return msg
 
+    def _wait_for_future(self, future, timeout_sec):
+        """Block until an rclpy Future completes; return True, or False on
+        timeout. The response is serviced by another executor thread
+        (MultiThreadedExecutor) because the client lives in a ReentrantCallback
+        group distinct from this service callback — so this wait cannot deadlock.
+        """
+        done = threading.Event()
+        future.add_done_callback(lambda _f: done.set())
+        return done.wait(timeout=timeout_sec)
+
     def create_risk_map_srv(self, req, res):
-        """創建風險地圖服務."""
+        """創建風險地圖服務（同步、回報真實成敗）."""
         self.get_logger().info('(service)create_risk_map_srv call')
-        res.success = True
-        res.message = '開始創建風險地圖，請稍候...'
-        self._start_create_risk_map_async()
+        try:
+            res.success, res.message = self._create_risk_map_sync()
+        except Exception as e:
+            self.get_logger().error(f'創建風險地圖時發生錯誤: {e}')
+            res.success = False
+            res.message = f'創建風險地圖時發生錯誤: {e}'
         return res
 
-    def _start_create_risk_map_async(self):
-        """異步創建風險地圖."""
-        try:
-            if not self.get_risk_zone_list_client.wait_for_service(timeout_sec=5.0):
-                self.get_logger().error('風險區域列表服務不可用')
-                return
+    def _create_risk_map_sync(self, timeout_sec=30.0):
+        """Build + publish the risk map, returning (success, message).
 
-            risk_zone_req = GetZoneList.Request()
-            future = self.get_risk_zone_list_client.call_async(risk_zone_req)
-            future.add_done_callback(self._handle_risk_zone_list_response)
+        Blocks on the nested /get_risk_zone_list call; safe against deadlock
+        because this service callback and the client response run in different
+        callback groups on a MultiThreadedExecutor.
+        """
+        if not self.get_risk_zone_list_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('風險區域列表服務不可用')
+            return False, '風險區域列表服務不可用'
 
-        except Exception as e:
-            self.get_logger().error(f'啟動異步創建風險地圖時發生錯誤: {e}')
+        future = self.get_risk_zone_list_client.call_async(GetZoneList.Request())
+        if not self._wait_for_future(future, timeout_sec):
+            self.get_logger().error('獲取風險區域列表逾時')
+            return False, '獲取風險區域列表逾時'
 
-    def _handle_risk_zone_list_response(self, future):
-        """處理風險區域列表服務響應/發布風險膨脹地圖."""
-        try:
-            if not future.done():
-                self.get_logger().error('獲取風險區域列表超時')
-                return
+        risk_zone_response = future.result()
+        if not risk_zone_response.success:
+            self.get_logger().error(
+                f'獲取風險區域列表失敗: {risk_zone_response.message}'
+            )
+            return False, f'獲取風險區域列表失敗: {risk_zone_response.message}'
 
-            risk_zone_response = future.result()
-
-            if not risk_zone_response.success:
-                self.get_logger().error(
-                    f'獲取風險區域列表失敗: {risk_zone_response.message}'
-                )
-                return
-
-            risk_map = self._generate_risk_map(risk_zone_response.zone_list)
-            if risk_map is None:
-                self.get_logger().error('生成風險地圖失敗')
-                return
-
-            self.risk_map = risk_map
-            risk_map_inflated = self._create_risk_map_inflated(risk_map)
-            self.risk_map_pub.publish(risk_map)
-            self.risk_map_inflated_pub.publish(risk_map_inflated)
-            self.get_logger().info(
-                f'成功創建風險地圖，包含 '
-                f'{len(risk_zone_response.zone_list.markers)} 個風險區域'
+        risk_map = self._generate_risk_map(risk_zone_response.zone_list)
+        if risk_map is None:
+            return (
+                False,
+                '生成風險地圖失敗（可能尚未建立自由空間，請先呼叫 /create_free_space）',
             )
 
-        except Exception as e:
-            self.get_logger().error(f'處理風險區域列表響應時發生錯誤: {e}')
+        self.risk_map = risk_map
+        risk_map_inflated = self._create_risk_map_inflated(risk_map)
+        self.risk_map_pub.publish(risk_map)
+        self.risk_map_inflated_pub.publish(risk_map_inflated)
+        n = len(risk_zone_response.zone_list.markers)
+        self.get_logger().info(f'成功創建風險地圖，包含 {n} 個風險區域')
+        return True, f'成功創建風險地圖，包含 {n} 個風險區域'
 
     def _generate_risk_map(self, risk_zones):
         """根據基礎地圖和風險區域生成風險地圖."""
@@ -695,45 +701,40 @@ class MapManage(Node):
             return risk_map
 
     def create_free_space_srv(self, req, res):
-        self.get_logger().info('(service)create_chennal_free_space_srv call')
-        res.success = True
-        res.message = '開始創建自由空間，請稍候...'
-        self._start_create_free_space_async()
+        """創建自由空間服務（同步、回報真實成敗）."""
+        self.get_logger().info('(service)create_free_space_srv call')
+        try:
+            res.success, res.message = self._create_free_space_sync()
+        except Exception as e:
+            self.get_logger().error(f'創建自由空間時發生錯誤: {e}')
+            res.success = False
+            res.message = f'創建自由空間時發生錯誤: {e}'
         return res
 
-    def _start_create_free_space_async(self):
-        """異步創建自由空間."""
-        try:
-            if not self.get_record_zone_list_client.wait_for_service(timeout_sec=5.0):
-                self.get_logger().error('記錄區域列表服務不可用')
-                return
+    def _create_free_space_sync(self, timeout_sec=30.0):
+        """Build + publish the collected free-space map, returning
+        (success, message). See _create_risk_map_sync for the deadlock note.
+        """
+        if not self.get_record_zone_list_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('記錄區域列表服務不可用')
+            return False, '記錄區域列表服務不可用'
 
-            zone_req = GetZoneList.Request()
-            future = self.get_record_zone_list_client.call_async(zone_req)
-            future.add_done_callback(self._handle_zone_list_response)
-
-        except Exception as e:
-            self.get_logger().error(f'啟動異步創建自由空間時發生錯誤: {e}')
-
-    def _handle_zone_list_response(self, future):
-        """處理區域列表服務響應."""
-        if not future.done():
-            self.get_logger().error('獲取記錄區域列表超時')
-            return
+        future = self.get_record_zone_list_client.call_async(GetZoneList.Request())
+        if not self._wait_for_future(future, timeout_sec):
+            self.get_logger().error('獲取記錄區域列表逾時')
+            return False, '獲取記錄區域列表逾時'
 
         zone_response = future.result()
-
         if not zone_response.success:
             self.get_logger().error(f'獲取記錄區域列表失敗: {zone_response.message}')
-            return
+            return False, f'獲取記錄區域列表失敗: {zone_response.message}'
 
         overall_freespace_map = self._create_zone_maps_and_freespace(
             zone_response.zone_list
         )
-
         if overall_freespace_map is None:
             self.get_logger().error('生成自由空間失敗')
-            return
+            return False, '生成自由空間失敗'
 
         overall_freespace_map_inflated = self._create_free_space_inflated(
             overall_freespace_map
@@ -745,9 +746,9 @@ class MapManage(Node):
         self.free_space_pub.publish(overall_freespace_map)
         self.free_space_inflated_pub.publish(overall_freespace_map_inflated)
         self.map_msg = overall_freespace_map
-        self.get_logger().info(
-            f'成功創建自由空間，包含 {len(self.zone_map_list)} 個區域'
-        )
+        n = len(self.zone_map_list)
+        self.get_logger().info(f'成功創建自由空間，包含 {n} 個區域')
+        return True, f'成功創建自由空間，包含 {n} 個區域'
 
     def _create_zone_maps_and_freespace(self, zone_list):
         self.zone_map_list = []
@@ -801,13 +802,25 @@ class MapManage(Node):
 
         mask = np.zeros((H, W), dtype=np.uint8)
         for polygon_points in zone_list.markers:
-            zone_mask = np.zeros((H, W), dtype=np.uint8)
             poly_px = []
             for pt in polygon_points.points:
                 x = int((pt.x - ox) / resolution)
                 y = int((pt.y - oy) / resolution)
                 poly_px.append([x, y])
-            poly_px = np.array([poly_px], dtype=np.int32)
+            # A polygon needs at least 3 vertices. A marker with an empty or
+            # degenerate point list makes cv2.fillPoly raise
+            # (-215) p.checkVector(2, CV_32S) >= 0, which crashes the node and
+            # leaves /free_space + /risk_map_inflated unpublished (coverage then
+            # fails with "缺少 risk_map_inflated 地圖數據"). _generate_risk_map
+            # above already guards this the same way.
+            if len(poly_px) < 3:
+                self.get_logger().warn(
+                    f'zone {polygon_points.id}: 僅 {len(poly_px)} 個點，'
+                    '無法構成多邊形，略過'
+                )
+                continue
+            zone_mask = np.zeros((H, W), dtype=np.uint8)
+            poly_px = np.array(poly_px, dtype=np.int32)
             cv2.fillPoly(zone_mask, [poly_px], 1)
             cv2.fillPoly(mask, [poly_px], 1)
             zone_occ_masked = np.where(zone_mask == 1, 0, 100)

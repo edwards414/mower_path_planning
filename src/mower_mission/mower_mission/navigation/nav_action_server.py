@@ -247,7 +247,12 @@ class NavActionServer(Node):
             self.single_path_execute_callback
         )
         self.declare_parameter('split_tolerance_m', 0.1)
-        self.declare_parameter('max_follow_segment_length_m', 4.0)
+        # 0.0 disables max-distance chopping (see _split_path_by_max_distance
+        # guard): each straight boustrophedon row runs as ONE continuous
+        # FollowPath instead of 4 m chunks that each decelerate/re-accelerate at
+        # the 0.25 m early-exit. Turn/coverage-point splits still apply. RPP only
+        # looks ~0.25 m ahead, so long rows follow fine — smoother & faster.
+        self.declare_parameter('max_follow_segment_length_m', 0.0)
         self.declare_parameter('turn_split_angle_rad', 0.8)
         self.declare_parameter('turn_split_min_segment_length_m', 0.25)
         self.declare_parameter('coverage_segment_success_distance_m', 0.25)
@@ -527,6 +532,22 @@ class NavActionServer(Node):
 
         if not path.poses:
             return self._abort_goal(goal_handle, '收到空路徑，取消導航')
+
+        # Nav2 lifecycle nodes activate asynchronously (autostart). Wait once for
+        # them before the first goToPose, else the goal silently no-ops.
+        # localizer='robot_localization' (this stack localizes via GPS+EKF, no
+        # AMCL) makes waitUntilNav2Active skip the amcl node + initial-pose waits
+        # and only wait for bt_navigator to be active.
+        if not getattr(self, '_nav2_ready', False):
+            self.get_logger().info('等待 nav2 啟用中…')
+            try:
+                self.navigator.waitUntilNav2Active(
+                    navigator='bt_navigator', localizer='robot_localization'
+                )
+                self._nav2_ready = True
+                self.get_logger().info('nav2 已啟用')
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(f'waitUntilNav2Active 失敗: {exc!r}')
 
         self.coverage_split_points = list(coverage_split_points)
         self.publish_split_points_marker()

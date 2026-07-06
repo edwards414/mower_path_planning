@@ -25,7 +25,9 @@ with ROS2 Nav2 for autonomous navigation.
 import threading
 
 from mower_interface.action import Waypoint
-from mower_interface.srv import ChannelRoute, ZoneExecPath, ZoneSequence
+from mower_interface.srv import (
+    ChannelRoute, ZoneExecPath, ZoneMapList, ZoneSequence,
+)
 from rclpy.action import ActionClient
 
 from geometry_msgs.msg import Point
@@ -49,12 +51,10 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from .coverage.path_validator import SafeMap
 from .coverage_backend.factory import create_backend
-from .utils.nav_action_client import NavActionClient
 from .utils.path_utils import (
     _transform_coverage_path_points,
     _transform_coverage_split_points,
 )
-from .utils.zone_map_client import ZoneMapClient
 
 
 
@@ -109,8 +109,10 @@ class CoveragePlanner(Node):
             SetBool,
             '/record_path_status',
         )
-        self._action_client_split_path = NavActionClient()
-        self.zone_map_client = ZoneMapClient()
+        self._zone_map_list_client = self.create_client(
+            ZoneMapList, '/get_zone_map_list_srv',
+            callback_group=self.cb_group,
+        )
 
         self._nav_follow_path_client = ActionClient(
             self, Waypoint, 'nav_action_follow_path'
@@ -204,7 +206,10 @@ class CoveragePlanner(Node):
     def generate_coverage_path(self):
         """Generate coverage path for all zones."""
         self._clear_path_visuals()
-        self.zone_map_list = self.zone_map_client.get_zone_maps()
+        resp = self._blocking_service_call(
+            self._zone_map_list_client, ZoneMapList.Request()
+        )
+        self.zone_map_list = list(resp.zone_map_list) if resp else []
         if not self.zone_map_list:
             self.get_logger().error('沒有可用的 zone map')
             return False
@@ -702,17 +707,21 @@ class CoveragePlanner(Node):
                 zone_map = zone
                 break
 
-        if zone_map:
-            self._action_client_split_path.send_goal_split_path(
-                path=zone_map.path,
-                coverage_split_points=zone_map.coverage_split_points
-            )
-            res.success = True
-            res.message = 'Goal sent to navigation action server'
-        else:
+        if not zone_map:
             res.success = False
             res.message = 'Zone not found'
+            return res
 
+        # Fire-and-forget on the executor-spun client (bounded server wait);
+        # execution runs in the background. See _send_follow_path.
+        dispatched = self._send_follow_path(
+            zone_map.path, zone_map.coverage_split_points, block=False
+        )
+        res.success = dispatched
+        res.message = (
+            'Goal sent to navigation action server'
+            if dispatched else 'nav action server 不可用'
+        )
         return res
 
     # ── Zone Sequence Mission ─────────────────────────────────────────────────
@@ -787,8 +796,8 @@ class CoveragePlanner(Node):
                 f'[{i + 1}/{len(zone_ids)}] 執行 zone {zone_id} 覆蓋路徑，'
                 f'共 {len(zone_map.path.poses)} 個路徑點'
             )
-            ok = self._blocking_action_call(
-                zone_map.path, list(zone_map.coverage_split_points)
+            ok = self._send_follow_path(
+                zone_map.path, list(zone_map.coverage_split_points), block=True
             )
             if not ok:
                 self.get_logger().error(
@@ -826,7 +835,7 @@ class CoveragePlanner(Node):
                 f'(zone {zone_id} → zone {next_zone_id})，'
                 f'共 {len(route_res.channel_path.poses)} 個路徑點'
             )
-            ok = self._blocking_action_call(route_res.channel_path, [])
+            ok = self._send_follow_path(route_res.channel_path, [], block=True)
             if not ok:
                 self.get_logger().error(
                     f'通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止'
@@ -846,11 +855,28 @@ class CoveragePlanner(Node):
                 return z
         return None
 
-    def _blocking_action_call(self, path, coverage_split_points, timeout_s=600.0):
-        """送出 nav_action_follow_path goal 並阻塞直到完成，回傳是否成功."""
+    def _send_follow_path(
+        self, path, coverage_split_points, block=False, timeout_s=600.0
+    ):
+        """Send a nav_action_follow_path goal on the executor-spun client — the
+        single source of truth for both /zone_exec_path and the zone sequence.
+
+        block=False → fire-and-forget (returns True once dispatched).
+        block=True  → wait for the result (returns the success bool).
+        """
+        if not self._nav_follow_path_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error('nav action server 不可用')
+            return False
+
         goal = Waypoint.Goal()
         goal.path = path
         goal.coverage_split_points = list(coverage_split_points)
+
+        if not block:
+            self._exec_goal_future = (
+                self._nav_follow_path_client.send_goal_async(goal)
+            )
+            return True
 
         done = threading.Event()
         result_box = [False]
@@ -867,11 +893,9 @@ class CoveragePlanner(Node):
             result_box[0] = future.result().result.success
             done.set()
 
-        self._nav_follow_path_client.wait_for_server()
         self._nav_follow_path_client.send_goal_async(goal).add_done_callback(
             _on_goal
         )
-
         if not done.wait(timeout=timeout_s):
             self.get_logger().error(f'Nav action 超時（{timeout_s:.0f}s）')
             return False
