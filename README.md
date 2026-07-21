@@ -252,6 +252,12 @@ docker compose exec lawan_node bash
 
 Development and simulation containers are defined under `.devcontainer/`.
 
+The `mediamtx` service streams the robot cameras to the app over WebRTC (WHEP).
+Start just the camera server with `docker compose up -d mediamtx`. See
+[docs/webrtc_camera_streaming.md](docs/webrtc_camera_streaming.md) for details,
+including how to attach a real camera (synthetic test patterns are used until
+one is wired).
+
 ## Testing
 
 Run the coverage planner unit tests:

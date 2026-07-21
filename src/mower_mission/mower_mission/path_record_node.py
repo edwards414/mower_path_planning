@@ -18,7 +18,8 @@ import math
 
 import os
 
-from mower_interface.srv import ChannelPathList, ChannelRoute, GetZoneList
+from mower_interface.srv import ChannelPathList, ChannelRoute, EditZone, \
+    GetZoneList, SiteOp
 
 from geometry_msgs.msg import Point, PoseStamped
 
@@ -31,11 +32,15 @@ from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 
+from std_msgs.msg import String
+
 from std_srvs.srv import Trigger
 
 from tf2_ros import Buffer, TransformListener
 
 from visualization_msgs.msg import Marker, MarkerArray
+
+from .utils import site_store
 
 from .utils.path_record_utils import path_to_marker, simplify_path
 
@@ -50,6 +55,7 @@ class PathRecorder(Node):
         self.declare_parameter('min_dt', 0.10)
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('save_dir', 'zone_record')
+        self.declare_parameter('sites_dir', '~/.mower/sites')
         self.declare_parameter('polygon_simplify_dist', 0.1)
         self.get_logger().info('path_recorder ready.')
 
@@ -106,6 +112,14 @@ class PathRecorder(Node):
         self.create_service(
             Trigger, '/chennal_record_end', self.chennal_record_end_srv)
 
+        # 取消目前進行中的記錄（不收尾、不加入清單）。App 的「取消」按鈕用這個，
+        # 因為 *_end 服務一律會把多邊形 append 進清單，沒有丟棄的途徑。
+        self.create_service(
+            Trigger, '/record_cancel', self.record_cancel_srv)
+
+        # App 直接編輯物件：新增（用 app 畫的多邊形）/ 刪除（依 id）/ 更新（依 id 換頂點）。
+        self.create_service(EditZone, '/edit_zone', self.edit_zone_srv)
+
         self.create_service(
             Trigger, '/get_record_zone_info', self.get_record_zone_info_srv)
         self.create_service(
@@ -122,6 +136,16 @@ class PathRecorder(Node):
         self.create_service(
             ChannelRoute, '/get_channel_route',
             self.get_channel_route_srv)
+
+        # 場地庫：把目前的 zone/risk/channel 集合以 WGS84 存成具名場地，
+        # 下次（map frame 重新原點化之後）載入時再投影回當下座標系。
+        self.create_service(SiteOp, '/site_op', self.site_op_srv)
+        self.site_list_pub = self.create_publisher(
+            String, '/site_list', polygon_qos)
+        self.map_datum = None
+        self.active_site = None
+        self.create_subscription(
+            String, '/adapter/map_datum', self._on_map_datum, polygon_qos)
 
         self.risk_path = Path()
         self.risk_path.header.frame_id = self.get_parameter(
@@ -161,9 +185,11 @@ class PathRecorder(Node):
             'frame_id').value
         self.chennal_path_array = MarkerArray()
 
+        self._publish_site_list()
+
     def try_initialize(self):
-        def publish_empty_markerarrays():
-            """清除 RViz 上的 zone_list 與 risk_zone_list."""
+        def clear_inprogress_markers():
+            """清除 RViz 上殘留的錄製中多邊形（/zone_markers, /risk_zone_markers）."""
             frame = self.get_parameter('frame_id').value
             now = self.get_clock().now().to_msg()
 
@@ -181,9 +207,6 @@ class PathRecorder(Node):
             delete_risk_marker.action = Marker.DELETEALL
             self.risk_zone_marker_pub.publish(delete_risk_marker)
 
-            self.record_zone_list = MarkerArray()
-            self.risk_zone_list = MarkerArray()
-
             self.get_logger().info(
                 '✅ 已清空 RViz zone_markers 與 risk_zone_markers')
 
@@ -193,7 +216,14 @@ class PathRecorder(Node):
                 self.last_robot_pos = robot_pos
                 self.initialized = True
 
-                publish_empty_markerarrays()
+                clear_inprogress_markers()
+
+                # 若 TF 可用前已有 load（場地或 zone_record），不可清掉已載入的清單。
+                if not (self.record_zone_list.markers
+                        or self.risk_zone_list.markers
+                        or self.chennal_path_array.markers):
+                    self.record_zone_list = MarkerArray()
+                    self.risk_zone_list = MarkerArray()
 
                 self.zone_list_pub.publish(self.record_zone_list)
                 self.risk_zone_list_pub.publish(self.risk_zone_list)
@@ -455,6 +485,154 @@ class PathRecorder(Node):
         res.message = f'成功記錄區域結束點 #{len(self.record_zone_list.markers)}'
         return res
 
+    def record_cancel_srv(self, req, res):
+        """取消目前進行中的記錄：停止取樣、清空 in-progress 路徑，不加入清單。"""
+        frame_id = self.get_parameter('frame_id').value
+        cancelled = None
+
+        if self.record_zone_status:
+            self.record_zone_status = False
+            self.path = Path()
+            self.path.header.frame_id = frame_id
+            self.record_zone_marker = Marker()
+            self.zone_marker_pub.publish(self.record_zone_marker)
+            cancelled = 'zone'
+
+        if self.risk_zone_status:
+            self.risk_zone_status = False
+            self.risk_path = Path()
+            self.risk_path.header.frame_id = frame_id
+            self.risk_zone_marker = Marker()
+            self.risk_zone_marker_pub.publish(self.risk_zone_marker)
+            cancelled = 'risk'
+
+        if self.chennal_record_status:
+            self.chennal_record_status = False
+            self.chennal_path = Path()
+            self.chennal_path.header.frame_id = frame_id
+            self.chennal_path_pub.publish(self.chennal_path)
+            self.channel_path_pub.publish(self.chennal_path)
+            cancelled = 'channel'
+
+        self.last_robot_pos = None
+
+        res.success = True
+        if cancelled is None:
+            res.message = '目前沒有進行中的記錄'
+        else:
+            res.message = f'已取消 {cancelled} 記錄'
+        self.get_logger().info(res.message)
+        return res
+
+    def _marker_from_xy(self, ns, marker_id, color, scale, pts, closed):
+        """以原始 (x, y) 點建立一個 LINE_STRIP marker。"""
+        marker = Marker()
+        marker.header.frame_id = self.get_parameter('frame_id').value
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = ns
+        marker.id = int(marker_id)
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = scale
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
+        marker.points = []
+        for (x, y) in pts:
+            p = Point()
+            p.x = float(x)
+            p.y = float(y)
+            p.z = 0.0
+            marker.points.append(p)
+        if closed and len(pts) >= 3:
+            fx, fy = pts[0]
+            lx, ly = pts[-1]
+            if math.hypot(fx - lx, fy - ly) > 1e-6:
+                p = Point()
+                p.x = float(fx)
+                p.y = float(fy)
+                p.z = 0.0
+                marker.points.append(p)
+        return marker
+
+    def edit_zone_srv(self, req, res):
+        """App 直接編輯物件：新增 / 刪除 / 更新（工作區 / 禁入區 / 通道）。"""
+        kind = req.kind
+        if kind == 'zone':
+            mlist = self.record_zone_list
+            pubs = [self.zone_list_pub]
+            save = self._save_zone_list
+            ns, color, scale, closed = 'zones', (0.6, 0.0, 1.0, 0.5), 0.02, True
+        elif kind == 'risk':
+            mlist = self.risk_zone_list
+            pubs = [self.risk_zone_list_pub]
+            save = self._save_risk_zone_list
+            ns, color, scale, closed = \
+                'risk_zones', (1.0, 0.0, 0.0, 0.8), 0.03, True
+        elif kind == 'channel':
+            mlist = self.chennal_path_array
+            pubs = [self.chennal_path_array_pub, self.channel_path_array_pub]
+            save = self._save_chennal_path_list
+            ns, color, scale, closed = \
+                'channels', (0.0, 0.7, 1.0, 0.8), 0.03, False
+        else:
+            res.success = False
+            res.message = f'未知 kind: {kind}（要 zone/risk/channel）'
+            return res
+
+        op = req.op
+        pts = [(p.x, p.y) for p in req.points]
+        min_pts = 3 if closed else 2
+
+        if op == 'delete':
+            before = len(mlist.markers)
+            mlist.markers = [m for m in mlist.markers if m.id != req.id]
+            if len(mlist.markers) == before:
+                res.success = False
+                res.message = f'找不到 {kind} id={req.id}'
+                return res
+            res.id = req.id
+            res.message = f'已刪除 {kind} id={req.id}'
+        elif op == 'add':
+            if len(pts) < min_pts:
+                res.success = False
+                res.message = f'{kind} 頂點不足（{len(pts)} < {min_pts}）'
+                return res
+            new_id = max((m.id for m in mlist.markers), default=0) + 1
+            mlist.markers.append(
+                self._marker_from_xy(ns, new_id, color, scale, pts, closed))
+            res.id = new_id
+            res.message = f'已新增 {kind} id={new_id}'
+        elif op == 'update':
+            if len(pts) < min_pts:
+                res.success = False
+                res.message = f'{kind} 頂點不足（{len(pts)} < {min_pts}）'
+                return res
+            target = next((m for m in mlist.markers if m.id == req.id), None)
+            if target is None:
+                res.success = False
+                res.message = f'找不到 {kind} id={req.id}'
+                return res
+            rebuilt = self._marker_from_xy(ns, req.id, color, scale, pts, closed)
+            target.points = rebuilt.points
+            target.header.stamp = self.get_clock().now().to_msg()
+            res.id = req.id
+            res.message = f'已更新 {kind} id={req.id}'
+        else:
+            res.success = False
+            res.message = f'未知 op: {op}（要 add/delete/update）'
+            return res
+
+        for pub in pubs:
+            pub.publish(mlist)
+        try:
+            save()
+        except Exception as e:
+            self.get_logger().warn(f'edit_zone 存檔失敗: {e}')
+        self._update_active_site()
+
+        res.success = True
+        self.get_logger().info(res.message)
+        return res
+
     def save_zone_list_srv(self, req, res):
         """合并的区域列表保存服务."""
         success_count = 0
@@ -485,10 +663,21 @@ class PathRecorder(Node):
             res.success = False
             res.message = f'储存列表失败: {"; ".join(error_messages)}'
 
+        # 注意：不同步 active site 檔 — /save_zone_list 在每次錄製結束後都會被
+        # app 呼叫，若同步會把「錄新場地」的內容默默寫進舊場地。場地檔只在
+        # /site_op save 與 /edit_zone（明確編輯場地物件）時更新。
+
         return res
 
     def load_zone_list_srv(self, req, res):
         """合并的区域列表加载服务."""
+        if (self.record_zone_status or self.risk_zone_status
+                or self.chennal_record_status):
+            # 載入會重設 id 計數器，會跟進行中錄製的 marker id 撞號。
+            res.success = False
+            res.message = '錄製進行中，請先結束或取消錄製再載入'
+            return res
+
         success_count = 0
         error_messages = []
 
@@ -521,7 +710,252 @@ class PathRecorder(Node):
             res.success = False
             res.message = f'載入列表失敗: {"; ".join(error_messages)}'
 
+        self._restore_id_counters()
+
         return res
+
+    # ── 場地庫（named sites, WGS84-anchored）───────────────────────────────────
+
+    def _on_map_datum(self, msg):
+        try:
+            data = json.loads(msg.data)
+            self.map_datum = {
+                'lat': float(data['origin_lat']),
+                'lon': float(data['origin_lon']),
+                'bearing_rad': float(data.get('bearing_rad', 0.0)),
+                'source': data.get('source', ''),
+            }
+        except (ValueError, KeyError, TypeError) as e:
+            self.get_logger().warn(f'解析 /adapter/map_datum 失敗: {e}')
+
+    def _sites_dir(self):
+        return os.path.expanduser(self.get_parameter('sites_dir').value)
+
+    def _publish_site_list(self):
+        payload = site_store.list_sites(
+            self._sites_dir(), active=self.active_site)
+        self.site_list_pub.publish(
+            String(data=json.dumps(payload, ensure_ascii=False)))
+        return payload
+
+    def _restore_id_counters(self):
+        """載入後把遞增計數器對齊清單裡的最大 id，避免之後錄製撞號."""
+        self.record_zone_id = max(
+            (m.id for m in self.record_zone_list.markers), default=0)
+        self.risk_zone_id = max(
+            (m.id for m in self.risk_zone_list.markers), default=0)
+        self.chennal_record_id = max(
+            (m.id for m in self.chennal_path_array.markers), default=0)
+
+    def _site_state_objects(self):
+        """把 in-memory MarkerArray 轉成 site_store 用的純 dict."""
+        def polys(mlist):
+            return [{'id': m.id, 'ns': m.ns,
+                     'points': [[p.x, p.y] for p in m.points]}
+                    for m in mlist.markers]
+
+        channels = [{'id': m.id, 'ns': m.ns,
+                     'points': [[p.x, p.y] for p in m.points],
+                     'color': {'r': m.color.r, 'g': m.color.g,
+                               'b': m.color.b, 'a': m.color.a},
+                     'scale': m.scale.x}
+                    for m in self.chennal_path_array.markers]
+        return (polys(self.record_zone_list),
+                polys(self.risk_zone_list),
+                channels)
+
+    def _apply_site_objects(self, zones, risk_zones, channels):
+        """用 site 內容（已轉回當下 map frame 的 XY）重建三個 MarkerArray.
+
+        先在區域變數建好三份再一次替換 self.*：壞掉的場地檔在建構途中丟
+        例外時，不會留下「一半新一半舊」的 in-memory 狀態。
+        """
+        zone_list = MarkerArray()
+        for o in zones:
+            zone_list.markers.append(self._marker_from_xy(
+                o['ns'], o['id'], (0.6, 0.0, 1.0, 0.5), 0.02,
+                o['points'], True))
+
+        risk_list = MarkerArray()
+        for o in risk_zones:
+            risk_list.markers.append(self._marker_from_xy(
+                o['ns'], o['id'], (1.0, 0.0, 0.0, 0.8), 0.03,
+                o['points'], True))
+
+        channel_array = MarkerArray()
+        for o in channels:
+            c = {'r': 0.0, 'g': 1.0, 'b': 0.0, 'a': 0.8}
+            c.update(o.get('color') or {})
+            channel_array.markers.append(self._marker_from_xy(
+                o['ns'], o['id'], (c['r'], c['g'], c['b'], c['a']),
+                o.get('scale', 0.1), o['points'], False))
+
+        self.record_zone_list = zone_list
+        self.risk_zone_list = risk_list
+        self.chennal_path_array = channel_array
+
+    def _update_active_site(self):
+        """編輯物件後同步覆寫啟用中的場地檔，讓場地與工作狀態一致."""
+        if not self.active_site:
+            return
+        if self.map_datum is None:
+            self.get_logger().warn('無 datum，跳過場地檔同步')
+            return
+        try:
+            created = None
+            existing_source = None
+            try:
+                existing = site_store.read_site(
+                    self._sites_dir(), self.active_site)
+                created = existing.get('created_at')
+                existing_source = existing.get('datum', {}).get('source')
+            except (OSError, ValueError):
+                pass
+            # datum 來源改變（如開機後 fallback → navsat 鎖定）時不自動覆寫：
+            # 檔內的 WGS84 是唯一副本，寧可略過同步也不能寫入位移後的座標。
+            # 使用者可用 /site_op save 明確以新 datum 重存。
+            if (existing_source is not None
+                    and existing_source != self.map_datum.get('source', '')):
+                self.get_logger().warn(
+                    f'datum 來源已由 {existing_source} 變為 '
+                    f'{self.map_datum.get("source", "")}，跳過場地「'
+                    f'{self.active_site}」自動同步')
+                return
+            zones, risks, channels = self._site_state_objects()
+            site = site_store.build_site(
+                self.active_site, self.map_datum, zones, risks, channels,
+                created_at=created)
+            site_store.write_site(self._sites_dir(), site)
+            self._publish_site_list()
+        except Exception as e:
+            self.get_logger().warn(f'場地檔同步失敗: {e}')
+
+    def site_op_srv(self, req, res):
+        """場地庫操作：save / load / delete / rename / list."""
+        op = req.op
+        name = site_store.valid_name(req.name)
+
+        try:
+            if op == 'list':
+                res.success = True
+                res.message = '成功取得場地清單'
+            elif name is None:
+                res.success = False
+                res.message = f'場地名稱無效: {req.name!r}'
+            elif op == 'save':
+                res.success, res.message = self._site_save(name)
+            elif op == 'load':
+                res.success, res.message = self._site_load(name)
+            elif op == 'delete':
+                res.success, res.message = self._site_delete(name)
+            elif op == 'rename':
+                res.success, res.message = self._site_rename(
+                    name, site_store.valid_name(req.new_name))
+            else:
+                res.success = False
+                res.message = f'未知 op: {op}（要 save/load/delete/rename/list）'
+        except Exception as e:
+            res.success = False
+            res.message = f'場地操作失敗: {e}'
+            self.get_logger().error(res.message)
+
+        res.sites_json = json.dumps(
+            self._publish_site_list(), ensure_ascii=False)
+        if res.success:
+            self.get_logger().info(res.message)
+        return res
+
+    def _site_save(self, name):
+        if self.map_datum is None:
+            return False, 'datum 尚未就緒（等待 /adapter/map_datum），無法儲存場地'
+        zones, risks, channels = self._site_state_objects()
+        if not (zones or risks or channels):
+            return False, '目前沒有任何物件可存成場地'
+        created = None
+        try:
+            created = site_store.read_site(
+                self._sites_dir(), name).get('created_at')
+        except (OSError, ValueError):
+            pass
+        site = site_store.build_site(
+            name, self.map_datum, zones, risks, channels, created_at=created)
+        site_store.write_site(self._sites_dir(), site)
+        self.active_site = name
+        return True, (
+            f'已儲存場地「{name}」'
+            f'（{len(zones)} 工作區 / {len(risks)} 禁區 / {len(channels)} 通道，'
+            f'datum: {self.map_datum["source"]}）')
+
+    def _site_load(self, name):
+        if self.map_datum is None:
+            return False, 'datum 尚未就緒（等待 /adapter/map_datum），無法載入場地'
+        if (self.record_zone_status or self.risk_zone_status
+                or self.chennal_record_status):
+            # 載入會重設 id 計數器，會跟進行中錄製的 marker id 撞號。
+            return False, '錄製進行中，請先結束或取消錄製再載入場地'
+        if not os.path.exists(site_store.site_path(self._sites_dir(), name)):
+            return False, f'找不到場地「{name}」'
+        site = site_store.read_site(self._sites_dir(), name)
+
+        # datum 來源必須一致：用 fallback datum 投影 RTK 存的場地（或反過來）
+        # 會把區域放到錯的位置，之後的自動同步還會把檔案裡的真值改寫壞。
+        site_source = site.get('datum', {}).get('source', '')
+        cur_source = self.map_datum.get('source', '')
+        if site_source != cur_source:
+            if cur_source != 'navsat':
+                return False, (
+                    f'GPS 尚未定位（目前 datum 為 {cur_source or "未知"}），'
+                    f'此場地以 {site_source} datum 儲存 — 請等定位完成再啟用')
+            return False, (
+                f'此場地以 {site_source} datum 儲存，與目前 {cur_source} '
+                f'不相容 — 請在相同定位條件下重新錄製或另存')
+
+        zones, risks, channels = site_store.site_to_xy(site, self.map_datum)
+        self._apply_site_objects(zones, risks, channels)
+        self._restore_id_counters()
+
+        self.zone_list_pub.publish(self.record_zone_list)
+        self.risk_zone_list_pub.publish(self.risk_zone_list)
+        self.chennal_path_array_pub.publish(self.chennal_path_array)
+        self.channel_path_array_pub.publish(self.chennal_path_array)
+
+        # 工作檔（zone_record/*.json）同步成剛載入的場地，維持 auto_coverage 一致。
+        synced = (self._save_zone_list()
+                  and self._save_risk_zone_list()
+                  and self._save_chennal_path_list())
+        self.active_site = name
+
+        msg = (f'已載入場地「{name}」'
+               f'（{len(zones)} 工作區 / {len(risks)} 禁區 / {len(channels)} 通道）')
+        if not synced:
+            msg += '；警告：工作檔（zone_record）同步失敗，重開機後會回到舊內容'
+        site_datum = site.get('datum', {})
+        if 'lat' in site_datum and 'lon' in site_datum:
+            dist_m = math.hypot(*site_store.xy_from_ll(
+                site_datum['lat'], site_datum['lon'], self.map_datum))
+            if dist_m > 1000.0:
+                msg += f'；注意：場地原點距目前 datum 約 {dist_m / 1000.0:.1f} km'
+        return True, msg
+
+    def _site_delete(self, name):
+        if not os.path.exists(site_store.site_path(self._sites_dir(), name)):
+            return False, f'找不到場地「{name}」'
+        site_store.delete_site(self._sites_dir(), name)
+        if self.active_site == name:
+            self.active_site = None
+        return True, f'已刪除場地「{name}」'
+
+    def _site_rename(self, name, new_name):
+        if new_name is None:
+            return False, '新場地名稱無效'
+        if not os.path.exists(site_store.site_path(self._sites_dir(), name)):
+            return False, f'找不到場地「{name}」'
+        if os.path.exists(site_store.site_path(self._sites_dir(), new_name)):
+            return False, f'場地「{new_name}」已存在'
+        site_store.rename_site(self._sites_dir(), name, new_name)
+        if self.active_site == name:
+            self.active_site = new_name
+        return True, f'已將場地「{name}」改名為「{new_name}」'
 
     def risk_zone_start_srv(self, req, res):
         """風險區域開始記錄服務."""

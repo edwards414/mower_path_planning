@@ -25,12 +25,16 @@ with ROS2 Nav2 for autonomous navigation.
 import threading
 
 from mower_interface.action import Waypoint
-from mower_interface.srv import ChannelRoute, ZoneExecPath, ZoneSequence
+from mower_interface.srv import (
+    ChannelRoute, ZoneExecPath, ZoneMapList, ZoneSequence,
+)
 from rclpy.action import ActionClient
 
 from geometry_msgs.msg import Point
 
 from nav_msgs.msg import OccupancyGrid, Path
+
+import cv2
 
 import numpy as np
 
@@ -47,12 +51,10 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from .coverage.path_validator import SafeMap
 from .coverage_backend.factory import create_backend
-from .utils.nav_action_client import NavActionClient
 from .utils.path_utils import (
     _transform_coverage_path_points,
     _transform_coverage_split_points,
 )
-from .utils.zone_map_client import ZoneMapClient
 
 
 
@@ -69,12 +71,21 @@ class CoveragePlanner(Node):
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
-        self.declare_parameter('coverage_backend', 'python')
+        self.declare_parameter('coverage_backend', 'rust')
         self.declare_parameter('allow_backend_fallback', True)
+        # boundary_ring: when true, trace each zone's outer contour as a
+        # perimeter pass (mowed before the area fill). User-controllable from the
+        # planning UI (PyQt checkbox / Flutter); custom image missions may also
+        # enable it automatically. Global flag — its value persists across
+        # missions, so reset to false for normal missions if no ring is wanted.
+        self.declare_parameter('boundary_ring', False)
 
         self._backend = create_backend(
             name=str(self.get_parameter('coverage_backend').value),
             allow_fallback=bool(self.get_parameter('allow_backend_fallback').value),
+        )
+        self.get_logger().info(
+            f'coverage backend: {type(self._backend).__name__}'
         )
 
         qos_vol = QoSProfile(depth=1)
@@ -98,8 +109,10 @@ class CoveragePlanner(Node):
             SetBool,
             '/record_path_status',
         )
-        self._action_client_split_path = NavActionClient()
-        self.zone_map_client = ZoneMapClient()
+        self._zone_map_list_client = self.create_client(
+            ZoneMapList, '/get_zone_map_list_srv',
+            callback_group=self.cb_group,
+        )
 
         self._nav_follow_path_client = ActionClient(
             self, Waypoint, 'nav_action_follow_path'
@@ -193,7 +206,10 @@ class CoveragePlanner(Node):
     def generate_coverage_path(self):
         """Generate coverage path for all zones."""
         self._clear_path_visuals()
-        self.zone_map_list = self.zone_map_client.get_zone_maps()
+        resp = self._blocking_service_call(
+            self._zone_map_list_client, ZoneMapList.Request()
+        )
+        self.zone_map_list = list(resp.zone_map_list) if resp else []
         if not self.zone_map_list:
             self.get_logger().error('沒有可用的 zone map')
             return False
@@ -318,6 +334,65 @@ class CoveragePlanner(Node):
                 )
                 return False
 
+            # Optionally prepend an outer-contour perimeter pass ("boundary
+            # ring") so the zone's outline is mowed before the area is filled.
+            # Merge it into the point list BEFORE transforming and re-run the
+            # same validation + connector planning as the fill: otherwise the
+            # straight jump from the ring back to the fill's start (and any ring
+            # segment grazing an inflated risk region) can cut across risk zones.
+            if bool(self.get_parameter('boundary_ring').value):
+                ring_pts = self._outer_boundary_ring(safe_map, res, ox, oy)
+                if ring_pts:
+                    coverage_pts = ring_pts + coverage_pts
+                    self.get_logger().info(
+                        f'zone {self.zone_map_list[i].zone_id}: added boundary '
+                        f'ring ({len(ring_pts)} pts); re-validating combined path'
+                    )
+                    ring_validation = self._backend.validate_path(
+                        coverage_pts, safe_map_struct
+                    )
+                    if ring_validation.invalid_segments:
+                        raw_ring_pts = coverage_pts
+                        coverage_pts, ring_conn_viz, ring_unresolved = (
+                            self._apply_connectors(
+                                coverage_pts,
+                                ring_validation.invalid_segments,
+                                safe_map_struct, i, self._backend,
+                            )
+                        )
+                        if ring_unresolved:
+                            self._publish_invalid_segments(
+                                raw_ring_pts, ring_unresolved, i,
+                                self.zone_map_list[i].mask_map.header.frame_id
+                                or 'map'
+                            )
+                            self.get_logger().error(
+                                f'zone {self.zone_map_list[i].zone_id}: '
+                                f'{len(ring_unresolved)} unsafe boundary-ring '
+                                'connector(s) unresolved; coverage path not '
+                                'published'
+                            )
+                            return False
+                        if ring_conn_viz:
+                            self._publish_connectors(
+                                ring_conn_viz, i,
+                                self.zone_map_list[i].mask_map.header.frame_id
+                                or 'map'
+                            )
+                    ring_final = self._backend.validate_path(
+                        coverage_pts, safe_map_struct
+                    )
+                    if not ring_final.valid:
+                        self._publish_invalid_segments(
+                            coverage_pts, ring_final.invalid_segments, i,
+                            self.zone_map_list[i].mask_map.header.frame_id or 'map'
+                        )
+                        self.get_logger().error(
+                            f'zone {self.zone_map_list[i].zone_id}: boundary-ring '
+                            f'path unsafe: {ring_final.message}; not published'
+                        )
+                        return False
+
             coverage_path = _transform_coverage_path_points(
                 points=coverage_pts,
                 map_header=self.zone_map_list[i].mask_map.header
@@ -412,6 +487,27 @@ class CoveragePlanner(Node):
         empty_path.header.frame_id = 'map'
         empty_path.header.stamp = self.get_clock().now().to_msg()
         self.path_pub.publish(empty_path)
+
+    def _outer_boundary_ring(self, safe_map, res, origin_x, origin_y):
+        """Outer contour of the safe region as a closed ring of world (x, y)
+        points — used as a perimeter pass so a custom shape's outline is mowed.
+        Returns [] if no contour is found."""
+        contours, _ = cv2.findContours(
+            safe_map.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        if not contours:
+            return []
+        contour = max(contours, key=cv2.contourArea)
+        pts = [
+            (
+                origin_x + (float(col) + 0.5) * res,
+                origin_y + (float(row) + 0.5) * res,
+            )
+            for col, row in contour[:, 0, :]
+        ]
+        if len(pts) >= 2:
+            pts.append(pts[0])  # close the loop
+        return pts
 
     def _risk_map_data_for_zone(self, zone_map: OccupancyGrid):
         """Return risk data aligned to a zone map grid."""
@@ -611,17 +707,21 @@ class CoveragePlanner(Node):
                 zone_map = zone
                 break
 
-        if zone_map:
-            self._action_client_split_path.send_goal_split_path(
-                path=zone_map.path,
-                coverage_split_points=zone_map.coverage_split_points
-            )
-            res.success = True
-            res.message = 'Goal sent to navigation action server'
-        else:
+        if not zone_map:
             res.success = False
             res.message = 'Zone not found'
+            return res
 
+        # Fire-and-forget on the executor-spun client (bounded server wait);
+        # execution runs in the background. See _send_follow_path.
+        dispatched = self._send_follow_path(
+            zone_map.path, zone_map.coverage_split_points, block=False
+        )
+        res.success = dispatched
+        res.message = (
+            'Goal sent to navigation action server'
+            if dispatched else 'nav action server 不可用'
+        )
         return res
 
     # ── Zone Sequence Mission ─────────────────────────────────────────────────
@@ -696,8 +796,8 @@ class CoveragePlanner(Node):
                 f'[{i + 1}/{len(zone_ids)}] 執行 zone {zone_id} 覆蓋路徑，'
                 f'共 {len(zone_map.path.poses)} 個路徑點'
             )
-            ok = self._blocking_action_call(
-                zone_map.path, list(zone_map.coverage_split_points)
+            ok = self._send_follow_path(
+                zone_map.path, list(zone_map.coverage_split_points), block=True
             )
             if not ok:
                 self.get_logger().error(
@@ -735,7 +835,7 @@ class CoveragePlanner(Node):
                 f'(zone {zone_id} → zone {next_zone_id})，'
                 f'共 {len(route_res.channel_path.poses)} 個路徑點'
             )
-            ok = self._blocking_action_call(route_res.channel_path, [])
+            ok = self._send_follow_path(route_res.channel_path, [], block=True)
             if not ok:
                 self.get_logger().error(
                     f'通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止'
@@ -755,11 +855,28 @@ class CoveragePlanner(Node):
                 return z
         return None
 
-    def _blocking_action_call(self, path, coverage_split_points, timeout_s=600.0):
-        """送出 nav_action_follow_path goal 並阻塞直到完成，回傳是否成功."""
+    def _send_follow_path(
+        self, path, coverage_split_points, block=False, timeout_s=600.0
+    ):
+        """Send a nav_action_follow_path goal on the executor-spun client — the
+        single source of truth for both /zone_exec_path and the zone sequence.
+
+        block=False → fire-and-forget (returns True once dispatched).
+        block=True  → wait for the result (returns the success bool).
+        """
+        if not self._nav_follow_path_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error('nav action server 不可用')
+            return False
+
         goal = Waypoint.Goal()
         goal.path = path
         goal.coverage_split_points = list(coverage_split_points)
+
+        if not block:
+            self._exec_goal_future = (
+                self._nav_follow_path_client.send_goal_async(goal)
+            )
+            return True
 
         done = threading.Event()
         result_box = [False]
@@ -776,11 +893,9 @@ class CoveragePlanner(Node):
             result_box[0] = future.result().result.success
             done.set()
 
-        self._nav_follow_path_client.wait_for_server()
         self._nav_follow_path_client.send_goal_async(goal).add_done_callback(
             _on_goal
         )
-
         if not done.wait(timeout=timeout_s):
             self.get_logger().error(f'Nav action 超時（{timeout_s:.0f}s）')
             return False

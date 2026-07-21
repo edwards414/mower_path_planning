@@ -78,8 +78,9 @@ services:
 
   ublox:
     build:
-      context: .
-      dockerfile: Dockerfile.gps
+      context: ..
+      dockerfile: Dockerfile
+      target: gps_runtime
       args:
         ROS_DISTRO: ${ROS_DISTRO:-jazzy}
     container_name: ublox_ros2

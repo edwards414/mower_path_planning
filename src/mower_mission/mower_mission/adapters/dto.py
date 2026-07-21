@@ -104,6 +104,7 @@ def params_to_coverage_settings(coverage_params: dict[str, Any],
         'inflateRadiusM': map_params.get('inflate_radius_m'),
         'unknownAsObstacle': coverage_params.get('unknown_as_obstacle'),
         'coveragePattern': coverage_params.get('coverage_pattern'),
+        'boundaryRing': coverage_params.get('boundary_ring'),
     }
 
 

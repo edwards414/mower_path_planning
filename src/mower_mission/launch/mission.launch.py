@@ -3,12 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    ExecuteProcess,
-    IncludeLaunchDescription,
-    TimerAction,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -44,25 +39,18 @@ def generate_launch_description():
                     ' ready (uses saved zones in zone_record/).',
     )
 
-    # Auto-coverage sequence (only when auto_coverage:=true). Staggered timers
-    # give each async step time to finish before the next: create_free_space is
-    # async, create_risk_map needs the free space first, generate_coverage_path
-    # needs /risk_map_inflated. Gaps are generous on purpose.
-    def _trigger(service, period):
-        return TimerAction(
-            period=period,
-            actions=[ExecuteProcess(
-                cmd=['ros2', 'service', 'call', service,
-                     'std_srvs/srv/Trigger', '{}'],
-                output='screen',
-            )],
-            condition=IfCondition(auto_coverage),
-        )
-
-    auto_load_zones = _trigger('/load_zone_list', 8.0)
-    auto_free_space = _trigger('/create_free_space', 12.0)
-    auto_risk_map = _trigger('/create_risk_map', 18.0)
-    auto_coverage_path = _trigger('/generate_coverage_path', 24.0)
+    # Auto-coverage driver (only when auto_coverage:=true). A node that
+    # sequences load_zone_list -> create_free_space -> create_risk_map ->
+    # generate_coverage_path, WAITING for each async step to finish (e.g.
+    # /free_space_inflated, /risk_map_inflated) before the next — robust to
+    # node-startup timing, unlike fixed timers.
+    auto_coverage_node = Node(
+        package='mower_mission',
+        executable='auto_coverage_node',
+        name='auto_coverage',
+        output='screen',
+        condition=IfCondition(auto_coverage),
+    )
 
     # rosbridge + rosapi so the Flutter app can connect to `make mission`.
     rosbridge_launch = IncludeLaunchDescription(
@@ -73,6 +61,53 @@ def generate_launch_description():
             )
         )
     )
+
+    # ── Bag recorder ─────────────────────────────────────────────────────────
+    # Auto-record every mission (mower_recorder) and auto-upload to R2 when on
+    # WiFi/dock. Turn off with record:=false.
+    record = LaunchConfiguration('record')
+    declare_record = DeclareLaunchArgument(
+        'record',
+        default_value='true',
+        description='Auto-record this mission + auto-upload to R2 '
+                    '(record:=false to skip).',
+    )
+    robot_id = LaunchConfiguration('robot_id')
+    declare_robot_id = DeclareLaunchArgument('robot_id', default_value='mower')
+    output_root = LaunchConfiguration('output_root')
+    declare_output_root = DeclareLaunchArgument(
+        'output_root', default_value='~/mower_bags')
+    r2_env_file = LaunchConfiguration('r2_env_file')
+    declare_r2_env_file = DeclareLaunchArgument(
+        'r2_env_file',
+        default_value='',
+        description="Gitignored .env with R2 creds; '' = read R2_* env vars.",
+    )
+    git_repo_dir = LaunchConfiguration('git_repo_dir')
+    declare_git_repo_dir = DeclareLaunchArgument(
+        'git_repo_dir', default_value='')
+
+    # Gracefully skip if mower_recorder isn't built.
+    recorder_entries = []
+    try:
+        recorder_entries.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory('mower_recorder'),
+                    'launch', 'record.launch.py',
+                )
+            ),
+            condition=IfCondition(record),
+            launch_arguments={
+                'robot_id': robot_id,
+                'output_root': output_root,
+                'autostart': 'true',
+                'r2_env_file': r2_env_file,
+                'git_repo_dir': git_repo_dir,
+            }.items(),
+        ))
+    except Exception:
+        pass
 
     path_record_node = Node(
         package='mower_mission',
@@ -91,7 +126,10 @@ def generate_launch_description():
     coverage_node = Node(
         package='mower_mission',
         executable='coverage_node',
-        name='coverage_node',
+        # Node name must stay 'boustrophedon_coverage': the flutter_adapter
+        # (/boustrophedon_coverage/get_parameters), the Flutter app + mower_qt
+        # (/boustrophedon_coverage/set_parameters) and system_test all target it.
+        name='boustrophedon_coverage',
         output='screen',
     )
 
@@ -142,7 +180,13 @@ def generate_launch_description():
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
         declare_auto_coverage,
+        declare_record,
+        declare_robot_id,
+        declare_output_root,
+        declare_r2_env_file,
+        declare_git_repo_dir,
         rosbridge_launch,
+        *recorder_entries,
         path_record_node,
         map_manage_node,
         coverage_node,
@@ -151,8 +195,5 @@ def generate_launch_description():
         docking_manager_node,
         heartbeat_node,
         temp_dock_pose_publisher,
-        auto_load_zones,
-        auto_free_space,
-        auto_risk_map,
-        auto_coverage_path,
+        auto_coverage_node,
     ])

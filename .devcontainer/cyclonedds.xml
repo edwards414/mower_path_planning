@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS config that raises the per-host participant-index limit so a large
+  node graph (full mission stack + rosbridge + gazebo on the shared rosnet) can
+  all create participants on domain 0. The default MaxAutoParticipantIndex (~9)
+  is far too low and causes "Failed to find a free participant index for
+  domain 0" once many nodes run. Network discovery is kept (so the app via
+  rosbridge and gazebo still interoperate).
+
+  Used via CYCLONEDDS_URI (set in docker-compose.dev.yaml).
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <Discovery>
+      <MaxAutoParticipantIndex>250</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
