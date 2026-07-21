@@ -1,0 +1,37 @@
+# Robot deployment: pulls the prebuilt runtime image from GHCR (no local build).
+#
+# Usage on the target host (self-contained; only this folder is needed):
+#   docker login ghcr.io            # once, if the image is private
+#   docker compose pull
+#   docker compose up -d
+#
+# The image is the `runtime` target (linux/arm64) published to GHCR by
+# .github/workflows/build.yml. mediamtx.yml lives alongside this file.
+services:
+  lawan_node:
+    image: ghcr.io/edwards414/mower_path_planning:main
+    pull_policy: always
+    environment:
+      # - ROS_DOMAIN_ID = 0
+      - ROS_LOCALHOST_ONLY=1
+    network_mode: host
+    ipc: host
+    pid: host
+    stdin_open: true
+    tty: true
+    devices:
+      - /dev/imu_usb:/dev/imu_usb
+      - /dev/stmcom:/dev/stmcom
+
+  # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.
+  # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
+  # No USB camera yet: mediamtx.yml serves synthetic ffmpeg test patterns.
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    # When a real USB/v4l2 camera is attached, expose it to the container:
+    # devices:
+    #   - /dev/video0:/dev/video0
