@@ -28,9 +28,12 @@ extern "C" {
 #define UART_FRAME_TYPE_MOTOR_OPEN_LOOP_COMMAND 0x01U
 #define UART_FRAME_TYPE_LAWER_MOTOR_COMMAND 0x02U
 #define UART_FRAME_TYPE_WS2812_COMMAND 0x03U
+#define UART_FRAME_TYPE_PID_CONFIG_COMMAND 0x04U
 #define UART_FRAME_TYPE_MOTOR_STATUS 0x81U
 #define UART_FRAME_TYPE_LAWER_MOTOR_STATUS 0x82U
 #define UART_FRAME_TYPE_WS2812_STATUS 0x83U
+#define UART_FRAME_TYPE_PID_CONFIG_STATUS 0x84U
+#define UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS 0x85U
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
 
@@ -40,6 +43,11 @@ extern "C" {
 #define UART_WS2812_MODE_TURN_LEFT 0x03U
 #define UART_WS2812_MODE_TURN_RIGHT 0x04U
 #define UART_WS2812_MODE_SHOW 0x05U
+
+#define UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED 0x01U
+#define UART_PID_STATUS_FLAG_FLASH_VALID 0x02U
+#define UART_PID_STATUS_FLAG_LAST_SAVE_OK 0x04U
+#define UART_PID_STATUS_FLAG_LAST_APPLY_OK 0x08U
 
 typedef struct {
   uint16_t start;
@@ -102,6 +110,45 @@ typedef struct __attribute__((packed)) {
   uint8_t flags;
   uint8_t last_rx_seq;
 } ws2812_status_payload_t;
+
+typedef struct {
+  float left_kp;
+  float left_ki;
+  float left_kd;
+  float right_kp;
+  float right_ki;
+  float right_kd;
+  uint8_t persist_to_flash;
+  uint8_t closed_loop_enabled;
+  uint16_t reserved;
+} pid_config_payload_t;
+
+typedef struct {
+  float left_kp;
+  float left_ki;
+  float left_kd;
+  float right_kp;
+  float right_ki;
+  float right_kd;
+  uint8_t flags;
+  uint8_t last_rx_seq;
+  uint16_t reserved;
+} pid_config_status_payload_t;
+
+typedef struct __attribute__((packed)) {
+  int16_t left_target_rpm_x100;
+  int16_t left_measured_rpm_x100;
+  int16_t right_target_rpm_x100;
+  int16_t right_measured_rpm_x100;
+  int16_t left_pid_output;
+  int16_t right_pid_output;
+  int32_t left_delta_counts;
+  int32_t right_delta_counts;
+  uint8_t flags;
+  uint8_t reserved0;
+  uint8_t reserved1;
+  uint8_t reserved2;
+} wheel_feedback_status_payload_t;
 
 extern volatile uint16_t uart_last_pos;
 extern uint8_t uart_rx_dma[UART_RX_DMA_BUF_SIZE];

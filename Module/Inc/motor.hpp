@@ -70,6 +70,7 @@ void Motor_SetOpenLoopCommand(int16_t left_command_permille,
                               uint16_t command_timeout_ms, uint8_t rx_seq);
 void Motor_GetStatusSnapshot(motor_open_loop_status_t *status);
 bool Motor_HasDriverAlarm(void);
+void Motor_SetWheelDriversEnabled(bool enabled);
 
 void motor_set_right_pwm(float pwm);
 void motor_set_left_pwm(float pwm);

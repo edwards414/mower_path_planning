@@ -1,4 +1,6 @@
 #include "uart_interface.hpp"
+#include "settings_storage.hpp"
+#include "wheel_controller.hpp"
 #include "ws2812.h"
 #include "cmsis_os2.h"
 #include <stddef.h>
@@ -58,6 +60,8 @@ volatile lawer_motor_runtime_command_t g_lawer_command = {};
 volatile lawer_motor_runtime_status_t g_lawer_status = {};
 volatile ws2812_runtime_command_t g_ws2812_command = {};
 volatile ws2812_runtime_status_t g_ws2812_status = {};
+volatile uint8_t g_pid_last_rx_seq = 0U;
+volatile bool g_pid_last_apply_ok = true;
 
 uint8_t g_ws2812_flow_pos = 0U;
 uint8_t g_ws2812_turn_left_pos = 0U;
@@ -104,6 +108,27 @@ uint16_t saturating_u16(uint32_t value) {
 uint16_t ws2812_sanitize_period(uint16_t effect_period_ms) {
   return (effect_period_ms == 0U) ? WS2812_DEFAULT_EFFECT_PERIOD_MS
                                   : effect_period_ms;
+}
+
+int16_t float_to_i16_x100(float value) {
+  float scaled = value * 100.0f;
+  if (scaled > 32767.0f) {
+    return 32767;
+  }
+  if (scaled < -32768.0f) {
+    return -32768;
+  }
+  return (int16_t)scaled;
+}
+
+int16_t float_to_i16_pwm(float value) {
+  if (value > 32767.0f) {
+    return 32767;
+  }
+  if (value < -32768.0f) {
+    return -32768;
+  }
+  return (int16_t)value;
 }
 
 void ws2812_set_led_pair(uint8_t index, uint8_t r, uint8_t g, uint8_t b) {
@@ -236,6 +261,33 @@ void ws2812_set_command(const ws2812_command_payload_t *payload, uint8_t rx_seq)
   g_ws2812_command.last_rx_seq = rx_seq;
   g_ws2812_command.last_update_ms = HAL_GetTick();
 
+  uart_exit_critical(primask);
+}
+
+void pid_config_set_command(const pid_config_payload_t *payload,
+                            uint8_t rx_seq) {
+  if (payload == NULL) {
+    return;
+  }
+
+  controller_settings_t settings = {};
+  WheelController_GetSettings(&settings);
+
+  settings.left_wheel_pid.kp = payload->left_kp;
+  settings.left_wheel_pid.ki = payload->left_ki;
+  settings.left_wheel_pid.kd = payload->left_kd;
+  settings.right_wheel_pid.kp = payload->right_kp;
+  settings.right_wheel_pid.ki = payload->right_ki;
+  settings.right_wheel_pid.kd = payload->right_kd;
+  settings.closed_loop_enabled =
+      (payload->closed_loop_enabled == 0U) ? 0U : 1U;
+
+  bool ok = WheelController_ApplySettings(&settings,
+                                          payload->persist_to_flash != 0U);
+
+  uint32_t primask = uart_enter_critical();
+  g_pid_last_rx_seq = rx_seq;
+  g_pid_last_apply_ok = ok;
   uart_exit_critical(primask);
 }
 
@@ -461,6 +513,15 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
     ws2812_command_payload_t ws_payload;
     memcpy(&ws_payload, payload, sizeof(ws_payload));
     ws2812_set_command(&ws_payload, seq);
+    break;
+
+  case UART_FRAME_TYPE_PID_CONFIG_COMMAND:
+    if (payload_len != sizeof(pid_config_payload_t)) {
+      return;
+    }
+    pid_config_payload_t pid_payload;
+    memcpy(&pid_payload, payload, sizeof(pid_payload));
+    pid_config_set_command(&pid_payload, seq);
     break;
 
   default:
@@ -692,6 +753,73 @@ void uart_send_ws2812_status(void) {
                         status_snapshot.last_rx_seq, &status_payload,
                         (uint8_t)sizeof(status_payload));
 }
+
+void uart_send_pid_config_status(void) {
+  controller_settings_t settings = {};
+  settings_storage_status_t storage_status = {};
+  uint8_t last_seq = 0U;
+  bool last_apply_ok = false;
+
+  WheelController_GetSettings(&settings);
+  SettingsStorage_GetStatus(&storage_status);
+
+  uint32_t primask = uart_enter_critical();
+  last_seq = g_pid_last_rx_seq;
+  last_apply_ok = g_pid_last_apply_ok;
+  uart_exit_critical(primask);
+
+  pid_config_status_payload_t payload = {};
+  payload.left_kp = settings.left_wheel_pid.kp;
+  payload.left_ki = settings.left_wheel_pid.ki;
+  payload.left_kd = settings.left_wheel_pid.kd;
+  payload.right_kp = settings.right_wheel_pid.kp;
+  payload.right_ki = settings.right_wheel_pid.ki;
+  payload.right_kd = settings.right_wheel_pid.kd;
+  payload.flags = 0U;
+  payload.last_rx_seq = last_seq;
+  if (settings.closed_loop_enabled != 0U) {
+    payload.flags |= UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED;
+  }
+  if (storage_status.flash_valid) {
+    payload.flags |= UART_PID_STATUS_FLAG_FLASH_VALID;
+  }
+  if (storage_status.last_save_ok) {
+    payload.flags |= UART_PID_STATUS_FLAG_LAST_SAVE_OK;
+  }
+  if (last_apply_ok) {
+    payload.flags |= UART_PID_STATUS_FLAG_LAST_APPLY_OK;
+  }
+
+  (void)uart_send_frame(UART_FRAME_TYPE_PID_CONFIG_STATUS, last_seq, &payload,
+                        (uint8_t)sizeof(payload));
+}
+
+void uart_send_wheel_feedback_status(void) {
+  wheel_controller_status_t wheel_status = {};
+  motor_open_loop_status_t motor_status = {};
+
+  WheelController_GetStatus(&wheel_status);
+  Motor_GetStatusSnapshot(&motor_status);
+
+  wheel_feedback_status_payload_t payload = {};
+  payload.left_target_rpm_x100 =
+      float_to_i16_x100(wheel_status.left.target_rpm);
+  payload.left_measured_rpm_x100 =
+      float_to_i16_x100(wheel_status.left.measured_rpm);
+  payload.right_target_rpm_x100 =
+      float_to_i16_x100(wheel_status.right.target_rpm);
+  payload.right_measured_rpm_x100 =
+      float_to_i16_x100(wheel_status.right.measured_rpm);
+  payload.left_pid_output = float_to_i16_pwm(wheel_status.left.pid_output);
+  payload.right_pid_output = float_to_i16_pwm(wheel_status.right.pid_output);
+  payload.left_delta_counts = wheel_status.left.delta_counts;
+  payload.right_delta_counts = wheel_status.right.delta_counts;
+  payload.flags = wheel_status.flags;
+
+  (void)uart_send_frame(UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS,
+                        motor_status.last_rx_seq, &payload,
+                        (uint8_t)sizeof(payload));
+}
 } // namespace
 
 void uart_server(void) {
@@ -733,8 +861,10 @@ void MotorTask(void *arg) {
     uint32_t now = HAL_GetTick();
     if ((now - last_status_tick) >= UART_STATUS_PERIOD_MS) {
       uart_send_motor_status();
+      uart_send_wheel_feedback_status();
       uart_send_lawer_status();
       uart_send_ws2812_status();
+      uart_send_pid_config_status();
       last_status_tick = now;
     }
 

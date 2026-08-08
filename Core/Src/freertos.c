@@ -25,6 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "board_modules.hpp"
 #include "uart_interface.hpp"
 /* USER CODE END Includes */
 
@@ -54,7 +55,7 @@ osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -133,9 +134,17 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   /* Infinite loop */
+  uint32_t last_board_led_tick = HAL_GetTick();
   for (;;) {
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-    osDelay(1000);
+    BoardModules_Update10ms();
+
+    uint32_t now = HAL_GetTick();
+    if ((now - last_board_led_tick) >= 1000U) {
+      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      last_board_led_tick = now;
+    }
+
+    osDelay(10);
   }
   /* USER CODE END StartDefaultTask */
 }

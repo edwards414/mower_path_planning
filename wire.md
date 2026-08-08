@@ -34,6 +34,7 @@
 | 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
 | 電池電壓量測 | 24 V main / 3.7 V AON battery divider | ADC MUX CH2/CH3 | `ADC1_IN9` through mux | 電阻分壓後進 ADC，輸入不可超過 3.3 V |
+| 輪速 PID / 設定儲存 | FT-555 encoder + internal Flash | `TIM5`, `TIM1`, Flash sector 7 | C++ module | 左右輪 PID 閉迴路；PID 參數存於 `0x08060000` |
 | 電源按鍵 / 低功耗 | Power button / power hold | `PB0`, `PC14`, `PC15` | EXTI input, GPIO output | 長按 3 秒關機；短按 1 秒喚醒 LebanCat；關機後 STM32 由小電池 AON 供電 |
 | 有源蜂鳴器 | Active buzzer module | `PB9` | GPIO output | 模組已含電晶體，`PB9` 只接控制訊號；high = on, low = off |
 | 板載狀態 | Board status LED | `PC13` | GPIO output | 板載狀態燈 |
@@ -542,17 +543,19 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 | 項目 | `.ioc` 目前規劃 | 目前產生碼狀態 |
 | --- | --- | --- |
-| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 仍是 `PA4/PA5/PA6/PA7` 四條 EN |
-| SPI-CAN | `PA5/PA6/PA7` = `SPI1`, `PA12` CS, `PA11` INT | 尚未產生 `SPI1`、`CAN_CS`、`CAN_INT` 程式 |
-| MG996 servo control | `PB10` GPIO software servo pulse | 尚未產生 |
-| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 尚未產生 `ADC1` / mux select 程式 |
-| MG996 current sense | ADC mux CH0 | 尚未實作 mux channel read |
-| Board temperature | ADC mux CH1, 10k NTC divider | 尚未實作 NTC 換算 |
-| Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 尚未實作分壓換算 |
+| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；CubeMX 產生碼仍需同步釋放 `PA5/PA6/PA7` |
+| SPI-CAN | `PA5/PA6/PA7` = `SPI1`, `PA12` CS, `PA11` INT | 已新增 MCP2515 C++ wrapper；`SPI1` HAL 產生碼仍需同步 |
+| MG996 servo control | `PB10` GPIO software servo pulse | 已新增 C++ wrapper；需排入 task 並實測 jitter |
+| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 產生碼仍需同步 |
+| MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
+| Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
+| Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper；需實測校正 |
+| Wheel PID settings | internal Flash sector 7 at `0x08060000` | 已新增 C++ storage module；需實車調 PID |
 | BLD120A PWM label / app binding | `PB8/TIM4_CH3`, label `BLD120A_PWM` | 需確認應用層是否使用 `TIM4_CH3` |
-| Active buzzer | `PB9` GPIO output, label `Active_Buzzer` | 尚未產生 |
-| Power button / low power | `PB0` EXTI pull-up, `PC14` `LEBANCAT_WAKE`, `PC15` `MAIN_POWER_EN` | 尚未產生，低功耗流程尚未實作 |
-| WS2812 狀態燈 protocol | LED index `0-2` 保留給狀態燈 | UART WS2812 command 尚未支援獨立狀態燈 |
+| Active buzzer | `PB9` GPIO output, label `Active_Buzzer` | 已新增 C++ wrapper，high = on |
+| Power button / low power | `PB0` EXTI pull-up, `PC14` `LEBANCAT_WAKE`, `PC15` `MAIN_POWER_EN` | 已新增 polling 狀態機 wrapper；實際 STOP low-power 進入點仍需接 task |
+| Board module runtime | module init / 10ms maintenance | 已新增 `BoardModules_Init()` / `BoardModules_Update10ms()`，接上蜂鳴器、電源按鍵、ADC 監控、MG996 限位狀態 |
+| WS2812 狀態燈 protocol | LED index `0-2` 保留給狀態燈 | 已新增狀態燈 wrapper；尚未自動接入 10ms runtime，避免和 UART 燈效搶 DMA |
 
 ## 待確認清單
 
@@ -570,10 +573,11 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 - AON 小電池已規劃使用 ADC mux CH3 量測 raw 3.7 V 電池；需確認小電池類型、最低電壓門檻與充電/保護模組。
 - ADC mux 型號需確認；mux 供電 3.3 V，所有 analog input 需在 0-3.3 V 範圍內。
 - MG996 限位電流 threshold 與持續判定時間需實測校正。
+- 左右輪 PID 預設值已加入韌體，但 Kp/Ki/Kd 需在實車上調整；確認後再寫入 internal Flash。
 - FT-555 A/B 已按 PP push-pull 輸出規劃；需確認選用的電壓邏輯轉換器可接受 5 V push-pull input 並輸出 3.3 V 給 STM32。
 - BLD120A PWM 需求為 5 V、1-3 kHz；STM32 `PB8/TIM4_CH3` 是 3.3 V，需電平轉換或確認 BLD120A 可接受 3.3 V high。
-- `PB9` 已加入 `.ioc` 作為 `Active_Buzzer` GPIO output，但尚未同步產生碼。
-- 電源按鍵已加入 `.ioc`：`PB0/POWER_BUTTON_N`、`PC14/LEBANCAT_WAKE`、`PC15/MAIN_POWER_EN`，但關機/喚醒狀態機尚未實作。
+- `PB9` 已加入 `.ioc` 作為 `Active_Buzzer` GPIO output；目前 C++ wrapper 可先自行初始化 GPIO。
+- 電源按鍵已加入 `.ioc`：`PB0/POWER_BUTTON_N`、`PC14/LEBANCAT_WAKE`、`PC15/MAIN_POWER_EN`；目前 C++ wrapper 已有長按/喚醒狀態機，但尚未接入 STOP low-power。
 - `PB0/POWER_BUTTON_N` 為低有效按鍵，CubeMX 產生碼需確認為 `GPIO_MODE_IT_FALLING` 或 `GPIO_MODE_IT_RISING_FALLING`，不可只用 rising。
 - `LEBANCAT_WAKE` 的 active level、需要保持多久、是否等同 PWRKEY 需確認。
 - 小電池 `AON_3V3` 已決定用電源晶片降壓並用二極體防反灌；仍需確認電源晶片型號、二極體壓降/電流規格、24 V 主電源 DC/DC + load switch / PMIC。

@@ -57,10 +57,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define LL_Motor_PWM_Pin GPIO_PIN_0
-#define LL_Motor_PWM_GPIO_Port GPIOA
-#define LR_Motor_PWM_Pin GPIO_PIN_1
-#define LR_Motor_PWM_GPIO_Port GPIOA
 #define RL_Motor_PWM_Pin GPIO_PIN_2
 #define RL_Motor_PWM_GPIO_Port GPIOA
 #define RR_Motor_PWM_Pin GPIO_PIN_3
@@ -85,8 +81,10 @@ void Error_Handler(void);
 #define LL_Motor_Alarm_Pin GPIO_PIN_15
 #define LL_Motor_Alarm_GPIO_Port GPIOB
 #define LL_Motor_Alarm_EXTI_IRQn EXTI15_10_IRQn
-#define BLDC_DEIVER_PWM_Pin GPIO_PIN_6
-#define BLDC_DEIVER_PWM_GPIO_Port GPIOB
+#define LL_Motor_PWM_Pin GPIO_PIN_15
+#define LL_Motor_PWM_GPIO_Port GPIOA
+#define LR_Motor_PWM_Pin GPIO_PIN_3
+#define LR_Motor_PWM_GPIO_Port GPIOB
 #define Lawer_Mower_Mower_Pin GPIO_PIN_7
 #define Lawer_Mower_Mower_GPIO_Port GPIOB
 
