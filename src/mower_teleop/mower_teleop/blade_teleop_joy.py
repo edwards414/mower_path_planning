@@ -30,7 +30,9 @@ class BladeTeleopJoy(Node):
             axis_pressed_value=float(
                 self.declare_parameter('axis_pressed_value', -1.0).value
             ),
-            lock_button_index=int(self.declare_parameter('lock_button_index', 5).value),
+            enable_button_index=int(
+                self.declare_parameter('enable_button_index', 4).value
+            ),
             estop_button_index=int(self.declare_parameter('estop_button_index', 0).value),
             max_blade_command=max(
                 float(self.declare_parameter('max_blade_command', 100.0).value),
@@ -39,6 +41,14 @@ class BladeTeleopJoy(Node):
             joy_timeout=max(float(self.declare_parameter('joy_timeout', 0.3).value), 0.0),
             command_ramp_per_sec=max(
                 float(self.declare_parameter('command_ramp_per_sec', 200.0).value),
+                0.0,
+            ),
+            axis_release_tolerance=max(
+                float(
+                    self.declare_parameter(
+                        'axis_release_tolerance', 0.1
+                    ).value
+                ),
                 0.0,
             ),
         )
@@ -63,11 +73,11 @@ class BladeTeleopJoy(Node):
         )
 
         self.get_logger().info(
-            'Blade teleop ready: axis=%d lock_button=%d estop_button=%d '
+            'Blade teleop ready: axis=%d enable_button=%d estop_button=%d '
             'max_command=%.1f timeout=%.2fs rate=%.1fHz'
             % (
                 config.blade_axis_index,
-                config.lock_button_index,
+                config.enable_button_index,
                 config.estop_button_index,
                 config.max_blade_command,
                 config.joy_timeout,
@@ -81,16 +91,20 @@ class BladeTeleopJoy(Node):
         self.command_publisher.publish(message)
 
     def _log_event(self, event: str) -> None:
-        if event == 'lock':
-            self.get_logger().info(
-                'Blade speed locked at %.1f' % self.controller.locked_command
-            )
-        elif event == 'unlock':
-            self.get_logger().info('Blade speed lock released')
-        elif event == 'estop':
+        if event == 'estop':
             self.get_logger().warn('Blade emergency stop triggered')
         elif event == 'timeout':
             self.get_logger().warn('Joystick timeout, blade command reset to zero')
+        elif event == 'deadman_released':
+            self.get_logger().info('Blade deadman released; command is zero')
+        elif event == 'not_armed':
+            self.get_logger().warn(
+                'Blade is not armed: release the trigger and deadman first'
+            )
+        elif event == 'invalid_axis':
+            self.get_logger().error(
+                'Blade axis is missing or non-finite; command is zero'
+            )
 
     def _handle_joy(self, message: Joy) -> None:
         event = self.controller.handle_joy(

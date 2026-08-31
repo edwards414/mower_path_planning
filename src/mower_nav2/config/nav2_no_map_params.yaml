@@ -96,11 +96,11 @@ controller_server:
       max_robot_pose_search_dist: 10.0
       min_distance_to_obstacle: 0.0
       stateful: true
-# GPS WPF CHANGE: No scan — local uses inflation only; global uses static map from map_manage
+# WARNING: No scan/live-obstacle layer is configured here. Both costmaps only
+# consume static, fail-closed maps produced by map_manage.
 local_costmap:
   local_costmap:
     ros__parameters:
-      use_sim_time: True
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: odom
@@ -109,7 +109,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.25
+      robot_radius: 0.5
       plugins:
       - static_layer
       static_layer:
@@ -132,7 +132,7 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
-        map_topic: "/map_grid"
+        map_topic: "/map_grid_global"
       always_send_full_costmap: True
 
 map_saver:
@@ -149,7 +149,9 @@ planner_server:
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
+      # Coverage goals must never be silently substituted by a nearby free
+      # cell; the safety-inflated mission boundary is the exact contract.
+      tolerance: 0.0
       use_astar: false
       allow_unknown: true
 
@@ -207,6 +209,9 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
+    # Preserve controller_server's original stamp while smoothing/replaying;
+    # the final velocity guard uses it to reject stale Nav2 output.
+    stamp_smoothed_velocity_with_smoothing_time: false
     max_velocity: [0.26, 0.0, 1.0]
     min_velocity: [-0.26, 0.0, -1.0]
     max_accel: [2.5, 0.0, 3.2]
@@ -218,7 +223,6 @@ velocity_smoother:
 
 docking_server:
   ros__parameters:
-    use_sim_time: True
     controller_frequency: 30.0
     initial_perception_timeout: 3.0
     wait_charge_timeout: 5.0

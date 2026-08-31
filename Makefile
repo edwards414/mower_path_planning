@@ -9,8 +9,8 @@ ZIGZAG_ANGLE_DEG ?= 0.0
 
 .PHONY: \
 	build build-release build-sim build-rust-core clean rviz open_rviz run \
-	bringup mower_qt mission mission-coverage record replay mission-docking-temp apriltag-docking mower_teleop \
-	teleop-keyboard blade-teleop-joy sim-containers sim-prefetch-gazebo-models \
+	bringup component-bringup mower_qt mission mission-coverage record replay mission-docking-temp apriltag-docking mower_teleop \
+	teleop-keyboard sim-containers sim-prefetch-gazebo-models \
 	sim-gazebo sim-gazebo-empty sim-coverage-system sim-coverage-system-rust \
 	sim-coverage-test env build_dev deps
 
@@ -44,6 +44,11 @@ mower_qt:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_qt mower_qt'
 
 bringup:
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup robot.launch.py'
+
+# Hardware components without app-facing mission/coordinator services.
+# This target is for bench debugging only; autonomous Nav2 remains fail-locked.
+component-bringup:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup mower.launch.py'
 
 mission:
@@ -84,10 +89,7 @@ apriltag-docking:
 mower_teleop: teleop-keyboard
 
 teleop-keyboard:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_teleop teleop_keyboard'
-
-blade-teleop-joy:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_teleop blade_teleop_joy'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 run mower_teleop teleop_keyboard --ros-args -r /cmd_vel:=/keyboard_cmd_vel'
 
 sim-containers:
 	$(COMPOSE_DEV) up -d gazebo lawan_node_dev
@@ -102,12 +104,12 @@ sim-gazebo-empty:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim_with_nav.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true world:=empty.world'
 
 sim-coverage-system:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=false use_sim_time:=true use_rviz:=false coverage_backend:=python zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true use_rviz:=false coverage_backend:=python zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
 
 sim-coverage-system-rust:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=false use_sim_time:=true use_rviz:=false coverage_backend:=rust zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true use_rviz:=false coverage_backend:=rust zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
 
-sim-coverage-test: sim-gazebo sim-coverage-system
+sim-coverage-test: sim-coverage-system
 
 env:
 	bash ./workspace/export_env.sh

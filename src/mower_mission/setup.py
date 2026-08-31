@@ -41,7 +41,6 @@ setup(
             'temp_dock_pose_publisher = '
             'mower_mission.temp_dock_pose_publisher:main',
             'nav_action_server = mower_mission.navigation.nav_action_server:main',
-            'nav_action_client = mower_mission.utils.nav_action_client:main',
             'zone_map_client = mower_mission.utils.zone_map_client:main',
             # legacy aliases
             'boustrophedon_coverage = mower_mission.coverage_node:main',

@@ -1,0 +1,39 @@
+# Public relay running on the Ubuntu server.
+#
+# Data path:
+#   Flutter WHEP reader
+#     -> camera.fxrbindi.com
+#     -> this MediaMTX instance
+#     -> RTSP over WireGuard
+#     -> 10.77.0.2:8554/front on the mower
+#
+# Only the WHEP signaling service is loopback-bound. WebRTC media must remain
+# reachable on 8189/udp (and 8189/tcp as a fallback).
+
+logLevel: info
+
+rtsp: false
+rtmp: false
+hls: false
+srt: false
+moq: false
+playback: false
+
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts:
+  - 59.125.215.63
+  - media.fxrbindi.com
+webrtcICEServers2:
+  - url: stun:stun.cloudflare.com:3478
+
+paths:
+  front:
+    source: rtsp://10.77.0.2:8554/front
+    sourceOnDemand: true
+    sourceOnDemandStartTimeout: 20s
+    sourceOnDemandCloseAfter: 10s
+    rtspTransport: tcp

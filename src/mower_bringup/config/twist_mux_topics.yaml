@@ -2,15 +2,28 @@ twist_mux:
   ros__parameters:
     use_stamped: true
     topics:
+      navigation_safety_stop:
+        topic   : /navigation_safety_stop
+        timeout : 0.2
+        priority: 50
       navigation:
         topic   : /nav_cmd_vel
         timeout : 0.5
         priority: 10
-      joy_cmd:
+      app_manual:
         topic   : /joy_cmd
+        timeout : 0.5
+        priority: 90
+      physical_joystick:
+        topic   : /physical_joy_cmd
         timeout : 0.5
         priority: 100
       keyboard:
         topic   : /keyboard_cmd_vel
         timeout : 0.5
-        priority: 90
+        priority: 80
+    locks:
+      navigation_coordinator:
+        topic   : /navigation_coordinator_lock
+        timeout : 0.3
+        priority: 50

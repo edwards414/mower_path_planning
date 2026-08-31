@@ -8,6 +8,26 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
+SAFE_REPLAY_TOPICS = [
+    '/adapter/robot_pose',
+    '/adapter/map_datum',
+    '/adapter/coverage_settings',
+    '/adapter/zone_summaries',
+    '/adapter/map_layers/map_grid',
+    '/adapter/map_layers/free_space_inflated',
+    '/adapter/map_layers/risk_map_inflated',
+    '/adapter/map_layers/chennal_map_inflated',
+    '/adapter/marker_layers/coverage_path',
+    '/adapter/marker_layers/zones',
+    '/adapter/marker_layers/channels',
+    '/adapter/marker_layers/connectors',
+    '/adapter/marker_layers/invalid_segments',
+    '/adapter/marker_layers/risk_zones',
+    '/robot/online',
+    '/battery_state',
+]
+
+
 def generate_launch_description():
     qos_overrides = os.path.join(
         get_package_share_directory('mower_mission'),
@@ -37,6 +57,10 @@ def generate_launch_description():
         cmd=[
             'ros2', 'bag', 'play', bag, '--loop',
             '--qos-profile-overrides-path', qos_overrides,
+            # Never replay recorded /cmd_vel, TF, GPS, action status or other
+            # engineering topics into a live robot domain. This launch is an
+            # app-scene viewer even if the source bag contains actuator data.
+            '--topics', *SAFE_REPLAY_TOPICS,
         ],
         output='screen',
     )

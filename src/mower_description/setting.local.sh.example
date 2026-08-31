@@ -1,0 +1,3 @@
+# Copy to setting.local.sh (which is gitignored) and fill in rotated keys.
+export ONSHAPE_ACCESS_KEY=''
+export ONSHAPE_SECRET_KEY=''

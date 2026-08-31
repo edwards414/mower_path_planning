@@ -47,6 +47,15 @@ def generate_launch_description():
         package='controller_manager',
         executable='ros2_control_node',
         parameters=[robot_description, test_controller],
+        # Controllers are loaded into this process, so their private topics
+        # must be remapped here (remapping a spawner has no effect).
+        remappings=[
+          (
+            '/diff_controller/cmd_vel',
+            '/drivetrain_guarded_cmd_vel',
+          ),
+          ('/diff_controller/odom', '/odom'),
+        ],
         output={
           'stdout': 'screen',
           'stderr': 'screen',
@@ -64,13 +73,6 @@ def generate_launch_description():
             package='controller_manager',
             executable='spawner',
             arguments=['diff_controller'],
-            output='screen'
-        ),
-
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=['mower_blade_controller'],
             output='screen'
         ),
 

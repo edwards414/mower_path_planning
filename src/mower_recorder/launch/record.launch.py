@@ -33,10 +33,11 @@ def generate_launch_description():
     git_repo_dir = LaunchConfiguration('git_repo_dir')
     r2_env_file = LaunchConfiguration('r2_env_file')
     upload_policy = LaunchConfiguration('upload_policy')
+    gps_topic = LaunchConfiguration('gps_topic')
 
     # Nodes whose disappearance raises a fault (flushes the snapshot buffer).
     # Edit here to watch your own critical nodes.
-    watch_nodes = ['map_manage_node', 'boustrophedon_coverage']
+    watch_nodes = ['map_manage', 'boustrophedon_coverage']
 
     return LaunchDescription([
         DeclareLaunchArgument('robot_id', default_value='mower'),
@@ -49,6 +50,7 @@ def generate_launch_description():
         # Gitignored .env with R2 creds; '' = read plain R2_* env vars.
         DeclareLaunchArgument('r2_env_file', default_value=''),
         DeclareLaunchArgument('upload_policy', default_value='wifi_or_dock'),
+        DeclareLaunchArgument('gps_topic', default_value='/fix'),
 
         Node(
             package='mower_recorder',
@@ -74,8 +76,8 @@ def generate_launch_description():
                 'qos_overrides_path': qos_overrides_path,
                 'git_repo_dir': git_repo_dir,
                 'params_dump_nodes': [
-                    '/boustrophedon_coverage', '/map_manage_node'],
-                'gps_topic': '/fix',
+                    '/boustrophedon_coverage', '/map_manage'],
+                'gps_topic': gps_topic,
                 'fault_topic': '/mower_recorder/fault',
             }],
         ),

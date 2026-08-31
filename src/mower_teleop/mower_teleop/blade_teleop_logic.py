@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Sequence
 
 
@@ -32,7 +33,16 @@ def map_axis_to_command(
     max_command: float,
 ) -> float:
     """Map a trigger axis value to a ``0..max_command`` blade command."""
-    if max_command <= 0.0 or pressed_value == released_value:
+    if (
+        not all(math.isfinite(float(value)) for value in (
+            axis_value,
+            released_value,
+            pressed_value,
+            max_command,
+        ))
+        or max_command <= 0.0
+        or pressed_value == released_value
+    ):
         return 0.0
 
     normalized = (axis_value - released_value) / (pressed_value - released_value)
@@ -46,11 +56,12 @@ class BladeTeleopConfig:
     blade_axis_index: int = 5
     axis_released_value: float = 1.0
     axis_pressed_value: float = -1.0
-    lock_button_index: int = 5
+    enable_button_index: int = 4
     estop_button_index: int = 0
     max_blade_command: float = 100.0
     joy_timeout: float = 0.3
     command_ramp_per_sec: float = 200.0
+    axis_release_tolerance: float = 0.1
 
 
 class BladeTeleopController:
@@ -58,14 +69,14 @@ class BladeTeleopController:
 
     def __init__(self, config: BladeTeleopConfig) -> None:
         self.config = config
-        self.locked = False
-        self.locked_command = 0.0
         self.desired_command = 0.0
         self.current_command = 0.0
         self.last_joy_time: float | None = None
-        self._prev_lock_pressed = False
         self._prev_estop_pressed = False
         self._timed_out = False
+        self._release_observed = False
+        self._deadman_pressed = False
+        self._warned_unarmed = False
 
     def axis_command(self, axes: Sequence[float]) -> float:
         """Translate the configured axis from the latest joy message."""
@@ -80,6 +91,16 @@ class BladeTeleopController:
             max_command=max(0.0, self.config.max_blade_command),
         )
 
+    def _axis_value(self, axes: Sequence[float]) -> float | None:
+        if not 0 <= self.config.blade_axis_index < len(axes):
+            return None
+        value = float(axes[self.config.blade_axis_index])
+        return value if math.isfinite(value) else None
+
+    def _force_zero(self) -> None:
+        self.desired_command = 0.0
+        self.current_command = 0.0
+
     def handle_joy(
         self,
         axes: Sequence[float],
@@ -90,33 +111,46 @@ class BladeTeleopController:
         self.last_joy_time = now
         self._timed_out = False
 
-        lock_pressed = button_is_pressed(buttons, self.config.lock_button_index)
+        deadman_pressed = button_is_pressed(
+            buttons,
+            self.config.enable_button_index,
+        )
         estop_pressed = button_is_pressed(buttons, self.config.estop_button_index)
-        axis_command = self.axis_command(axes)
+        axis_value = self._axis_value(axes)
         event = None
 
-        if estop_pressed and not self._prev_estop_pressed:
-            self.locked = False
-            self.locked_command = 0.0
-            self.desired_command = 0.0
-            self.current_command = 0.0
-            event = 'estop'
+        if estop_pressed:
+            self._force_zero()
+            self._release_observed = False
+            self._warned_unarmed = False
+            if not self._prev_estop_pressed:
+                event = 'estop'
+        elif axis_value is None:
+            self._force_zero()
+            self._release_observed = False
+            self._warned_unarmed = False
+            event = 'invalid_axis'
+        elif not deadman_pressed:
+            # Hold-to-run: releasing the hardware button is an immediate stop,
+            # not a ramp. Observe a genuinely released trigger before arming so
+            # the common reconnect default axis value 0 cannot mean 50% blade.
+            was_pressed = self._deadman_pressed
+            self._force_zero()
+            tolerance = max(0.0, self.config.axis_release_tolerance)
+            if abs(axis_value - self.config.axis_released_value) <= tolerance:
+                self._release_observed = True
+                self._warned_unarmed = False
+            if was_pressed:
+                event = 'deadman_released'
+        elif not self._release_observed:
+            self._force_zero()
+            if not self._warned_unarmed:
+                event = 'not_armed'
+                self._warned_unarmed = True
         else:
-            if lock_pressed and not self._prev_lock_pressed:
-                if self.locked:
-                    self.locked = False
-                    event = 'unlock'
-                else:
-                    self.locked = True
-                    self.locked_command = self.current_command
-                    event = 'lock'
+            self.desired_command = self.axis_command(axes)
 
-            if self.locked:
-                self.desired_command = self.locked_command
-            else:
-                self.desired_command = axis_command
-
-        self._prev_lock_pressed = lock_pressed
+        self._deadman_pressed = deadman_pressed
         self._prev_estop_pressed = estop_pressed
         return event
 
@@ -131,10 +165,10 @@ class BladeTeleopController:
         if now - self.last_joy_time > timeout:
             event = None if self._timed_out else 'timeout'
             self._timed_out = True
-            self.locked = False
-            self.locked_command = 0.0
-            self.desired_command = 0.0
-            self.current_command = 0.0
+            self._force_zero()
+            self._release_observed = False
+            self._deadman_pressed = False
+            self._warned_unarmed = False
             return self.current_command, event
 
         max_delta = max(0.0, self.config.command_ramp_per_sec) * max(dt, 0.0)

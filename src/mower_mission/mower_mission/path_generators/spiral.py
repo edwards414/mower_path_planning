@@ -34,6 +34,7 @@ from ..coverage.types import SpiralCoveragePlan, SpiralSegment
 def plan_spiral_coverage(
     safe_map: np.ndarray,
     strip_width_m: float,
+    waypoint_spacing_m: float,
     res: float,
     H: int,
     W: int,
@@ -61,7 +62,8 @@ def plan_spiral_coverage(
 
     for comp_id, comp_mask in enumerate(components):
         pts = _onion_layer_spiral(
-            comp_mask, strip_width_m, res, H, W, origin_x, origin_y,
+            comp_mask, strip_width_m, waypoint_spacing_m,
+            res, H, W, origin_x, origin_y,
         )
         if not pts:
             continue
@@ -119,6 +121,7 @@ def plan_spiral_coverage(
 def _generate_coverage_spiral_path(
     safe_map: np.ndarray,
     strip_width_m: float,
+    waypoint_spacing_m: float,
     res: float,
     H: int,
     W: int,
@@ -127,7 +130,8 @@ def _generate_coverage_spiral_path(
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]], list[tuple[int, int]]]:
     """3-tuple wrapper around plan_spiral_coverage for backward compatibility."""
     plan = plan_spiral_coverage(
-        safe_map, strip_width_m, res, H, W, origin_x, origin_y,
+        safe_map, strip_width_m, waypoint_spacing_m,
+        res, H, W, origin_x, origin_y,
     )
     return plan.points, plan.split_points, plan.invalid_segments
 
@@ -137,6 +141,7 @@ def _generate_coverage_spiral_path(
 def _onion_layer_spiral(
     comp_mask: np.ndarray,
     strip_width_m: float,
+    waypoint_spacing_m: float,
     res: float,
     H: int,
     W: int,
@@ -154,7 +159,7 @@ def _onion_layer_spiral(
 
     dist = _bfs_dist(comp_mask, H, W)
     layer_step = max(1, int(round(strip_width_m / res)))
-    spacing_cells = max(1, int(round(strip_width_m / res)))
+    spacing_cells = max(1, int(round(waypoint_spacing_m / res)))
     max_dist = int(dist[comp_mask].max())
 
     path_cells: list[tuple[int, int]] = []

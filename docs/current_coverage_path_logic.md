@@ -107,7 +107,7 @@ inflated_data = np.where(eroded_free_mask == 1, 0, 100)
 使用參數：
 
 ```text
-inflate_radius_m = 0.55
+inflate_radius_m = 0.75
 ```
 
 這代表 coverage planner 使用的工作區域會比原始 polygon 內縮，避免路徑太靠邊界。

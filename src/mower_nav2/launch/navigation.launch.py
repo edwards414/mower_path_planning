@@ -17,13 +17,30 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    OpaqueFunction,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LoadComposableNodes, SetParameter
 from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode, ParameterFile
 from nav2_common.launch import RewrittenYaml
+
+
+def _reject_unsupported_namespace(context):
+    """Fail closed until every Nav2 topic is genuinely namespaced."""
+    namespace = LaunchConfiguration('namespace').perform(context).strip('/')
+    if namespace:
+        raise RuntimeError(
+            'navigation.launch.py does not provide safe multi-robot topic '
+            'isolation yet; keep namespace empty and isolate robots with '
+            'separate ROS_DOMAIN_ID values'
+        )
+    return []
 
 
 def generate_launch_description():
@@ -39,6 +56,7 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration('use_respawn')
     log_level = LaunchConfiguration('log_level')
     launch_battery_simulator = LaunchConfiguration('launch_battery_simulator')
+    cmd_vel_output_topic = LaunchConfiguration('cmd_vel_output_topic')
 
     lifecycle_nodes = [
         'controller_server',
@@ -48,7 +66,6 @@ def generate_launch_description():
         'velocity_smoother',
         'bt_navigator',
         'waypoint_follower',
-        'docking_server',
     ]
 
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
@@ -119,6 +136,15 @@ def generate_launch_description():
         description='Launch simulated /battery_state publisher',
     )
 
+    declare_cmd_vel_output_topic_cmd = DeclareLaunchArgument(
+        'cmd_vel_output_topic',
+        default_value='/nav_cmd_vel',
+        description=(
+            'Velocity-smoother output. Production must use /nav_cmd_vel so '
+            'twist_mux and the navigation coordinator remain authoritative.'
+        ),
+    )
+
     battery_simulator_node = Node(
         package='mower_mission',
         executable='battery_simulator_node',
@@ -179,6 +205,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings + [('cmd_vel', '/cmd_vel_nav')],
             ),
             Node(
                 package='nav2_bt_navigator',
@@ -214,19 +241,8 @@ def generate_launch_description():
                 remappings=remappings
                 + [
                     ('/cmd_vel', '/cmd_vel_nav'),
-                    ('/cmd_vel_smoothed', '/nav_cmd_vel'),
+                    ('/cmd_vel_smoothed', cmd_vel_output_topic),
                 ],
-            ),
-            Node(
-                package='opennav_docking',
-                executable='opennav_docking',
-                name='docking_server',
-                output='screen',
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params],
-                arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings + [('cmd_vel', '/nav_cmd_vel')],
             ),
             Node(
                 package='nav2_lifecycle_manager',
@@ -272,6 +288,9 @@ def generate_launch_description():
                         plugin='behavior_server::BehaviorServer',
                         name='behavior_server',
                         parameters=[configured_params],
+                        remappings=(
+                            remappings + [('cmd_vel', '/cmd_vel_nav')]
+                        ),
                     ),
                     ComposableNode(
                         package='nav2_bt_navigator',
@@ -295,15 +314,8 @@ def generate_launch_description():
                         remappings=remappings
                         + [
                             ('/cmd_vel', '/cmd_vel_nav'),
-                            ('/cmd_vel_smoothed', '/nav_cmd_vel'),
+                            ('/cmd_vel_smoothed', cmd_vel_output_topic),
                         ],
-                    ),
-                    ComposableNode(
-                        package='opennav_docking',
-                        plugin='opennav_docking::DockingServer',
-                        name='docking_server',
-                        parameters=[configured_params],
-                        remappings=remappings + [('cmd_vel', '/nav_cmd_vel')],
                     ),
                     ComposableNode(
                         package='nav2_lifecycle_manager',
@@ -322,6 +334,7 @@ def generate_launch_description():
 
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(declare_namespace_cmd)
+    ld.add_action(OpaqueFunction(function=_reject_unsupported_namespace))
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
@@ -330,6 +343,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_launch_battery_simulator_cmd)
+    ld.add_action(declare_cmd_vel_output_topic_cmd)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
     ld.add_action(battery_simulator_node)

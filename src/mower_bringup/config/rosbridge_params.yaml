@@ -1,7 +1,9 @@
 rosbridge_websocket:
   ros__parameters:
     port: 9090
-    address: "0.0.0.0"
+    # Secure default: production access is expected through the authenticated
+    # WSS proxy/tunnel. LAN exposure must be an explicit launch override.
+    address: "127.0.0.1"
     retry_startup_delay: 5.0
     fragment_timeout: 600
     delay_between_messages: 0.0
@@ -9,6 +11,22 @@ rosbridge_websocket:
     use_compression: false
     call_services_in_new_thread: true
     send_action_goals_in_new_thread: true
-    topics_glob: "[*]"
-    services_glob: "[*]"
-    params_glob: "[*]"
+    # Keep the legacy topic allow-list empty and use the directional lists
+    # below.  This prevents a remote rosbridge client from publishing forged
+    # telemetry/map data while still allowing the operator commands used by
+    # the Flutter app.
+    topics_glob: "[]"
+    topics_pub_glob: "['/app_joy_cmd', '/mower_recorder/command']"
+    topics_sub_glob: "['/adapter/*', '/site_list', '/robot/online', '/battery_state', '/fix', '/gps/fix', '/manual_command_clock', '/*/online', '/*/robot_pose', '/*/battery_state', '/mower_recorder/status', '/mower_recorder/bags', '/mower_recorder/command_result']"
+    services_glob: "['/record_zone_start', '/record_zone_end', '/risk_zone_start', '/risk_zone_end', '/channel_record_start', '/channel_record_end', '/record_cancel', '/save_zone_list', '/load_zone_list', '/create_free_space', '/create_risk_map', '/create_chennal_map', '/generate_coverage_path', '/restore_free_space_coverage', '/import_image_mask', '/edit_zone', '/site_op', '/zone_exec_path', '/cancel_nav2', '/cencel_nav2', '/check_nav_status', '/boustrophedon_coverage/set_parameters']"
+    actions_glob: "[]"
+    params_glob: "[]"
+
+# rosapi is a separate node.  It must receive its own graph/parameter filters;
+# otherwise callers can reach unrestricted rosapi services through the
+# automatically exposed /rosapi/* namespace.
+rosapi:
+  ros__parameters:
+    topics_glob: "['/adapter/*', '/site_list', '/robot/online', '/battery_state', '/fix', '/gps/fix', '/manual_command_clock', '/*/online', '/*/robot_pose', '/*/battery_state', '/mower_recorder/status', '/mower_recorder/bags', '/mower_recorder/command_result']"
+    services_glob: "[]"
+    params_glob: "[]"

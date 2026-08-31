@@ -199,8 +199,8 @@ MapManage 參數：
 
 | Parameter | Node | Default | Flutter 控制 |
 |---|---|---:|---|
-| `inflate_radius_m` | `/map_manage` | `0.55` | double input / slider，0.0-3.0 m |
-| `chennal_width_m` | `/map_manage` | `0.6` | double input / slider，0.1-3.0 m |
+| `inflate_radius_m` | `/map_manage` | `0.75` | double input / slider，0.75-3.0 m |
+| `chennal_width_m` | `/map_manage` | `1.2` | double input / slider，0.1-3.0 m |
 
 #### Coverage 參數
 
@@ -281,7 +281,7 @@ string feedback
 2. 依 coverage split points 切段。
 3. 再依大轉角與最大長度切段。
 4. 每段 publish `/split_path`。
-5. 使用 Nav2 `followPath()` 執行。
+5. 透過 Nav2 `FollowPath` action 執行，並以 goal handle/result status 確認終態。
 6. 失敗時讀取 `/rosout` 中 Nav2 warning/error 摘要。
 
 Execution 頁建議欄位：
@@ -303,14 +303,14 @@ Execution 頁建議欄位：
 
 | Topic | Type | 說明 |
 |---|---|---|
-| `/cmd_vel` | `geometry_msgs/TwistStamped` | 發布速度命令 |
+| `/keyboard_cmd_vel` | `geometry_msgs/TwistStamped` | 發布到安全 mux 的鍵盤速度命令 |
 
 參數：
 
 | Parameter | Default |
 |---|---:|
-| `max_linear_speed` | `0.8` |
-| `max_angular_speed` | `1.5` |
+| `max_linear_speed` | `0.5` |
+| `max_angular_speed` | `1.0` |
 | `linear_step` | `0.15` |
 | `angular_step` | `0.45` |
 | `linear_acceleration` | `0.8` |
@@ -318,11 +318,15 @@ Execution 頁建議欄位：
 | `publish_rate` | `20.0` |
 | `steering_timeout` | `0.25` |
 
-Flutter 若要做虛擬搖桿，建議透過 adapter 發布 stamped velocity，且加入 deadman switch。專案中 `twist_mux_topics.yaml` 目前列出 `/nav_cmd_vel`、`/joy_cmd`、`/keyboard_cmd_vel`，但 keyboard teleop 現在直接發 `/cmd_vel`，前端實作前應確認最終 mux topic。
+Flutter 虛擬搖桿只能發布 `/app_joy_cmd`，並回填機器人發出的
+`/manual_command_clock` stamp 與 session id。機器人端 manual guard 驗證後才轉成
+`/joy_cmd`。完整路徑為 `/app_joy_cmd` → manual guard → `/joy_cmd` →
+`twist_mux` → final velocity guard → drivetrain；App 不得直接發布後段 topic。
 
 #### 刀盤控制
 
-目前 `blade_teleop_joy` 從 joystick `/joy` 讀取輸入，發布刀盤 effort：
+生產系統的刀盤輸出目前強制為零，`blade_teleop_joy` 不會在生產 launch
+啟動。下列為舊的實驗介面，不是可用的 App 控制合約：
 
 | Topic | Type | 說明 |
 |---|---|---|
@@ -399,8 +403,11 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/split_path` | `nav_msgs/Path` | `nav_action_server` | 目前執行中的切段 |
 | `/coverage_split_points` | `visualization_msgs/Marker` | `nav_action_server` | 分段點 |
 | `/rosout` | `rcl_interfaces/Log` | ROS | 診斷與錯誤 |
-| `/cmd_vel` | `geometry_msgs/TwistStamped` | teleop / controller | 移動控制 |
-| `/mower_blade_controller/commands` | `std_msgs/Float64MultiArray` | blade teleop | 刀盤命令 |
+| `/app_joy_cmd` | `geometry_msgs/TwistStamped` | Flutter App | 未信任的手動命令入口 |
+| `/manual_command_clock` | `std_msgs/Header` | manual guard | 機器人時間與啟動期 session |
+| `/joy_cmd` | `geometry_msgs/TwistStamped` | manual guard | 通過時間/session 驗證的 mux 輸入 |
+| `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | final guard | 生產 controller 唯一速度入口 |
+| `/mower_blade_controller/commands` | `std_msgs/Float64MultiArray` | disabled | 生產環境不可用 |
 
 ### 6.3 Interface Schema
 
@@ -492,7 +499,7 @@ geometry_msgs/Pose[] coverage_split_points
   "CoverageSettings": {
     "stripWidthM": 0.8,
     "waypointSpacingM": 0.2,
-    "inflateRadiusM": 0.55,
+    "inflateRadiusM": 0.75,
     "unknownAsObstacle": true,
     "coveragePattern": "zigzag",
     "boundaryRing": false

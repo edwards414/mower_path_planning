@@ -172,6 +172,58 @@ def test_write_site_is_atomic(tmp_path):
     assert names == ['後院']
 
 
+def test_active_site_manifest_round_trip_is_atomic_and_utf8(tmp_path):
+    sites_dir = str(tmp_path)
+    site_store.write_active_site(sites_dir, '後院')
+
+    assert site_store.read_active_site(sites_dir) == '後院'
+    manifest = tmp_path / '.active_site'
+    assert '後院' in manifest.read_text(encoding='utf-8')
+    assert not (tmp_path / '.active_site.tmp').exists()
+
+    site_store.clear_active_site(sites_dir)
+    assert site_store.read_active_site(sites_dir) is None
+    assert not manifest.exists()
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '{}',
+        '{"version": 2, "active": "field"}',
+        '{"version": 1, "active": "../field"}',
+        'not json',
+    ],
+)
+def test_active_site_manifest_rejects_corruption(tmp_path, payload):
+    (tmp_path / '.active_site').write_text(payload, encoding='utf-8')
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        site_store.read_active_site(str(tmp_path))
+
+
+def test_site_and_manifest_writes_fsync_file_and_directory(
+    tmp_path,
+    monkeypatch,
+):
+    fsync_calls = []
+    monkeypatch.setattr(
+        site_store.os,
+        'fsync',
+        lambda file_descriptor: fsync_calls.append(file_descriptor),
+    )
+
+    site_store.write_site(str(tmp_path), _sample_site())
+    assert len(fsync_calls) == 2
+
+    fsync_calls.clear()
+    site_store.write_active_site(str(tmp_path), '後院')
+    assert len(fsync_calls) == 2
+
+    fsync_calls.clear()
+    site_store.clear_active_site(str(tmp_path))
+    assert len(fsync_calls) == 1
+
+
 def test_antimeridian_wrap():
     # Site saved just west of the antimeridian, reloaded under a datum just
     # east of it (~22 m away): vertices must land metres away, not 38,000 km.

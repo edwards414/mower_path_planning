@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 M_PER_DEG_LAT = 111320.0
 
 _INVALID_NAME_CHARS = re.compile(r'[\\/\x00-\x1f]')
+_ACTIVE_SITE_FILE = '.active_site'
 
 
 # ── geo conversion ─────────────────────────────────────────────────────────
@@ -106,6 +107,39 @@ def valid_name(name):
 
 def site_path(sites_dir, name):
     return os.path.join(sites_dir, name + '.json')
+
+
+def active_site_path(sites_dir):
+    """Return the durable active-site manifest path."""
+    return os.path.join(sites_dir, _ACTIVE_SITE_FILE)
+
+
+def _fsync_dir(path):
+    """Make a replace/unlink durable across sudden power loss on Linux."""
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    directory_fd = os.open(path, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _write_json_atomic(path, payload, *, ensure_ascii=True):
+    """Write and atomically replace one durable JSON file."""
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as file_obj:
+        json.dump(
+            payload,
+            file_obj,
+            ensure_ascii=ensure_ascii,
+            indent=2,
+        )
+        file_obj.flush()
+        os.fsync(file_obj.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(directory)
 
 
 def build_site(name, datum, zones, risk_zones, channels, created_at=None):
@@ -182,12 +216,49 @@ def site_to_xy(site, datum):
 def write_site(sites_dir, site):
     # 原子寫入：先寫 .tmp 再 os.replace，斷電/被 kill 不會留下半截檔
     # （active site 檔在每次 /edit_zone 後都會被覆寫，唯一副本必須保護）。
-    os.makedirs(sites_dir, exist_ok=True)
-    path = site_path(sites_dir, site['name'])
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(site, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    _write_json_atomic(
+        site_path(sites_dir, site['name']),
+        site,
+        ensure_ascii=False,
+    )
+
+
+def write_active_site(sites_dir, name):
+    """Persist the active named site after validating its file-safe name."""
+    normalized = valid_name(name)
+    if normalized is None or normalized != name:
+        raise ValueError(f'invalid active site name: {name!r}')
+    _write_json_atomic(
+        active_site_path(sites_dir),
+        {'version': 1, 'active': normalized},
+        ensure_ascii=False,
+    )
+
+
+def read_active_site(sites_dir):
+    """Read the active named-site manifest, or None when it does not exist."""
+    path = active_site_path(sites_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as file_obj:
+        payload = json.load(file_obj)
+    if not isinstance(payload, dict) or payload.get('version') != 1:
+        raise ValueError('active-site manifest has an unsupported format')
+    name = payload.get('active')
+    normalized = valid_name(name)
+    if normalized is None or normalized != name:
+        raise ValueError('active-site manifest contains an invalid name')
+    return normalized
+
+
+def clear_active_site(sites_dir):
+    """Durably clear the active named-site association."""
+    path = active_site_path(sites_dir)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+    _fsync_dir(sites_dir)
 
 
 def read_site(sites_dir, name):
@@ -197,6 +268,7 @@ def read_site(sites_dir, name):
 
 def delete_site(sites_dir, name):
     os.remove(site_path(sites_dir, name))
+    _fsync_dir(sites_dir)
 
 
 def rename_site(sites_dir, old_name, new_name):

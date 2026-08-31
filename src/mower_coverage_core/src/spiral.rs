@@ -484,8 +484,7 @@ fn onion_layer_spiral(
 
     let dist = bfs_dist(comp_mask);
     let layer_step = ((strip_width_m / res).round() as usize).max(1);
-    let point_spacing_m = waypoint_spacing_m.max(strip_width_m);
-    let spacing_cells = ((point_spacing_m / res).round() as usize).max(1);
+    let spacing_cells = ((waypoint_spacing_m / res).round() as usize).max(1);
     let max_dist = comp_mask.iter()
         .zip(dist.iter())
         .filter(|(&m, _)| m)

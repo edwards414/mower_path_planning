@@ -32,6 +32,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 from nav_msgs.msg import OccupancyGrid
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 
@@ -50,12 +51,23 @@ class AutoCoverage(Node):
 
         self._free_space_seen = threading.Event()
         self._risk_map_seen = threading.Event()
+        self._navigation_idle_seen = threading.Event()
         self.create_subscription(
             OccupancyGrid, '/free_space_inflated',
             lambda _m: self._free_space_seen.set(), _latched())
         self.create_subscription(
             OccupancyGrid, '/risk_map_inflated',
             lambda _m: self._risk_map_seen.set(), _latched())
+        self.create_subscription(
+            Bool,
+            '/nav_operation_active',
+            lambda message: (
+                self._navigation_idle_seen.clear()
+                if message.data
+                else self._navigation_idle_seen.set()
+            ),
+            _latched(),
+        )
 
         self.cli_load = self.create_client(Trigger, '/load_zone_list')
         self.cli_fs = self.create_client(Trigger, '/create_free_space')
@@ -89,21 +101,26 @@ class AutoCoverage(Node):
         self.get_logger().error(f'auto_coverage: timed out waiting for {what}')
         return False
 
-    def run_sequence(self):
+    def run_sequence(self) -> bool:
         # Give the freshly-launched nodes a moment to advertise services.
         time.sleep(3.0)
+        if not self._wait(
+            self._navigation_idle_seen,
+            'navigation coordinator idle state',
+        ):
+            return False
         if not self._call(self.cli_load, '/load_zone_list'):
-            return
+            return False
         # create_free_space is async -> wait for /free_space_inflated.
         if not self._call(self.cli_fs, '/create_free_space'):
-            return
+            return False
         if not self._wait(self._free_space_seen, '/free_space_inflated'):
-            return
+            return False
         # create_risk_map is async -> wait for /risk_map_inflated.
         if not self._call(self.cli_risk, '/create_risk_map'):
-            return
+            return False
         if not self._wait(self._risk_map_seen, '/risk_map_inflated'):
-            return
+            return False
         # /risk_map_inflated arriving on OUR subscription doesn't guarantee
         # coverage_node has processed it yet (separate subscriber). Retry
         # generate_coverage_path until coverage_node has the map.
@@ -111,7 +128,7 @@ class AutoCoverage(Node):
             time.sleep(1.5)
             if not self.cli_cov.wait_for_service(timeout_sec=self._timeout):
                 self.get_logger().error('auto_coverage: coverage service gone')
-                return
+                return False
             fut = self.cli_cov.call_async(Trigger.Request())
             t0 = time.time()
             while rclpy.ok() and not fut.done() and time.time() - t0 < self._timeout:
@@ -121,11 +138,12 @@ class AutoCoverage(Node):
             msg = getattr(resp, 'message', '') if resp else 'timeout'
             if ok:
                 self.get_logger().info('auto_coverage: coverage path ready ✓')
-                return
+                return True
             self.get_logger().warn(
                 f'auto_coverage: generate attempt {attempt + 1} failed ({msg}); '
                 'retrying')
         self.get_logger().error('auto_coverage: coverage generation gave up')
+        return False
 
 
 def main(args=None):
@@ -133,20 +151,27 @@ def main(args=None):
     node = AutoCoverage()
     spin = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin.start()
+    exit_code = 0
     try:
-        node.run_sequence()
-    finally:
-        node.get_logger().info('auto_coverage: done (idle)')
-        # Keep the node alive so launch doesn't flag an early exit; the work is
-        # one-shot but the process lingers harmlessly.
-        try:
+        if not node.run_sequence():
+            exit_code = 1
+            node.get_logger().fatal(
+                'auto_coverage: startup sequence failed; exiting nonzero'
+            )
+        else:
+            node.get_logger().info('auto_coverage: done (idle)')
+            # Keep the successful one-shot node alive. A failed sequence must
+            # exit so launch supervision and CI can observe the failure.
             while rclpy.ok():
                 time.sleep(1.0)
-        except KeyboardInterrupt:
-            pass
+    except KeyboardInterrupt:
+        pass
+    finally:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == '__main__':

@@ -22,11 +22,19 @@ autonomous lawn mowers using zigzag and spiral patterns. It integrates
 with ROS2 Nav2 for autonomous navigation.
 """
 
+import json
 import threading
+import uuid
 
+from action_msgs.msg import GoalStatus
 from mower_interface.action import Waypoint
 from mower_interface.srv import (
-    ChannelRoute, ZoneExecPath, ZoneMapList, ZoneSequence,
+    CancelNavigationDispatch,
+    ChannelRoute,
+    ConfirmNavigationDispatch,
+    ZoneExecPath,
+    ZoneMapList,
+    ZoneSequence,
 )
 from rclpy.action import ActionClient
 
@@ -39,10 +47,10 @@ import cv2
 import numpy as np
 
 import rclpy
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 from std_srvs.srv import SetBool, Trigger
@@ -51,28 +59,46 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from .coverage.path_validator import SafeMap
 from .coverage_backend.factory import create_backend
+from .navigation_guard import NavigationActivityGuard, guarded_mission_mutation
 from .utils.path_utils import (
     _transform_coverage_path_points,
     _transform_coverage_split_points,
 )
 
 
+_PROVEN_TERMINAL_ACTION_STATUSES = {
+    GoalStatus.STATUS_SUCCEEDED,
+    GoalStatus.STATUS_CANCELED,
+    GoalStatus.STATUS_ABORTED,
+}
 
-class CoveragePlanner(Node):
+
+def _proven_action_result(done_future):
+    """Return a get-result response only for a proven terminal ROS status."""
+    response = done_future.result()
+    if response.status not in _PROVEN_TERMINAL_ACTION_STATUSES:
+        raise RuntimeError(
+            f'action result status {response.status} is not terminal proof'
+        )
+    return response
+
+
+class CoveragePlanner(Node, NavigationActivityGuard):
     """CoveragePlanner class."""
 
     def __init__(self):
         """Initialize the CoveragePlanner class."""
         super().__init__('boustrophedon_coverage')
-        self.set_parameters(
-            [Parameter('use_sim_time', Parameter.Type.BOOL, True)])
         self.get_logger().info('boustrophedon_coverage 初始化')
         self.declare_parameter('strip_width_m', 0.8)
+        self.declare_parameter('waypoint_spacing_m', 0.2)
+        self.declare_parameter('zigzag_angle_deg', 0.0)
         self.declare_parameter('unknown_as_obstacle', True)
         self.declare_parameter('min_safe_component_area_m2', 0.05)
         self.declare_parameter('coverage_pattern', 'zigzag')
         self.declare_parameter('coverage_backend', 'rust')
         self.declare_parameter('allow_backend_fallback', True)
+        self.declare_parameter('fallback_cancel_request_timeout_s', 5.0)
         # boundary_ring: when true, trace each zone's outer contour as a
         # perimeter pass (mowed before the area fill). User-controllable from the
         # planning UI (PyQt checkbox / Flutter); custom image missions may also
@@ -88,13 +114,13 @@ class CoveragePlanner(Node):
             f'coverage backend: {type(self._backend).__name__}'
         )
 
-        qos_vol = QoSProfile(depth=1)
-        qos_vol.durability = QoSDurabilityPolicy.VOLATILE
-        qos_vol.reliability = QoSReliabilityPolicy.RELIABLE
-
         qos_tl = QoSProfile(depth=1)
         qos_tl.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         qos_tl.reliability = QoSReliabilityPolicy.RELIABLE
+        self._init_navigation_activity_guard()
+        self.add_on_set_parameters_callback(
+            self._on_planning_parameters_changed
+        )
 
         self.cb_group = ReentrantCallbackGroup()
 
@@ -117,6 +143,29 @@ class CoveragePlanner(Node):
         self._nav_follow_path_client = ActionClient(
             self, Waypoint, 'nav_action_follow_path'
         )
+        self._confirm_navigation_dispatch_client = self.create_client(
+            ConfirmNavigationDispatch,
+            '/confirm_navigation_dispatch',
+            callback_group=self.cb_group,
+        )
+        self._cancel_navigation_dispatch_client = self.create_client(
+            CancelNavigationDispatch,
+            '/cancel_navigation_dispatch',
+            callback_group=self.cb_group,
+        )
+        self._nav_status_client = self.create_client(
+            Trigger,
+            '/check_nav_status',
+            callback_group=self.cb_group,
+        )
+        self._last_nav_dispatch_error = ''
+        self._exec_goal_handle = None
+        self._goal_tracking_lock = threading.Lock()
+        self._unconfirmed_goal_handles = {}
+        self._goal_tracking_timers = set()
+        self._fallback_cancel_attempts = {}
+        self._goal_tracking_shutdown = False
+        self._sequence_active_goal = None
         self._channel_route_client = self.create_client(
             ChannelRoute, '/get_channel_route',
             callback_group=self.cb_group
@@ -135,21 +184,28 @@ class CoveragePlanner(Node):
             callback_group=self.cb_group
         )
 
-        self.path_pub = self.create_publisher(Path, '/coverage_path', 1)
+        # These are current-plan snapshots, not an event stream. Latching also
+        # preserves DELETEALL from _clear_path_visuals for late joiners.
+        self.path_pub = self.create_publisher(Path, '/coverage_path', qos_tl)
         self.path_marker_pub = self.create_publisher(
-            MarkerArray, '/coverage_path_markers', 1
+            MarkerArray, '/coverage_path_markers', qos_tl
         )
         self.invalid_segments_pub = self.create_publisher(
-            MarkerArray, '/coverage_invalid_segments', 1
+            MarkerArray, '/coverage_invalid_segments', qos_tl
         )
         self.connectors_pub = self.create_publisher(
-            MarkerArray, '/coverage_connectors', 1
+            MarkerArray, '/coverage_connectors', qos_tl
         )
+        # These duplicate the map manager's snapshot topics for historical API
+        # compatibility. Keep the offered durability compatible with every
+        # transient-local consumer (coverage itself, auto coverage and the
+        # Flutter adapter); a volatile publisher on the same names produces
+        # incompatible-QoS endpoints and can make diagnostics misleading.
         self.free_space_inflated_pub = self.create_publisher(
-            OccupancyGrid, '/free_space_inflated', qos_vol
+            OccupancyGrid, '/free_space_inflated', qos_tl
         )
         self.risk_map_inflated_pub = self.create_publisher(
-            OccupancyGrid, '/risk_map_inflated', qos_vol
+            OccupancyGrid, '/risk_map_inflated', qos_tl
         )
 
         self.free_space_map = None
@@ -175,6 +231,44 @@ class CoveragePlanner(Node):
         self.coverage_split_points = []
         self.zone_map_list = []
 
+    def _on_planning_parameters_changed(self, params):
+        runtime_immutable = {'coverage_backend', 'allow_backend_fallback'}
+        changed_immutable = [
+            param.name for param in params if param.name in runtime_immutable
+        ]
+        if changed_immutable:
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    f'{", ".join(changed_immutable)} is startup-only; '
+                    'restart coverage_node with the desired backend'
+                ),
+            )
+        guarded_names = {
+            'strip_width_m',
+            'waypoint_spacing_m',
+            'zigzag_angle_deg',
+            'unknown_as_obstacle',
+            'min_safe_component_area_m2',
+            'coverage_pattern',
+            'boundary_ring',
+        }
+        if (
+            any(param.name in guarded_names for param in params)
+            and (
+                self._mutation_block_reason() is not None
+                or self._local_mutation_lock.locked()
+            )
+        ):
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    'coverage parameters cannot change while navigation or '
+                    'coverage generation is active/unknown'
+                ),
+            )
+        return SetParametersResult(successful=True)
+
     def risk_map_callback(self, msg: OccupancyGrid):
         """Handle the risk map subscription callback."""
         self.risk_map = msg
@@ -185,6 +279,7 @@ class CoveragePlanner(Node):
         self.risk_map_inflated_map = msg
         self.get_logger().info('收到 risk_map_inflated 地圖')
 
+    @guarded_mission_mutation('regenerate the coverage path')
     def generate_coverage_path_srv(self, req, res):
         """服務回調：生成覆蓋路徑."""
         if self.risk_map_inflated_map is None:
@@ -222,6 +317,24 @@ class CoveragePlanner(Node):
             )
             return False
         self.get_logger().info(f'coverage_pattern={pattern}')
+
+        strip_width_m = float(self.get_parameter('strip_width_m').value)
+        waypoint_spacing_m = float(
+            self.get_parameter('waypoint_spacing_m').value
+        )
+        zigzag_angle_deg = float(
+            self.get_parameter('zigzag_angle_deg').value
+        )
+        if strip_width_m <= 0.0 or waypoint_spacing_m <= 0.0:
+            self.get_logger().error(
+                'strip_width_m and waypoint_spacing_m must both be positive'
+            )
+            return False
+        if not 0.0 <= zigzag_angle_deg <= 180.0:
+            self.get_logger().error(
+                'zigzag_angle_deg must be between 0 and 180 degrees'
+            )
+            return False
 
         for i in range(len(self.zone_map_list)):
             info = self.zone_map_list[i].mask_map.info
@@ -271,7 +384,8 @@ class CoveragePlanner(Node):
 
             _gen_kw = dict(
                 safe_map=safe_map,
-                strip_width_m=self.get_parameter('strip_width_m').value,
+                strip_width_m=strip_width_m,
+                waypoint_spacing_m=waypoint_spacing_m,
                 res=res,
                 H=H,
                 W=W,
@@ -284,7 +398,9 @@ class CoveragePlanner(Node):
                 )
             else:
                 coverage_pts, split_pts, invalid_segs = (
-                    self._backend.generate_zigzag_path(**_gen_kw)
+                    self._backend.generate_zigzag_path(
+                        **_gen_kw, angle_deg=zigzag_angle_deg
+                    )
                 )
 
             safe_map_struct = SafeMap(
@@ -699,6 +815,8 @@ class CoveragePlanner(Node):
             The service response containing success status and message.
 
         """
+        if self._reject_mutation(res, 'start another navigation mission'):
+            return res
         self.get_logger().info(f'zone_exec_path_srv start: {req.zone_id}')
         zone_id = req.zone_id
         zone_map = None
@@ -712,15 +830,20 @@ class CoveragePlanner(Node):
             res.message = 'Zone not found'
             return res
 
-        # Fire-and-forget on the executor-spun client (bounded server wait);
-        # execution runs in the background. See _send_follow_path.
+        if not zone_map.path.poses:
+            res.success = False
+            res.message = 'Zone coverage path is empty'
+            return res
+
+        # Execution remains asynchronous, but do not report success until the
+        # action server has accepted this goal and its shared busy guard.
         dispatched = self._send_follow_path(
             zone_map.path, zone_map.coverage_split_points, block=False
         )
         res.success = dispatched
         res.message = (
-            'Goal sent to navigation action server'
-            if dispatched else 'nav action server 不可用'
+            'Navigation action goal accepted'
+            if dispatched else self._last_nav_dispatch_error
         )
         return res
 
@@ -728,9 +851,17 @@ class CoveragePlanner(Node):
 
     def run_zone_sequence_srv(self, req, res):
         """啟動多 zone 任務序列：覆蓋 → 走通道 → 覆蓋 → ..."""
+        if self._reject_mutation(res, 'start a zone sequence'):
+            return res
         if self._sequence_thread and self._sequence_thread.is_alive():
             res.success = False
             res.message = '已有任務序列執行中，請先呼叫 /stop_zone_sequence'
+            return res
+        with self._goal_tracking_lock:
+            previous_goal_unconfirmed = self._sequence_active_goal is not None
+        if previous_goal_unconfirmed:
+            res.success = False
+            res.message = '前一序列的導航終止狀態尚未確認，拒絕啟動新序列'
             return res
 
         zone_ids = list(req.zone_ids)
@@ -771,11 +902,18 @@ class CoveragePlanner(Node):
         return res
 
     def stop_zone_sequence_srv(self, req, res):
-        """取消正在執行的任務序列."""
+        """Stop the sequence and immediately cancel its current action goal."""
         self._sequence_cancel.set()
+        cancel_started = self._cancel_sequence_active_goal(
+            'Zone sequence stop requested'
+        )
         res.success = True
         res.message = (
-            '已送出取消請求，序列將在當前步驟完成後停止'
+            '已立即送出目前導航目標的取消請求；正追蹤至終止狀態'
+            if cancel_started
+            else '目前導航目標的取消已在追蹤中'
+            if self._sequence_active_goal is not None
+            else '已送出取消請求；序列尚未派送或正在步驟間切換'
             if self._sequence_thread and self._sequence_thread.is_alive()
             else '目前無執行中的任務序列'
         )
@@ -797,7 +935,10 @@ class CoveragePlanner(Node):
                 f'共 {len(zone_map.path.poses)} 個路徑點'
             )
             ok = self._send_follow_path(
-                zone_map.path, list(zone_map.coverage_split_points), block=True
+                zone_map.path,
+                list(zone_map.coverage_split_points),
+                block=True,
+                sequence_owned=True,
             )
             if not ok:
                 self.get_logger().error(
@@ -835,7 +976,12 @@ class CoveragePlanner(Node):
                 f'(zone {zone_id} → zone {next_zone_id})，'
                 f'共 {len(route_res.channel_path.poses)} 個路徑點'
             )
-            ok = self._send_follow_path(route_res.channel_path, [], block=True)
+            ok = self._send_follow_path(
+                route_res.channel_path,
+                [],
+                block=True,
+                sequence_owned=True,
+            )
             if not ok:
                 self.get_logger().error(
                     f'通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止'
@@ -855,50 +1001,846 @@ class CoveragePlanner(Node):
                 return z
         return None
 
-    def _send_follow_path(
-        self, path, coverage_split_points, block=False, timeout_s=600.0
+    def _request_nav2_cancel_fallback(
+        self,
+        reason,
+        dispatch_id,
+        on_terminal_confirmed=None,
+        on_request_finished=None,
     ):
-        """Send a nav_action_follow_path goal on the executor-spun client — the
-        single source of truth for both /zone_exec_path and the zone sequence.
+        """Send one bounded correlated-cancel request.
 
-        block=False → fire-and-forget (returns True once dispatched).
-        block=True  → wait for the result (returns the success bool).
+        Return an idempotent cancellation callback while the request is live.
+        The caller can use ``on_request_finished`` to release a per-goal
+        outstanding-request gate on response, timeout, or node shutdown.
         """
+        try:
+            timeout_s = float(
+                self.get_parameter(
+                    'fallback_cancel_request_timeout_s'
+                ).value
+            )
+        except (TypeError, ValueError, OverflowError):
+            timeout_s = 5.0
+        if not 0.5 <= timeout_s <= 30.0:
+            timeout_s = 5.0
+        attempt_lock = threading.Lock()
+        attempt_claimed = False
+        timeout_timer = None
+        future = None
+        attempt = {
+            'cancel': None,
+            'finished_callbacks': [],
+            'terminal_callbacks': [],
+            'terminal_confirmed': False,
+        }
+        if on_request_finished is not None:
+            attempt['finished_callbacks'].append(on_request_finished)
+        if on_terminal_confirmed is not None:
+            attempt['terminal_callbacks'].append(on_terminal_confirmed)
+
+        def _claim_attempt():
+            nonlocal attempt_claimed
+            with attempt_lock:
+                if attempt_claimed:
+                    return False
+                attempt_claimed = True
+            if timeout_timer is not None:
+                timeout_timer.cancel()
+            return True
+
+        def _finish_attempt():
+            with self._goal_tracking_lock:
+                if (
+                    self._fallback_cancel_attempts.get(dispatch_id)
+                    is attempt
+                ):
+                    self._fallback_cancel_attempts.pop(dispatch_id, None)
+                callbacks = tuple(attempt['finished_callbacks'])
+                attempt['finished_callbacks'].clear()
+                attempt['terminal_callbacks'].clear()
+            for callback in callbacks:
+                try:
+                    callback()
+                except Exception as exc:  # noqa: BLE001
+                    self.get_logger().error(
+                        f'{reason}; fallback completion callback failed: {exc}'
+                    )
+
+        def _cancel_future():
+            if future is None or future.done():
+                return
+            cancel = getattr(future, 'cancel', None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _cancel_attempt():
+            if not _claim_attempt():
+                return
+            _cancel_future()
+            _finish_attempt()
+
+        attempt['cancel'] = _cancel_attempt
+
+        terminal_callback_now = None
+        with self._goal_tracking_lock:
+            if self._goal_tracking_shutdown:
+                return None
+            existing = self._fallback_cancel_attempts.get(dispatch_id)
+            if existing is None:
+                self._fallback_cancel_attempts[dispatch_id] = attempt
+                terminal_callback_now = None
+            else:
+                if on_request_finished is not None:
+                    existing['finished_callbacks'].append(
+                        on_request_finished
+                    )
+                if on_terminal_confirmed is not None:
+                    if existing['terminal_confirmed']:
+                        terminal_callback_now = on_terminal_confirmed
+                    else:
+                        existing['terminal_callbacks'].append(
+                            on_terminal_confirmed
+                        )
+                else:
+                    terminal_callback_now = None
+                existing_cancel = existing['cancel']
+        if existing is not None:
+            if terminal_callback_now is not None:
+                terminal_callback_now()
+            return existing_cancel
+
+        if not self._cancel_navigation_dispatch_client.wait_for_service(
+            timeout_sec=0.25
+        ):
+            if _claim_attempt():
+                self.get_logger().error(
+                    f'{reason}; correlated cancel service unavailable and '
+                    'navigation outcome remains uncertain'
+                )
+                _finish_attempt()
+            return None
+
+        try:
+            with attempt_lock:
+                if attempt_claimed:
+                    return None
+                request = CancelNavigationDispatch.Request()
+                request.dispatch_id = dispatch_id
+                future = self._cancel_navigation_dispatch_client.call_async(
+                    request
+                )
+        except Exception as exc:  # noqa: BLE001
+            if _claim_attempt():
+                self.get_logger().error(
+                    f'{reason}; fallback cancel dispatch failed: {exc}; '
+                    'navigation outcome remains uncertain'
+                )
+                _finish_attempt()
+            return None
+
+        def _on_fallback_cancel(done_future):
+            if not _claim_attempt():
+                return
+            try:
+                response = done_future.result()
+                if (
+                    response is not None
+                    and response.success
+                    and response.terminal_confirmed
+                ):
+                    with self._goal_tracking_lock:
+                        attempt['terminal_confirmed'] = True
+                        terminal_callbacks = tuple(
+                            attempt['terminal_callbacks']
+                        )
+                        attempt['terminal_callbacks'].clear()
+                    for callback in terminal_callbacks:
+                        try:
+                            callback()
+                        except Exception as exc:  # noqa: BLE001
+                            self.get_logger().error(
+                                f'{reason}; terminal confirmation callback '
+                                f'failed: {exc}'
+                            )
+                elif response is None or not response.success:
+                    message = (
+                        getattr(response, 'message', 'no response')
+                        if response is not None else 'no response'
+                    )
+                    self.get_logger().error(
+                        f'{reason}; fallback cancel was not confirmed: '
+                        f'{message}'
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f'{reason}; fallback cancel failed: {exc}'
+                )
+            finally:
+                _finish_attempt()
+
+        def _on_fallback_timeout():
+            if not _claim_attempt():
+                return
+            _cancel_future()
+            self.get_logger().error(
+                f'{reason}; fallback cancel response timed out after '
+                f'{timeout_s:.1f}s; navigation outcome remains uncertain'
+            )
+            _finish_attempt()
+
+        new_timeout_timer = threading.Timer(
+            timeout_s,
+            _on_fallback_timeout,
+        )
+        new_timeout_timer.daemon = True
+        with attempt_lock:
+            if attempt_claimed:
+                return None
+            timeout_timer = new_timeout_timer
+        with self._goal_tracking_lock:
+            shutdown = self._goal_tracking_shutdown
+        if shutdown:
+            _cancel_attempt()
+            return None
+
+        try:
+            future.add_done_callback(_on_fallback_cancel)
+            timeout_timer.start()
+        except Exception as exc:  # noqa: BLE001
+            _cancel_attempt()
+            self.get_logger().error(
+                f'{reason}; fallback cancel tracking failed: {exc}; '
+                'navigation outcome remains uncertain'
+            )
+            return None
+        return _cancel_attempt
+
+    def _register_active_navigation_goal(
+        self,
+        handle,
+        dispatch_id,
+        result_future,
+        *,
+        sequence_owned,
+    ):
+        """Atomically retain the exact active action identity."""
+        with self._goal_tracking_lock:
+            if sequence_owned and self._sequence_active_goal is not None:
+                return False
+            self._exec_goal_handle = handle
+            if sequence_owned:
+                self._sequence_active_goal = (
+                    handle,
+                    dispatch_id,
+                    result_future,
+                    False,
+                )
+        return True
+
+    def _clear_active_navigation_goal(
+        self,
+        handle,
+        dispatch_id,
+        result_future,
+    ):
+        """Clear only the matching generation; a late A cannot clear goal B."""
+        with self._goal_tracking_lock:
+            if self._exec_goal_handle is handle:
+                self._exec_goal_handle = None
+            active = self._sequence_active_goal
+            if (
+                active is not None
+                and active[0] is handle
+                and active[1] == dispatch_id
+                and active[2] is result_future
+            ):
+                self._sequence_active_goal = None
+
+    def _cancel_sequence_active_goal(self, reason):
+        """Mark cancel-once under lock, then issue cancellation outside it."""
+        with self._goal_tracking_lock:
+            active = self._sequence_active_goal
+            if active is None or active[3]:
+                return False
+            handle, dispatch_id, result_future, _ = active
+            self._sequence_active_goal = (
+                handle,
+                dispatch_id,
+                result_future,
+                True,
+            )
+        self._track_and_cancel_navigation_goal(
+            handle,
+            reason,
+            dispatch_id,
+            result_future=result_future,
+        )
+        return True
+
+    def _track_and_cancel_navigation_goal(
+        self,
+        handle,
+        reason,
+        dispatch_id,
+        result_future=None,
+    ):
+        """Retain a timed-out handle until terminal and verify cancellation."""
+        key = id(handle)
+        terminal = threading.Event()
+        cancel_acknowledged = threading.Event()
+        tracker = {
+            'handle': handle,
+            'terminal': terminal,
+            'timers': set(),
+            'fallback_token': None,
+            'fallback_cancel': None,
+        }
+        with self._goal_tracking_lock:
+            if (
+                self._goal_tracking_shutdown
+                or key in self._unconfirmed_goal_handles
+            ):
+                return False
+            self._unconfirmed_goal_handles[key] = tracker
+
+        if result_future is None:
+            try:
+                result_future = handle.get_result_async()
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f'{reason}; unable to track action result: {exc}'
+                )
+                result_future = None
+
+        def _schedule_tracking_timer(delay_s, callback):
+            timer_box = {}
+
+            def _run_timer():
+                with self._goal_tracking_lock:
+                    timer = timer_box['timer']
+                    tracker['timers'].discard(timer)
+                    self._goal_tracking_timers.discard(timer)
+                    should_run = (
+                        not terminal.is_set()
+                        and not self._goal_tracking_shutdown
+                    )
+                if should_run:
+                    callback()
+
+            timer = threading.Timer(delay_s, _run_timer)
+            timer.daemon = True
+            timer_box['timer'] = timer
+            with self._goal_tracking_lock:
+                if terminal.is_set() or self._goal_tracking_shutdown:
+                    return None
+                tracker['timers'].add(timer)
+                self._goal_tracking_timers.add(timer)
+            timer.start()
+            return timer
+
+        def _mark_terminal_confirmed():
+            with self._goal_tracking_lock:
+                if terminal.is_set():
+                    return
+                terminal.set()
+                if self._unconfirmed_goal_handles.get(key) is tracker:
+                    self._unconfirmed_goal_handles.pop(key, None)
+                timers = tuple(tracker['timers'])
+                tracker['timers'].clear()
+                for timer in timers:
+                    self._goal_tracking_timers.discard(timer)
+                cancel_fallback = tracker['fallback_cancel']
+                tracker['fallback_token'] = None
+                tracker['fallback_cancel'] = None
+            for timer in timers:
+                timer.cancel()
+            if cancel_fallback is not None:
+                cancel_fallback()
+            self._clear_active_navigation_goal(
+                handle,
+                dispatch_id,
+                result_future,
+            )
+
+        def _finish_fallback_attempt(token):
+            with self._goal_tracking_lock:
+                if tracker['fallback_token'] is not token:
+                    return
+                tracker['fallback_token'] = None
+                tracker['fallback_cancel'] = None
+
+        def _request_fallback(detail):
+            token = object()
+            with self._goal_tracking_lock:
+                if (
+                    terminal.is_set()
+                    or self._goal_tracking_shutdown
+                    or tracker['fallback_token'] is not None
+                ):
+                    return False
+                tracker['fallback_token'] = token
+            cancel_attempt = self._request_nav2_cancel_fallback(
+                f'{reason}; {detail}',
+                dispatch_id,
+                on_terminal_confirmed=_mark_terminal_confirmed,
+                on_request_finished=(
+                    lambda token=token: _finish_fallback_attempt(token)
+                ),
+            )
+            if cancel_attempt is None:
+                _finish_fallback_attempt(token)
+                return False
+            with self._goal_tracking_lock:
+                keep_attempt = (
+                    not terminal.is_set()
+                    and not self._goal_tracking_shutdown
+                    and tracker['fallback_token'] is token
+                )
+                if keep_attempt:
+                    tracker['fallback_cancel'] = cancel_attempt
+            if not keep_attempt:
+                cancel_attempt()
+            return keep_attempt
+
+        def _on_terminal(done_future):
+            try:
+                _proven_action_result(done_future)
+                self.get_logger().warn(
+                    f'{reason}; navigation action is now terminal'
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f'{reason}; terminal result could not be read: {exc}'
+                )
+                _request_fallback(
+                    'action terminal result could not be confirmed'
+                )
+                return
+            _mark_terminal_confirmed()
+
+        if result_future is not None:
+            try:
+                result_future.add_done_callback(_on_terminal)
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f'{reason}; action result callback could not be installed: '
+                    f'{exc}'
+                )
+                _request_fallback(
+                    'action result callback could not be installed'
+                )
+
+        def _on_cancel_response(done_future):
+            try:
+                response = done_future.result()
+                acknowledged = bool(
+                    response is not None
+                    and getattr(response, 'goals_canceling', ())
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f'{reason}; action cancel request failed: {exc}'
+                )
+                acknowledged = False
+            if acknowledged:
+                cancel_acknowledged.set()
+            else:
+                _request_fallback(
+                    'action server did not acknowledge cancellation'
+                )
+
+        try:
+            handle.cancel_goal_async().add_done_callback(_on_cancel_response)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(
+                f'{reason}; action cancellation could not be sent: {exc}'
+            )
+            _request_fallback('action cancellation dispatch failed')
+
+        def _cancel_watchdog():
+            if not terminal.is_set() and not cancel_acknowledged.is_set():
+                _request_fallback(
+                    'action cancellation acknowledgment timed out'
+                )
+
+        _schedule_tracking_timer(2.0, _cancel_watchdog)
+
+        def _retry_correlated_cancel_until_terminal():
+            if terminal.is_set():
+                return
+            _request_fallback(
+                'action is still not terminal; retrying correlated cancel'
+            )
+            _schedule_tracking_timer(
+                2.0,
+                _retry_correlated_cancel_until_terminal,
+            )
+
+        _schedule_tracking_timer(
+            2.0,
+            _retry_correlated_cancel_until_terminal,
+        )
+        return True
+
+    def _shutdown_navigation_goal_tracking(self):
+        """Cancel fallback futures/timers without starting post-destroy work."""
+        with self._goal_tracking_lock:
+            if self._goal_tracking_shutdown:
+                return
+            self._goal_tracking_shutdown = True
+            timers = tuple(self._goal_tracking_timers)
+            attempts = tuple(
+                attempt['cancel']
+                for attempt in self._fallback_cancel_attempts.values()
+            )
+            self._goal_tracking_timers.clear()
+            self._fallback_cancel_attempts.clear()
+            for tracker in self._unconfirmed_goal_handles.values():
+                tracker['terminal'].set()
+                tracker['timers'].clear()
+                tracker['fallback_token'] = None
+                tracker['fallback_cancel'] = None
+            self._unconfirmed_goal_handles.clear()
+        for timer in timers:
+            timer.cancel()
+        for cancel_attempt in attempts:
+            cancel_attempt()
+
+    def destroy_node(self):
+        """Stop background cancel tracking before destroying ROS entities."""
+        self._shutdown_navigation_goal_tracking()
+        return super().destroy_node()
+
+    def _send_follow_path(
+        self,
+        path,
+        coverage_split_points,
+        block=False,
+        timeout_s=600.0,
+        acceptance_timeout_s=3.0,
+        sequence_owned=False,
+    ):
+        """Send a goal and wait at least until the server accepts it.
+
+        ``block=False`` returns after goal acceptance. ``block=True`` waits for
+        the final action result. A late acceptance after timeout is canceled so
+        a failed service response can never leave untracked mower motion.
+        """
+        self._last_nav_dispatch_error = ''
+        if sequence_owned and self._sequence_cancel.is_set():
+            self._last_nav_dispatch_error = (
+                'Zone sequence was canceled before goal dispatch'
+            )
+            return False
+        if not path.poses:
+            self._last_nav_dispatch_error = 'Navigation path is empty'
+            self.get_logger().error(self._last_nav_dispatch_error)
+            return False
+
         if not self._nav_follow_path_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error('nav action server 不可用')
+            self._last_nav_dispatch_error = (
+                'Navigation action server unavailable'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
             return False
 
         goal = Waypoint.Goal()
         goal.path = path
         goal.coverage_split_points = list(coverage_split_points)
+        dispatch_id = uuid.uuid4().hex
+        goal.dispatch_id = dispatch_id
+
+        accepted = threading.Event()
+        accepted_lock = threading.Lock()
+        accepted_box = {
+            'handle': None,
+            'error': None,
+            'timed_out': False,
+        }
+
+        def _on_goal(future):
+            try:
+                handle = future.result()
+                error = None
+            except Exception as exc:  # noqa: BLE001
+                handle = None
+                error = exc
+
+            with accepted_lock:
+                timed_out = accepted_box['timed_out']
+                if not timed_out:
+                    accepted_box['handle'] = handle
+                    accepted_box['error'] = error
+            accepted.set()
+
+            if timed_out and handle is not None and handle.accepted:
+                self.get_logger().warn(
+                    'Canceling navigation goal accepted after timeout'
+                )
+                self._track_and_cancel_navigation_goal(
+                    handle,
+                    'Navigation goal was accepted after its caller timed out',
+                    dispatch_id,
+                )
+
+        try:
+            self._nav_follow_path_client.send_goal_async(
+                goal
+            ).add_done_callback(_on_goal)
+        except Exception as exc:  # noqa: BLE001
+            self._last_nav_dispatch_error = (
+                f'Navigation action goal dispatch failed: {exc}'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            return False
+        if not accepted.wait(timeout=acceptance_timeout_s):
+            with accepted_lock:
+                # Resolve a callback/Event race at the timeout boundary.
+                has_response = (
+                    accepted_box['handle'] is not None
+                    or accepted_box['error'] is not None
+                )
+                if not has_response:
+                    accepted_box['timed_out'] = True
+            if not has_response:
+                self._last_nav_dispatch_error = (
+                    'Navigation action goal acceptance timed out; dispatch '
+                    'outcome is uncertain and cancellation is being tracked'
+                )
+                self.get_logger().error(self._last_nav_dispatch_error)
+                self._request_nav2_cancel_fallback(
+                    self._last_nav_dispatch_error,
+                    dispatch_id,
+                )
+                return False
+
+        with accepted_lock:
+            handle = accepted_box['handle']
+            error = accepted_box['error']
+
+        if error is not None:
+            self._last_nav_dispatch_error = (
+                f'Navigation action goal response failed ({error}); dispatch '
+                'outcome is uncertain and correlated cancellation was '
+                'requested'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            self._request_nav2_cancel_fallback(
+                self._last_nav_dispatch_error,
+                dispatch_id,
+            )
+            return False
+        if handle is None or not handle.accepted:
+            reason = None
+            status_response = self._blocking_service_call(
+                self._nav_status_client,
+                Trigger.Request(),
+                timeout_s=1.0,
+            )
+            if status_response is not None and status_response.success:
+                try:
+                    payload = json.loads(status_response.message)
+                    value = payload.get('block_reason')
+                    reason = value.strip() if isinstance(value, str) else None
+                except (AttributeError, TypeError, ValueError):
+                    reason = None
+            self._last_nav_dispatch_error = (
+                'Navigation action goal rejected: '
+                f'{reason or "busy or a safety precondition failed"}'
+            )
+            self.get_logger().warn(self._last_nav_dispatch_error)
+            return False
+
+        try:
+            result_future = handle.get_result_async()
+        except Exception as exc:  # noqa: BLE001
+            self._last_nav_dispatch_error = (
+                f'Navigation result tracking could not start ({exc}); '
+                'outcome is uncertain, navigation may be active, and '
+                'cancellation is being tracked'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            self._track_and_cancel_navigation_goal(
+                handle,
+                self._last_nav_dispatch_error,
+                dispatch_id,
+            )
+            return False
+
+        if not self._register_active_navigation_goal(
+            handle,
+            dispatch_id,
+            result_future,
+            sequence_owned=sequence_owned,
+        ):
+            self._last_nav_dispatch_error = (
+                'A previous zone-sequence goal is not terminal; the new '
+                'accepted goal is being canceled'
+            )
+            self._track_and_cancel_navigation_goal(
+                handle,
+                self._last_nav_dispatch_error,
+                dispatch_id,
+                result_future=result_future,
+            )
+            return False
+        if sequence_owned and self._sequence_cancel.is_set():
+            self._last_nav_dispatch_error = (
+                'Zone sequence was canceled before dispatch confirmation'
+            )
+            self._cancel_sequence_active_goal(self._last_nav_dispatch_error)
+            return False
+
+        confirm_request = ConfirmNavigationDispatch.Request()
+        confirm_request.dispatch_id = dispatch_id
+        confirm_response = self._blocking_service_call(
+            self._confirm_navigation_dispatch_client,
+            confirm_request,
+            timeout_s=2.0,
+        )
+        if confirm_response is None or not confirm_response.success:
+            detail = (
+                confirm_response.message
+                if confirm_response is not None
+                else 'confirmation response timed out'
+            )
+            self._last_nav_dispatch_error = (
+                f'Navigation dispatch confirmation failed ({detail}); '
+                'outcome is uncertain, navigation may be active, and '
+                'cancellation is being tracked'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            self._track_and_cancel_navigation_goal(
+                handle,
+                self._last_nav_dispatch_error,
+                dispatch_id,
+                result_future=result_future,
+            )
+            return False
+        if sequence_owned and self._sequence_cancel.is_set():
+            self._last_nav_dispatch_error = (
+                'Zone sequence was canceled while confirmation was pending'
+            )
+            self._cancel_sequence_active_goal(self._last_nav_dispatch_error)
+            return False
 
         if not block:
-            self._exec_goal_future = (
-                self._nav_follow_path_client.send_goal_async(goal)
-            )
+            def _on_background_result(future):
+                try:
+                    response = _proven_action_result(future)
+                    success = bool(
+                        response.status == GoalStatus.STATUS_SUCCEEDED
+                        and response.result.success
+                    )
+                    self.get_logger().info(
+                        f'Background navigation completed: success={success}'
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._last_nav_dispatch_error = (
+                        f'Background navigation result could not be read '
+                        f'({exc}); outcome is uncertain, navigation may be '
+                        'active, and cancellation is being tracked'
+                    )
+                    self.get_logger().error(self._last_nav_dispatch_error)
+                    self._track_and_cancel_navigation_goal(
+                        handle,
+                        self._last_nav_dispatch_error,
+                        dispatch_id,
+                        result_future=result_future,
+                    )
+                    return
+                self._clear_active_navigation_goal(
+                    handle,
+                    dispatch_id,
+                    result_future,
+                )
+
+            try:
+                result_future.add_done_callback(_on_background_result)
+            except Exception as exc:  # noqa: BLE001
+                self._last_nav_dispatch_error = (
+                    f'Background result callback could not be installed '
+                    f'({exc}); cancellation is being tracked'
+                )
+                self.get_logger().error(self._last_nav_dispatch_error)
+                self._track_and_cancel_navigation_goal(
+                    handle,
+                    self._last_nav_dispatch_error,
+                    dispatch_id,
+                    result_future=result_future,
+                )
+                return False
             return True
 
         done = threading.Event()
         result_box = [False]
 
-        def _on_goal(future):
-            handle = future.result()
-            if not handle.accepted:
-                self.get_logger().warn('Nav goal 被 action server 拒絕')
+        def _on_result(future):
+            try:
+                response = _proven_action_result(future)
+                result_box[0] = bool(
+                    response.status == GoalStatus.STATUS_SUCCEEDED
+                    and response.result.success
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._last_nav_dispatch_error = (
+                    f'Navigation action result could not be read ({exc}); '
+                    'outcome is uncertain, navigation may be active, and '
+                    'cancellation is being tracked'
+                )
+                self.get_logger().error(self._last_nav_dispatch_error)
+                self._track_and_cancel_navigation_goal(
+                    handle,
+                    self._last_nav_dispatch_error,
+                    dispatch_id,
+                    result_future=result_future,
+                )
                 done.set()
                 return
-            handle.get_result_async().add_done_callback(_on_result)
-
-        def _on_result(future):
-            result_box[0] = future.result().result.success
+            self._clear_active_navigation_goal(
+                handle,
+                dispatch_id,
+                result_future,
+            )
             done.set()
 
-        self._nav_follow_path_client.send_goal_async(goal).add_done_callback(
-            _on_goal
-        )
-        if not done.wait(timeout=timeout_s):
-            self.get_logger().error(f'Nav action 超時（{timeout_s:.0f}s）')
+        try:
+            result_future.add_done_callback(_on_result)
+        except Exception as exc:  # noqa: BLE001
+            self._last_nav_dispatch_error = (
+                f'Navigation result callback could not be installed ({exc}); '
+                'cancellation is being tracked'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            self._track_and_cancel_navigation_goal(
+                handle,
+                self._last_nav_dispatch_error,
+                dispatch_id,
+                result_future=result_future,
+            )
             return False
+        if not done.wait(timeout=timeout_s):
+            self._last_nav_dispatch_error = (
+                f'Navigation action timed out after {timeout_s:.0f}s; '
+                'outcome is uncertain, navigation may be active, and '
+                'cancellation is being tracked'
+            )
+            self.get_logger().error(self._last_nav_dispatch_error)
+            self._track_and_cancel_navigation_goal(
+                handle,
+                self._last_nav_dispatch_error,
+                dispatch_id,
+                result_future=result_future,
+            )
+            return False
+        if not result_box[0] and not self._last_nav_dispatch_error:
+            self._last_nav_dispatch_error = (
+                'Navigation action completed unsuccessfully'
+            )
         return result_box[0]
 
     def _blocking_service_call(self, client, req, timeout_s=10.0):
@@ -917,7 +1859,11 @@ class CoveragePlanner(Node):
                 self.get_logger().error(f'Service call 異常: {e}')
             done.set()
 
-        client.call_async(req).add_done_callback(_cb)
+        try:
+            client.call_async(req).add_done_callback(_cb)
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'Service call dispatch failed: {exc}')
+            return None
 
         if not done.wait(timeout=timeout_s):
             self.get_logger().error(f'Service call 超時（{timeout_s:.0f}s）')
@@ -936,7 +1882,9 @@ def main(args=None):
     """Initialize and run the CoveragePlanner node."""
     rclpy.init(args=args)
     node = CoveragePlanner()
-    executor = MultiThreadedExecutor()
+    # Service callbacks wait briefly for action/service futures, so guarantee
+    # executor capacity for their done callbacks even on CPU-pinned hosts.
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:
         executor.spin()

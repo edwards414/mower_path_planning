@@ -9,7 +9,11 @@
 
   <exec_depend>mower_nav2</exec_depend>
   <exec_depend>apriltag_ros</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>joy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend condition="$MOWER_BUILD_TARGET != 'sim'">mower_controller</exec_depend>
   <exec_depend>mower_description</exec_depend>
   <exec_depend>mower_teleop</exec_depend>

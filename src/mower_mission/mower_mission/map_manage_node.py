@@ -31,7 +31,6 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.qos import (
     QoSDurabilityPolicy,
     QoSProfile,
@@ -45,22 +44,47 @@ from mower_mission.image_mask_import import (
     rasterize_image_masks,
     yaw_from_quaternion,
 )
+from mower_mission.map_safety import erode_free_space_grid
+from mower_mission.nav_map_fusion import (
+    fuse_navigation_grid,
+    union_free_space_grids,
+    world_to_grid_index,
+)
+from mower_mission.navigation_guard import (
+    NavigationActivityGuard,
+    guarded_mission_mutation,
+)
 
 
-class MapManage(Node):
+MIN_SAFE_INFLATE_RADIUS_M = 0.75
+
+
+class MapManage(Node, NavigationActivityGuard):
 
     def __init__(self):
         super().__init__('map_manage')
         self.get_logger().info('map_manage init')
-        # Aligned with Nav2 robot_radius (0.5 m) + coverage_clearance (0.05 m)
-        self.declare_parameter('inflate_radius_m', 0.55)
-        self.add_on_set_parameters_callback(self.on_parameters_changed)
-        self.set_parameters([
-            Parameter('use_sim_time', Parameter.Type.BOOL, True)
-        ])
+        # Robot radius (0.5 m) plus 0.25 m for localization dropout, command
+        # stop latency and braking. Runtime/startup overrides may only increase
+        # this production safety envelope.
+        initial_inflate_parameter = self.declare_parameter(
+            'inflate_radius_m',
+            MIN_SAFE_INFLATE_RADIUS_M,
+        )
+        initial_inflate_radius_m = float(initial_inflate_parameter.value)
+        if (
+            not math.isfinite(initial_inflate_radius_m)
+            or initial_inflate_radius_m < MIN_SAFE_INFLATE_RADIUS_M
+        ):
+            raise ValueError(
+                'inflate_radius_m startup value must be finite and >= '
+                f'{MIN_SAFE_INFLATE_RADIUS_M:.2f} m'
+            )
         qos = QoSProfile(depth=1)
         qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         qos.reliability = QoSReliabilityPolicy.RELIABLE
+        self._init_navigation_activity_guard()
+        self.add_on_set_parameters_callback(self.on_parameters_changed)
 
         self.create_service(Trigger, '/create_risk_map', self.create_risk_map_srv)
         self.create_service(Trigger, '/create_free_space', self.create_free_space_srv)
@@ -109,6 +133,7 @@ class MapManage(Node):
         # the imported image mask to the real drivable area.
         self.collected_free_space = None
         self.risk_map = None
+        self.risk_map_inflated = None
         self.chennal_map = None
         # Image-mission swap-out: /import_image_mask backs up the freespace zone
         # maps + risk here so the app can restore them (discarding the image)
@@ -126,20 +151,38 @@ class MapManage(Node):
             OccupancyGrid, '/chennal_map_inflated', qos
         )
 
-        self.declare_parameter('chennal_width_m', 0.6)
+        self.declare_parameter('chennal_width_m', 1.2)
 
         self.nav_base_map_pub = self.create_publisher(OccupancyGrid, '/map_grid', qos)
+        self.nav_global_map_pub = self.create_publisher(
+            OccupancyGrid, '/map_grid_global', qos
+        )
         self.resolution = 0.1
         self.width = 400
         self.height = 400
 
+        self._map_lock = threading.Lock()
         self.map_msg = self.build_demo_map()
+        self.global_map_msg = copy.deepcopy(self.map_msg)
 
         self.timer = self.create_timer(1.0, self.timer_cb)
-        self.get_logger().info(f'Publishing OccupancyGrid on /map_grid')
+        self.get_logger().info(
+            'Publishing OccupancyGrid on /map_grid and /map_grid_global'
+        )
 
     def on_parameters_changed(self, params):
         """Validate runtime parameters and refresh derived inflated maps."""
+        if (
+            any(param.name == 'inflate_radius_m' for param in params)
+            and self._mutation_block_reason() is not None
+        ):
+            return SetParametersResult(
+                successful=False,
+                reason=(
+                    'inflate_radius_m cannot change while navigation is '
+                    'active or unknown'
+                ),
+            )
         next_inflate_radius_m = None
         for param in params:
             if param.name != 'inflate_radius_m':
@@ -153,14 +196,56 @@ class MapManage(Node):
                     reason='inflate_radius_m must be a number'
                 )
 
-            if next_inflate_radius_m < 0.0:
+            if not math.isfinite(next_inflate_radius_m):
                 return SetParametersResult(
                     successful=False,
-                    reason='inflate_radius_m must be >= 0'
+                    reason='inflate_radius_m must be finite'
+                )
+
+            if next_inflate_radius_m < MIN_SAFE_INFLATE_RADIUS_M:
+                return SetParametersResult(
+                    successful=False,
+                    reason=(
+                        'inflate_radius_m must be >= '
+                        f'{MIN_SAFE_INFLATE_RADIUS_M:.2f} m'
+                    )
                 )
 
         if next_inflate_radius_m is not None:
-            self.refresh_inflated_maps(next_inflate_radius_m)
+            guard_response = Trigger.Response()
+            if not self._acquire_mission_mutation(
+                guard_response,
+                'refresh inflated maps',
+            ):
+                return SetParametersResult(
+                    successful=False,
+                    reason=guard_response.message,
+                )
+            refresh_error = None
+            try:
+                self.refresh_inflated_maps(next_inflate_radius_m)
+            except Exception as exc:  # noqa: BLE001
+                refresh_error = exc
+                self.get_logger().error(
+                    f'inflated-map refresh failed: {exc}'
+                )
+            finally:
+                release_confirmed = self._release_mission_mutation()
+            if not release_confirmed:
+                return SetParametersResult(
+                    successful=False,
+                    reason=(
+                        'maps may have refreshed, but mutation-lock release '
+                        'is unconfirmed; navigation remains blocked. Inspect '
+                        'the robot, then restart map_manage and '
+                        'nav_action_server'
+                    ),
+                )
+            if refresh_error is not None:
+                return SetParametersResult(
+                    successful=False,
+                    reason=f'inflated-map refresh failed: {refresh_error}',
+                )
 
         return SetParametersResult(successful=True)
 
@@ -203,6 +288,7 @@ class MapManage(Node):
                 inflate_radius_m,
             )
             if risk_map_inflated is not None:
+                self.risk_map_inflated = risk_map_inflated
                 self.risk_map_inflated_pub.publish(risk_map_inflated)
                 refreshed_topics.append('/risk_map_inflated')
 
@@ -214,6 +300,10 @@ class MapManage(Node):
             if chennal_map_inflated is not None:
                 self.chennal_map_inflated_pub.publish(chennal_map_inflated)
                 refreshed_topics.append('/chennal_map_inflated')
+
+        if self.base_map is not None:
+            self._publish_navigation_maps(inflate_radius_m)
+            refreshed_topics.extend(('/map_grid', '/map_grid_global'))
 
         radius = self.get_inflate_radius_m(inflate_radius_m)
         if refreshed_topics:
@@ -243,20 +333,215 @@ class MapManage(Node):
         origin.orientation.w = 1.0
         msg.info.origin = origin
 
-        grid = np.zeros((self.height, self.width), dtype=np.int8)
-
-        grid[0, :] = 100
-        grid[-1, :] = 100
-        grid[:, 0] = 100
-        grid[:, -1] = 100
+        # Before both free-space and risk snapshots exist, Nav2 must not infer
+        # that the synthetic startup extent is traversable.
+        grid = np.full((self.height, self.width), 100, dtype=np.int8)
 
         msg.data = grid.flatten().tolist()
         return msg
 
     def timer_cb(self):
-        self.map_msg.header.stamp = self.get_clock().now().to_msg()
-        self.nav_base_map_pub.publish(self.map_msg)
+        with self._map_lock:
+            map_msg = copy.deepcopy(self.map_msg)
+            global_map_msg = copy.deepcopy(self.global_map_msg)
+        stamp = self.get_clock().now().to_msg()
+        map_msg.header.stamp = stamp
+        global_map_msg.header.stamp = stamp
+        self.nav_base_map_pub.publish(map_msg)
+        self.nav_global_map_pub.publish(global_map_msg)
 
+    def _occupied_navigation_map(self, base_map):
+        nav_map = copy.deepcopy(base_map)
+        width = int(nav_map.info.width)
+        height = int(nav_map.info.height)
+        nav_map.data = [100] * max(0, width * height)
+        nav_map.header.stamp = self.get_clock().now().to_msg()
+        return nav_map
+
+    def _navigation_base_with_channel(self, base_map, chennal_map):
+        """Union a matching channel into raw free-space geometry."""
+        combined = copy.deepcopy(base_map)
+        height = int(combined.info.height)
+        width = int(combined.info.width)
+        base_grid = np.asarray(
+            combined.data, dtype=np.int16
+        ).reshape(height, width)
+        if chennal_map is None:
+            combined.data = union_free_space_grids(base_grid).flatten().tolist()
+            return combined
+
+        base_frame = combined.header.frame_id or 'map'
+        channel_frame = chennal_map.header.frame_id or 'map'
+        base_yaw = self._yaw_from_quaternion(combined.info.origin.orientation)
+        channel_yaw = self._yaw_from_quaternion(
+            chennal_map.info.origin.orientation
+        )
+        yaw_delta = math.atan2(
+            math.sin(channel_yaw - base_yaw),
+            math.cos(channel_yaw - base_yaw),
+        )
+        geometry_matches = (
+            base_frame == channel_frame
+            and int(chennal_map.info.height) == height
+            and int(chennal_map.info.width) == width
+            and math.isclose(
+                float(chennal_map.info.resolution),
+                float(combined.info.resolution),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            and math.isclose(
+                float(chennal_map.info.origin.position.x),
+                float(combined.info.origin.position.x),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            and math.isclose(
+                float(chennal_map.info.origin.position.y),
+                float(combined.info.origin.position.y),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            and abs(yaw_delta) <= 1e-9
+        )
+        if not geometry_matches:
+            raise ValueError('base and channel grid geometries must match')
+
+        channel_grid = np.asarray(
+            chennal_map.data, dtype=np.int16
+        ).reshape(height, width)
+        combined.data = union_free_space_grids(
+            base_grid, channel_grid
+        ).flatten().tolist()
+        return combined
+
+    def _fuse_navigation_map(self, base_map, risk_map, topic):
+        """Build one fail-closed Nav2 snapshot in base_map geometry."""
+        nav_map = copy.deepcopy(base_map)
+        width = int(nav_map.info.width)
+        height = int(nav_map.info.height)
+        if risk_map is None:
+            self.get_logger().info(
+                f'{topic} held occupied until its risk map is ready'
+            )
+            return self._occupied_navigation_map(nav_map), False
+
+        try:
+            base_grid = np.asarray(
+                nav_map.data, dtype=np.int16
+            ).reshape(height, width)
+            base_frame = nav_map.header.frame_id or 'map'
+            risk_frame = risk_map.header.frame_id or 'map'
+            if base_frame != risk_frame:
+                raise ValueError(
+                    f'grid frame mismatch: {base_frame} != {risk_frame}'
+                )
+            risk_grid = np.asarray(
+                risk_map.data, dtype=np.int16
+            ).reshape(
+                int(risk_map.info.height),
+                int(risk_map.info.width),
+            )
+
+            fused = fuse_navigation_grid(
+                base_grid,
+                base_resolution=float(nav_map.info.resolution),
+                base_origin_x=float(nav_map.info.origin.position.x),
+                base_origin_y=float(nav_map.info.origin.position.y),
+                base_yaw=self._yaw_from_quaternion(
+                    nav_map.info.origin.orientation
+                ),
+                risk_grid=risk_grid,
+                risk_resolution=float(risk_map.info.resolution),
+                risk_origin_x=float(risk_map.info.origin.position.x),
+                risk_origin_y=float(risk_map.info.origin.position.y),
+                risk_yaw=self._yaw_from_quaternion(
+                    risk_map.info.origin.orientation
+                ),
+            )
+            nav_map.data = fused.flatten().tolist()
+            success = True
+        except Exception as exc:  # noqa: BLE001
+            nav_map = self._occupied_navigation_map(nav_map)
+            self.get_logger().error(
+                f'cannot fuse {topic} safely; using occupied map: {exc}'
+            )
+            success = False
+
+        nav_map.header.stamp = self.get_clock().now().to_msg()
+        return nav_map, success
+
+    def _build_navigation_maps(
+        self,
+        *,
+        base_map,
+        risk_map,
+        risk_map_inflated,
+        chennal_map,
+        inflate_radius_m=None,
+    ):
+        """Build independent local(raw) and global(configuration-space) maps."""
+        try:
+            combined_base = self._navigation_base_with_channel(
+                base_map, chennal_map
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(
+                f'cannot union channel into navigation base: {exc}'
+            )
+            occupied = self._occupied_navigation_map(base_map)
+            return occupied, copy.deepcopy(occupied), False, False
+
+        local_map, local_success = self._fuse_navigation_map(
+            combined_base,
+            risk_map,
+            '/map_grid',
+        )
+        try:
+            global_base = self._create_free_space_inflated(
+                combined_base,
+                inflate_radius_m,
+            )
+            if global_base is None:
+                raise ValueError('inflated navigation base is not ready')
+            global_map, global_success = self._fuse_navigation_map(
+                global_base,
+                risk_map_inflated,
+                '/map_grid_global',
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(
+                'cannot build /map_grid_global safely; using occupied map: '
+                f'{exc}'
+            )
+            global_map = self._occupied_navigation_map(combined_base)
+            global_success = False
+
+        return local_map, global_map, local_success, global_success
+
+    def _commit_navigation_maps(self, local_map, global_map):
+        with self._map_lock:
+            self.map_msg = local_map
+            self.global_map_msg = global_map
+        self.nav_base_map_pub.publish(local_map)
+        self.nav_global_map_pub.publish(global_map)
+
+    def _publish_navigation_maps(self, inflate_radius_m=None):
+        if self.base_map is None:
+            return False
+        local_map, global_map, local_success, global_success = (
+            self._build_navigation_maps(
+                base_map=self.base_map,
+                risk_map=self.risk_map,
+                risk_map_inflated=self.risk_map_inflated,
+                chennal_map=self.chennal_map,
+                inflate_radius_m=inflate_radius_m,
+            )
+        )
+        self._commit_navigation_maps(local_map, global_map)
+        return local_success and global_success
+
+    @guarded_mission_mutation('import an image mission')
     def import_image_mask_srv(self, req, res):
         """Import an app-generated black/white mask as the active zone map."""
         try:
@@ -279,49 +564,75 @@ class MapManage(Node):
 
         free_space_inflated = self._create_free_space_inflated(free_map)
         risk_map_inflated = self._create_risk_map_inflated(risk_map)
-        # Custom (image) coverage uses NO inflation so the swept path hugs the
-        # uploaded shape: the area is already clipped to freespace, and the
-        # outer-contour ring (coverage_node boundary_ring) traces the edge.
-        zone_map.mask_map_inflated = copy.deepcopy(zone_map.mask_map)
+        if free_space_inflated is None or risk_map_inflated is None:
+            res.success = False
+            res.message = '圖片 mask 的衍生安全地圖生成失敗'
+            res.zone_id = zone_map.zone_id
+            res.area_m2 = 0.0
+            return res
+        safe_free = np.asarray(
+            free_space_inflated.data, dtype=np.int16
+        ) == 0
+        safe_risk = np.asarray(
+            risk_map_inflated.data, dtype=np.int16
+        ) == 0
+        if not np.any(safe_free & safe_risk):
+            res.success = False
+            res.message = '圖片 mask 安全內縮後沒有可用割草區域'
+            res.zone_id = zone_map.zone_id
+            res.area_m2 = 0.0
+            return res
+        # CoveragePlanner consumes mask_map_inflated. Keep the same production
+        # clearance as /free_space_inflated; the uploaded outline is a range
+        # limit, not permission for the robot footprint to touch its edge.
+        zone_map.mask_map_inflated = copy.deepcopy(free_space_inflated)
 
         # The image is only a RANGE LIMITER. zone_map.mask_map already holds
         # image_free ∩ collected_freespace (see _create_image_mask_maps), so the
         # coverage PATH is the intersection no matter which freespace we keep as
         # base_map / display.
-        # Back up the freespace zone maps + risk (only once, so a re-import does
-        # not clobber it) so /restore_free_space_coverage can bring them back.
+        if self.collected_free_space is None:
+            # No collected freespace -> image-only behavior (UNCHANGED): the
+            # image becomes the base / free-space / display map.
+            candidate_base = free_map
+        else:
+            # Collected freespace exists -> KEEP it as the base geometry and
+            # display layer. Both Nav2 maps conservatively resample image risk.
+            candidate_base = self.collected_free_space
+
+        local_map, global_map, local_success, global_success = (
+            self._build_navigation_maps(
+                base_map=candidate_base,
+                risk_map=risk_map,
+                risk_map_inflated=risk_map_inflated,
+                chennal_map=self.chennal_map,
+            )
+        )
+        if not local_success or not global_success:
+            res.success = False
+            res.message = '圖片已解析，但 Nav2 安全地圖生成失敗'
+            res.zone_id = zone_map.zone_id
+            res.area_m2 = area_m2
+            return res
+
+        # Commit only after every candidate artifact is valid. Back up the
+        # original free-space mission once so re-import cannot clobber it.
         if self._free_zone_backup is None:
             self._free_zone_backup = self.zone_map_list
             self._free_risk_backup = self.risk_map
         self.zone_map_list = [zone_map]
-        # Risk always comes from the image so the image's risk mask applies to
-        # this mission. coverage_node resamples /risk_map_inflated onto the zone
-        # grid, and the zone grid IS the image grid, so image-grid risk is exact
-        # even when base_map keeps the (different) collected grid below.
         self.risk_map = risk_map
+        self.risk_map_inflated = risk_map_inflated
+        self.base_map = candidate_base
 
         if self.collected_free_space is None:
-            # No collected freespace -> image-only behavior (UNCHANGED): the
-            # image becomes the base / free-space / display map.
-            self.base_map = free_map
-            self.map_msg = free_map
             self.free_space_pub.publish(free_map)
             self.free_space_inflated_pub.publish(free_space_inflated)
-            self.nav_base_map_pub.publish(free_map)
-        else:
-            # Collected freespace exists -> KEEP it. Do NOT republish
-            # /free_space, /free_space_inflated or /map_grid with the image: the
-            # latched collected layers stay (green display preserved), and
-            # base_map/map_msg keep the collected grid that create_risk_map /
-            # create_chennal_map / refresh_inflated_maps / the /map_grid timer
-            # rely on. The coverage path is still image ∩ collected via the
-            # zone map above. (Re-asserts collected as a safety net.)
-            self.base_map = self.collected_free_space
-            self.map_msg = self.collected_free_space
 
         # Risk is published from the IMAGE in both branches.
         self.risk_map_pub.publish(risk_map)
         self.risk_map_inflated_pub.publish(risk_map_inflated)
+        self._commit_navigation_maps(local_map, global_map)
 
         res.success = True
         res.message = '圖片 mask 匯入成功'
@@ -334,6 +645,7 @@ class MapManage(Node):
         )
         return res
 
+    @guarded_mission_mutation('restore free-space coverage')
     def restore_free_space_srv(self, req, res):
         """Discard the imported image coverage and restore the freespace zone
         maps + risk active before /import_image_mask. Called by the app when it
@@ -342,17 +654,46 @@ class MapManage(Node):
             res.success = True
             res.message = '目前已是自由空間覆蓋'
             return res
+        if self.collected_free_space is None:
+            res.success = False
+            res.message = '沒有採集的自由空間可還原；保留目前圖片任務'
+            return res
+        if self._free_risk_backup is None:
+            res.success = False
+            res.message = '原自由空間缺少風險地圖；保留目前圖片任務'
+            return res
+
+        restored_risk = self._free_risk_backup
+        risk_inflated = self._create_risk_map_inflated(restored_risk)
+        if risk_inflated is None:
+            res.success = False
+            res.message = '無法還原原自由空間的風險地圖；保留目前圖片任務'
+            return res
+
+        local_map, global_map, local_success, global_success = (
+            self._build_navigation_maps(
+                base_map=self.collected_free_space,
+                risk_map=restored_risk,
+                risk_map_inflated=risk_inflated,
+                chennal_map=self.chennal_map,
+            )
+        )
+        if not local_success or not global_success:
+            res.success = False
+            res.message = '無法安全還原 Nav2 地圖；保留目前圖片任務'
+            return res
+
         self.zone_map_list = self._free_zone_backup
-        self.risk_map = self._free_risk_backup
+        self.risk_map = restored_risk
+        self.risk_map_inflated = risk_inflated
+        self.base_map = self.collected_free_space
         self._free_zone_backup = None
         self._free_risk_backup = None
         # Republish the freespace risk so coverage_node resamples it (the image
         # risk was published on /risk_map_inflated during the import).
-        if self.risk_map is not None:
-            self.risk_map_pub.publish(self.risk_map)
-            risk_inflated = self._create_risk_map_inflated(self.risk_map)
-            if risk_inflated is not None:
-                self.risk_map_inflated_pub.publish(risk_inflated)
+        self.risk_map_pub.publish(self.risk_map)
+        self.risk_map_inflated_pub.publish(risk_inflated)
+        self._commit_navigation_maps(local_map, global_map)
         res.success = True
         res.message = '已還原為完整自由空間覆蓋'
         self.get_logger().info('restored freespace coverage (image discarded)')
@@ -408,6 +749,8 @@ class MapManage(Node):
 
         header = copy.deepcopy(req.robot_pose_header)
         header.frame_id = header.frame_id or 'map'
+        if header.frame_id != 'map':
+            raise ValueError('robot_pose_header.frame_id must be map')
         header.stamp = self.get_clock().now().to_msg()
 
         free_map = self._occupancy_grid_from_array(
@@ -556,6 +899,7 @@ class MapManage(Node):
         future.add_done_callback(lambda _f: done.set())
         return done.wait(timeout=timeout_sec)
 
+    @guarded_mission_mutation('rebuild the risk map')
     def create_risk_map_srv(self, req, res):
         """創建風險地圖服務（同步、回報真實成敗）."""
         self.get_logger().info('(service)create_risk_map_srv call')
@@ -597,10 +941,25 @@ class MapManage(Node):
                 '生成風險地圖失敗（可能尚未建立自由空間，請先呼叫 /create_free_space）',
             )
 
-        self.risk_map = risk_map
         risk_map_inflated = self._create_risk_map_inflated(risk_map)
+        if risk_map_inflated is None:
+            return False, '生成膨脹風險地圖失敗'
+        local_map, global_map, local_success, global_success = (
+            self._build_navigation_maps(
+                base_map=self.base_map,
+                risk_map=risk_map,
+                risk_map_inflated=risk_map_inflated,
+                chennal_map=self.chennal_map,
+            )
+        )
+        if not local_success or not global_success:
+            return False, '風險地圖已生成，但 Nav2 安全地圖生成失敗'
+
+        self.risk_map = risk_map
+        self.risk_map_inflated = risk_map_inflated
         self.risk_map_pub.publish(risk_map)
         self.risk_map_inflated_pub.publish(risk_map_inflated)
+        self._commit_navigation_maps(local_map, global_map)
         n = len(risk_zone_response.zone_list.markers)
         self.get_logger().info(f'成功創建風險地圖，包含 {n} 個風險區域')
         return True, f'成功創建風險地圖，包含 {n} 個風險區域'
@@ -700,6 +1059,7 @@ class MapManage(Node):
         else:
             return risk_map
 
+    @guarded_mission_mutation('rebuild free space')
     def create_free_space_srv(self, req, res):
         """創建自由空間服務（同步、回報真實成敗）."""
         self.get_logger().info('(service)create_free_space_srv call')
@@ -729,34 +1089,50 @@ class MapManage(Node):
             self.get_logger().error(f'獲取記錄區域列表失敗: {zone_response.message}')
             return False, f'獲取記錄區域列表失敗: {zone_response.message}'
 
-        overall_freespace_map = self._create_zone_maps_and_freespace(
+        candidate = self._create_zone_maps_and_freespace(
             zone_response.zone_list
         )
-        if overall_freespace_map is None:
+        if candidate is None:
             self.get_logger().error('生成自由空間失敗')
             return False, '生成自由空間失敗'
+        overall_freespace_map, zone_maps = candidate
 
         overall_freespace_map_inflated = self._create_free_space_inflated(
             overall_freespace_map
         )
+        if overall_freespace_map_inflated is None:
+            self.get_logger().error('生成膨脹自由空間失敗')
+            return False, '生成膨脹自由空間失敗'
+        local_map, global_map, _, _ = self._build_navigation_maps(
+            base_map=overall_freespace_map,
+            risk_map=None,
+            risk_map_inflated=None,
+            chennal_map=None,
+        )
+
+        # Commit only after every candidate artifact is valid. A failed rebuild
+        # must leave the previously published/active mission fully intact.
+        self.zone_map_list = zone_maps
         self.base_map = overall_freespace_map
         # Persist the collected freespace so a later /import_image_mask clips to
         # it (this field is NOT overwritten by import, unlike base_map).
         self.collected_free_space = overall_freespace_map
+        # A risk grid is tied to the previous base geometry and zone snapshot.
+        # Invalidate it so /map_grid fails closed until /create_risk_map builds
+        # the matching (possibly all-free) risk snapshot.
+        self.risk_map = None
+        self.risk_map_inflated = None
+        self.chennal_map = None
+        self._free_zone_backup = None
+        self._free_risk_backup = None
         self.free_space_pub.publish(overall_freespace_map)
         self.free_space_inflated_pub.publish(overall_freespace_map_inflated)
-        self.map_msg = overall_freespace_map
-        n = len(self.zone_map_list)
+        self._commit_navigation_maps(local_map, global_map)
+        n = len(zone_maps)
         self.get_logger().info(f'成功創建自由空間，包含 {n} 個區域')
         return True, f'成功創建自由空間，包含 {n} 個區域'
 
     def _create_zone_maps_and_freespace(self, zone_list):
-        self.zone_map_list = []
-        # Invalidate any previously collected freespace; it is re-set on success
-        # in _handle_zone_list_response. Prevents a failed/empty re-record from
-        # leaving a stale clip mask behind.
-        self.collected_free_space = None
-
         if not zone_list.markers:
             self.get_logger().warn('沒有區域數據')
             return None
@@ -801,6 +1177,7 @@ class MapManage(Node):
         masked_map.info.origin.orientation.w = 1.0
 
         mask = np.zeros((H, W), dtype=np.uint8)
+        zone_maps = []
         for polygon_points in zone_list.markers:
             poly_px = []
             for pt in polygon_points.points:
@@ -830,15 +1207,19 @@ class MapManage(Node):
             zone_map.mask_map.data = zone_occ_masked.flatten().tolist()
 
             zone_map.mask_map_inflated = self._create_free_space_inflated(zone_map.mask_map)
-            self.zone_map_list.append(zone_map)
+            zone_maps.append(zone_map)
             self.get_logger().info(
-                f'成功創建zone map，包含 {len(self.zone_map_list)} 個區域'
+                f'成功創建zone map，包含 {len(zone_maps)} 個區域'
             )
+
+        if not zone_maps:
+            self.get_logger().warn('沒有可建立自由空間的有效多邊形')
+            return None
 
         occ_masked = np.where(mask == 1, 0, 100)
         masked_map.data = occ_masked.flatten().tolist()
 
-        return masked_map
+        return masked_map, zone_maps
 
     def _create_free_space_inflated(
         self,
@@ -854,76 +1235,86 @@ class MapManage(Node):
         H = free_space_map.info.height
         W = free_space_map.info.width
         free_space_map_data = np.asarray(free_space_map.data, dtype=np.int16).reshape(H, W)
-        r_cells = max(0, int(math.ceil(inflate_r_m / resolution)))
-        if r_cells > 0:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r_cells + 1, 2 * r_cells + 1))
-            free_mask = (free_space_map_data == 0).astype(np.uint8)
-            eroded_free_mask = cv2.erode(free_mask, k)
-            inflated_data = np.where(eroded_free_mask == 1, 0, 100).astype(np.int8)
-            inflated_map = OccupancyGrid()
-            inflated_map.header = free_space_map.header
-            inflated_map.info = free_space_map.info
-            inflated_map.data = inflated_data.flatten().tolist()
-            return inflated_map
-        else:
-            return free_space_map
+        inflated_data = erode_free_space_grid(
+            free_space_map_data,
+            resolution_m=resolution,
+            inflate_radius_m=inflate_r_m,
+        )
+        inflated_map = OccupancyGrid()
+        inflated_map.header = free_space_map.header
+        inflated_map.info = free_space_map.info
+        inflated_map.data = inflated_data.flatten().tolist()
+        return inflated_map
 
+    @guarded_mission_mutation('rebuild the channel map')
     def create_chennal_map_srv(self, req, res):
-        """创建通道地图服务."""
+        """Create the channel map and report its actual completion state."""
         self.get_logger().info('(service)create_chennal_map_srv call')
-        res.success = True
-        res.message = '开始创建通道地图，请稍候...'
-        self._start_create_chennal_map_async()
+        try:
+            res.success, res.message = self._create_chennal_map_sync()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f'創建通道地圖時發生錯誤: {exc}')
+            res.success = False
+            res.message = f'創建通道地圖時發生錯誤: {exc}'
         return res
 
-    def _start_create_chennal_map_async(self):
-        """异步创建通道地图."""
-        try:
-            if not self.get_chennal_path_list_client.wait_for_service(timeout_sec=5.0):
-                self.get_logger().error('通道路径列表服务不可用')
-                return
+    def _create_chennal_map_sync(self, timeout_sec=30.0):
+        """Build and publish the channel map, returning (success, message)."""
+        if not self.get_chennal_path_list_client.wait_for_service(
+            timeout_sec=5.0
+        ):
+            self.get_logger().error('通道路徑列表服務不可用')
+            return False, '通道路徑列表服務不可用'
 
-            chennal_req = ChennalPathList.Request()
-            future = self.get_chennal_path_list_client.call_async(chennal_req)
-            future.add_done_callback(self._handle_chennal_path_list_response)
+        future = self.get_chennal_path_list_client.call_async(
+            ChennalPathList.Request()
+        )
+        if not self._wait_for_future(future, timeout_sec):
+            self.get_logger().error('獲取通道路徑列表逾時')
+            return False, '獲取通道路徑列表逾時'
 
-        except Exception as e:
-            self.get_logger().error(f'启动异步创建通道地图时发生错误: {e}')
-
-    def _handle_chennal_path_list_response(self, future):
-        """处理通道路径列表服务响应."""
-        try:
-            if not future.done():
-                self.get_logger().error('获取通道路径列表超时')
-                return
-
-            chennal_response = future.result()
-
-            if not chennal_response.success:
-                self.get_logger().error(
-                    f'获取通道路径列表失败: {chennal_response.message}'
-                )
-                return
-
-            chennal_map = self._generate_chennal_map(
-                chennal_response.chennal_path_array
+        chennal_response = future.result()
+        if not chennal_response.success:
+            self.get_logger().error(
+                f'獲取通道路徑列表失敗: {chennal_response.message}'
             )
-            if chennal_map is None:
-                self.get_logger().error('生成通道地图失败')
-                return
-
-            self.chennal_map = chennal_map
-            chennal_map_inflated = self._create_chennal_map_inflated(chennal_map)
-
-            self.chennal_map_pub.publish(chennal_map)
-            self.chennal_map_inflated_pub.publish(chennal_map_inflated)
-            self.get_logger().info(
-                f'成功创建通道地图，包含 '
-                f'{len(chennal_response.chennal_path_array.markers)} 条通道'
+            return (
+                False,
+                f'獲取通道路徑列表失敗: {chennal_response.message}',
             )
 
-        except Exception as e:
-            self.get_logger().error(f'处理通道路径列表响应时发生错误: {e}')
+        chennal_map = self._generate_chennal_map(
+            chennal_response.chennal_path_array
+        )
+        if chennal_map is None:
+            self.get_logger().error('生成通道地圖失敗')
+            return False, '生成通道地圖失敗'
+
+        chennal_map_inflated = self._create_chennal_map_inflated(chennal_map)
+        if chennal_map_inflated is None:
+            self.get_logger().error('生成膨脹通道地圖失敗')
+            return False, '生成膨脹通道地圖失敗'
+
+        local_map, global_map, local_success, global_success = (
+            self._build_navigation_maps(
+                base_map=self.base_map,
+                risk_map=self.risk_map,
+                risk_map_inflated=self.risk_map_inflated,
+                chennal_map=chennal_map,
+            )
+        )
+        if not local_success or not global_success:
+            self.get_logger().error('通道無法安全合併至 Nav2 地圖')
+            return False, '通道已生成，但無法安全合併至 Nav2 地圖'
+
+        self.chennal_map = chennal_map
+        self.chennal_map_pub.publish(chennal_map)
+        self.chennal_map_inflated_pub.publish(chennal_map_inflated)
+        self._commit_navigation_maps(local_map, global_map)
+        count = len(chennal_response.chennal_path_array.markers)
+        message = f'成功創建通道地圖，包含 {count} 條通道'
+        self.get_logger().info(message)
+        return True, message
 
     def _generate_chennal_map(self, chennal_path_array):
         """根据通道路径生成通道地图."""
@@ -933,6 +1324,14 @@ class MapManage(Node):
                 return None
             if not self.base_map:
                 self.get_logger().error('没有基础地图')
+                return None
+            if any(
+                len(marker.points) < 2
+                for marker in chennal_path_array.markers
+            ):
+                self.get_logger().error(
+                    '每條通道路徑至少需要兩個點；拒絕不完整資料'
+                )
                 return None
 
             all_points = []
@@ -945,6 +1344,9 @@ class MapManage(Node):
                 return None
 
             chennal_width = float(self.get_parameter('chennal_width_m').value)
+            if not math.isfinite(chennal_width) or chennal_width <= 0.0:
+                self.get_logger().error('chennal_width_m 必須是有限正數')
+                return None
 
             chennal_map = OccupancyGrid()
             chennal_map.header.stamp = self.get_clock().now().to_msg()
@@ -957,20 +1359,36 @@ class MapManage(Node):
 
             chennal_map_data = np.full((H, W), 100, dtype=np.uint8)
             resolution = self.base_map.info.resolution
+            base_frame = self.base_map.header.frame_id or 'map'
+            origin_yaw = self._yaw_from_quaternion(
+                self.base_map.info.origin.orientation
+            )
 
             for marker in chennal_path_array.markers:
-                if len(marker.points) < 2:
-                    continue
+                marker_frame = marker.header.frame_id or base_frame
+                if marker_frame != base_frame:
+                    raise ValueError(
+                        '通道路徑 frame 與基礎地圖不一致: '
+                        f'{marker_frame} != {base_frame}'
+                    )
 
                 path_points = []
                 for point in marker.points:
-                    x = int((point.x - ox) / resolution)
-                    y = int((point.y - oy) / resolution)
-                    x = max(0, min(x, W-1))
-                    y = max(0, min(y, H-1))
-                    path_points.append((x, y))
+                    path_points.append(world_to_grid_index(
+                        point.x,
+                        point.y,
+                        origin_x=ox,
+                        origin_y=oy,
+                        origin_yaw=origin_yaw,
+                        resolution=resolution,
+                        width=W,
+                        height=H,
+                    ))
 
-                chennal_width_pixels = int(chennal_width / resolution)
+                chennal_width_pixels = max(
+                    1,
+                    int(math.ceil(chennal_width / resolution)),
+                )
 
                 for i in range(len(path_points) - 1):
                     pt1 = path_points[i]

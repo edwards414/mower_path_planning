@@ -1,77 +1,67 @@
-# WebRTC Camera Streaming (WHEP)
+# WebRTC front-camera streaming
 
-The app's manual-control page shows the robot's cameras as live **WebRTC**
-streams pulled from an on-robot [MediaMTX](https://github.com/bluenviron/mediamtx)
-media server using **WHEP** (WebRTC-HTTP Egress Protocol).
+The manual-control page shows the mower's single front camera as a low-latency
+WebRTC stream. MediaMTX runs on both the mower and the public Ubuntu relay.
+Video is H.264 and is kept separate from rosbridge control/status traffic.
 
-This replaces the previous approach of shipping raw `sensor_msgs/msg/Image`
-frames over the rosbridge WebSocket, which was bandwidth-heavy (uncompressed
-pixels) and high-latency. Video is now H.264-encoded and decoupled from
-rosbridge — rosbridge (`ws://<robot-ip>:9090`) still carries control and status
-only.
+## Production data flow
 
-## Data flow
-
-```
-Camera device (/dev/video*  or  lavfi test pattern while no camera)
-        │  ffmpeg (H.264 baseline, low-latency)  ── runOnDemand
-        ▼
-   MediaMTX  (on the robot, docker service `mediamtx`)
-   ├─ path front  →  WHEP: http://<robot-ip>:8889/front/whep
-   └─ path rear   →  WHEP: http://<robot-ip>:8889/rear/whep
-        │  WebRTC (H.264)
-        ▼
-   Flutter app  (flutter_webrtc + RTCVideoView)
+```text
+Camera device (/dev/video* or a temporary lavfi test pattern)
+  │ ffmpeg H.264 baseline, started on demand
+  ▼
+Mower MediaMTX: rtsp://10.77.0.2:8554/front
+  │ RTSP/TCP over WireGuard through the mower's 4G connection
+  ▼
+Ubuntu relay MediaMTX: 127.0.0.1:8889/front/whep
+  │ Cloudflare Tunnel for HTTPS WHEP signaling
+  ▼
+Flutter app: https://camera.fxrbindi.com/front/whep
+  │
+  └─ WebRTC media to the relay on 8189/udp or 8189/tcp
 ```
 
-Signaling is a single HTTP POST of the SDP offer to the WHEP endpoint; MediaMTX
-replies with the SDP answer (HTTP 201) and embeds its ICE candidates, so no
-separate signaling server or trickle ICE is needed on a LAN.
+Control follows a separate path:
 
-## Configuration
+```text
+Flutter app
+  -> wss://control.fxrbindi.com
+  -> Cloudflare Tunnel
+  -> ws://10.77.0.2:9090 over WireGuard
+  -> rosbridge on the mower
+```
 
-- `mediamtx.yml` — MediaMTX config: two paths (`front`, `rear`), each with a
-  `runOnDemand` ffmpeg producer (ffmpeg starts when the app connects, stops
-  shortly after it disconnects).
-- `docker-compose.yaml` — the `mediamtx` service (`bluenviron/mediamtx:latest-ffmpeg`,
-  `network_mode: host`).
+The mower is `10.77.0.2` and the relay is `10.77.0.1` inside WireGuard. The
+mower initiates the VPN connection, so it does not need a public 4G address.
 
-The app derives the WHEP URLs from the same robot IP it uses for rosbridge (port
-`8889`); see `whepUrl()` in
-`mower_lawer_app/lib/providers/mission_mock_provider.dart`.
+## Components
 
-## Running
+- `mediamtx.yml` runs on the mower. Its one `front` path starts ffmpeg only
+  while a downstream reader exists.
+- `docker-compose.yaml` runs the mower MediaMTX/ffmpeg container.
+- `deploy/server/` runs the public relay MediaMTX. Its WHEP signaling listener
+  is loopback-only; Cloudflare Tunnel publishes it.
+- `mower_lawer_app` reads `front/whep` with `flutter_webrtc`.
 
-Start just the camera server on the robot:
+## Router forwarding
+
+The router in front of the Ubuntu relay must forward:
+
+- `51820/udp` to `192.168.10.200:51820` for WireGuard.
+- `8189/udp` to `192.168.10.200:8189` for WebRTC media.
+- `8189/tcp` to `192.168.10.200:8189` as a WebRTC fallback.
+
+Ports `8554`, `8889`, and `9090` must not be exposed publicly.
+
+## Attaching the physical front camera
+
+Find the V4L2 color device:
 
 ```bash
-docker compose up -d mediamtx
+v4l2-ctl --list-devices
 ```
 
-Then in the app, set the robot IP to the robot's LAN address and open the
-manual-control page. Front/rear toggle switches feeds.
-
-Quick check without the app — MediaMTX serves a built-in player page:
-
-```
-http://<robot-ip>:8889/front
-http://<robot-ip>:8889/rear
-```
-
-## No camera yet: synthetic test sources
-
-Until a USB/v4l2 camera is wired, both feeds are ffmpeg **synthetic test
-patterns** so the full WebRTC path can be verified end-to-end:
-
-- `front` → `testsrc2` (animated test pattern)
-- `rear`  → `smptebars` (SMPTE colour bars)
-
-They are visually distinct so front/rear switching is obvious.
-
-## Attaching a real camera
-
-In `mediamtx.yml`, replace the `lavfi` input of the relevant path with the
-camera device, e.g. a USB/v4l2 camera on `/dev/video0`:
+Replace the temporary `lavfi` input in the mower's `mediamtx.yml`, for example:
 
 ```yaml
 paths:
@@ -82,29 +72,30 @@ paths:
       -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
       -profile:v baseline -level 3.1 -bf 0 -g 50
       -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
-    runOnDemandRestart: yes
+    runOnDemandRestart: true
+    runOnDemandCloseAfter: 10s
 ```
 
-Then expose the device to the container in `docker-compose.yaml`:
+Expose the selected device in `docker-compose.yaml`:
 
 ```yaml
+services:
   mediamtx:
     devices:
       - /dev/video0:/dev/video0
 ```
 
-A RealSense-class front "depth camera" exposes its **colour** stream as a plain
-v4l2 device (some `/dev/videoN`); capture that directly rather than going
-through the ROS depth node. Confirm the index with `v4l2-ctl --list-devices`.
+For a RealSense-class depth camera, WHEP uses its RGB/color V4L2 stream. Depth
+images and camera calibration continue to travel through ROS 2 topics.
 
-## Notes / gotchas
+## LAN fallback
 
-- `network_mode: host` is used so WebRTC ICE host candidates are reachable on
-  the LAN with no port mapping. On Docker Desktop for macOS host networking runs
-  inside a VM, so the WebRTC media flow is best verified on the robot (Linux) on
-  the same LAN as the phone.
-- The app talks to the WHEP endpoint over `http://` (cleartext). Android needs
-  `usesCleartextTraffic="true"` + `INTERNET`; iOS needs the local-network ATS
-  key. These are already set in the app's `AndroidManifest.xml` / `Info.plist`.
-- `flutter_webrtc` is a native plugin: after adding it the app needs a full
-  rebuild (and `pod install` on iOS), not hot reload.
+The on-mower player remains available on the LAN:
+
+```text
+http://<mower-lan-ip>:8889/front
+```
+
+Build the Flutter app with an empty `CAMERA_BASE_URL` and
+`USE_SAVED_ROBOT_IP=true` to derive the LAN WHEP URL from the configured mower
+IP.

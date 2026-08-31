@@ -11,13 +11,20 @@ import launch_ros.actions
 
 import launch_testing.actions
 
-from mower_interface.srv import ChannelPathList, ChennalPathList
+from mower_interface.srv import (
+    ChannelPathList,
+    ChennalPathList,
+    GetZoneList,
+    MissionOperationLock,
+)
 
 import pytest
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 from tf2_ros import TransformBroadcaster
@@ -107,6 +114,38 @@ class TestPathRecordLaunch:
         """Create a ROS client node and TF broadcaster for each test."""
         self.node = rclpy.create_node('path_record_launch_test_client')
         self.tf_broadcaster = TransformBroadcaster(self.node)
+        self._lock_owner = None
+
+        def operation_lock(req, res):
+            if req.acquire:
+                if self._lock_owner is not None:
+                    res.success = False
+                    res.message = 'busy'
+                else:
+                    self._lock_owner = req.owner
+                    res.success = True
+                    res.message = 'acquired'
+            elif self._lock_owner == req.owner:
+                self._lock_owner = None
+                res.success = True
+                res.message = 'released'
+            else:
+                res.success = False
+                res.message = 'not owner'
+            return res
+
+        self.node.create_service(
+            MissionOperationLock,
+            '/mission_operation_lock',
+            operation_lock,
+        )
+        qos = QoSProfile(depth=1)
+        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos.reliability = QoSReliabilityPolicy.RELIABLE
+        self.nav_active_pub = self.node.create_publisher(
+            Bool, '/nav_operation_active', qos
+        )
+        self.nav_active_pub.publish(Bool(data=False))
 
     def teardown_method(self):
         """Destroy the ROS client node after each test."""
@@ -174,3 +213,36 @@ class TestPathRecordLaunch:
         assert alias_response.success
         assert len(alias_response.channel_path_array.markers) >= 1
         assert len(alias_response.channel_path_array.markers[-1].points) >= 2
+
+    def test_zone_recording_rejects_empty_end_and_competing_starts(self):
+        """Only one recorder may run and an empty zone must never be saved."""
+        no_active_response = _call_trigger(self.node, '/record_zone_end')
+        assert not no_active_response.success
+
+        start_response = _call_trigger(self.node, '/record_zone_start')
+        assert start_response.success
+
+        duplicate_response = _call_trigger(self.node, '/record_zone_start')
+        assert not duplicate_response.success
+        risk_response = _call_trigger(self.node, '/risk_zone_start')
+        assert not risk_response.success
+        channel_response = _call_trigger(self.node, '/channel_record_start')
+        assert not channel_response.success
+
+        insufficient_response = _call_trigger(self.node, '/record_zone_end')
+        assert not insufficient_response.success
+
+        cancel_response = _call_trigger(self.node, '/record_cancel')
+        assert cancel_response.success
+
+        # The rejected end must not have added an empty marker to the list.
+        zone_list_client = self.node.create_client(
+            GetZoneList, '/get_record_zone_list'
+        )
+        assert zone_list_client.wait_for_service(timeout_sec=5.0)
+        zone_info = _spin_until_future(
+            self.node,
+            zone_list_client.call_async(GetZoneList.Request()),
+        )
+        assert zone_info.success
+        assert zone_info.zone_list.markers == []

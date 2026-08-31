@@ -64,6 +64,7 @@ private:
   Wheel wheel_right_;
 
   double mower_blade_cmd_{0.0};
+  bool hardware_fault_latched_{true};
 
   Config cfg_;
 

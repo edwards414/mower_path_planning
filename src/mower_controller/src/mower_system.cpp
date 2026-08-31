@@ -10,6 +10,8 @@
 #include <limits>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "hardware_interface/lexical_casts.hpp"
@@ -23,7 +25,8 @@ constexpr uint8_t kCommandTimeoutMask = 0x02;
 constexpr uint8_t kDriverAlarmMask = 0x04;
 
 int normalize_to_permille(double value, double max_abs_value) {
-  if (max_abs_value <= 0.0) {
+  if (!std::isfinite(value) || !std::isfinite(max_abs_value) ||
+      max_abs_value <= 0.0) {
     return 0;
   }
 
@@ -45,13 +48,31 @@ double permille_to_rad_per_sec(int16_t permille) {
 
 hardware_interface::CallbackReturn MowerSystemHardware::on_configure(
     const rclcpp_lifecycle::State & /*previous_state*/) {
+  hardware_fault_latched_ = true;
   // Set up the serial communication with STM32
   // Read parameters from URDF
-  cfg_.device = info_.hardware_parameters["device"];
-  cfg_.baud_rate = std::stoi(info_.hardware_parameters["baud_rate"]);
-  cfg_.timeout = std::stoi(info_.hardware_parameters["timeout"]);
-  cfg_.left_wheel_name = info_.hardware_parameters["left_wheel_name"];
-  cfg_.right_wheel_name = info_.hardware_parameters["right_wheel_name"];
+  try {
+    cfg_.device = info_.hardware_parameters.at("device");
+    cfg_.baud_rate = std::stoi(info_.hardware_parameters.at("baud_rate"));
+    cfg_.timeout = std::stoi(info_.hardware_parameters.at("timeout"));
+    cfg_.left_wheel_name =
+        info_.hardware_parameters.at("left_wheel_name");
+    cfg_.right_wheel_name =
+        info_.hardware_parameters.at("right_wheel_name");
+    const bool supported_baud =
+        cfg_.baud_rate == 9600 || cfg_.baud_rate == 19200 ||
+        cfg_.baud_rate == 38400 || cfg_.baud_rate == 57600 ||
+        cfg_.baud_rate == 115200 || cfg_.baud_rate == 230400;
+    if (cfg_.device.empty() || cfg_.left_wheel_name.empty() ||
+        cfg_.right_wheel_name.empty() || !supported_baud ||
+        cfg_.timeout < 10 || cfg_.timeout > 5000) {
+      throw std::invalid_argument("invalid mower hardware parameter value");
+    }
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(get_logger(), "Invalid mower hardware configuration: %s",
+                 error.what());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
   // Set up the wheels with their names
   wheel_left_.setup(cfg_.left_wheel_name);
   wheel_right_.setup(cfg_.right_wheel_name);
@@ -75,6 +96,7 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
     const rclcpp_lifecycle::State & /*previous_state*/) {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to
   // your production code
+  hardware_fault_latched_ = true;
   RCLCPP_INFO(get_logger(), "Activating ...please wait...");
 
   try {
@@ -89,7 +111,34 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
     RCLCPP_ERROR(get_logger(), "Failed to connect to the STM32");
     return hardware_interface::CallbackReturn::ERROR;
   }
-  stm_comms_.setLedOK();
+  stm_comms_.setLedError();
+  if (!stm_comms_.setMowerBladeValue(0)) {
+    RCLCPP_ERROR(get_logger(), "Failed to send initial blade stop command");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  const auto stop_sequence = stm_comms_.setMotorValues(0, 0);
+  if (!stop_sequence.has_value()) {
+    RCLCPP_ERROR(get_logger(), "Failed to send initial STM32 stop command");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  const auto handshake_deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(
+                                      std::max(250, cfg_.timeout));
+  while (std::chrono::steady_clock::now() < handshake_deadline) {
+    stm_comms_.poll();
+    if (stm_comms_.motor_status_is_fresh_and_acknowledged(
+            std::chrono::milliseconds(250), stop_sequence)) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!stm_comms_.motor_status_is_fresh_and_acknowledged(
+          std::chrono::milliseconds(250), stop_sequence)) {
+    RCLCPP_ERROR(get_logger(),
+                 "STM32 did not acknowledge the activation stop command");
+    stm_comms_.setLedError();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
 
   wheel_left_.cmd = 0.0;
   wheel_left_.vel = 0.0;
@@ -104,6 +153,8 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_activate(
   for (const auto &[name, /*descr*/ _] : joint_command_interfaces_) {
     set_command(name, 0.0);
   }
+  hardware_fault_latched_ = false;
+  stm_comms_.setLedOK();
   // END: This part here is for exemplary purposes - Please do not copy to your
   // production code
 
@@ -124,26 +175,64 @@ hardware_interface::CallbackReturn MowerSystemHardware::on_deactivate(
   // your production code
   RCLCPP_INFO(get_logger(), "Deactivating ...please wait...");
 
-  stm_comms_.setMotorValues(0, 0);
-  stm_comms_.setMowerBladeValue(0);
+  hardware_fault_latched_ = true;
+  wheel_left_.cmd = 0.0;
+  wheel_right_.cmd = 0.0;
+  mower_blade_cmd_ = 0.0;
   stm_comms_.setLedError();
+  const bool blade_stop_sent = stm_comms_.setMowerBladeValue(0);
+  // Keep the motor stop as the final frame so its exact sequence remains the
+  // one proved by 0x81 even after blade/LED handlers are implemented in MCU
+  // firmware and begin consuming the shared wire sequence.
+  const auto stop_sequence = stm_comms_.setMotorValues(0, 0);
   // END: This part here is for exemplary purposes - Please do not copy to your
   // production code
 
-  RCLCPP_INFO(get_logger(), "Successfully deactivated!");
+  if (!stop_sequence.has_value() || !blade_stop_sent) {
+    RCLCPP_ERROR(get_logger(), "Failed to transmit deactivation stop");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(std::max(250, cfg_.timeout));
+  while (std::chrono::steady_clock::now() < deadline) {
+    stm_comms_.poll();
+    if (stm_comms_.motor_status_is_fresh_and_acknowledged(
+            std::chrono::milliseconds(250), stop_sequence)) {
+      RCLCPP_INFO(get_logger(), "Successfully deactivated!");
+      return hardware_interface::CallbackReturn::SUCCESS;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
 
-  return hardware_interface::CallbackReturn::SUCCESS;
+  RCLCPP_ERROR(get_logger(), "STM32 did not acknowledge deactivation stop");
+  return hardware_interface::CallbackReturn::ERROR;
 }
 
 hardware_interface::return_type
 MowerSystemHardware::read(const rclcpp::Time & /*time*/,
                           const rclcpp::Duration &period) {
-  // Without encoder feedback, the latest accepted STM32 open-loop command is
-  // the best state estimate available for ros2_control.
-  wheel_left_.vel = wheel_left_.cmd;
-  wheel_right_.vel = wheel_right_.cmd;
-
+  if (hardware_fault_latched_) {
+    wheel_left_.vel = 0.0;
+    wheel_right_.vel = 0.0;
+    return hardware_interface::return_type::ERROR;
+  }
   stm_comms_.poll();
+  if (!stm_comms_.motor_status_is_fresh_and_acknowledged(
+          std::chrono::milliseconds(250))) {
+    wheel_left_.vel = 0.0;
+    wheel_right_.vel = 0.0;
+    wheel_left_.cmd = 0.0;
+    wheel_right_.cmd = 0.0;
+    mower_blade_cmd_ = 0.0;
+    hardware_fault_latched_ = true;
+    stm_comms_.setMotorValues(0, 0);
+    stm_comms_.setMowerBladeValue(0);
+    stm_comms_.setLedError();
+    RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "STM32 status/command acknowledgement is stale; hardware faulted");
+    return hardware_interface::return_type::ERROR;
+  }
   const auto motor_status = stm_comms_.getMotorStatus();
   if (motor_status.has_value()) {
     const bool command_valid =
@@ -153,10 +242,21 @@ MowerSystemHardware::read(const rclcpp::Time & /*time*/,
     const bool driver_alarm =
         (motor_status->flags & kDriverAlarmMask) != 0U;
 
-    if (command_timeout || driver_alarm) {
+    if (!command_valid || command_timeout || driver_alarm) {
       wheel_left_.vel = 0.0;
       wheel_right_.vel = 0.0;
-    } else if (command_valid) {
+      wheel_left_.cmd = 0.0;
+      wheel_right_.cmd = 0.0;
+      hardware_fault_latched_ = true;
+      stm_comms_.setMotorValues(0, 0);
+      stm_comms_.setMowerBladeValue(0);
+      stm_comms_.setLedError();
+      RCLCPP_ERROR_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "STM32 reported unsafe motor flags=0x%02X; hardware fault latched",
+          motor_status->flags);
+      return hardware_interface::return_type::ERROR;
+    } else {
       wheel_left_.vel =
           permille_to_rad_per_sec(motor_status->commanded_left_permille);
       wheel_right_.vel =
@@ -214,7 +314,11 @@ MowerSystemHardware::read(const rclcpp::Time & /*time*/,
 hardware_interface::return_type
 MowerSystemHardware::write(const rclcpp::Time & /*time*/,
                            const rclcpp::Duration & /*period*/) {
-  if (!stm_comms_.is_connected()) {
+  if (hardware_fault_latched_ || !stm_comms_.is_connected()) {
+    if (stm_comms_.is_connected()) {
+      stm_comms_.setMotorValues(0, 0);
+      stm_comms_.setMowerBladeValue(0);
+    }
     return hardware_interface::return_type::ERROR;
   }
   // Set the motor values
@@ -225,18 +329,39 @@ MowerSystemHardware::write(const rclcpp::Time & /*time*/,
     } else if (name == wheel_right_.name) {
       wheel_right_.cmd = get_command(name);
     } else if (name == "mower_joint/effort") {
-      mower_blade_cmd_ = get_command(name);
+      // Production blade actuation is intentionally disabled. A standard
+      // effort controller retains its last command when its publisher dies,
+      // while this 50 Hz write loop would keep refreshing the MCU watchdog.
+      // Do not consume this interface until a steady-clock freshness watchdog
+      // and independent hardware interlock are implemented and tested.
+      mower_blade_cmd_ = 0.0;
     }
+  }
+  if (!std::isfinite(wheel_left_.cmd) ||
+      !std::isfinite(wheel_right_.cmd) ||
+      !std::isfinite(mower_blade_cmd_)) {
+    // Never allow NaN/Inf to reach round(), an integer conversion, or the
+    // motor MCU. Stop every actuator and fault the hardware write so the
+    // controller manager cannot silently continue on a malformed command.
+    stm_comms_.setMotorValues(0, 0);
+    stm_comms_.setMowerBladeValue(0);
+    hardware_fault_latched_ = true;
+    stm_comms_.setLedError();
+    RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Rejected non-finite actuator command; all motors forced to zero");
+    return hardware_interface::return_type::ERROR;
   }
   const int left_permille =
       normalize_to_permille(wheel_left_.cmd, kMaxWheelCommandRadPerSec);
   const int right_permille =
       normalize_to_permille(wheel_right_.cmd, kMaxWheelCommandRadPerSec);
-  const int blade_permille =
-      normalize_to_permille(mower_blade_cmd_, kMaxMowerBladeEffort);
+  const int blade_permille = 0;
 
-  stm_comms_.setMotorValues(left_permille, right_permille);
-  stm_comms_.setMowerBladeValue(blade_permille);
+  if (!stm_comms_.setMotorValues(left_permille, right_permille).has_value()) {
+    hardware_fault_latched_ = true;
+    return hardware_interface::return_type::ERROR;
+  }
 
   RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 500,

@@ -17,6 +17,8 @@ import rclpy
 from geometry_msgs.msg import Pose
 from nav_msgs.msg import MapMetaData, OccupancyGrid
 from mower_interface.srv import ImportImageMask
+from std_srvs.srv import Trigger
+from visualization_msgs.msg import MarkerArray
 
 from mower_mission.map_manage_node import MapManage
 
@@ -27,6 +29,10 @@ def map_manage():
     if not rclpy.ok():
         rclpy.init()
     node = MapManage()
+    # Unit-test the map mutation itself; central lease admission is covered by
+    # test_nav_action_server_services.
+    node._acquire_mission_mutation = lambda response, operation: True
+    node._release_mission_mutation = lambda: True
     try:
         yield node
     finally:
@@ -105,6 +111,15 @@ def test_import_keeps_collected_freespace_and_clips_zone(map_manage):
     # Coverage zone = image ∩ collected ≈ 4 m² (NOT the full ~64 m² image).
     zone_area = _free_cells(map_manage.zone_map_list[0].mask_map) * 0.1 * 0.1
     assert 3.0 <= zone_area <= 5.0
+    expected_inflated = map_manage._create_free_space_inflated(
+        map_manage.zone_map_list[0].mask_map
+    )
+    assert map_manage.zone_map_list[0].mask_map_inflated.data == (
+        expected_inflated.data
+    )
+    assert _free_cells(expected_inflated) < _free_cells(
+        map_manage.zone_map_list[0].mask_map
+    )
 
 
 def test_import_without_collected_is_image_only(map_manage):
@@ -120,3 +135,58 @@ def test_import_without_collected_is_image_only(map_manage):
         or _free_cells(map_manage.base_map) == _free_cells(map_manage.zone_map_list[0].mask_map)
     image_area = _free_cells(map_manage.zone_map_list[0].mask_map) * 0.1 * 0.1
     assert image_area > 50.0
+    assert _free_cells(
+        map_manage.zone_map_list[0].mask_map_inflated
+    ) < _free_cells(map_manage.zone_map_list[0].mask_map)
+    # Local uses raw geometry for footprint collision checks; global is an
+    # eroded configuration-space map for NavFn.
+    assert _free_cells(map_manage.map_msg) > _free_cells(
+        map_manage.global_map_msg
+    )
+
+
+def test_import_rejects_image_narrower_than_safety_clearance(map_manage):
+    res = ImportImageMask.Response()
+    map_manage.import_image_mask_srv(
+        _import_request(0.0, 0.0, side_px=10, res=0.1), res
+    )
+
+    assert not res.success
+    assert '安全內縮後沒有可用割草區域' in res.message
+    assert map_manage.zone_map_list == []
+
+
+def test_image_only_restore_fails_without_mutating_active_image(map_manage):
+    imported = ImportImageMask.Response()
+    map_manage.import_image_mask_srv(_import_request(0.0, 0.0), imported)
+    assert imported.success, imported.message
+    active_base = map_manage.base_map
+    active_zones = map_manage.zone_map_list
+    active_risk = map_manage.risk_map
+    backup_zones = map_manage._free_zone_backup
+    active_local_map = map_manage.map_msg
+    active_global_map = map_manage.global_map_msg
+
+    restored = Trigger.Response()
+    map_manage.restore_free_space_srv(Trigger.Request(), restored)
+
+    assert not restored.success
+    assert '沒有採集的自由空間' in restored.message
+    assert map_manage.base_map is active_base
+    assert map_manage.zone_map_list is active_zones
+    assert map_manage.risk_map is active_risk
+    assert map_manage._free_zone_backup is backup_zones
+    assert map_manage.map_msg is active_local_map
+    assert map_manage.global_map_msg is active_global_map
+
+
+def test_failed_freespace_candidate_preserves_previous_state(map_manage):
+    collected = _free_grid((0.0, 1.0, 0.0, 1.0), 0.05, 0.0, 0.0, 20)
+    previous_zones = map_manage.zone_map_list
+    map_manage.base_map = collected
+    map_manage.collected_free_space = collected
+
+    assert map_manage._create_zone_maps_and_freespace(MarkerArray()) is None
+    assert map_manage.base_map is collected
+    assert map_manage.collected_free_space is collected
+    assert map_manage.zone_map_list is previous_zones

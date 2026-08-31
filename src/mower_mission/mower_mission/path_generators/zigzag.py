@@ -30,11 +30,13 @@ MIN_U_TURN_RADIUS_M = 0.35
 def _generate_coverage_zigzag_path(
     safe_map: np.ndarray,
     strip_width_m: float,
+    waypoint_spacing_m: float,
     res: float,
     H: int,
     W: int,
     origin_x: float,
     origin_y: float,
+    angle_deg: float = 0.0,
 ) -> tuple[
     list[tuple[float, float]],
     list[tuple[float, float]],
@@ -45,7 +47,20 @@ def _generate_coverage_zigzag_path(
     This is the single implementation for the old "boustrophedon" naming and
     the current UI-facing "zigzag" naming.
     """
-    waypoint_spacing_m = strip_width_m
+    safe_map = safe_map.astype(bool, copy=False)
+    if abs(angle_deg) >= 1e-6:
+        return _generate_rotated_zigzag_path(
+            safe_map,
+            strip_width_m,
+            waypoint_spacing_m,
+            res,
+            H,
+            W,
+            origin_x,
+            origin_y,
+            angle_deg,
+        )
+
     spacing = waypoint_spacing_m
     strip_cols = max(1, int(round(strip_width_m / res)))
     midcols = list(range(strip_cols // 2, W, strip_cols))
@@ -94,6 +109,113 @@ def _generate_coverage_zigzag_path(
         points, safe_map, res, origin_x, origin_y
     )
     return points, coverage_split_points, invalid_segments
+
+
+def _generate_rotated_zigzag_path(
+    safe_map: np.ndarray,
+    strip_width_m: float,
+    waypoint_spacing_m: float,
+    res: float,
+    H: int,
+    W: int,
+    origin_x: float,
+    origin_y: float,
+    angle_deg: float,
+) -> tuple[
+    list[tuple[float, float]],
+    list[tuple[float, float]],
+    list[tuple[int, int]],
+]:
+    """Generate zigzag lanes in a rotated planning frame.
+
+    The implementation intentionally mirrors mower_coverage_core's Rust
+    backend so both backends expose the same public planning contract.
+    """
+    angle_rad = math.radians(angle_deg)
+    center_x = origin_x + W * res / 2.0
+    center_y = origin_y + H * res / 2.0
+    cos_neg = math.cos(-angle_rad)
+    sin_neg = math.sin(-angle_rad)
+
+    rotated_safe_points: list[tuple[float, float]] = []
+    for row in range(H):
+        for col in range(W):
+            if not safe_map[row, col]:
+                continue
+            world_x = origin_x + (col + 0.5) * res
+            world_y = origin_y + (row + 0.5) * res
+            dx = world_x - center_x
+            dy = world_y - center_y
+            rotated_safe_points.append((
+                cos_neg * dx - sin_neg * dy + center_x,
+                sin_neg * dx + cos_neg * dy + center_y,
+            ))
+
+    if not rotated_safe_points:
+        return [], [], []
+
+    min_x = min(point[0] for point in rotated_safe_points)
+    max_x = max(point[0] for point in rotated_safe_points)
+    width_rotated = max_x - min_x
+    strip_count = max(1, int(math.floor(width_rotated / strip_width_m)))
+    if strip_count == 1:
+        strip_centers = [(min_x + max_x) / 2.0]
+    else:
+        strip_centers = [
+            min_x
+            + strip_width_m / 2.0
+            + index * (width_rotated - strip_width_m) / (strip_count - 1)
+            for index in range(strip_count)
+        ]
+
+    rotated_points: list[tuple[float, float]] = []
+    rotated_split_points: list[tuple[float, float]] = []
+    reverse = False
+    min_distance = max(waypoint_spacing_m, res) * 0.5
+
+    for strip_x in strip_centers:
+        candidates = [
+            point for point in rotated_safe_points
+            if abs(point[0] - strip_x) <= strip_width_m / 2.0
+        ]
+        candidates.sort(key=lambda point: (point[1], point[0]))
+        if reverse:
+            candidates.reverse()
+        if not candidates:
+            reverse = not reverse
+            continue
+
+        previous = None
+        strip_last = None
+        for point in candidates:
+            if previous is not None and math.hypot(
+                point[0] - previous[0], point[1] - previous[1]
+            ) < min_distance:
+                continue
+            rotated_points.append(point)
+            previous = point
+            strip_last = point
+        if strip_last is not None:
+            rotated_split_points.append(strip_last)
+        reverse = not reverse
+
+    cos_pos = math.cos(angle_rad)
+    sin_pos = math.sin(angle_rad)
+
+    def rotate_back(point: tuple[float, float]) -> tuple[float, float]:
+        dx = point[0] - center_x
+        dy = point[1] - center_y
+        return (
+            cos_pos * dx - sin_pos * dy + center_x,
+            sin_pos * dx + cos_pos * dy + center_y,
+        )
+
+    points = [rotate_back(point) for point in rotated_points]
+    split_points = [rotate_back(point) for point in rotated_split_points]
+    invalid_segments = _find_invalid_segments(
+        points, safe_map, res, origin_x, origin_y
+    )
+    return points, split_points, invalid_segments
 
 
 def _build_path_with_u_turns(

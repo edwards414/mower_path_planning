@@ -3,6 +3,20 @@
 .claude
 .vscode
 
+# Never send local credentials to the Docker daemon or a remote BuildKit
+# builder, even when the Dockerfile does not COPY them into the final image.
+.env
+**/*.env
+.secrets/
+**/.secrets/
+**/setting.local.sh
+deploy/server/cloudflared-config.yml
+deploy/server/tunnel-credentials.json
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
+
 build/
 install/
 log/

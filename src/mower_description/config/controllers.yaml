@@ -43,10 +43,26 @@ diff_drive_controller:
     twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
 
     # cmd_vel 設定
-    cmd_vel_timeout: 0.5        # 超過此時間沒有 cmd_vel 則停止
+    cmd_vel_timeout: 0.25       # 與真機 safety timeout 一致
 
-    # 是否使用 stamped Twist（Jazzy 預設 false，與 nav2 相容）
+    # Jazzy 使用 stamped Twist；與 Nav2 及真機安全鏈一致
     use_stamped_vel: true
+
+    # 與真機限速一致。正常加速維持平順；安全零速可在 50 Hz 的下一個
+    # controller update 內越過 limiter，避免 watchdog 後再多滑行約 0.5 秒。
+    linear.x.max_velocity: 0.5
+    linear.x.min_velocity: -0.5
+    linear.x.max_acceleration: 1.0
+    linear.x.max_acceleration_reverse: -1.0
+    linear.x.max_deceleration: -25.0
+    linear.x.max_deceleration_reverse: 25.0
+
+    angular.z.max_velocity: 1.0
+    angular.z.min_velocity: -1.0
+    angular.z.max_acceleration: 2.0
+    angular.z.max_acceleration_reverse: -2.0
+    angular.z.max_deceleration: -50.0
+    angular.z.max_deceleration_reverse: 50.0
 
     # TF 發布設定：關閉 diff_drive_controller 的 TF 發布！
     # ekf_filter_node_odom (publish_tf: true) 是唯一的 odom → base_footprint TF 來源

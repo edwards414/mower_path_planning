@@ -17,10 +17,10 @@ node[nav2_gps_waypoint_follower]:
     """
 
     """
-    ros2 launch nav2_gps_waypoint_follower system_test.launch.py
+    ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true
 
-    ros2 launch nav2_gps_waypoint_follower small_test.launch.py
-  ros2 launch nav2_gps_waypoint_follower rviz.launch.py
+    # small_test.launch.py 已停用；請使用上面的完整 system_test graph。
+  ros2 launch mower_bringup rviz.launch.py
     ros2 run mower_qt mower_qt
 
 
@@ -132,7 +132,9 @@ boustrophedon_coverage node
 
 
 [nav_action_server]
-ros2 run boustrophedon_coverage nav_action_client
+# Legacy nav_action_client is intentionally not installed: it does not own the
+# production correlated result/cancel watchdog. Start missions through
+# /zone_exec_path (CoveragePlanner) instead.
 
 [鍵盤]
 ros2 run turtlebot3_teleop teleop_keyboard

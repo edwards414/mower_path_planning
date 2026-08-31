@@ -25,6 +25,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ZoneSequence.srv"
   "srv/EditZone.srv"
   "srv/SiteOp.srv"
+  "srv/MissionOperationLock.srv"
+  "srv/ConfirmNavigationDispatch.srv"
+  "srv/CancelNavigationDispatch.srv"
   "action/Waypoint.action"
   DEPENDENCIES std_msgs geometry_msgs nav_msgs visualization_msgs action_msgs
 )

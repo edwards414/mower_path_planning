@@ -54,6 +54,8 @@ _MARKER_TOPICS = [
 
 _COVERAGE_PARAM_NAMES = [
     'strip_width_m',
+    'waypoint_spacing_m',
+    'zigzag_angle_deg',
     'unknown_as_obstacle',
     'coverage_pattern',
     'boundary_ring',
@@ -92,17 +94,25 @@ class FlutterAdapter(Node):
 
         for src, name in _MARKER_TOPICS:
             adapter_topic = f'/adapter/marker_layers/{name}'
+            # Marker arrays are complete layer snapshots. Keep both relay legs
+            # latched so an adapter or app that starts later receives the same
+            # current layer instead of retaining demo/previous-session data.
             self._marker_pubs[name] = self.create_publisher(
-                String, adapter_topic, 10
+                String, adapter_topic, latched
             )
             self.create_subscription(
                 MarkerArray, src,
-                self._make_marker_cb(name), 10,
+                self._make_marker_cb(name), latched,
             )
+            self._marker_pubs[name].publish(String(data=json.dumps({
+                'name': name,
+                'markers': [],
+            })))
 
         self._robot_pose_pub = self.create_publisher(
             PoseStamped, '/adapter/robot_pose', 10
         )
+        self.declare_parameter('robot_pose_max_age_s', 1.0)
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self.create_timer(0.2, self._publish_robot_pose)  # 5 Hz
@@ -133,8 +143,10 @@ class FlutterAdapter(Node):
         self.create_timer(0.5, self._publish_zone_summaries)
 
         # Map datum (geo-reference for the satellite base map). Prefer the live
-        # navsat_transform datum (toLL); fall back to configured lat/lon when
-        # GPS is unavailable (e.g. the sim GPS has no usable fix).
+        # navsat_transform datum (toLL). A configured fallback is opt-in only:
+        # publishing a real-looking fixed coordinate when GPS is unavailable
+        # can project a saved site onto the wrong physical location.
+        self.declare_parameter('enable_map_datum_fallback', False)
         self.declare_parameter('map_datum_fallback_lat', 23.6939508)
         self.declare_parameter('map_datum_fallback_lon', 120.5376539)
         self.declare_parameter('map_datum_fallback_bearing_deg', 0.0)
@@ -143,6 +155,7 @@ class FlutterAdapter(Node):
         )
         self._toll_client = self.create_client(ToLL, '/toLL')
         self._datum_locked = False
+        self._fallback_disabled_logged = False
         self.create_timer(2.0, self._publish_map_datum)
 
     # ── topic relays ─────────────────────────────────────────────────────────
@@ -178,6 +191,41 @@ class FlutterAdapter(Node):
             )
         except (LookupException, TransformException):
             return  # TF not yet available — just skip this tick
+
+        stamp_ns = (
+            int(tf.header.stamp.sec) * 1_000_000_000
+            + int(tf.header.stamp.nanosec)
+        )
+        age_s = (
+            (self.get_clock().now().nanoseconds - stamp_ns)
+            / 1_000_000_000.0
+        ) if stamp_ns > 0 else math.inf
+        values = (
+            tf.transform.translation.x,
+            tf.transform.translation.y,
+            tf.transform.translation.z,
+            tf.transform.rotation.x,
+            tf.transform.rotation.y,
+            tf.transform.rotation.z,
+            tf.transform.rotation.w,
+        )
+        quaternion_norm = math.sqrt(sum(
+            float(value) ** 2 for value in values[3:]
+        ))
+        max_age_s = max(
+            0.1,
+            float(self.get_parameter('robot_pose_max_age_s').value),
+        )
+        if (
+            tf.header.frame_id != 'map'
+            or tf.child_frame_id != 'base_footprint'
+            or not all(math.isfinite(float(value)) for value in values)
+            or not math.isfinite(quaternion_norm)
+            or abs(quaternion_norm - 1.0) > 1e-2
+            or not -0.5 <= age_s <= max_age_s
+        ):
+            # Do not turn a frozen/invalid TF into a fresh 5 Hz pose relay.
+            return
 
         pose = PoseStamped()
         pose.header = tf.header
@@ -322,6 +370,15 @@ class FlutterAdapter(Node):
         )
 
     def _publish_fallback_datum(self) -> None:
+        if not bool(
+            self.get_parameter('enable_map_datum_fallback').value
+        ):
+            if not self._fallback_disabled_logged:
+                self.get_logger().warn(
+                    'map datum unavailable; fixed fallback is disabled'
+                )
+                self._fallback_disabled_logged = True
+            return
         lat = float(self.get_parameter('map_datum_fallback_lat').value)
         lon = float(self.get_parameter('map_datum_fallback_lon').value)
         bearing = math.radians(

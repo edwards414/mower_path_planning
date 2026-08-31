@@ -12,11 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+)
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
+
+
+def _reject_deprecated_launch(_context):
+    raise RuntimeError(
+        'small_test.launch.py is deprecated because it has no clock, '
+        'coordinator, mux, or drivetrain owner. Use '
+        'system_test.launch.py launch_sim:=true instead.'
+    )
 
 
 def generate_launch_description():
@@ -37,15 +50,24 @@ def generate_launch_description():
     configured_params = LaunchConfiguration('params_file')
 
     path_record = ExecuteProcess(
-        cmd=['ros2', 'run', 'mower_mission', 'path_record_node'],
+        cmd=[
+            'ros2', 'run', 'mower_mission', 'path_record_node',
+            '--ros-args', '-p', ['use_sim_time:=', use_sim_time],
+        ],
         output='screen'
     )
     map_manage = ExecuteProcess(
-        cmd=['ros2', 'run', 'mower_mission', 'map_manage_node'],
+        cmd=[
+            'ros2', 'run', 'mower_mission', 'map_manage_node',
+            '--ros-args', '-p', ['use_sim_time:=', use_sim_time],
+        ],
         output='screen'
     )
     boustrophedon_coverage = ExecuteProcess(
-        cmd=['ros2', 'run', 'mower_mission', 'coverage_node'],
+        cmd=[
+            'ros2', 'run', 'mower_mission', 'coverage_node',
+            '--ros-args', '-p', ['use_sim_time:=', use_sim_time],
+        ],
         output='screen'
     )
 
@@ -57,6 +79,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'gps_fix_topic': '/gps/fix',
         }.items()
     )
 
@@ -74,6 +97,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_params_file,
+        OpaqueFunction(function=_reject_deprecated_launch),
         robot_localization_cmd,
         navigation_cmd,
         path_record,

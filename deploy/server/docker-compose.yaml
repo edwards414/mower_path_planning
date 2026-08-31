@@ -1,0 +1,39 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    container_name: mower-mediamtx
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: mower-cloudflared
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - tunnel
+      - --config
+      - /etc/cloudflared/config.yml
+      - --no-autoupdate
+      - run
+    volumes:
+      - ${CLOUDFLARED_CONFIG_PATH:-./cloudflared-config.yml}:/etc/cloudflared/config.yml:ro
+      - ${CLOUDFLARED_CREDENTIALS_PATH:-./tunnel-credentials.json}:/etc/cloudflared/tunnel.json:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

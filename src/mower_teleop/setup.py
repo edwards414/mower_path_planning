@@ -29,7 +29,6 @@ setup(
     entry_points={
         'console_scripts': [
             'teleop_keyboard = mower_teleop.teleop_keyboard:main',
-            'blade_teleop_joy = mower_teleop.blade_teleop_joy:main',
         ],
     },
 )

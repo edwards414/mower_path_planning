@@ -1,0 +1,15 @@
+# Copy to cloudflared-config.yml (gitignored) after creating the tunnel.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /etc/cloudflared/tunnel.json
+
+metrics: 127.0.0.1:2000
+
+ingress:
+  - hostname: camera.fxrbindi.com
+    service: http://127.0.0.1:8889
+  - hostname: control.fxrbindi.com
+    service: http://10.77.0.2:9090
+    originRequest:
+      connectTimeout: 12s
+      keepAliveTimeout: 30s
+  - service: http_status:404

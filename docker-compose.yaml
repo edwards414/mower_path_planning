@@ -3,8 +3,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Dockerfile's final stage is the GPS-only image; select the full mower
+      # runtime explicitly or robot.launch.py/install will not exist.
+      target: runtime
+    restart: unless-stopped
+    stop_grace_period: 60s
     # image: ghcr.io/edwards414/mower_path_planning:main
     # image: lawan_node:latest
+    command:
+      - ros2
+      - launch
+      - mower_bringup
+      - robot.launch.py
+      - use_sim_time:=false
+      - rosbridge_address:=${ROSBRIDGE_ADDRESS:-127.0.0.1}
+      - zone_record_dir:=/home/mower/.mower/zone_record
+      - sites_dir:=/home/mower/.mower/sites
+      - output_root:=/home/mower/.mower/bags
+      - record:=false
     environment:
       # - ROS_DOMAIN_ID = 0
       - ROS_LOCALHOST_ONLY=1
@@ -16,10 +32,12 @@ services:
     devices:
       - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom
+    volumes:
+      - mower_data:/home/mower/.mower
 
   # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.
   # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
-  # No USB camera yet: mediamtx.yml serves synthetic ffmpeg test patterns.
+  # No USB camera yet: mediamtx.yml serves one synthetic front-camera pattern.
   mediamtx:
     image: bluenviron/mediamtx:latest-ffmpeg
     network_mode: host
@@ -29,3 +47,7 @@ services:
     # When a real USB/v4l2 camera is attached, expose it to the container:
     # devices:
     #   - /dev/video0:/dev/video0
+
+volumes:
+  mower_data:
+    name: mower_data

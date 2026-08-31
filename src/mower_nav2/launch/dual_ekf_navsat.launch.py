@@ -29,6 +29,7 @@ def generate_launch_description():
     )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
+    gps_fix_topic = LaunchConfiguration('gps_fix_topic')
 
     mower_nav2_dir = get_package_share_directory('mower_nav2')
     rl_params_file = os.path.join(
@@ -36,6 +37,11 @@ def generate_launch_description():
     return LaunchDescription(
         [
             declare_use_sim_time,
+            DeclareLaunchArgument(
+                'gps_fix_topic',
+                default_value='/fix',
+                description='Canonical raw GPS fix consumed by localization',
+            ),
             launch.actions.DeclareLaunchArgument(
                 'output_final_position', default_value='false'
             ),
@@ -75,7 +81,7 @@ def generate_launch_description():
                     # old ('imu/data','imu/data') was a no-op so it never got IMU
                     # yaw → datum never established → toLL returned 0.
                     ('imu', 'imu/data'),
-                    ('gps/fix', 'gps/fix'),
+                    ('gps/fix', gps_fix_topic),
                     ('gps/filtered', 'gps/filtered'),
                     ('odometry/gps', 'odometry/gps'),
                     ('odometry/filtered', 'odometry/global'),

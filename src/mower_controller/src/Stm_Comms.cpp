@@ -20,6 +20,9 @@ constexpr uint16_t kDefaultErrorLedPeriodMs = 200;
 constexpr size_t kMinimumFrameSize = 8;
 constexpr size_t kMotorStatusPayloadSize = 12;
 constexpr std::array<uint8_t, 2> kFramePreamble{kSof0, kSof1};
+constexpr uint8_t kCommandValidMask = 0x01;
+constexpr uint8_t kCommandTimeoutMask = 0x02;
+constexpr uint8_t kDriverAlarmMask = 0x04;
 
 } // namespace
 
@@ -36,6 +39,11 @@ void StmComms::setup(const std::string &serial_device, int32_t baud_rate,
   rx_buffer_.clear();
   motor_status_ = {};
   has_motor_status_ = false;
+  has_motor_status_time_ = false;
+  has_ack_progress_time_ = false;
+  last_acknowledged_sequence_.reset();
+  recent_motor_commands_.clear();
+  io_fault_ = false;
 
   if (serial_conn_.IsOpen()) {
     serial_conn_.Close();
@@ -119,20 +127,20 @@ int16_t StmComms::read_int16_le(const std::vector<uint8_t> &payload,
   return static_cast<int16_t>(read_uint16_le(payload, offset));
 }
 
-void StmComms::write_frame(FrameType type,
-                           const std::vector<uint8_t> &payload) {
+std::optional<uint8_t>
+StmComms::write_frame(FrameType type, const std::vector<uint8_t> &payload) {
   if (!serial_conn_.IsOpen()) {
     RCLCPP_WARN(rclcpp::get_logger("StmComms"),
                 "Serial port is not open, dropping frame type 0x%02X",
                 static_cast<unsigned int>(type));
-    return;
+    return std::nullopt;
   }
 
   if (payload.size() > 0xFF) {
     RCLCPP_WARN(rclcpp::get_logger("StmComms"),
                 "Payload too large for frame type 0x%02X: %zu bytes",
                 static_cast<unsigned int>(type), payload.size());
-    return;
+    return std::nullopt;
   }
 
   std::vector<uint8_t> frame;
@@ -142,7 +150,8 @@ void StmComms::write_frame(FrameType type,
   frame.push_back(kSof1);
   frame.push_back(kProtocolVersion);
   frame.push_back(static_cast<uint8_t>(type));
-  frame.push_back(next_sequence_++);
+  const uint8_t sequence = next_sequence_++;
+  frame.push_back(sequence);
   frame.push_back(static_cast<uint8_t>(payload.size()));
   frame.insert(frame.end(), payload.begin(), payload.end());
 
@@ -154,30 +163,50 @@ void StmComms::write_frame(FrameType type,
   try {
     serial_conn_.Write(std::string(frame.begin(), frame.end()));
     serial_conn_.DrainWriteBuffer();
+    return sequence;
   } catch (const std::exception &e) {
-    RCLCPP_WARN(rclcpp::get_logger("StmComms"),
-                "Error writing frame type 0x%02X: %s",
-                static_cast<unsigned int>(type), e.what());
+    mark_io_fault("writing UART frame", e);
+    return std::nullopt;
   }
 }
 
-void StmComms::setMotorValues(int left_permille, int right_permille,
-                              uint16_t command_timeout_ms) {
+std::optional<uint8_t>
+StmComms::setMotorValues(int left_permille, int right_permille,
+                         uint16_t command_timeout_ms) {
+  const auto clamped_left = static_cast<int16_t>(std::clamp(
+      left_permille, -static_cast<int>(kCommandPermilleMax),
+      static_cast<int>(kCommandPermilleMax)));
+  const auto clamped_right = static_cast<int16_t>(std::clamp(
+      right_permille, -static_cast<int>(kCommandPermilleMax),
+      static_cast<int>(kCommandPermilleMax)));
   std::vector<uint8_t> payload;
   payload.reserve(8);
-  append_int16_le(payload, static_cast<int16_t>(std::clamp(
-                              left_permille, -static_cast<int>(kCommandPermilleMax),
-                              static_cast<int>(kCommandPermilleMax))));
-  append_int16_le(payload, static_cast<int16_t>(std::clamp(
-                              right_permille, -static_cast<int>(kCommandPermilleMax),
-                              static_cast<int>(kCommandPermilleMax))));
+  append_int16_le(payload, clamped_left);
+  append_int16_le(payload, clamped_right);
   append_uint16_le(payload, command_timeout_ms);
   append_uint16_le(payload, 0);
 
-  write_frame(FrameType::kMotorOpenLoopCommand, payload);
+  const auto sequence = write_frame(FrameType::kMotorOpenLoopCommand, payload);
+  if (sequence.has_value()) {
+    const auto now = std::chrono::steady_clock::now();
+    recent_motor_commands_.push_back(MotorCommandRecord{
+        *sequence,
+        clamped_left,
+        clamped_right,
+        command_timeout_ms,
+        now,
+    });
+    while (!recent_motor_commands_.empty() &&
+           now - recent_motor_commands_.front().sent_at >
+               std::chrono::seconds(2)) {
+      recent_motor_commands_.pop_front();
+    }
+  }
+  return sequence;
 }
 
-void StmComms::setMowerBladeValue(int permille, uint16_t command_timeout_ms) {
+bool StmComms::setMowerBladeValue(int permille,
+                                  uint16_t command_timeout_ms) {
   std::vector<uint8_t> payload;
   payload.reserve(8);
   append_int16_le(payload, static_cast<int16_t>(std::clamp(
@@ -187,7 +216,7 @@ void StmComms::setMowerBladeValue(int permille, uint16_t command_timeout_ms) {
   append_uint16_le(payload, 0);
   append_uint16_le(payload, 0);
 
-  write_frame(FrameType::kMowerBladeOpenLoopCommand, payload);
+  return write_frame(FrameType::kMowerBladeOpenLoopCommand, payload).has_value();
 }
 
 void StmComms::setWs2812Mode(uint8_t mode, uint8_t red, uint8_t green,
@@ -219,7 +248,12 @@ bool StmComms::poll() {
     return false;
   }
 
-  read_incoming_bytes();
+  try {
+    read_incoming_bytes();
+  } catch (const std::exception &error) {
+    mark_io_fault("polling UART status", error);
+    return false;
+  }
   return process_incoming_frames();
 }
 
@@ -239,8 +273,7 @@ void StmComms::read_incoming_bytes() {
       serial_conn_.ReadByte(data_byte, 0);
       rx_buffer_.push_back(static_cast<uint8_t>(data_byte));
     } catch (const std::exception &e) {
-      RCLCPP_WARN(rclcpp::get_logger("StmComms"),
-                  "Error reading UART status stream: %s", e.what());
+      mark_io_fault("reading UART status", e);
       break;
     }
   }
@@ -310,16 +343,113 @@ bool StmComms::handle_frame(uint8_t type, uint8_t seq,
     return false;
   }
 
-  motor_status_.seq = seq;
-  motor_status_.commanded_left_permille = read_int16_le(payload, 0);
-  motor_status_.commanded_right_permille = read_int16_le(payload, 2);
-  motor_status_.applied_left_pwm = read_int16_le(payload, 4);
-  motor_status_.applied_right_pwm = read_int16_le(payload, 6);
-  motor_status_.command_age_ms = read_uint16_le(payload, 8);
-  motor_status_.flags = payload[10];
-  motor_status_.last_rx_seq = payload[11];
+  MotorStatus candidate{};
+  candidate.seq = seq;
+  candidate.commanded_left_permille = read_int16_le(payload, 0);
+  candidate.commanded_right_permille = read_int16_le(payload, 2);
+  candidate.applied_left_pwm = read_int16_le(payload, 4);
+  candidate.applied_right_pwm = read_int16_le(payload, 6);
+  candidate.command_age_ms = read_uint16_le(payload, 8);
+  candidate.flags = payload[10];
+  candidate.last_rx_seq = payload[11];
+  if (seq != candidate.last_rx_seq) {
+    RCLCPP_WARN(rclcpp::get_logger("StmComms"),
+                "Ignoring inconsistent motor status seq=%u last_rx_seq=%u",
+                seq, candidate.last_rx_seq);
+    return false;
+  }
+
+  const auto command = std::find_if(
+      recent_motor_commands_.begin(), recent_motor_commands_.end(),
+      [&](const MotorCommandRecord &record) {
+        return record.seq == candidate.last_rx_seq;
+      });
+  if (command == recent_motor_commands_.end()) {
+    RCLCPP_WARN(rclcpp::get_logger("StmComms"),
+                "Ignoring motor status for unknown command seq=%u",
+                candidate.last_rx_seq);
+    return false;
+  }
+  if (candidate.commanded_left_permille != command->left_permille ||
+      candidate.commanded_right_permille != command->right_permille) {
+    RCLCPP_ERROR(
+        rclcpp::get_logger("StmComms"),
+        "Ignoring motor status seq=%u with mismatched command echo",
+        candidate.last_rx_seq);
+    return false;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (!last_acknowledged_sequence_.has_value() ||
+      *last_acknowledged_sequence_ != candidate.last_rx_seq) {
+    last_acknowledged_sequence_ = candidate.last_rx_seq;
+    last_ack_progress_at_ = now;
+    has_ack_progress_time_ = true;
+  }
+  motor_status_ = candidate;
   has_motor_status_ = true;
+  last_motor_status_at_ = now;
+  has_motor_status_time_ = true;
   return true;
 }
 
-bool StmComms::is_connected() const { return serial_conn_.IsOpen(); }
+void StmComms::mark_io_fault(const char *operation,
+                             const std::exception &error) {
+  io_fault_ = true;
+  RCLCPP_ERROR(rclcpp::get_logger("StmComms"), "%s failed: %s", operation,
+               error.what());
+  try {
+    if (serial_conn_.IsOpen()) {
+      serial_conn_.Close();
+    }
+  } catch (const std::exception &close_error) {
+    RCLCPP_ERROR(rclcpp::get_logger("StmComms"),
+                 "Closing faulted UART failed: %s", close_error.what());
+  }
+}
+
+bool StmComms::is_connected() const {
+  return !io_fault_ && serial_conn_.IsOpen();
+}
+
+bool StmComms::motor_status_is_fresh_and_acknowledged(
+    std::chrono::milliseconds max_age,
+    std::optional<uint8_t> expected_sequence) const {
+  if (!is_connected() || !has_motor_status_ || !has_motor_status_time_) {
+    return false;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_motor_status_at_ > max_age) {
+    return false;
+  }
+  if (expected_sequence.has_value() &&
+      motor_status_.last_rx_seq != *expected_sequence) {
+    return false;
+  }
+  if (!has_ack_progress_time_ || now - last_ack_progress_at_ > max_age) {
+    return false;
+  }
+  const auto command = std::find_if(
+      recent_motor_commands_.begin(), recent_motor_commands_.end(),
+      [&](const MotorCommandRecord &record) {
+        return record.seq == motor_status_.last_rx_seq;
+      });
+  if (command == recent_motor_commands_.end() ||
+      now - command->sent_at > max_age ||
+      motor_status_.commanded_left_permille != command->left_permille ||
+      motor_status_.commanded_right_permille != command->right_permille ||
+      motor_status_.command_age_ms > command->timeout_ms ||
+      motor_status_.command_age_ms > max_age.count()) {
+    return false;
+  }
+  const bool command_valid =
+      (motor_status_.flags & kCommandValidMask) != 0U;
+  const bool command_timeout =
+      (motor_status_.flags & kCommandTimeoutMask) != 0U;
+  const bool driver_alarm =
+      (motor_status_.flags & kDriverAlarmMask) != 0U;
+  constexpr uint8_t kKnownFlags =
+      kCommandValidMask | kCommandTimeoutMask | kDriverAlarmMask;
+  const bool unknown_flag = (motor_status_.flags & ~kKnownFlags) != 0U;
+  return command_valid && !command_timeout && !driver_alarm && !unknown_flag;
+}

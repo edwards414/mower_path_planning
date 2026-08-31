@@ -38,9 +38,50 @@ permissions:
   id-token: write
 
 jobs:
+  python-tests:
+    name: Pure Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install numpy opencv-python-headless pytest
+
+      - name: Run ROS-free mower_mission tests
+        working-directory: src/mower_mission
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q \
+            test/test_backend_api.py \
+            test/test_backend_parity.py \
+            test/test_battery_simulator.py \
+            test/test_cell_decomposition.py \
+            test/test_connector_planner.py \
+            test/test_controller_configuration.py \
+            test/test_coverage_cancel_tracking.py \
+            test/test_flutter_adapter_dto.py \
+            test/test_image_mask_import.py \
+            test/test_map_safety.py \
+            test/test_nav_map_fusion.py \
+            test/test_path_validator.py \
+            test/test_qos_configuration.py \
+            test/test_safe_map_filter.py \
+            test/test_site_store.py \
+            test/test_spiral_generator.py \
+            test/test_zigzag_generator.py \
+            test/test_zigzag_segment_boundaries.py
+
   build:
     name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
+    needs: python-tests
 
     strategy:
       fail-fast: false
@@ -175,6 +216,7 @@ jobs:
             set -u
             ros2 pkg prefix mower_bringup >/dev/null
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
+            ros2 launch mower_bringup robot.launch.py --show-args >/tmp/robot_launch_args.txt
           '
 
       - name: Build runtime ARM64 release target

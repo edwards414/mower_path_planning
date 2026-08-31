@@ -142,7 +142,7 @@
 |---|---|
 | 地圖 nav2 | `ros2 launch nav2_gps_waypoint_follower gps_waypoint_follower.launch.py` |
 | test system | `ros2 launch nav2_gps_waypoint_follower system_test.launch.py` |
-| small test | `ros2 launch nav2_gps_waypoint_follower small_test.launch.py` |
+| system test | `ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true` |
 | rviz | `ros2 launch nav2_gps_waypoint_follower rviz.launch.py` |
 | 控制面板 | `ros2 run mower_qt mower_qt` |
 

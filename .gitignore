@@ -26,3 +26,8 @@ _rb_live.log
 .env
 src/mower_recorder/config/r2.env
 .secrets/
+
+# Local Onshape CAD credentials. Keep the tracked setting.sh loader secret-free.
+src/mower_description/setting.local.sh
+deploy/server/cloudflared-config.yml
+deploy/server/tunnel-credentials.json

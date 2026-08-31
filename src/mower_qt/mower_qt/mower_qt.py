@@ -38,7 +38,7 @@ COVERAGE_PARAMETER_DEFAULTS = {
     'waypoint_spacing_m': 0.2,
     'zigzag_angle_deg': 0.0,
     'unknown_as_obstacle': True,
-    'inflate_radius_m': 0.55,
+    'inflate_radius_m': 0.75,
     'coverage_pattern': 'zigzag',
     'boundary_ring': False,
 }
@@ -447,7 +447,7 @@ class MowerQtWindow(QMainWindow):
 
         self.inflate_radius_spinbox = self.create_double_spinbox(
             COVERAGE_PARAMETER_DEFAULTS['inflate_radius_m'],
-            minimum=0.0,
+            minimum=0.75,
             maximum=3.0,
             step=0.05,
         )

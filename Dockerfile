@@ -113,6 +113,7 @@ ARG GROUP_ID=1000
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV WORKSPACE=${WORKSPACE}
+ENV HOME=/home/${USER_NAME}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR ${WORKSPACE}
@@ -154,6 +155,9 @@ RUN if getent group ${GROUP_ID} > /dev/null; then \
         useradd --uid ${USER_ID} --gid ${GROUP_ID} --create-home --shell /bin/bash ${USER_NAME}; \
     fi \
     && usermod --append --groups video,dialout ${USER_NAME} \
+    && mkdir -p /home/${USER_NAME}/.mower/zone_record \
+        /home/${USER_NAME}/.mower/sites \
+        /home/${USER_NAME}/.mower/bags \
     && chown -R ${USER_ID}:${GROUP_ID} ${WORKSPACE} /home/${USER_NAME}
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc \
@@ -163,7 +167,7 @@ RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashr
 USER ${USER_NAME}
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["ros2", "launch", "mower_bringup", "mower.launch.py"]
+CMD ["ros2", "launch", "mower_bringup", "robot.launch.py", "use_sim_time:=false"]
 
 ##############################################
 # Stage: gps_runtime (輕量 ublox GPS driver)

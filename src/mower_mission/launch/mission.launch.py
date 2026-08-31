@@ -11,6 +11,45 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    rosbridge_address = LaunchConfiguration('rosbridge_address')
+    zone_record_dir = LaunchConfiguration('zone_record_dir')
+    sites_dir = LaunchConfiguration('sites_dir')
+    require_navigation_health = LaunchConfiguration(
+        'require_navigation_health'
+    )
+    gps_fix_topic = LaunchConfiguration('gps_fix_topic')
+
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock for mission nodes',
+    )
+    declare_rosbridge_address = DeclareLaunchArgument(
+        'rosbridge_address',
+        default_value='127.0.0.1',
+        description='Address passed to rosbridge_websocket',
+    )
+    declare_zone_record_dir = DeclareLaunchArgument(
+        'zone_record_dir',
+        default_value='zone_record',
+        description='Persistent directory for active zone/risk/channel JSON',
+    )
+    declare_sites_dir = DeclareLaunchArgument(
+        'sites_dir',
+        default_value='~/.mower/sites',
+        description='Persistent directory for named WGS84 site snapshots',
+    )
+    declare_require_navigation_health = DeclareLaunchArgument(
+        'require_navigation_health',
+        default_value='true',
+        description='Require fresh pose and precise GPS before/during Nav2',
+    )
+    declare_gps_fix_topic = DeclareLaunchArgument(
+        'gps_fix_topic',
+        default_value='/fix',
+        description='GPS fix topic that is also consumed by navsat_transform',
+    )
     launch_temp_dock_pose_publisher = LaunchConfiguration(
         'launch_temp_dock_pose_publisher'
     )
@@ -49,6 +88,7 @@ def generate_launch_description():
         executable='auto_coverage_node',
         name='auto_coverage',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(auto_coverage),
     )
 
@@ -59,18 +99,18 @@ def generate_launch_description():
                 get_package_share_directory('mower_bringup'),
                 'launch', 'rosbridge.launch.py',
             )
-        )
+        ),
+        launch_arguments={'address': rosbridge_address}.items(),
     )
 
     # ── Bag recorder ─────────────────────────────────────────────────────────
-    # Auto-record every mission (mower_recorder) and auto-upload to R2 when on
-    # WiFi/dock. Turn off with record:=false.
+    # Recording is opt-in until a retention or working R2 upload policy is
+    # configured; otherwise an unattended process can fill the mower disk.
     record = LaunchConfiguration('record')
     declare_record = DeclareLaunchArgument(
         'record',
-        default_value='true',
-        description='Auto-record this mission + auto-upload to R2 '
-                    '(record:=false to skip).',
+        default_value='false',
+        description='Opt in to mission recording (requires retention/upload)',
     )
     robot_id = LaunchConfiguration('robot_id')
     declare_robot_id = DeclareLaunchArgument('robot_id', default_value='mower')
@@ -104,6 +144,7 @@ def generate_launch_description():
                 'autostart': 'true',
                 'r2_env_file': r2_env_file,
                 'git_repo_dir': git_repo_dir,
+                'gps_topic': gps_fix_topic,
             }.items(),
         ))
     except Exception:
@@ -114,13 +155,21 @@ def generate_launch_description():
         executable='path_record_node',
         name='path_record_node',
         output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'save_dir': zone_record_dir,
+            'sites_dir': sites_dir,
+        }],
     )
 
     map_manage_node = Node(
         package='mower_mission',
         executable='map_manage_node',
-        name='map_manage_node',
+        # Keep the node's native name: FlutterAdapter, mower_qt and the public
+        # parameter contract all address /map_manage/{get,set}_parameters.
+        name='map_manage',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
     )
 
     coverage_node = Node(
@@ -131,12 +180,18 @@ def generate_launch_description():
         # (/boustrophedon_coverage/set_parameters) and system_test all target it.
         name='boustrophedon_coverage',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
     )
 
     nav_action_server = Node(
         package='mower_mission',
         executable='nav_action_server',
         output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'require_navigation_health': require_navigation_health,
+            'gps_fix_topic': gps_fix_topic,
+        }],
     )
 
     flutter_adapter_node = Node(
@@ -144,13 +199,7 @@ def generate_launch_description():
         executable='flutter_adapter_node',
         name='flutter_adapter',
         output='screen',
-    )
-
-    docking_manager_node = Node(
-        package='mower_mission',
-        executable='docking_manager_node',
-        name='docking_manager_node',
-        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
     )
 
     # Robot liveness heartbeat: publishes /robot/online (LWT-style). Uses wall
@@ -173,10 +222,17 @@ def generate_launch_description():
         executable='temp_dock_pose_publisher',
         name='temp_dock_pose_publisher',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(launch_temp_dock_pose_publisher),
     )
 
     return LaunchDescription([
+        declare_use_sim_time,
+        declare_rosbridge_address,
+        declare_zone_record_dir,
+        declare_sites_dir,
+        declare_require_navigation_health,
+        declare_gps_fix_topic,
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
         declare_auto_coverage,
@@ -192,7 +248,6 @@ def generate_launch_description():
         coverage_node,
         nav_action_server,
         flutter_adapter_node,
-        docking_manager_node,
         heartbeat_node,
         temp_dock_pose_publisher,
         auto_coverage_node,

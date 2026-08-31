@@ -19,6 +19,13 @@ def generate_launch_description():
         default_value='9090',
         description='WebSocket port for rosbridge_websocket',
     )
+    address_arg = DeclareLaunchArgument(
+        'address',
+        default_value='127.0.0.1',
+        description=(
+            'rosbridge listen address; expose 0.0.0.0 only on a trusted LAN'
+        ),
+    )
 
     rosbridge_websocket = Node(
         package='rosbridge_server',
@@ -27,7 +34,10 @@ def generate_launch_description():
         output='screen',
         parameters=[
             rosbridge_config,
-            {'port': LaunchConfiguration('port')},
+            {
+                'port': LaunchConfiguration('port'),
+                'address': LaunchConfiguration('address'),
+            },
         ],
     )
 
@@ -36,10 +46,14 @@ def generate_launch_description():
         executable='rosapi_node',
         name='rosapi',
         output='screen',
+        # Apply the same topics/services/params allowlists as websocket so
+        # rosapi cannot bypass the bridge policy through parameter services.
+        parameters=[rosbridge_config],
     )
 
     return LaunchDescription([
         port_arg,
+        address_arg,
         rosbridge_websocket,
         rosapi,
     ])

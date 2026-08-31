@@ -82,7 +82,7 @@ A -> B 的直線穿過邊界或障礙
 
 ### 3.3 邊界安全半徑不一致
 
-`map_manage.py` 目前 `inflate_radius_m` 預設約 `0.08m`，但 Nav2 costmap 中 `robot_radius` 目前約 `0.5m`。
+`map_manage_node.py` 目前強制 `inflate_radius_m` 最低/預設為 `0.75m`；部署只能增加，不能在執行期降到安全包絡以下。
 
 這代表 coverage planner 可能認為路徑安全，但 Nav2 costmap 會認為機器人已經貼邊或碰撞。
 
@@ -814,4 +814,3 @@ SA：
 - 將 `Chennal` 全面改名 `Channel`
 
 先讓路徑安全，再讓路徑聰明。
-

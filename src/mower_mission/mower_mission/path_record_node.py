@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import json
 
 import math
@@ -28,6 +29,7 @@ from nav_msgs.msg import Path
 from mower_interface.srv import ChennalPathList
 
 import rclpy
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSProfile,
                        QoSReliabilityPolicy)
@@ -41,11 +43,34 @@ from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .utils import site_store
+from .navigation_guard import (
+    NavigationActivityGuard,
+    guarded_mission_mutation,
+)
 
 from .utils.path_record_utils import path_to_marker, simplify_path
 
 
-class PathRecorder(Node):
+def _write_json_atomic(path, payload):
+    """Replace a JSON snapshot atomically so power loss cannot truncate it."""
+    tmp_path = path + '.tmp'
+    with open(tmp_path, 'w') as file_obj:
+        json.dump(payload, file_obj, indent=2)
+        file_obj.flush()
+        os.fsync(file_obj.fileno())
+    os.replace(tmp_path, path)
+    directory = os.path.dirname(path) or '.'
+    directory_fd = os.open(
+        directory,
+        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+    )
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+class PathRecorder(Node, NavigationActivityGuard):
 
     def __init__(self):
         super().__init__('path_recorder')
@@ -56,6 +81,7 @@ class PathRecorder(Node):
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('save_dir', 'zone_record')
         self.declare_parameter('sites_dir', '~/.mower/sites')
+        self.declare_parameter('max_site_datum_distance_m', 100.0)
         self.declare_parameter('polygon_simplify_dist', 0.1)
         self.get_logger().info('path_recorder ready.')
 
@@ -64,6 +90,7 @@ class PathRecorder(Node):
         polygon_qos = QoSProfile(depth=1)
         polygon_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         polygon_qos.reliability = QoSReliabilityPolicy.RELIABLE
+        self._init_navigation_activity_guard()
 
         self.path_pub = self.create_publisher(Path, '/recorded_path', 10)
         self.zone_marker_pub = self.create_publisher(
@@ -144,6 +171,8 @@ class PathRecorder(Node):
             String, '/site_list', polygon_qos)
         self.map_datum = None
         self.active_site = None
+        self._active_manifest_blocked_reason = None
+        self._working_state_ready = False
         self.create_subscription(
             String, '/adapter/map_datum', self._on_map_datum, polygon_qos)
 
@@ -185,6 +214,7 @@ class PathRecorder(Node):
             'frame_id').value
         self.chennal_path_array = MarkerArray()
 
+        self._restore_startup_persistence()
         self._publish_site_list()
 
     def try_initialize(self):
@@ -445,13 +475,66 @@ class PathRecorder(Node):
                 self.chennal_path_pub.publish(self.chennal_path)
                 self.channel_path_pub.publish(self.chennal_path)
 
+    def _active_recording_kind(self):
+        """Return the one active recorder mode, if any."""
+        if self.record_zone_status:
+            return 'zone'
+        if self.risk_zone_status:
+            return 'risk'
+        if self.chennal_record_status:
+            return 'channel'
+        return None
+
+    def _reject_start_while_recording(self, res, requested_kind):
+        active_kind = self._active_recording_kind()
+        if active_kind is None:
+            if self._reject_blocked_manifest(res, f'開始 {requested_kind} 錄製'):
+                return res
+            if self._acquire_mission_mutation(
+                res,
+                f'record {requested_kind} geometry',
+            ):
+                # Recording may describe a new field. Detach the prior named
+                # site durably so a later edit cannot overwrite that site with
+                # this newly recorded working geometry by accident.
+                if self.active_site is not None:
+                    try:
+                        site_store.clear_active_site(self._sites_dir())
+                        self.active_site = None
+                    except Exception as exc:  # noqa: BLE001
+                        res.success = False
+                        res.message = (
+                            '無法清除舊場地關聯，拒絕開始錄製: '
+                            f'{exc}'
+                        )
+                        if not self._release_mission_mutation():
+                            res.message += (
+                                '；操作鎖釋放也未確認，導航仍被禁止；'
+                                '請檢查機器後重啟 path_record_node 與 '
+                                'nav_action_server'
+                            )
+                        return res
+                    try:
+                        self._publish_site_list()
+                    except Exception as exc:  # noqa: BLE001
+                        self.get_logger().warn(
+                            f'舊場地關聯已清除，但清單發佈失敗: {exc}'
+                        )
+                return None
+            return res
+        res.success = False
+        res.message = (
+            f'無法開始 {requested_kind} 記錄：'
+            f'目前正在進行 {active_kind} 記錄'
+        )
+        self.get_logger().warn(res.message)
+        return res
+
     def record_zone_start_srv(self, req, res):
         """記錄區域起始點."""
-        if self.risk_zone_status:
-            self.get_logger().warn('無法開始記錄普通區域：目前正在記錄風險區域')
-            res.success = False
-            res.message = '無法開始記錄普通區域：目前正在記錄風險區域，請先結束風險區域記錄'
-            return res
+        rejected = self._reject_start_while_recording(res, 'zone')
+        if rejected is not None:
+            return rejected
 
         self.get_logger().info('記錄區域起始點')
         self.record_zone_status = True
@@ -474,15 +557,45 @@ class PathRecorder(Node):
 
     def record_zone_end_srv(self, req, res):
         """記錄區域結束點."""
+        if not self.record_zone_status:
+            res.success = False
+            res.message = '沒有正在進行的 zone 記錄'
+            return res
+        if (self.record_zone_marker is None
+                or len(self.record_zone_marker.points) < 3):
+            res.success = False
+            res.message = '區域點數不足，至少需要 3 個點'
+            return res
+
         self.get_logger().info('記錄區域結束點')
-        self.record_zone_status = False
         self.record_zone_list.markers.append(self.record_zone_marker)
+        if not self._save_zone_list():
+            self.record_zone_list.markers.pop()
+            res.success = False
+            res.message = (
+                '區域已收尾但持久化失敗；錄製仍保留，'
+                '請檢查磁碟後重試結束'
+            )
+            self.get_logger().error(res.message)
+            return res
+
+        self.record_zone_status = False
         self.record_zone_marker = Marker()
+        self.path = Path()
+        self.path.header.frame_id = self.get_parameter('frame_id').value
+        self.last_robot_pos = None
+        self._working_state_ready = True
 
         self.zone_list_pub.publish(self.record_zone_list)
+        release_confirmed = self._release_mission_mutation()
 
-        res.success = True
+        res.success = release_confirmed
         res.message = f'成功記錄區域結束點 #{len(self.record_zone_list.markers)}'
+        if not release_confirmed:
+            res.message += (
+                '；資料已儲存，但操作鎖釋放未確認，導航仍被禁止；'
+                '請檢查機器後重啟 path_record_node 與 nav_action_server'
+            )
         return res
 
     def record_cancel_srv(self, req, res):
@@ -521,6 +634,12 @@ class PathRecorder(Node):
             res.message = '目前沒有進行中的記錄'
         else:
             res.message = f'已取消 {cancelled} 記錄'
+            if not self._release_mission_mutation():
+                res.success = False
+                res.message += (
+                    '；操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 '
+                    'path_record_node 與 nav_action_server'
+                )
         self.get_logger().info(res.message)
         return res
 
@@ -553,8 +672,11 @@ class PathRecorder(Node):
                 marker.points.append(p)
         return marker
 
+    @guarded_mission_mutation('edit mission geometry')
     def edit_zone_srv(self, req, res):
         """App 直接編輯物件：新增 / 刪除 / 更新（工作區 / 禁入區 / 通道）。"""
+        if self._reject_blocked_manifest(res, '編輯任務幾何'):
+            return res
         kind = req.kind
         if kind == 'zone':
             mlist = self.record_zone_list
@@ -581,6 +703,7 @@ class PathRecorder(Node):
         op = req.op
         pts = [(p.x, p.y) for p in req.points]
         min_pts = 3 if closed else 2
+        original_markers = copy.deepcopy(mlist.markers)
 
         if op == 'delete':
             before = len(mlist.markers)
@@ -621,13 +744,44 @@ class PathRecorder(Node):
             res.message = f'未知 op: {op}（要 add/delete/update）'
             return res
 
+        try:
+            persisted = bool(save())
+        except Exception as e:
+            persisted = False
+            self.get_logger().error(f'edit_zone 存檔失敗: {e}')
+        if not persisted:
+            mlist.markers = original_markers
+            res.success = False
+            res.message += '；持久化失敗，變更已回復'
+            self.get_logger().error(res.message)
+            return res
+
+        if not self._update_active_site():
+            mlist.markers = original_markers
+            try:
+                rollback_persisted = bool(save())
+            except Exception as e:
+                rollback_persisted = False
+                self.get_logger().error(
+                    f'edit_zone 工作檔回復失敗: {e}'
+                )
+            res.success = False
+            res.message += '；場地檔同步失敗，變更已回復'
+            if not rollback_persisted:
+                self._active_manifest_blocked_reason = (
+                    '編輯回復後的工作檔狀態無法確認'
+                )
+                res.message += '（工作檔回復也失敗，請立即檢查磁碟）'
+            self.get_logger().error(res.message)
+            return res
+
+        # App-created markers choose their id from the current list rather
+        # than from the physical recorder's counters.  Keep all three
+        # counters aligned before the next manual recording starts, otherwise
+        # an App add followed by a recording can create duplicate marker ids.
+        self._restore_id_counters()
         for pub in pubs:
             pub.publish(mlist)
-        try:
-            save()
-        except Exception as e:
-            self.get_logger().warn(f'edit_zone 存檔失敗: {e}')
-        self._update_active_site()
 
         res.success = True
         self.get_logger().info(res.message)
@@ -656,8 +810,9 @@ class PathRecorder(Node):
         if success_count == 3:
             res.success = True
             res.message = '成功储存所有列表（普通区域 + 风险区域 + channel 路径）'
+            self._working_state_ready = True
         elif success_count > 0:
-            res.success = True
+            res.success = False
             res.message = f'部分成功储存列表。错误: {"; ".join(error_messages)}'
         else:
             res.success = False
@@ -669,6 +824,7 @@ class PathRecorder(Node):
 
         return res
 
+    @guarded_mission_mutation('load mission geometry')
     def load_zone_list_srv(self, req, res):
         """合并的区域列表加载服务."""
         if (self.record_zone_status or self.risk_zone_status
@@ -678,39 +834,43 @@ class PathRecorder(Node):
             res.message = '錄製進行中，請先結束或取消錄製再載入'
             return res
 
-        success_count = 0
+        original = (
+            copy.deepcopy(self.record_zone_list),
+            copy.deepcopy(self.risk_zone_list),
+            copy.deepcopy(self.chennal_path_array),
+        )
         error_messages = []
 
-        if self._load_zone_list():
-            success_count += 1
-            self.zone_list_pub.publish(self.record_zone_list)
-        else:
+        zone_ok = self._load_zone_list()
+        if not zone_ok:
             error_messages.append('載入普通區域列表失敗')
 
-        if self._load_risk_zone_list():
-            success_count += 1
-            self.risk_zone_list_pub.publish(self.risk_zone_list)
-        else:
+        risk_ok = self._load_risk_zone_list()
+        if not risk_ok:
             error_messages.append('載入風險區域列表失敗')
 
-        if self._load_chennal_path_list():
-            success_count += 1
-            self.chennal_path_array_pub.publish(self.chennal_path_array)
-            self.channel_path_array_pub.publish(self.chennal_path_array)
-        else:
+        channel_ok = self._load_chennal_path_list()
+        if not channel_ok:
             error_messages.append('載入 channel 路徑列表失敗')
 
-        if success_count == 3:
-            res.success = True
-            res.message = '成功載入所有列表（普通區域 + 風險區域 + channel 路徑）'
-        elif success_count > 0:
-            res.success = True
-            res.message = f'部分成功載入列表。错误: {"; ".join(error_messages)}'
-        else:
+        if not (zone_ok and risk_ok and channel_ok):
+            (self.record_zone_list, self.risk_zone_list,
+             self.chennal_path_array) = original
             res.success = False
-            res.message = f'載入列表失敗: {"; ".join(error_messages)}'
+            res.message = (
+                f'載入列表失敗，既有資料已保留: '
+                f'{"; ".join(error_messages)}'
+            )
+            return res
 
         self._restore_id_counters()
+        self._working_state_ready = True
+        self.zone_list_pub.publish(self.record_zone_list)
+        self.risk_zone_list_pub.publish(self.risk_zone_list)
+        self.chennal_path_array_pub.publish(self.chennal_path_array)
+        self.channel_path_array_pub.publish(self.chennal_path_array)
+        res.success = True
+        res.message = '成功載入所有列表（普通區域 + 風險區域 + channel 路徑）'
 
         return res
 
@@ -719,17 +879,147 @@ class PathRecorder(Node):
     def _on_map_datum(self, msg):
         try:
             data = json.loads(msg.data)
-            self.map_datum = {
+            datum = {
                 'lat': float(data['origin_lat']),
                 'lon': float(data['origin_lon']),
                 'bearing_rad': float(data.get('bearing_rad', 0.0)),
                 'source': data.get('source', ''),
             }
+            if (
+                not all(math.isfinite(datum[key]) for key in (
+                    'lat', 'lon', 'bearing_rad'
+                ))
+                or not -90.0 <= datum['lat'] <= 90.0
+                or not -180.0 <= datum['lon'] <= 180.0
+            ):
+                raise ValueError('datum contains invalid coordinates')
+            self.map_datum = datum
         except (ValueError, KeyError, TypeError) as e:
             self.get_logger().warn(f'解析 /adapter/map_datum 失敗: {e}')
 
     def _sites_dir(self):
         return os.path.expanduser(self.get_parameter('sites_dir').value)
+
+    def _working_file_paths(self):
+        save_dir = self.get_parameter('save_dir').value
+        return (
+            os.path.join(save_dir, 'zone_list.json'),
+            os.path.join(save_dir, 'risk_zone_list.json'),
+            os.path.join(save_dir, 'chennal_path_list.json'),
+        )
+
+    def _publish_geometry_lists(self):
+        self.zone_list_pub.publish(self.record_zone_list)
+        self.risk_zone_list_pub.publish(self.risk_zone_list)
+        self.chennal_path_array_pub.publish(self.chennal_path_array)
+        self.channel_path_array_pub.publish(self.chennal_path_array)
+
+    def _save_all_working_state(self):
+        """Attempt every work-file save and report all-or-nothing success."""
+        results = (
+            self._save_zone_list(),
+            self._save_risk_zone_list(),
+            self._save_chennal_path_list(),
+        )
+        return all(results)
+
+    def _restore_startup_persistence(self):
+        """Atomically restore all work files and their named-site association."""
+        manifest_path = site_store.active_site_path(self._sites_dir())
+        manifest_exists = os.path.exists(manifest_path)
+        work_paths = self._working_file_paths()
+
+        # A pristine installation has neither work files nor a manifest. Avoid
+        # three expected file-not-found errors, but create all three empty
+        # snapshots now. A later *_end service persists only its own list, so
+        # the other two files must already exist for atomic startup recovery.
+        if not manifest_exists and not any(os.path.exists(p) for p in work_paths):
+            if self._save_all_working_state():
+                self._working_state_ready = True
+            else:
+                self._active_manifest_blocked_reason = (
+                    '無法初始化三份工作檔'
+                )
+                self.get_logger().error(
+                    '任務幾何持久化目錄未就緒'
+                )
+            return
+
+        original = (
+            copy.deepcopy(self.record_zone_list),
+            copy.deepcopy(self.risk_zone_list),
+            copy.deepcopy(self.chennal_path_array),
+        )
+        work_results = (
+            self._load_zone_list(),
+            self._load_risk_zone_list(),
+            self._load_chennal_path_list(),
+        )
+        work_ok = all(work_results)
+        if work_ok:
+            self._working_state_ready = True
+            self._restore_id_counters()
+            self._publish_geometry_lists()
+        else:
+            (self.record_zone_list, self.risk_zone_list,
+             self.chennal_path_array) = original
+            if not manifest_exists:
+                self._active_manifest_blocked_reason = (
+                    '三份工作檔不完整'
+                )
+
+        manifest_name = None
+        if manifest_exists:
+            try:
+                manifest_name = site_store.read_active_site(self._sites_dir())
+            except (OSError, ValueError) as exc:
+                self._active_manifest_blocked_reason = (
+                    f'啟用場地 manifest 損壞: {exc}'
+                )
+            if (
+                manifest_name is None
+                and self._active_manifest_blocked_reason is None
+            ):
+                self._active_manifest_blocked_reason = (
+                    '啟用場地 manifest 在啟動時消失'
+                )
+
+        if manifest_name is not None:
+            site_exists = os.path.exists(
+                site_store.site_path(self._sites_dir(), manifest_name)
+            )
+            if work_ok and site_exists:
+                self.active_site = manifest_name
+                self.get_logger().info(
+                    f'已復原工作檔與啟用場地「{manifest_name}」'
+                )
+            else:
+                reason = (
+                    '三份工作檔不完整'
+                    if not work_ok
+                    else f'場地檔「{manifest_name}」不存在'
+                )
+                self._active_manifest_blocked_reason = reason
+
+        if self._active_manifest_blocked_reason is not None:
+            self.active_site = None
+            self.get_logger().error(
+                f'持久化狀態未就緒: '
+                f'{self._active_manifest_blocked_reason}；'
+                '請使用 /site_op load 重新啟用場地'
+            )
+
+    def _reject_blocked_manifest(self, response, operation):
+        if self._active_manifest_blocked_reason is None:
+            return False
+        response.success = False
+        response.message = (
+            f'無法{operation}：持久化場地狀態未就緒'
+            f'（{self._active_manifest_blocked_reason}），'
+            '請先使用 /site_op load 重新載入場地'
+        )
+        self.get_logger().error(response.message)
+        return True
 
     def _publish_site_list(self):
         payload = site_store.list_sites(
@@ -796,21 +1086,35 @@ class PathRecorder(Node):
 
     def _update_active_site(self):
         """編輯物件後同步覆寫啟用中的場地檔，讓場地與工作狀態一致."""
+        if self._active_manifest_blocked_reason is not None:
+            self.get_logger().error(
+                '啟用場地 manifest 未就緒，拒絕自動同步'
+            )
+            return False
         if not self.active_site:
-            return
+            return True
         if self.map_datum is None:
-            self.get_logger().warn('無 datum，跳過場地檔同步')
-            return
+            self.get_logger().error('無 datum，無法同步場地檔')
+            return False
         try:
             created = None
             existing_source = None
             try:
+                manifest_name = site_store.read_active_site(self._sites_dir())
+                if manifest_name != self.active_site:
+                    self._active_manifest_blocked_reason = (
+                        'manifest 與記憶體的啟用場地不一致'
+                    )
+                    return False
                 existing = site_store.read_site(
                     self._sites_dir(), self.active_site)
                 created = existing.get('created_at')
                 existing_source = existing.get('datum', {}).get('source')
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                self._active_manifest_blocked_reason = (
+                    f'無法讀取啟用場地: {exc}'
+                )
+                return False
             # datum 來源改變（如開機後 fallback → navsat 鎖定）時不自動覆寫：
             # 檔內的 WGS84 是唯一副本，寧可略過同步也不能寫入位移後的座標。
             # 使用者可用 /site_op save 明確以新 datum 重存。
@@ -820,20 +1124,49 @@ class PathRecorder(Node):
                     f'datum 來源已由 {existing_source} 變為 '
                     f'{self.map_datum.get("source", "")}，跳過場地「'
                     f'{self.active_site}」自動同步')
-                return
+                return False
             zones, risks, channels = self._site_state_objects()
             site = site_store.build_site(
                 self.active_site, self.map_datum, zones, risks, channels,
                 created_at=created)
             site_store.write_site(self._sites_dir(), site)
-            self._publish_site_list()
+            try:
+                self._publish_site_list()
+            except Exception as e:
+                # The named-site file is already durable. A list-topic publish
+                # failure must not make edit_zone roll back only the work file
+                # and leave the two persisted copies divergent.
+                self.get_logger().warn(f'場地清單發佈失敗: {e}')
+            return True
         except Exception as e:
-            self.get_logger().warn(f'場地檔同步失敗: {e}')
+            self._active_manifest_blocked_reason = (
+                f'場地檔同步結果無法確認: {e}'
+            )
+            self.get_logger().error(f'場地檔同步失敗: {e}')
+            return False
 
     def site_op_srv(self, req, res):
         """場地庫操作：save / load / delete / rename / list."""
         op = req.op
         name = site_store.valid_name(req.name)
+        if (
+            op not in ('list', 'load')
+            and self._reject_blocked_manifest(res, f'執行場地 {op}')
+        ):
+            res.sites_json = json.dumps(
+                self._publish_site_list(), ensure_ascii=False
+            )
+            return res
+        mutation_lease = False
+        if op != 'list':
+            mutation_lease = self._acquire_mission_mutation(
+                res,
+                f'{op or "unknown"} a named site',
+            )
+            if not mutation_lease:
+                res.sites_json = json.dumps(
+                    self._publish_site_list(), ensure_ascii=False)
+                return res
 
         try:
             if op == 'list':
@@ -858,6 +1191,17 @@ class PathRecorder(Node):
             res.success = False
             res.message = f'場地操作失敗: {e}'
             self.get_logger().error(res.message)
+        finally:
+            if mutation_lease and not self._release_mission_mutation():
+                previous = res.message
+                res.success = False
+                res.message = (
+                    f'{previous}；' if previous else ''
+                ) + (
+                    '場地操作可能已完成，但操作鎖釋放未確認，導航仍被禁止；'
+                    '請檢查機器後重啟 path_record_node 與 '
+                    'nav_action_server'
+                )
 
         res.sites_json = json.dumps(
             self._publish_site_list(), ensure_ascii=False)
@@ -868,19 +1212,55 @@ class PathRecorder(Node):
     def _site_save(self, name):
         if self.map_datum is None:
             return False, 'datum 尚未就緒（等待 /adapter/map_datum），無法儲存場地'
+        if self.map_datum.get('source') != 'navsat':
+            return False, 'GPS datum 尚未由 NavSatFix 確認，拒絕儲存可執行場地'
         zones, risks, channels = self._site_state_objects()
         if not (zones or risks or channels):
             return False, '目前沒有任何物件可存成場地'
+        if not self._save_all_working_state():
+            return False, '三份工作檔未能完整儲存，拒絕啟用場地'
+        sites_dir = self._sites_dir()
+        old_manifest = site_store.read_active_site(sites_dir)
+        old_site = None
+        target_existed = os.path.exists(site_store.site_path(sites_dir, name))
         created = None
         try:
-            created = site_store.read_site(
-                self._sites_dir(), name).get('created_at')
-        except (OSError, ValueError):
-            pass
+            if target_existed:
+                old_site = site_store.read_site(sites_dir, name)
+                created = old_site.get('created_at')
+        except (OSError, ValueError) as exc:
+            return False, f'既有場地檔損壞，拒絕覆寫: {exc}'
         site = site_store.build_site(
             name, self.map_datum, zones, risks, channels, created_at=created)
-        site_store.write_site(self._sites_dir(), site)
+        site_store.write_site(sites_dir, site)
+        try:
+            site_store.write_active_site(sites_dir, name)
+        except Exception as exc:  # noqa: BLE001
+            rollback_errors = []
+            try:
+                if target_existed:
+                    site_store.write_site(sites_dir, old_site)
+                elif os.path.exists(site_store.site_path(sites_dir, name)):
+                    site_store.delete_site(sites_dir, name)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f'場地檔: {rollback_exc}')
+            try:
+                if old_manifest is None:
+                    site_store.clear_active_site(sites_dir)
+                else:
+                    site_store.write_active_site(sites_dir, old_manifest)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f'manifest: {rollback_exc}')
+            message = f'啟用場地 manifest 寫入失敗: {exc}'
+            if rollback_errors:
+                self._active_manifest_blocked_reason = '; '.join(
+                    rollback_errors
+                )
+                message += f'；回復失敗: {"; ".join(rollback_errors)}'
+            return False, message
         self.active_site = name
+        self._active_manifest_blocked_reason = None
+        self._working_state_ready = True
         return True, (
             f'已儲存場地「{name}」'
             f'（{len(zones)} 工作區 / {len(risks)} 禁區 / {len(channels)} 通道，'
@@ -901,69 +1281,230 @@ class PathRecorder(Node):
         # 會把區域放到錯的位置，之後的自動同步還會把檔案裡的真值改寫壞。
         site_source = site.get('datum', {}).get('source', '')
         cur_source = self.map_datum.get('source', '')
+        if cur_source != 'navsat':
+            return False, (
+                f'GPS 尚未由 NavSatFix 確認（目前 datum 為 '
+                f'{cur_source or "未知"}），拒絕啟用可執行場地'
+            )
         if site_source != cur_source:
-            if cur_source != 'navsat':
-                return False, (
-                    f'GPS 尚未定位（目前 datum 為 {cur_source or "未知"}），'
-                    f'此場地以 {site_source} datum 儲存 — 請等定位完成再啟用')
             return False, (
                 f'此場地以 {site_source} datum 儲存，與目前 {cur_source} '
                 f'不相容 — 請在相同定位條件下重新錄製或另存')
 
+        site_datum = site.get('datum', {})
+        try:
+            site_lat = float(site_datum['lat'])
+            site_lon = float(site_datum['lon'])
+            current_lat = float(self.map_datum['lat'])
+            current_lon = float(self.map_datum['lon'])
+            max_distance_m = float(
+                self.get_parameter('max_site_datum_distance_m').value
+            )
+        except (KeyError, TypeError, ValueError):
+            return False, '場地 datum 格式無效，拒絕載入'
+        if (
+            not all(math.isfinite(value) for value in (
+                site_lat, site_lon, current_lat, current_lon, max_distance_m
+            ))
+            or not -90.0 <= site_lat <= 90.0
+            or not -180.0 <= site_lon <= 180.0
+            or max_distance_m <= 0.0
+        ):
+            return False, '場地 datum 或允許距離設定無效，拒絕載入'
+        datum_distance_m = math.hypot(*site_store.xy_from_ll(
+            site_lat,
+            site_lon,
+            self.map_datum,
+        ))
+        if datum_distance_m > max_distance_m:
+            return False, (
+                f'場地「{name}」原點距目前定位約 {datum_distance_m:.1f} m，'
+                f'超過安全上限 {max_distance_m:.1f} m，拒絕啟用'
+            )
+
+        sites_dir = self._sites_dir()
+        old_manifest_valid = True
+        try:
+            old_manifest = site_store.read_active_site(sites_dir)
+        except (OSError, ValueError) as exc:
+            old_manifest = None
+            old_manifest_valid = False
+            old_manifest_error = str(exc)
+        old_state = (
+            copy.deepcopy(self.record_zone_list),
+            copy.deepcopy(self.risk_zone_list),
+            copy.deepcopy(self.chennal_path_array),
+            self.active_site,
+            self._active_manifest_blocked_reason,
+            self._working_state_ready,
+        )
         zones, risks, channels = site_store.site_to_xy(site, self.map_datum)
         self._apply_site_objects(zones, risks, channels)
         self._restore_id_counters()
 
-        self.zone_list_pub.publish(self.record_zone_list)
-        self.risk_zone_list_pub.publish(self.risk_zone_list)
-        self.chennal_path_array_pub.publish(self.chennal_path_array)
-        self.channel_path_array_pub.publish(self.chennal_path_array)
-
         # 工作檔（zone_record/*.json）同步成剛載入的場地，維持 auto_coverage 一致。
-        synced = (self._save_zone_list()
-                  and self._save_risk_zone_list()
-                  and self._save_chennal_path_list())
+        synced = self._save_all_working_state()
+        if not synced:
+            (self.record_zone_list, self.risk_zone_list,
+             self.chennal_path_array, self.active_site,
+             self._active_manifest_blocked_reason,
+             self._working_state_ready) = old_state
+            self._restore_id_counters()
+            repaired = self._save_all_working_state()
+            message = '工作檔同步失敗；場地未啟用，既有資料已回復'
+            if not repaired:
+                self._active_manifest_blocked_reason = '舊工作檔回復失敗'
+                message += '（舊工作檔回復也失敗，請立即備份並檢查磁碟）'
+            return False, message
+
+        try:
+            site_store.write_active_site(sites_dir, name)
+        except Exception as exc:  # noqa: BLE001
+            (self.record_zone_list, self.risk_zone_list,
+             self.chennal_path_array, self.active_site,
+             self._active_manifest_blocked_reason,
+             self._working_state_ready) = old_state
+            self._restore_id_counters()
+            repaired = self._save_all_working_state()
+            manifest_repaired = old_manifest_valid
+            if old_manifest_valid:
+                try:
+                    if old_manifest is None:
+                        site_store.clear_active_site(sites_dir)
+                    else:
+                        site_store.write_active_site(
+                            sites_dir,
+                            old_manifest,
+                        )
+                except Exception as manifest_exc:  # noqa: BLE001
+                    manifest_repaired = False
+                    self.get_logger().error(
+                        f'舊 manifest 回復失敗: {manifest_exc}'
+                    )
+            if not repaired:
+                self._active_manifest_blocked_reason = (
+                    'manifest 寫入失敗且舊工作檔回復失敗'
+                )
+            if not manifest_repaired:
+                detail = (
+                    old_manifest_error
+                    if not old_manifest_valid
+                    else '舊 manifest 回復失敗'
+                )
+                self._active_manifest_blocked_reason = detail
+            message = f'啟用場地 manifest 寫入失敗: {exc}'
+            if not repaired:
+                message += '；舊工作檔回復也失敗，請立即檢查磁碟'
+            if not manifest_repaired:
+                message += '；舊 manifest 狀態無法確認'
+            return False, message
+
         self.active_site = name
+        self._active_manifest_blocked_reason = None
+        self._working_state_ready = True
+        self._publish_geometry_lists()
 
         msg = (f'已載入場地「{name}」'
                f'（{len(zones)} 工作區 / {len(risks)} 禁區 / {len(channels)} 通道）')
-        if not synced:
-            msg += '；警告：工作檔（zone_record）同步失敗，重開機後會回到舊內容'
-        site_datum = site.get('datum', {})
-        if 'lat' in site_datum and 'lon' in site_datum:
-            dist_m = math.hypot(*site_store.xy_from_ll(
-                site_datum['lat'], site_datum['lon'], self.map_datum))
-            if dist_m > 1000.0:
-                msg += f'；注意：場地原點距目前 datum 約 {dist_m / 1000.0:.1f} km'
         return True, msg
 
     def _site_delete(self, name):
-        if not os.path.exists(site_store.site_path(self._sites_dir(), name)):
+        sites_dir = self._sites_dir()
+        path = site_store.site_path(sites_dir, name)
+        if not os.path.exists(path):
             return False, f'找不到場地「{name}」'
-        site_store.delete_site(self._sites_dir(), name)
-        if self.active_site == name:
+        backup = site_store.read_site(sites_dir, name)
+        manifest_name = site_store.read_active_site(sites_dir)
+        if self.active_site != manifest_name:
+            self._active_manifest_blocked_reason = (
+                'manifest 與記憶體的啟用場地不一致'
+            )
+            return False, self._active_manifest_blocked_reason
+        was_active = manifest_name == name
+        try:
+            if was_active:
+                site_store.clear_active_site(sites_dir)
+            site_store.delete_site(sites_dir, name)
+        except Exception as exc:  # noqa: BLE001
+            rollback_errors = []
+            try:
+                if not os.path.exists(path):
+                    site_store.write_site(sites_dir, backup)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f'場地檔: {rollback_exc}')
+            if was_active:
+                try:
+                    site_store.write_active_site(sites_dir, name)
+                except Exception as rollback_exc:  # noqa: BLE001
+                    rollback_errors.append(f'manifest: {rollback_exc}')
+            if rollback_errors:
+                self._active_manifest_blocked_reason = '; '.join(
+                    rollback_errors
+                )
+            message = f'刪除場地失敗: {exc}'
+            if rollback_errors:
+                message += f'；回復失敗: {"; ".join(rollback_errors)}'
+            return False, message
+        if was_active:
             self.active_site = None
         return True, f'已刪除場地「{name}」'
 
     def _site_rename(self, name, new_name):
         if new_name is None:
             return False, '新場地名稱無效'
-        if not os.path.exists(site_store.site_path(self._sites_dir(), name)):
+        sites_dir = self._sites_dir()
+        old_path = site_store.site_path(sites_dir, name)
+        new_path = site_store.site_path(sites_dir, new_name)
+        if not os.path.exists(old_path):
             return False, f'找不到場地「{name}」'
-        if os.path.exists(site_store.site_path(self._sites_dir(), new_name)):
+        if os.path.exists(new_path):
             return False, f'場地「{new_name}」已存在'
-        site_store.rename_site(self._sites_dir(), name, new_name)
-        if self.active_site == name:
+        old_site = site_store.read_site(sites_dir, name)
+        new_site = copy.deepcopy(old_site)
+        new_site['name'] = new_name
+        manifest_name = site_store.read_active_site(sites_dir)
+        if self.active_site != manifest_name:
+            self._active_manifest_blocked_reason = (
+                'manifest 與記憶體的啟用場地不一致'
+            )
+            return False, self._active_manifest_blocked_reason
+        was_active = manifest_name == name
+        try:
+            site_store.write_site(sites_dir, new_site)
+            if was_active:
+                site_store.write_active_site(sites_dir, new_name)
+            site_store.delete_site(sites_dir, name)
+        except Exception as exc:  # noqa: BLE001
+            rollback_errors = []
+            try:
+                if not os.path.exists(old_path):
+                    site_store.write_site(sites_dir, old_site)
+                if os.path.exists(new_path):
+                    site_store.delete_site(sites_dir, new_name)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f'場地檔: {rollback_exc}')
+            if was_active:
+                try:
+                    site_store.write_active_site(sites_dir, name)
+                except Exception as rollback_exc:  # noqa: BLE001
+                    rollback_errors.append(f'manifest: {rollback_exc}')
+            if rollback_errors:
+                self._active_manifest_blocked_reason = '; '.join(
+                    rollback_errors
+                )
+            message = f'場地改名失敗: {exc}'
+            if rollback_errors:
+                message += f'；回復失敗: {"; ".join(rollback_errors)}'
+            return False, message
+        if was_active:
             self.active_site = new_name
         return True, f'已將場地「{name}」改名為「{new_name}」'
 
     def risk_zone_start_srv(self, req, res):
         """風險區域開始記錄服務."""
-        if self.record_zone_status:
-            self.get_logger().warn('無法開始記錄風險區域：目前正在記錄普通區域')
-            res.success = False
-            res.message = '無法開始記錄風險區域：目前正在記錄普通區域，請先結束普通區域記錄'
-            return res
+        rejected = self._reject_start_while_recording(res, 'risk')
+        if rejected is not None:
+            return rejected
 
         self.get_logger().info('開始記錄風險區域')
         self.risk_zone_status = True
@@ -986,18 +1527,46 @@ class PathRecorder(Node):
 
     def risk_zone_end_srv(self, req, res):
         """風險區域結束記錄服務."""
-        self.get_logger().info('結束記錄風險區域')
-        self.risk_zone_status = False
+        if not self.risk_zone_status:
+            res.success = False
+            res.message = '沒有正在進行的 risk 記錄'
+            return res
+        if (self.risk_zone_marker is None
+                or len(self.risk_zone_marker.points) < 3):
+            res.success = False
+            res.message = '風險區域點數不足，至少需要 3 個點'
+            return res
 
-        if hasattr(self, 'risk_zone_marker') and self.risk_zone_marker.points:
-            self.risk_zone_list.markers.append(self.risk_zone_marker)
-            self.risk_zone_list_pub.publish(self.risk_zone_list)
+        self.get_logger().info('結束記錄風險區域')
+        self.risk_zone_list.markers.append(self.risk_zone_marker)
+        if not self._save_risk_zone_list():
+            self.risk_zone_list.markers.pop()
+            res.success = False
+            res.message = (
+                '風險區域已收尾但持久化失敗；錄製仍保留，'
+                '請檢查磁碟後重試結束'
+            )
+            self.get_logger().error(res.message)
+            return res
+
+        self.risk_zone_status = False
+        self.risk_zone_list_pub.publish(self.risk_zone_list)
 
         self.risk_zone_marker = Marker()
+        self.risk_path = Path()
+        self.risk_path.header.frame_id = self.get_parameter('frame_id').value
+        self.last_robot_pos = None
+        self._working_state_ready = True
+        release_confirmed = self._release_mission_mutation()
 
-        res.success = True
+        res.success = release_confirmed
         res.message = (
             f'成功結束記錄風險區域 #{len(self.risk_zone_list.markers)}')
+        if not release_confirmed:
+            res.message += (
+                '；資料已儲存，但操作鎖釋放未確認，導航仍被禁止；'
+                '請檢查機器後重啟 path_record_node 與 nav_action_server'
+            )
         return res
 
     def risk_zone_save_srv(self, req, res):
@@ -1010,15 +1579,18 @@ class PathRecorder(Node):
             res.message = '儲存風險區域失敗'
         return res
 
+    @guarded_mission_mutation('load risk geometry')
     def risk_zone_load_srv(self, req, res):
         """風險區域載入服務."""
+        original = copy.deepcopy(self.risk_zone_list)
         if self._load_risk_zone_list():
             self.risk_zone_list_pub.publish(self.risk_zone_list)
             res.success = True
             res.message = '成功載入風險區域'
         else:
+            self.risk_zone_list = original
             res.success = False
-            res.message = '載入風險區域失敗'
+            res.message = '載入風險區域失敗，既有資料已保留'
         return res
 
     def get_record_zone_info_srv(self, req, res):
@@ -1073,9 +1645,11 @@ class PathRecorder(Node):
                 }
                 risk_zones_data.append(marker_data)
 
-            with open(self.get_parameter('save_dir').value +
-                      '/risk_zone_list.json', 'w') as f:
-                json.dump(risk_zones_data, f, indent=2)
+            _write_json_atomic(
+                self.get_parameter('save_dir').value
+                + '/risk_zone_list.json',
+                risk_zones_data,
+            )
             return True
         except Exception as e:
             self.get_logger().error(f'儲存風險區域列表失敗: {e}')
@@ -1130,9 +1704,10 @@ class PathRecorder(Node):
                 }
                 zones_data.append(marker_data)
 
-            with open(self.get_parameter('save_dir').value +
-                      '/zone_list.json', 'w') as f:
-                json.dump(zones_data, f, indent=2)
+            _write_json_atomic(
+                self.get_parameter('save_dir').value + '/zone_list.json',
+                zones_data,
+            )
             return True
         except Exception as e:
             self.get_logger().error(f'儲存區域列表失敗: {e}')
@@ -1177,6 +1752,10 @@ class PathRecorder(Node):
 
     def chennal_record_start_srv(self, req, res):
         """開始記錄 chennal 路徑."""
+        rejected = self._reject_start_while_recording(res, 'channel')
+        if rejected is not None:
+            return rejected
+
         self.get_logger().info('開始記錄 chennal 路徑')
 
         self.chennal_record_status = True
@@ -1208,8 +1787,6 @@ class PathRecorder(Node):
             res.message = '沒有正在進行的 chennal 路徑記錄'
             return res
 
-        self.chennal_record_status = False
-
         robot_pos = self.get_robot_pos()
         if robot_pos is not None and len(self.chennal_path.poses) > 0:
             last_pose = self.chennal_path.poses[-1]
@@ -1218,17 +1795,44 @@ class PathRecorder(Node):
             if math.hypot(dx, dy) >= self.get_parameter('min_dist').value:
                 self.chennal_path.poses.append(robot_pos)
 
-        if len(self.chennal_path.poses) > 0:
-            self.chennal_path_array.markers.append(
-                path_to_marker(self.chennal_path,
-                               ns='chennal_path',
-                               marker_id=self.chennal_record_id,
-                               color=(0.0, 1.0, 0.0),
-                               scale=0.1))
-            self.chennal_path_array_pub.publish(self.chennal_path_array)
-            self.channel_path_array_pub.publish(self.chennal_path_array)
-        res.success = True
+        if len(self.chennal_path.poses) < 2:
+            res.success = False
+            res.message = 'chennal 路徑點數不足，至少需要 2 個點'
+            return res
+
+        completed_marker = path_to_marker(
+            self.chennal_path,
+            ns='chennal_path',
+            marker_id=self.chennal_record_id,
+            color=(0.0, 1.0, 0.0),
+            scale=0.1,
+        )
+        self.chennal_path_array.markers.append(completed_marker)
+        if not self._save_chennal_path_list():
+            self.chennal_path_array.markers.pop()
+            res.success = False
+            res.message = (
+                'channel 路徑已收尾但持久化失敗；錄製仍保留，'
+                '請檢查磁碟後重試結束'
+            )
+            self.get_logger().error(res.message)
+            return res
+
+        self.chennal_record_status = False
+        self.chennal_path_array_pub.publish(self.chennal_path_array)
+        self.channel_path_array_pub.publish(self.chennal_path_array)
+        self.chennal_path = Path()
+        self.chennal_path.header.frame_id = self.get_parameter('frame_id').value
+        self.last_robot_pos = None
+        self._working_state_ready = True
+        release_confirmed = self._release_mission_mutation()
+        res.success = release_confirmed
         res.message = '成功結束記錄 chennal 路徑'
+        if not release_confirmed:
+            res.message += (
+                '；資料已儲存，但操作鎖釋放未確認，導航仍被禁止；'
+                '請檢查機器後重啟 path_record_node 與 nav_action_server'
+            )
         return res
 
     def get_channel_path_list_srv(self, req, res):
@@ -1454,8 +2058,7 @@ class PathRecorder(Node):
 
             save_path = (self.get_parameter('save_dir').value +
                          '/chennal_path_list.json')
-            with open(save_path, 'w') as f:
-                json.dump(chennal_paths_data, f, indent=2)
+            _write_json_atomic(save_path, chennal_paths_data)
 
             return True
         except Exception as e:
@@ -1507,8 +2110,14 @@ class PathRecorder(Node):
 def main():
     rclpy.init()
     node = PathRecorder()
-    rclpy.spin(node)
-    rclpy.shutdown()
+    executor = MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
+    try:
+        executor.spin()
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

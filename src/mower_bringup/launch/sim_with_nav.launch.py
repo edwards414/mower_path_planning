@@ -18,11 +18,22 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    OpaqueFunction,
     TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+
+
+def _require_sim_time(context):
+    value = LaunchConfiguration('use_sim_time').perform(context).strip().lower()
+    if value not in {'1', 'true', 'yes', 'on'}:
+        raise RuntimeError(
+            'sim_with_nav.launch.py requires use_sim_time:=true because '
+            'Gazebo sensor timestamps use the simulation clock'
+        )
+    return []
 
 
 def generate_launch_description():
@@ -32,6 +43,7 @@ def generate_launch_description():
     enable_navigation = LaunchConfiguration('enable_navigation')
     nav_autostart = LaunchConfiguration('nav_autostart')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
+    cmd_vel_output_topic = LaunchConfiguration('cmd_vel_output_topic')
     x_pose = LaunchConfiguration('x_pose')
     y_pose = LaunchConfiguration('y_pose')
     world = LaunchConfiguration('world')
@@ -72,6 +84,14 @@ def generate_launch_description():
             'nav2_no_map_params.yaml',
         ),
         description='Full path to the Nav2 parameters file',
+    )
+    declare_cmd_vel_output_topic = DeclareLaunchArgument(
+        'cmd_vel_output_topic',
+        default_value='/cmd_vel',
+        description=(
+            'Nav2 smoother output. Standalone simulation drives Gazebo '
+            'directly; system tests override this to /nav_cmd_vel for muxing.'
+        ),
     )
     declare_x_pose = DeclareLaunchArgument(
         'x_pose',
@@ -116,6 +136,7 @@ def generate_launch_description():
         condition=IfCondition(enable_localization),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'gps_fix_topic': '/gps/fix',
         }.items(),
     )
 
@@ -137,6 +158,9 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'params_file': nav2_params_file,
             'autostart': nav_autostart,
+            # The simulator has no production twist_mux/coordinator. Route
+            # Nav2 directly to the Gazebo controller only in this launch.
+            'cmd_vel_output_topic': cmd_vel_output_topic,
         }.items(),
     )
 
@@ -147,11 +171,13 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        OpaqueFunction(function=_require_sim_time),
         declare_use_rviz,
         declare_enable_localization,
         declare_enable_navigation,
         declare_nav_autostart,
         declare_nav2_params_file,
+        declare_cmd_vel_output_topic,
         declare_x_pose,
         declare_y_pose,
         declare_world,

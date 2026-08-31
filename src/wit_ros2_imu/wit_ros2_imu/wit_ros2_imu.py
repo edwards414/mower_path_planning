@@ -26,9 +26,16 @@ def check_sum(list_data, check_data):
     return sum(list_data) & 0xff == check_data
 
 
+def reset_serial_parser():
+    """Discard every partial frame after a host-side scheduling gap."""
+    global buff, key
+    buff = {}
+    key = 0
+
+
 def handle_serial_data(raw_data):
     global buff, key, angle_degree, magnetometer, acceleration, angularVelocity, pub_flag
-    angle_flag = False
+    processed_type = None
     buff[key] = raw_data
 
     key += 1
@@ -43,6 +50,7 @@ def handle_serial_data(raw_data):
         if buff[1] == 0x51:
             if check_sum(data_buff[0:10], data_buff[10]):
                 acceleration = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 16 * 9.8 for i in range(0, 3)]
+                processed_type = 0x51
             else:
                 print('0x51 Check failure')
 
@@ -50,6 +58,7 @@ def handle_serial_data(raw_data):
             if check_sum(data_buff[0:10], data_buff[10]):
                 angularVelocity = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 2000 * math.pi / 180 for i in
                                    range(0, 3)]
+                processed_type = 0x52
 
             else:
                 print('0x52 Check failure')
@@ -57,12 +66,13 @@ def handle_serial_data(raw_data):
         elif buff[1] == 0x53:
             if check_sum(data_buff[0:10], data_buff[10]):
                 angle_degree = [hex_to_short(data_buff[2:10])[i] / 32768.0 * 180 for i in range(0, 3)]
-                angle_flag = True
+                processed_type = 0x53
             else:
                 print('0x53 Check failure')
         elif buff[1] == 0x54:
             if check_sum(data_buff[0:10], data_buff[10]):
                 magnetometer = hex_to_short(data_buff[2:10])
+                processed_type = 0x54
             else:
                 print('0x54 Check failure')
         else:
@@ -71,7 +81,7 @@ def handle_serial_data(raw_data):
 
         buff = {}
         key = 0
-        return angle_flag
+        return processed_type
         # if angle_flag:
         #     stamp = rospy.get_rostime()
         #
@@ -133,9 +143,19 @@ class IMUDriverNode(Node):
     def __init__(self, port_name):
         super().__init__('imu_driver_node')
 
+        self.declare_parameter('orientation_stddev_rad', 0.35)
+        self.declare_parameter('angular_velocity_stddev_rad_s', 0.10)
+        self.declare_parameter('linear_acceleration_stddev_m_s2', 0.50)
+        self._stop_event = threading.Event()
+        self._serial = None
+        self._last_acceleration_at = None
+        self._last_angular_velocity_at = None
+        self._component_timeout_s = 0.20
+
         # 初始化IMU消息
         self.imu_msg = Imu()
         self.imu_msg.header.frame_id = 'imu_link'
+        self._set_covariances()
 
         # 创建IMU数据发布器
         self.imu_pub = self.create_publisher(Imu, 'imu/data_raw', 10)
@@ -143,60 +163,144 @@ class IMUDriverNode(Node):
         #self.baud_rate = self.get_parameter('baud')
 
         # 启动IMU驱动线程
-        self.driver_thread = threading.Thread(target=self.driver_loop, args=(port_name,))
+        self.driver_thread = threading.Thread(
+            target=self.driver_loop,
+            args=(port_name,),
+            name='wit-imu-serial',
+            daemon=True,
+        )
         self.driver_thread.start()
+
+    def _set_covariances(self):
+        values = (
+            ('orientation_stddev_rad', self.imu_msg.orientation_covariance),
+            (
+                'angular_velocity_stddev_rad_s',
+                self.imu_msg.angular_velocity_covariance,
+            ),
+            (
+                'linear_acceleration_stddev_m_s2',
+                self.imu_msg.linear_acceleration_covariance,
+            ),
+        )
+        for parameter_name, covariance in values:
+            stddev = float(self.get_parameter(parameter_name).value)
+            if not math.isfinite(stddev) or stddev <= 0.0:
+                raise ValueError(f'{parameter_name} must be finite and > 0')
+            variance = stddev * stddev
+            covariance[:] = [
+                variance, 0.0, 0.0,
+                0.0, variance, 0.0,
+                0.0, 0.0, variance,
+            ]
+
+    def _fatal_driver_error(self, message):
+        self.get_logger().fatal(message)
+        self._stop_event.set()
+        # Exiting only this worker thread leaves a healthy-looking ROS process
+        # publishing no IMU. Stop the node so launch supervision and the
+        # navigation freshness gate both fail closed.
+        rclpy.try_shutdown(context=self.context)
 
     def driver_loop(self, port_name):
         # 打开串口
 
         try:
-            wt_imu = serial.Serial(port="/dev/imu_usb", baudrate=9600, timeout=0.5)
+            wt_imu = serial.Serial(port=port_name, baudrate=9600, timeout=0.5)
+            self._serial = wt_imu
             if wt_imu.isOpen():
                 self.get_logger().info("\033[32mSerial port opened successfully...\033[0m")
             else:
                 wt_imu.open()
                 self.get_logger().info("\033[32mSerial port opened successfully...\033[0m")
-        except Exception as e:
-            print(e)
-            self.get_logger().info("\033[31mSerial port opening failure\033[0m")
-            exit(0)
+        except Exception as exc:
+            self._fatal_driver_error(f'IMU serial open failed: {exc}')
+            return
 
         # 循环读取IMU数据
-        while True:
-            # 读取加速度计数据
-
+        last_poll_at = time.monotonic()
+        while not self._stop_event.is_set():
             try:
+                poll_at = time.monotonic()
+                if poll_at - last_poll_at > self._component_timeout_s:
+                    wt_imu.reset_input_buffer()
+                    reset_serial_parser()
+                    self._last_acceleration_at = None
+                    self._last_angular_velocity_at = None
+                    last_poll_at = poll_at
+                    self.get_logger().warn(
+                        'Discarded IMU serial backlog after a host timing gap'
+                    )
+                    continue
+                last_poll_at = poll_at
                 buff_count = wt_imu.inWaiting()
-            except Exception as e:
-                print("exception:" + str(e))
-                print("imu disconnect")
-                exit(0)
-            else:
-                if buff_count > 0:
-                    buff_data = wt_imu.read(buff_count)
-                    for i in range(0, buff_count):
-                        tag = handle_serial_data(buff_data[i])
-                        if tag:
+                if buff_count <= 0:
+                    # Do not consume a full CPU core when the sensor is quiet.
+                    self._stop_event.wait(0.005)
+                    continue
+                # At 9600 baud, more than two complete 0x51..0x54 cycles means
+                # the bytes are a backlog. Re-stamping them as current sensor
+                # data could incorrectly satisfy the navigation health gate.
+                if buff_count > 88:
+                    wt_imu.reset_input_buffer()
+                    reset_serial_parser()
+                    self._last_acceleration_at = None
+                    self._last_angular_velocity_at = None
+                    self.get_logger().warn(
+                        'Discarded oversized IMU serial backlog'
+                    )
+                    continue
+                buff_data = wt_imu.read(buff_count)
+                now = time.monotonic()
+                for raw_byte in buff_data:
+                    frame_type = handle_serial_data(raw_byte)
+                    if frame_type == 0x51:
+                        self._last_acceleration_at = now
+                    elif frame_type == 0x52:
+                        self._last_angular_velocity_at = now
+                    elif frame_type == 0x53:
+                        components_are_fresh = all(
+                            timestamp is not None
+                            and now - timestamp <= self._component_timeout_s
+                            for timestamp in (
+                                self._last_acceleration_at,
+                                self._last_angular_velocity_at,
+                            )
+                        )
+                        if components_are_fresh:
                             self.imu_data()
+                        else:
+                            self.get_logger().warn(
+                                'Dropping IMU orientation frame because '
+                                'acceleration/gyro components are stale'
+                            )
+            except Exception as exc:
+                self._fatal_driver_error(
+                    f'IMU serial read/parser failed: {exc}'
+                )
+                return
+
+    def destroy_node(self):
+        self._stop_event.set()
+        serial_port = self._serial
+        if serial_port is not None:
+            try:
+                serial_port.close()
+            except Exception:
+                pass
+        if (
+            self.driver_thread.is_alive()
+            and threading.current_thread() is not self.driver_thread
+        ):
+            self.driver_thread.join(timeout=1.0)
+        return super().destroy_node()
 
     def imu_data(self):
-        accel_x, accel_y, accel_z = acceleration[0], acceleration[1], acceleration[2]  # struct.unpack('hhh', accel_raw)
-        accel_scale = 16 / 32768.0
-        accel_x, accel_y, accel_z = accel_x * accel_scale, accel_y * accel_scale, accel_z * accel_scale
-
-        # 读取陀螺仪数据
-        gyro_x, gyro_y, gyro_z = angularVelocity[0], angularVelocity[1], angularVelocity[
-            2]  # struct.unpack('hhh', gyro_raw)
-        gyro_scale = 2000 / 32768.0
-        gyro_x, gyro_y, gyro_z = math.radians(gyro_x * gyro_scale), math.radians(gyro_y * gyro_scale), math.radians(
-            gyro_z * gyro_scale)
-
-        # 计算角速度
-        dt = 0.01
-        wx, wy, wz = gyro_x, gyro_y, gyro_z
-        ax, ay, az = accel_x, accel_y, accel_z
-        roll, pitch, yaw = self.compute_orientation(wx, wy, wz, ax, ay, az, dt)
-
+        # ``handle_serial_data`` already converts signed int16 samples to the
+        # ROS SI units m/s² and rad/s. Applying the register scale here again
+        # made both signals several orders of magnitude too small for the EKF.
+        accel_x, accel_y, accel_z = acceleration
+        gyro_x, gyro_y, gyro_z = angularVelocity
         # 更新IMU消息
         self.imu_msg.header.stamp = self.get_clock().now().to_msg()
         self.imu_msg.linear_acceleration.x = accel_x
@@ -242,17 +346,18 @@ class IMUDriverNode(Node):
 def main():
     # 初始化ROS 2节点
     rclpy.init()
-    node = IMUDriverNode('/dev/ttyACM0')
+    node = IMUDriverNode('/dev/imu_usb')
 
     # 运行ROS 2节点
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-
-    # 停止ROS 2节点
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        # 停止ROS 2节点
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

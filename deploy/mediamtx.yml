@@ -1,13 +1,10 @@
-# MediaMTX — WebRTC (WHEP) camera server for the mower app.
+# MediaMTX on the mower — RTSP source restricted to the WireGuard relay.
 #
-# The Flutter app pulls each feed from:
-#   http://<robot-ip>:8889/front/whep
-#   http://<robot-ip>:8889/rear/whep
-# (see `whepUrl()` in mower_lawer_app/lib/providers/mission_mock_provider.dart)
+# Production Flutter clients use the authenticated relay WHEP endpoint; this
+# mower process does not expose WHEP directly.
 #
-# NO USB CAMERA YET: both feeds are ffmpeg synthetic test patterns so the whole
-# WebRTC path can be verified end-to-end. `front` = testsrc2 (moving pattern),
-# `rear` = smptebars (colour bars) so front/rear switching is obvious in the app.
+# NO USB CAMERA YET: the front feed uses an ffmpeg synthetic test pattern so
+# the complete WebRTC path can be verified end-to-end.
 #
 # When a real camera is attached, replace the lavfi input of the matching path,
 # e.g. a USB/v4l2 camera on /dev/video0:
@@ -20,16 +17,35 @@
 
 logLevel: info
 
-# WebRTC / WHEP endpoint (HTTP signaling + media).
-webrtcAddress: :8889
-# UDP mux for WebRTC media (ICE host candidates). Open on the LAN via host net.
-webrtcLocalUDPAddress: :8189
+webrtc: false
+rtmp: false
+hls: false
+srt: false
+moq: false
 
-# Internal RTSP that the ffmpeg producers publish to; re-served over WebRTC.
-rtspAddress: :8554
+# The relay has 10.77.0.1 and the mower has 10.77.0.2 on WireGuard.
+rtspAddress: 10.77.0.2:8554
+
+authMethod: internal
+authInternalUsers:
+  # runOnDemand ffmpeg publishes through the mower's WireGuard address because
+  # the RTSP listener is intentionally not bound to loopback/all interfaces.
+  - user: any
+    pass:
+    ips: ["10.77.0.2"]
+    permissions:
+      - action: publish
+        path: front
+  # The public relay may read, but cannot publish or access another path.
+  - user: any
+    pass:
+    ips: ["10.77.0.1"]
+    permissions:
+      - action: read
+        path: front
 
 paths:
-  # Synthetic FRONT camera — animated test pattern.
+  # Synthetic front camera — animated test pattern.
   front:
     # runOnDemand: ffmpeg starts only when the app (a reader) connects, and is
     # torn down shortly after the last reader leaves — same lifecycle a real
@@ -39,17 +55,6 @@ paths:
       -f lavfi -i testsrc2=size=1280x720:rate=25
       -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
       -profile:v baseline -level 3.1 -bf 0 -g 50
-      -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
-    runOnDemandRestart: yes
-    runOnDemandCloseAfter: 10s
-
-  # Synthetic REAR camera — SMPTE colour bars (visually distinct from front).
-  rear:
-    runOnDemand: >
-      ffmpeg -hide_banner -re
-      -f lavfi -i smptebars=size=1280x720:rate=25
-      -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
-      -profile:v baseline -level 3.1 -bf 0 -g 50
-      -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+      -f rtsp rtsp://10.77.0.2:$RTSP_PORT/$MTX_PATH
     runOnDemandRestart: yes
     runOnDemandCloseAfter: 10s
