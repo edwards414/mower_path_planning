@@ -584,6 +584,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | Power button / low power | `PB0` EXTI pull-up, `PC14` `LEBANCAT_WAKE`, `PC15` `MAIN_POWER_EN` | 已新增 polling 狀態機 wrapper；實際 STOP low-power 進入點仍需接 task |
 | Board module runtime | module init / 10ms maintenance | 已新增 `BoardModules_Init()` / `BoardModules_Update10ms()`，接上蜂鳴器、電源按鍵、ADC 監控、MG996 限位狀態 |
 | WS2812 狀態燈 protocol | LED index `0-2` 保留給狀態燈 | 已新增狀態燈 wrapper；尚未自動接入 10ms runtime，避免和 UART 燈效搶 DMA |
+| WS2812 開機動畫 | `boot_animation.cpp`，約 3.6 s：點火 / 波浪 / 呼吸淡出 | 已接入 MotorTask 的 20 ms 燈條迴圈，`main.c` 在 init 完成後啟動；動畫期間 UART 燈效命令暫緩，結束後自動套用；亮度上限 110/255 |
 
 ## 待確認清單
 

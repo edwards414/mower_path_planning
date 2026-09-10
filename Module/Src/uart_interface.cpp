@@ -2,6 +2,7 @@
 #include "settings_storage.hpp"
 #include "wheel_controller.hpp"
 #include "ws2812.h"
+#include "boot_animation.hpp"
 #include "cmsis_os2.h"
 #include <stddef.h>
 #include <string.h>
@@ -367,7 +368,14 @@ void update_ws2812_control(void) {
   command_snapshot.last_update_ms = g_ws2812_command.last_update_ms;
   uart_exit_critical(primask);
 
-  if (command_snapshot.valid) {
+  /* Power-on light show owns the strips until it finishes; a UART command
+   * received meanwhile is applied as soon as it ends. */
+  bool boot_animation_active = BootAnimation_Update();
+  if (boot_animation_active) {
+    g_ws2812_static_applied = false;
+  }
+
+  if (command_snapshot.valid && !boot_animation_active) {
     if ((command_snapshot.mode == UART_WS2812_MODE_FLOW) ||
         (command_snapshot.mode == UART_WS2812_MODE_TURN_LEFT) ||
         (command_snapshot.mode == UART_WS2812_MODE_TURN_RIGHT)) {

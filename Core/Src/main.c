@@ -30,6 +30,7 @@
 #include "board_modules.hpp"
 #include "motor.hpp"
 #include "ws2812.h"
+#include "boot_animation.hpp"
 
 /* USER CODE END Includes */
 
@@ -107,7 +108,7 @@ int main(void)
   MowerMotor_Init();
   BoardModules_Init();
 
-  ws2812_all_on(0, 255, 0);
+  BootAnimation_Start(); /* rendered from the 20 ms WS2812 loop in MotorTask */
   /* USER CODE END 2 */
 
   /* Init scheduler */
