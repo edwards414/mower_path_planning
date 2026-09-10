@@ -55,6 +55,17 @@ typedef struct {
 } motor_open_loop_status_t;
 
 #define MOTOR_PWM_MAX_COUNTS 200
+/* Wheel motors are mirror-mounted. Measured 2026-09-11: with both wheels
+ * driven by L_PWM the right wheel goes vehicle-forward and the left goes
+ * backward, so the left wheel is inverted here (positive = vehicle forward
+ * for both). Encoder signs in wheel_controller.hpp follow this. */
+#define MOTOR_LEFT_DIRECTION_SIGN (-1)
+#define MOTOR_RIGHT_DIRECTION_SIGN (1)
+/* BTS7960 IS pins (PB12-PB15) are analog current-sense outputs, not digital
+ * alarms. Read as GPIO they go high on normal start-up inrush and chop the
+ * drive (measured 2026-09-11). Keep them advisory-only until they are
+ * filtered or moved to an ADC; the BTS7960 has its own OC/OT shutdown. */
+#define MOTOR_ALARM_DISABLES_OUTPUT 0
 #define MOTOR_DEFAULT_COMMAND_TIMEOUT_MS 200U
 #define MOTOR_COMMAND_PERMILLE_LIMIT 1000
 

@@ -134,16 +134,9 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   /* Infinite loop */
-  uint32_t last_board_led_tick = HAL_GetTick();
+  /* PC13 is BLD120A_BRK now (open-drain, low = brake); no heartbeat toggle here. */
   for (;;) {
     BoardModules_Update10ms();
-
-    uint32_t now = HAL_GetTick();
-    if ((now - last_board_led_tick) >= 1000U) {
-      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-      last_board_led_tick = now;
-    }
-
     osDelay(10);
   }
   /* USER CODE END StartDefaultTask */

@@ -61,6 +61,8 @@ void Error_Handler(void);
 #define RL_Motor_PWM_GPIO_Port GPIOA
 #define RR_Motor_PWM_Pin GPIO_PIN_3
 #define RR_Motor_PWM_GPIO_Port GPIOA
+#define ADC_MUX_OUT_Pin GPIO_PIN_1
+#define ADC_MUX_OUT_GPIO_Port GPIOB
 #define LL_Motor_EN_Pin GPIO_PIN_4
 #define LL_Motor_EN_GPIO_Port GPIOA
 #define LR_Motor_EN_Pin GPIO_PIN_5

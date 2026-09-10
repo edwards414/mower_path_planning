@@ -59,9 +59,9 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(Lawer_Mower_Mower_GPIO_Port, Lawer_Mower_Mower_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PC13 */
+  /*Configure GPIO pin : PC13 (BLD120A_BRK, open-drain, low = brake) */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
@@ -79,9 +79,9 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : Lawer_Mower_Mower_Pin */
+  /*Configure GPIO pin : Lawer_Mower_Mower_Pin (BLD120A F/R, open-drain: low = reverse, high-Z = forward) */
   GPIO_InitStruct.Pin = Lawer_Mower_Mower_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Lawer_Mower_Mower_GPIO_Port, &GPIO_InitStruct);

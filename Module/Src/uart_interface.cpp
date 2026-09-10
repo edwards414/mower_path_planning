@@ -132,7 +132,13 @@ int16_t float_to_i16_pwm(float value) {
 }
 
 void ws2812_set_led_pair(uint8_t index, uint8_t r, uint8_t g, uint8_t b) {
-  ws2812_set_led_buf(ws2812_buf_front, index, r, g, b);
+  /* Animations index 0..LED_NUM-1 (16). Front strip has 32 LEDs, so map each
+   * index to two adjacent front LEDs to keep both strips in step. */
+  uint32_t f = (uint32_t)index * LED_NUM_FRONT / LED_NUM;
+  ws2812_set_led_buf(ws2812_buf_front, (int)f, r, g, b);
+  if (f + 1U < LED_NUM_FRONT) {
+    ws2812_set_led_buf(ws2812_buf_front, (int)f + 1, r, g, b);
+  }
   ws2812_set_led_buf(ws2812_buf_back, index, r, g, b);
 }
 
@@ -312,6 +318,10 @@ void update_lawer_control(void) {
   int16_t applied_pwm = 0;
   if (!timeout) {
     applied_pwm = permille_to_lawer_pwm(command_snapshot.command_permille);
+  }
+  /* Blade is single-direction: negative commands are refused (reported as 0). */
+  if (applied_pwm < 0) {
+    applied_pwm = 0;
   }
 
   uint8_t dir = (applied_pwm >= 0) ? 1U : 0U;

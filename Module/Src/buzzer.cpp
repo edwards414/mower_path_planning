@@ -1,5 +1,9 @@
 #include "buzzer.hpp"
 #include "hardware_pins.hpp"
+#include "tim.h"
+
+/* Passive buzzer on PB9 = TIM4_CH4. TIM4 runs at 2 kHz (shared with the
+ * BLD120A PWM on CH3); a 50% duty on CH4 gives a 2 kHz tone, 0% is silent. */
 
 namespace {
 
@@ -10,16 +14,26 @@ void configure_pin(void) {
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   GPIO_InitTypeDef gpio = {};
-  gpio.Pin = Active_Buzzer_Pin;
-  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pin = Buzzer_PWM_Pin;
+  gpio.Mode = GPIO_MODE_AF_PP;
   gpio.Pull = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(Active_Buzzer_GPIO_Port, &gpio);
+  gpio.Alternate = GPIO_AF2_TIM4;
+  HAL_GPIO_Init(Buzzer_PWM_GPIO_Port, &gpio);
+
+  TIM_OC_InitTypeDef oc = {};
+  oc.OCMode = TIM_OCMODE_PWM1;
+  oc.Pulse = 0U;
+  oc.OCPolarity = TIM_OCPOLARITY_HIGH;
+  oc.OCFastMode = TIM_OCFAST_DISABLE;
+  HAL_TIM_PWM_ConfigChannel(&htim4, &oc, BUZZER_TIM_CHANNEL);
+  __HAL_TIM_SET_COMPARE(&htim4, BUZZER_TIM_CHANNEL, 0U);
+  HAL_TIM_PWM_Start(&htim4, BUZZER_TIM_CHANNEL);
 }
 
 void write_buzzer(bool on) {
-  HAL_GPIO_WritePin(Active_Buzzer_GPIO_Port, Active_Buzzer_Pin,
-                    on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  uint32_t period = __HAL_TIM_GET_AUTORELOAD(&htim4) + 1U;
+  __HAL_TIM_SET_COMPARE(&htim4, BUZZER_TIM_CHANNEL, on ? (period / 2U) : 0U);
   g_status.active = on;
 }
 

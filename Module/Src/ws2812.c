@@ -11,8 +11,8 @@
 extern DMA_HandleTypeDef hdma_tim3_ch1_trig;
 extern DMA_HandleTypeDef hdma_tim3_ch2;
 
-uint16_t ws2812_buf_front[BUF_LEN];
-uint16_t ws2812_buf_back[BUF_LEN];
+uint16_t ws2812_buf_front[BUF_LEN_FRONT];
+uint16_t ws2812_buf_back[BUF_LEN_BACK];
 
 void WS2812_Test(void) {
   static uint16_t data[24 + RESET_LENGTH] = {
@@ -57,26 +57,20 @@ void ws2812_set_led_buf(uint16_t *buf, int led, uint8_t r, uint8_t g,
 }
 
 void ws2812_clear_all(void) {
-  // 應該填充 Code0，而不是 0
-  for (int i = 0; i < BUF_LEN - RESET_SLOTS; i++) {
-    ws2812_buf_front[i] = Code0;
-    ws2812_buf_back[i] = Code0;
+  // 應該填充 Code0，而不是 0；最後的 reset slots 才設為 0
+  for (int i = 0; i < BUF_LEN_FRONT; i++) {
+    ws2812_buf_front[i] = (i < BUF_LEN_FRONT - RESET_SLOTS) ? Code0 : 0;
   }
-
-  // 最後的 reset slots 才設為 0
-  for (int i = BUF_LEN - RESET_SLOTS; i < BUF_LEN; i++) {
-    ws2812_buf_front[i] = 0;
-    ws2812_buf_back[i] = 0;
+  for (int i = 0; i < BUF_LEN_BACK; i++) {
+    ws2812_buf_back[i] = (i < BUF_LEN_BACK - RESET_SLOTS) ? Code0 : 0;
   }
 }
 
 void ws2812_show_dual(void) {
-  int start = LED_NUM * BITS_PER_LED;
-
   // reset slot
   for (int i = 0; i < RESET_SLOTS; i++) {
-    ws2812_buf_front[start + i] = 0;
-    ws2812_buf_back[start + i] = 0;
+    ws2812_buf_front[LED_NUM_FRONT * BITS_PER_LED + i] = 0;
+    ws2812_buf_back[LED_NUM_BACK * BITS_PER_LED + i] = 0;
   }
 
   // 先停止之前的 DMA 传输
@@ -94,10 +88,10 @@ void ws2812_show_dual(void) {
 
   // 後燈 CH1
   HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1, (uint32_t *)ws2812_buf_back,
-                        BUF_LEN);
+                        BUF_LEN_BACK);
 
   HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_2, (uint32_t *)ws2812_buf_front,
-                        BUF_LEN);
+                        BUF_LEN_FRONT);
 }
 
 void ws2812_flow_dual(uint8_t r, uint8_t g, uint8_t b, int delay_ms) {
@@ -174,8 +168,10 @@ void ws2812_all_on(uint8_t r, uint8_t g, uint8_t b) {
   ws2812_clear_all();
 
   // 填滿每一顆 LED
-  for (int i = 0; i < LED_NUM; i++) {
+  for (int i = 0; i < LED_NUM_FRONT; i++) {
     ws2812_set_led_buf(ws2812_buf_front, i, r, g, b);
+  }
+  for (int i = 0; i < LED_NUM_BACK; i++) {
     ws2812_set_led_buf(ws2812_buf_back, i, r, g, b);
   }
 

@@ -5,6 +5,7 @@
  *      Author: fxrbindi
  */
 #include "motor.hpp"
+#include "hardware_pins.hpp"
 #include "wheel_controller.hpp"
 
 #ifndef BTS7960_Motor_EN_Pin
@@ -169,7 +170,7 @@ void MowerMotor_Init() {
 }
 
 void motor_set_right_pwm(float pwm) {
-  int16_t signed_pwm = clamp_pwm((int16_t)pwm);
+  int16_t signed_pwm = clamp_pwm((int16_t)(pwm * MOTOR_RIGHT_DIRECTION_SIGN));
   // ---- Right Motor ----
   if (signed_pwm >= 0) {
     __HAL_TIM_SET_COMPARE(motor_R.htim, motor_R.channel_L,
@@ -183,7 +184,7 @@ void motor_set_right_pwm(float pwm) {
 }
 
 void motor_set_left_pwm(float pwm) {
-  int16_t signed_pwm = clamp_pwm((int16_t)pwm);
+  int16_t signed_pwm = clamp_pwm((int16_t)(pwm * MOTOR_LEFT_DIRECTION_SIGN));
   // ---- Left Motor ----
   if (signed_pwm >= 0) {
     __HAL_TIM_SET_COMPARE(motor_L.htim, motor_L.channel_L,
@@ -254,7 +255,10 @@ void control_update_50hz(void) {
                  (command_age_ms > command_snapshot.command_timeout_ms);
   bool alarm = Motor_HasDriverAlarm();
 
-  bool output_enabled = (!timeout && !alarm);
+  bool output_enabled = !timeout;
+#if MOTOR_ALARM_DISABLES_OUTPUT
+  output_enabled = output_enabled && !alarm;
+#endif
   WheelController_Update20ms(command_snapshot.left_command_permille,
                              command_snapshot.right_command_permille,
                              output_enabled);
@@ -291,13 +295,25 @@ void control_update_50hz(void) {
 }
 
 void Grass_cutting_motor(uint16_t pwm, uint8_t dir) {
+  /* BLD120A EN is hardwired to COM; BRK is the only fast stop. Brake whenever
+   * the commanded duty is 0 (includes timeout), release before applying PWM. */
+  if (pwm == 0U) {
+    __HAL_TIM_SET_COMPARE(Cutting_Motor.htim, Cutting_Motor.channel, 0U);
+    HAL_GPIO_WritePin(BLD120A_BRK_GPIO_Port, BLD120A_BRK_Pin, GPIO_PIN_RESET);
+    return;
+  }
+  HAL_GPIO_WritePin(BLD120A_BRK_GPIO_Port, BLD120A_BRK_Pin, GPIO_PIN_SET);
+  /* Single-direction blade (2026-09-10): this motor/driver only runs with F/R
+   * shorted to COM (PB7 low). The other direction is dead (hall/phase mapping
+   * to be checked), so dir == 1 (forward) drives PB7 low and dir == 0 is
+   * refused by braking instead of running the dead direction. */
   if (dir == 1) {
     HAL_GPIO_WritePin(Cutting_Motor.Dir_Port, Cutting_Motor.Dir_Pin,
-                      GPIO_PIN_SET);
-
-  } else {
-    HAL_GPIO_WritePin(Cutting_Motor.Dir_Port, Cutting_Motor.Dir_Pin,
                       GPIO_PIN_RESET);
+  } else {
+    __HAL_TIM_SET_COMPARE(Cutting_Motor.htim, Cutting_Motor.channel, 0U);
+    HAL_GPIO_WritePin(BLD120A_BRK_GPIO_Port, BLD120A_BRK_Pin, GPIO_PIN_RESET);
+    return;
   }
   __HAL_TIM_SET_COMPARE(Cutting_Motor.htim, Cutting_Motor.channel, pwm);
 }

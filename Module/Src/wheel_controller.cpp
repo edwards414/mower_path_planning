@@ -135,8 +135,10 @@ void WheelController_Update20ms(int16_t left_command_permille,
   uint32_t left_counter = __HAL_TIM_GET_COUNTER(&htim5);
   uint32_t right_counter = __HAL_TIM_GET_COUNTER(&htim1);
 
-  int32_t left_delta = timer32_delta(left_counter, g_left_previous_counter);
-  int32_t right_delta = timer16_delta(right_counter, g_right_previous_counter);
+  int32_t left_delta = WHEEL_CONTROLLER_LEFT_ENCODER_SIGN *
+                       timer32_delta(left_counter, g_left_previous_counter);
+  int32_t right_delta = WHEEL_CONTROLLER_RIGHT_ENCODER_SIGN *
+                        timer16_delta(right_counter, g_right_previous_counter);
 
   g_left_previous_counter = left_counter;
   g_right_previous_counter = right_counter;

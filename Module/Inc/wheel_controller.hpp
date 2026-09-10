@@ -11,6 +11,12 @@ extern "C" {
 
 #define WHEEL_CONTROLLER_CONTROL_PERIOD_MS 20U
 #define WHEEL_CONTROLLER_ENCODER_COUNTS_PER_REV 8896.0f
+/* Encoder count direction relative to a positive (vehicle-forward) command.
+ * Measured 2026-09-11: both FT-555 count negative when their motor is driven
+ * by L_PWM. Right wheel: positive = L_PWM, so sign -1. Left wheel is
+ * inverted in motor.hpp (positive = R_PWM), so its encoder sign is +1. */
+#define WHEEL_CONTROLLER_LEFT_ENCODER_SIGN (1)
+#define WHEEL_CONTROLLER_RIGHT_ENCODER_SIGN (-1)
 #define WHEEL_CONTROLLER_COMMAND_DEADBAND_PERMILLE 5
 
 #define WHEEL_CONTROLLER_FLAG_ENABLED 0x01U

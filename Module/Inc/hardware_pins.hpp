@@ -3,10 +3,12 @@
 
 #include "stm32f4xx_hal.h"
 
-#ifndef Active_Buzzer_Pin
-#define Active_Buzzer_Pin GPIO_PIN_9
-#define Active_Buzzer_GPIO_Port GPIOB
+/* PB9: passive buzzer, TIM4_CH4 PWM tone (2 kHz). */
+#ifndef Buzzer_PWM_Pin
+#define Buzzer_PWM_Pin GPIO_PIN_9
+#define Buzzer_PWM_GPIO_Port GPIOB
 #endif
+#define BUZZER_TIM_CHANNEL TIM_CHANNEL_4
 
 #ifndef MG996_PWM_Pin
 #define MG996_PWM_Pin GPIO_PIN_10
@@ -48,9 +50,10 @@
 #define CAN_INT_GPIO_Port GPIOA
 #endif
 
-#ifndef BOARD_STATUS_LED_Pin
-#define BOARD_STATUS_LED_Pin GPIO_PIN_13
-#define BOARD_STATUS_LED_GPIO_Port GPIOC
+/* PC13: BLD120A BRK, open-drain. Low = brake, high (high-Z) = release. */
+#ifndef BLD120A_BRK_Pin
+#define BLD120A_BRK_Pin GPIO_PIN_13
+#define BLD120A_BRK_GPIO_Port GPIOC
 #endif
 
 #endif /* MODULE_INC_HARDWARE_PINS_HPP_ */

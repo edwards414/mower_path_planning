@@ -92,6 +92,7 @@ Payload 長度固定 `8` bytes。
 - `0` = 停止
 - `1000` = 全正轉
 - 這是 `lawer_motor` 的開環 duty / PWM 命令
+- 目前刀片馬達為單向：負值會被 STM32 視為 `0`（剎車），`0x82` 的 `applied_pwm` 回報 `0`
 
 ## `0x03` WS2812 Command
 
@@ -261,7 +262,7 @@ Wheel controller flags:
 |---|---|---|
 | 0 | `0x01` | `COMMAND_VALID`，代表至少收過一筆有效命令 |
 | 1 | `0x02` | `COMMAND_TIMEOUT`，代表命令超時，輸出已被切成 0 |
-| 2 | `0x04` | `DRIVER_ALARM`，代表偵測到 motor driver alarm |
+| 2 | `0x04` | `DRIVER_ALARM`，代表偵測到 motor driver alarm（目前只回報，不切輸出；BTS7960 `IS` 為類比電流感測，啟動電流大時會短暫拉高） |
 
 常見組合:
 
