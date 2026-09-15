@@ -6,13 +6,14 @@
  * meant to be called from the 20 ms WS2812 runtime loop. While it returns
  * true the UART WS2812 command path must not touch the strips.
  *
- * Sequence (about 3.6 s total):
+ * Sequence (about 1.9 s, then steady):
  *   1. Ignition  : a cyan-white spark grows from the centre of each strip
  *                  outwards with a fading tail.
- *   2. Wave      : a scrolling hue gradient (teal -> blue -> violet) sweeps
- *                  along both strips while brightness ramps up.
- *   3. Breathe   : the strips settle to cool white, breathe once, and fade
- *                  to black.
+ *   2. Settle    : cross-fades into an even white and stays lit. The white
+ *                  remains until a UART WS2812 command replaces it.
+ *   Buzzer cues : two short chirps at ignition, one long tone as the
+ *                  white comes on (needs Buzzer_Init() before the first
+ *                  update).
  */
 #ifndef MODULE_INC_BOOT_ANIMATION_HPP_
 #define MODULE_INC_BOOT_ANIMATION_HPP_
@@ -31,7 +32,7 @@ extern "C" {
 void BootAnimation_Start(void);
 
 /* Render the next frame if it is time. Returns true while the animation
- * still owns the strips, false once it has finished (strips left black). */
+ * still owns the strips, false once it has finished (strips left white). */
 bool BootAnimation_Update(void);
 
 bool BootAnimation_IsActive(void);

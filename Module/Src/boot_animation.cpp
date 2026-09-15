@@ -1,4 +1,5 @@
 #include "boot_animation.hpp"
+#include "buzzer.hpp"
 extern "C" {
 #include "ws2812.h"
 }
@@ -11,12 +12,25 @@ namespace {
 /* ---- timeline (ms from start) ------------------------------------------ */
 constexpr uint32_t kFrameMs = 20U;
 constexpr uint32_t kIgnitionEndMs = 1200U;
-constexpr uint32_t kWaveEndMs = 2400U;
-constexpr uint32_t kBreatheEndMs = 3600U;
+constexpr uint32_t kSettleEndMs = 2200U; /* ignition tail -> steady white */
 
 bool g_active = false;
 uint32_t g_start_ms = 0U;
 uint32_t g_last_frame_ms = 0U;
+
+/* Buzzer cues: two short chirps as the spark ignites, one long tone when
+ * the white comes on. */
+struct BuzzerCue {
+  uint32_t at_ms;
+  uint32_t duration_ms;
+};
+constexpr BuzzerCue kCues[] = {
+    {0U, 60U},
+    {160U, 60U},
+    {kIgnitionEndMs, 220U},
+};
+constexpr uint8_t kCueCount = sizeof(kCues) / sizeof(kCues[0]);
+uint8_t g_next_cue = 0U;
 
 /* ---- helpers ------------------------------------------------------------ */
 
@@ -37,98 +51,67 @@ uint8_t to_u8(float v) {
   return (uint8_t)(v * (float)BOOT_ANIMATION_MAX_BRIGHTNESS + 0.5f);
 }
 
-/* h in [0,1), s,v in [0,1] -> r,g,b in [0,1] */
-void hsv(float h, float s, float v, float *r, float *g, float *b) {
-  h = h - floorf(h);
-  float i = floorf(h * 6.0f);
-  float f = h * 6.0f - i;
-  float p = v * (1.0f - s);
-  float q = v * (1.0f - s * f);
-  float t = v * (1.0f - s * (1.0f - f));
-  switch ((int)i % 6) {
-  case 0: *r = v; *g = t; *b = p; break;
-  case 1: *r = q; *g = v; *b = p; break;
-  case 2: *r = p; *g = v; *b = t; break;
-  case 3: *r = p; *g = q; *b = v; break;
-  case 4: *r = t; *g = p; *b = v; break;
-  default: *r = v; *g = p; *b = q; break;
-  }
-}
-
 void put(uint16_t *buf, int led, float r, float g, float b) {
   ws2812_set_led_buf(buf, led, to_u8(r), to_u8(g), to_u8(b));
 }
 
 /* ---- phase 1: ignition --------------------------------------------------
  * A spark grows from the centre outwards. Head is near-white, the tail
- * fades through cyan into black. p in [0,1]. */
-void render_ignition(uint16_t *buf, int led_count, float p) {
+ * fades through cyan down to a dim cyan floor (never black, so the hand-over
+ * to white has nothing to jump from). p in [0,1]. */
+constexpr float kTailFloor = 0.22f;
+
+void ignition_color(int i, int led_count, float p, float *r, float *g, float *b) {
   float centre = ((float)led_count - 1.0f) * 0.5f;
   float half = (float)led_count * 0.5f;
   /* ease-out so the spark bursts fast then slows at the ends */
   float e = 1.0f - (1.0f - p) * (1.0f - p);
   float head = e * (half + 2.0f);
 
+  float d = fabsf((float)i - centre); /* distance from centre */
+  float behind = head - d;            /* >0 once the head passed */
+  float v;
+  float white = 0.0f;
+  if (behind < 0.0f) {
+    v = 0.0f;
+  } else if (behind < 1.5f) {
+    v = 1.0f; /* bright head */
+    white = 1.0f - behind / 1.5f;
+  } else {
+    float fade = clamp01(1.0f - (behind - 1.5f) / 6.0f);
+    v = kTailFloor + (1.0f - kTailFloor) * fade;
+  }
+  *r = v * (0.15f + 0.85f * white);
+  *g = v * (0.75f + 0.25f * white);
+  *b = v;
+}
+
+void render_ignition(uint16_t *buf, int led_count, float p) {
   for (int i = 0; i < led_count; ++i) {
-    float d = fabsf((float)i - centre); /* distance from centre */
-    float behind = head - d;            /* >0 once the head passed */
-    float v;
-    if (behind < 0.0f) {
-      v = 0.0f;
-    } else if (behind < 1.5f) {
-      v = 1.0f; /* bright head */
-    } else {
-      v = clamp01(1.0f - (behind - 1.5f) / 6.0f); /* tail fade */
-    }
-    /* head is white, tail is cyan */
-    float white = (behind >= 0.0f && behind < 1.5f) ? 1.0f : 0.0f;
-    float r = v * (0.15f + 0.85f * white);
-    float g = v * (0.75f + 0.25f * white);
-    float b = v;
+    float r, g, b;
+    ignition_color(i, led_count, p, &r, &g, &b);
     put(buf, i, r, g, b);
   }
 }
 
-/* ---- phase 2: wave ------------------------------------------------------
- * Scrolling teal -> blue -> violet gradient, overall brightness ramps in
- * and the ignition afterglow fades out. */
-void render_wave(uint16_t *buf, int led_count, float p, float scroll) {
-  float ramp = clamp01(p * 2.5f); /* fully on after 40% of the phase */
+/* ---- phase 2: settle to steady white -----------------------------------
+ * Per-LED cross-fade from the exact ignition end colour into an even white,
+ * smoothstep-eased so both ends of the blend are gentle. p in [0,1]. */
+void render_settle(uint16_t *buf, int led_count, float p) {
+  float mix = p * p * (3.0f - 2.0f * p); /* smoothstep */
   for (int i = 0; i < led_count; ++i) {
-    float pos = (float)i / (float)led_count;
-    /* hue window 0.48 (teal) .. 0.78 (violet), scrolling */
-    float h = 0.48f + 0.30f * (0.5f + 0.5f * sinf((pos * 2.0f - scroll) * 6.2831853f));
-    float r, g, b;
-    hsv(h, 0.85f, 1.0f, &r, &g, &b);
-    /* soft moving highlight */
-    float hl = 0.5f + 0.5f * sinf((pos * 3.0f + scroll * 1.7f) * 6.2831853f);
-    float v = ramp * (0.55f + 0.45f * hl);
-    put(buf, i, r * v, g * v, b * v);
+    float r0, g0, b0;
+    ignition_color(i, led_count, 1.0f, &r0, &g0, &b0);
+    float r = r0 + (1.0f - r0) * mix;
+    float g = g0 + (1.0f - g0) * mix;
+    float b = b0 + (1.0f - b0) * mix;
+    put(buf, i, r, g, b);
   }
 }
 
-/* ---- phase 3: breathe ---------------------------------------------------
- * Blend from the last wave colour into cool white, one breath, fade out. */
-void render_breathe(uint16_t *buf, int led_count, float p) {
-  /* brightness: rise to 1 at 35%, hold, then fall to 0 at 100% */
-  float v;
-  if (p < 0.35f) {
-    v = 0.6f + 0.4f * (p / 0.35f);
-  } else if (p < 0.55f) {
-    v = 1.0f;
-  } else {
-    float q = (p - 0.55f) / 0.45f;
-    v = (1.0f - q) * (1.0f - q);
-  }
-  float whiten = clamp01(p * 3.0f); /* colour -> white in first third */
+void render_white(uint16_t *buf, int led_count) {
   for (int i = 0; i < led_count; ++i) {
-    float pos = (float)i / (float)led_count;
-    float r, g, b;
-    hsv(0.58f + 0.12f * pos, 0.85f, 1.0f, &r, &g, &b);
-    r = r + (0.85f - r) * whiten;
-    g = g + (0.90f - g) * whiten;
-    b = b + (1.00f - b) * whiten;
-    put(buf, i, r * v, g * v, b * v);
+    put(buf, i, 1.0f, 1.0f, 1.0f);
   }
 }
 
@@ -139,15 +122,13 @@ void render_frame(uint32_t t_ms) {
     float p = (float)t_ms / (float)kIgnitionEndMs;
     render_ignition(ws2812_buf_front, LED_NUM_FRONT, p);
     render_ignition(ws2812_buf_back, LED_NUM_BACK, p);
-  } else if (t_ms < kWaveEndMs) {
-    float p = (float)(t_ms - kIgnitionEndMs) / (float)(kWaveEndMs - kIgnitionEndMs);
-    float scroll = (float)t_ms / 900.0f;
-    render_wave(ws2812_buf_front, LED_NUM_FRONT, p, scroll);
-    render_wave(ws2812_buf_back, LED_NUM_BACK, p, scroll);
+  } else if (t_ms < kSettleEndMs) {
+    float p = (float)(t_ms - kIgnitionEndMs) / (float)(kSettleEndMs - kIgnitionEndMs);
+    render_settle(ws2812_buf_front, LED_NUM_FRONT, p);
+    render_settle(ws2812_buf_back, LED_NUM_BACK, p);
   } else {
-    float p = (float)(t_ms - kWaveEndMs) / (float)(kBreatheEndMs - kWaveEndMs);
-    render_breathe(ws2812_buf_front, LED_NUM_FRONT, p);
-    render_breathe(ws2812_buf_back, LED_NUM_BACK, p);
+    render_white(ws2812_buf_front, LED_NUM_FRONT);
+    render_white(ws2812_buf_back, LED_NUM_BACK);
   }
 
   ws2812_show_dual();
@@ -157,6 +138,7 @@ void render_frame(uint32_t t_ms) {
 
 void BootAnimation_Start(void) {
   g_active = true;
+  g_next_cue = 0U;
   g_start_ms = HAL_GetTick();
   g_last_frame_ms = g_start_ms - kFrameMs; /* render first frame at once */
 }
@@ -184,8 +166,16 @@ bool BootAnimation_Update(void) {
   g_last_frame_ms = now;
 
   uint32_t t = now - g_start_ms;
-  if (t >= kBreatheEndMs) {
-    BootAnimation_Stop();
+  while ((g_next_cue < kCueCount) && (t >= kCues[g_next_cue].at_ms)) {
+    Buzzer_Beep(kCues[g_next_cue].duration_ms);
+    ++g_next_cue;
+  }
+
+  if (t >= kSettleEndMs) {
+    /* Final frame: steady white. Hand the strips back to the UART path
+     * without clearing, so the white stays until a command replaces it. */
+    render_frame(t);
+    g_active = false;
     return false;
   }
 
