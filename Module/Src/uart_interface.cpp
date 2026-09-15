@@ -830,8 +830,8 @@ void uart_send_wheel_feedback_status(void) {
       float_to_i16_x100(wheel_status.right.measured_rpm);
   payload.left_pid_output = float_to_i16_pwm(wheel_status.left.pid_output);
   payload.right_pid_output = float_to_i16_pwm(wheel_status.right.pid_output);
-  payload.left_delta_counts = wheel_status.left.delta_counts;
-  payload.right_delta_counts = wheel_status.right.delta_counts;
+  payload.left_total_counts = wheel_status.left.total_counts;
+  payload.right_total_counts = wheel_status.right.total_counts;
   payload.flags = wheel_status.flags;
 
   (void)uart_send_frame(UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS,

@@ -11,6 +11,8 @@ controller_settings_t g_runtime_settings;
 wheel_controller_status_t g_status = {};
 uint32_t g_left_previous_counter = 0U;
 uint32_t g_right_previous_counter = 0U;
+int32_t g_left_total_counts = 0;
+int32_t g_right_total_counts = 0;
 bool g_initialized = false;
 
 uint32_t enter_critical(void) {
@@ -115,6 +117,8 @@ void WheelController_Init(void) {
 
   g_left_previous_counter = __HAL_TIM_GET_COUNTER(&htim5);
   g_right_previous_counter = __HAL_TIM_GET_COUNTER(&htim1);
+  g_left_total_counts = 0;
+  g_right_total_counts = 0;
   g_left_pid.Reset();
   g_right_pid.Reset();
 
@@ -142,6 +146,8 @@ void WheelController_Update20ms(int16_t left_command_permille,
 
   g_left_previous_counter = left_counter;
   g_right_previous_counter = right_counter;
+  g_left_total_counts += left_delta;
+  g_right_total_counts += right_delta;
 
   float left_measured_rpm = counts_to_rpm(left_delta);
   float right_measured_rpm = counts_to_rpm(right_delta);
@@ -192,12 +198,14 @@ void WheelController_Update20ms(int16_t left_command_permille,
   g_status.left.pid_output = left_pid_output;
   g_status.left.applied_pwm = left_pwm;
   g_status.left.delta_counts = left_delta;
+  g_status.left.total_counts = g_left_total_counts;
   g_status.left.raw_counter = left_counter;
   g_status.right.target_rpm = right_target_rpm;
   g_status.right.measured_rpm = right_measured_rpm;
   g_status.right.pid_output = right_pid_output;
   g_status.right.applied_pwm = right_pwm;
   g_status.right.delta_counts = right_delta;
+  g_status.right.total_counts = g_right_total_counts;
   g_status.right.raw_counter = right_counter;
   update_status_flags(output_enabled);
   exit_critical(primask);

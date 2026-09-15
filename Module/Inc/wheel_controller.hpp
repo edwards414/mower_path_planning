@@ -29,7 +29,10 @@ typedef struct {
   float measured_rpm;
   float pid_output;
   int16_t applied_pwm;
-  int32_t delta_counts;
+  int32_t delta_counts;   /* counts in the last 20 ms tick (sign-corrected) */
+  int32_t total_counts;   /* accumulated since boot, sign-corrected; wraps at
+                             int32 (~2.4e5 wheel revs). Host odometry uses the
+                             difference between successive frames. */
   uint32_t raw_counter;
 } wheel_controller_wheel_status_t;
 

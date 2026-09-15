@@ -240,12 +240,16 @@ Payload 長度固定 `24` bytes。
 | 6 | `int16_t` | `right_measured_rpm_x100` | 右輪 encoder 實測 RPM x100 |
 | 8 | `int16_t` | `left_pid_output` | 左輪 PID 輸出 PWM counts |
 | 10 | `int16_t` | `right_pid_output` | 右輪 PID 輸出 PWM counts |
-| 12 | `int32_t` | `left_delta_counts` | 左輪最近一個 20ms control tick 的 encoder 增量 |
-| 16 | `int32_t` | `right_delta_counts` | 右輪最近一個 20ms control tick 的 encoder 增量 |
+| 12 | `int32_t` | `left_total_counts` | 左輪開機以來累積 encoder 計數（已含方向修正，正 = 前進），8896 counts = 輪子一圈 |
+| 16 | `int32_t` | `right_total_counts` | 右輪開機以來累積 encoder 計數，同上 |
 | 20 | `uint8_t` | `flags` | wheel controller flags |
 | 21 | `uint8_t` | `reserved0` | 目前固定 `0` |
 | 22 | `uint8_t` | `reserved1` | 目前固定 `0` |
 | 23 | `uint8_t` | `reserved2` | 目前固定 `0` |
+
+里程計用法：Host 端記住上一幀的 `*_total_counts`，用相減得到位移，不會因為 status 週期 (50ms) 比 control tick (20ms) 慢而漏計。int32 溢位約 24 萬圈後回捲，相減時用 32-bit 帶號運算即可正確處理。
+
+位置換算：`wheel_angle_rad = total_counts * 2π / 8896`。
 
 Wheel controller flags:
 

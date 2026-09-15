@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!-- Minimal chassis so the stack can be brought up without the full robot
+     description. Replace with the real URDF; keep the joint names. -->
+<robot name="mower" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="device" default="/dev/ttyS0"/>
+
+  <xacro:property name="wheel_radius" value="0.10"/>
+  <xacro:property name="wheel_sep" value="0.40"/>
+
+  <link name="base_link">
+    <visual>
+      <geometry><box size="0.5 0.35 0.15"/></geometry>
+      <origin xyz="0 0 0.10"/>
+    </visual>
+  </link>
+
+  <xacro:macro name="wheel" params="side y">
+    <link name="${side}_wheel_link">
+      <visual>
+        <geometry><cylinder radius="${wheel_radius}" length="0.04"/></geometry>
+        <origin rpy="1.5708 0 0"/>
+      </visual>
+    </link>
+    <joint name="${side}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${side}_wheel_link"/>
+      <origin xyz="0 ${y} ${wheel_radius}"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+  <xacro:wheel side="left" y="${wheel_sep/2}"/>
+  <xacro:wheel side="right" y="${-wheel_sep/2}"/>
+
+  <xacro:include filename="$(find mower_hardware)/urdf/mower_base.ros2_control.xacro"/>
+  <xacro:mower_base_ros2_control device="$(arg device)"/>
+</robot>

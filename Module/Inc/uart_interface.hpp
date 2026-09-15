@@ -142,8 +142,8 @@ typedef struct __attribute__((packed)) {
   int16_t right_measured_rpm_x100;
   int16_t left_pid_output;
   int16_t right_pid_output;
-  int32_t left_delta_counts;
-  int32_t right_delta_counts;
+  int32_t left_total_counts;  /* accumulated encoder counts since boot */
+  int32_t right_total_counts;
   uint8_t flags;
   uint8_t reserved0;
   uint8_t reserved1;

@@ -1,0 +1,10 @@
+<library path="mower_hardware">
+  <class name="mower_hardware/MowerSystem"
+         type="mower_hardware::MowerSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Differential-drive base: STM32F411 over UART (115200 8N1). Two wheel
+      joints with velocity command and position/velocity state.
+    </description>
+  </class>
+</library>
