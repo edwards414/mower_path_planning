@@ -3,6 +3,7 @@
 #include "wheel_controller.hpp"
 #include "ws2812.h"
 #include "boot_animation.hpp"
+#include "boot_shared.h"
 #include "cmsis_os2.h"
 #include <stddef.h>
 #include <string.h>
@@ -495,6 +496,46 @@ uint16_t uart_crc16_ccitt(const uint8_t *data, uint16_t len) {
   return crc;
 }
 
+/* Host asked us to reboot into the UART bootloader (see BOOTLOADER.md).
+ * Sends the 0x8F ack synchronously, leaves BOOT_REQUEST_MAGIC in the RAM
+ * mailbox and resets. Never returns on success. */
+void enter_bootloader(uint8_t rx_seq) {
+  boot_enter_ack_payload_t ack = {};
+  ack.status = BOOT_STATUS_OK;
+
+  /* Engage the blade brake before the reset drops every PWM output. */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+
+  uint8_t frame[8U + sizeof(ack)];
+  frame[0] = UART_FRAME_SOF_0;
+  frame[1] = UART_FRAME_SOF_1;
+  frame[2] = UART_PROTOCOL_VERSION;
+  frame[3] = BOOT_FRAME_TYPE_ENTER_BOOTLOADER_ACK;
+  frame[4] = rx_seq;
+  frame[5] = (uint8_t)sizeof(ack);
+  memcpy(&frame[6], &ack, sizeof(ack));
+  uint16_t crc = uart_crc16_ccitt(&frame[2], (uint16_t)(UART_CRC_INPUT_HEADER_SIZE + sizeof(ack)));
+  frame[6U + sizeof(ack)] = (uint8_t)(crc & 0xFFU);
+  frame[7U + sizeof(ack)] = (uint8_t)(crc >> 8);
+
+  /* From here on nothing else may touch the UART: interrupts stay off until
+   * the reset. HAL_UART_Transmit polls, so it still completes. */
+  __disable_irq();
+  (void)HAL_UART_AbortTransmit(&huart1);
+  uart_write_blocking(frame, (uint16_t)sizeof(frame));
+  /* Bounded: HAL_GetTick() is frozen with interrupts off, so never spin on a
+   * flag without a limit here. */
+  for (uint32_t spin = 0U; spin < 200000U; ++spin) {
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) != RESET) {
+      break;
+    }
+  }
+
+  *BOOT_SHARED_MAGIC_PTR = BOOT_REQUEST_MAGIC;
+  __DSB();
+  NVIC_SystemReset();
+}
+
 void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
                        const uint8_t *payload, uint8_t payload_len) {
   if ((version != UART_PROTOCOL_VERSION) || (payload == NULL)) {
@@ -541,6 +582,19 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
     memcpy(&pid_payload, payload, sizeof(pid_payload));
     pid_config_set_command(&pid_payload, seq);
     break;
+
+  case BOOT_FRAME_TYPE_ENTER_BOOTLOADER: {
+    if (payload_len != sizeof(boot_enter_payload_t)) {
+      return;
+    }
+    boot_enter_payload_t boot_payload;
+    memcpy(&boot_payload, payload, sizeof(boot_payload));
+    if (boot_payload.magic != BOOT_REQUEST_MAGIC) {
+      return;
+    }
+    enter_bootloader(seq);
+    break;
+  }
 
   default:
     break;

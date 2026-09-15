@@ -45,7 +45,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument("device", default_value="/dev/ttyS0",
+        DeclareLaunchArgument("device", default_value="/dev/ttyS3",
                               description="UART device wired to STM32 PB6/PA10"),
         DeclareLaunchArgument(
             "urdf",

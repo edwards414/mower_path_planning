@@ -3,10 +3,10 @@
 
   <!-- Include from your robot's URDF:
          <xacro:include filename="$(find mower_hardware)/urdf/mower_base.ros2_control.xacro"/>
-         <xacro:mower_base_ros2_control device="/dev/ttyS0"/>
+         <xacro:mower_base_ros2_control device="/dev/ttyS3"/>
        Joint names must match diff_drive_controller's left/right_wheel_names. -->
   <xacro:macro name="mower_base_ros2_control"
-               params="name:=MowerBase device:=/dev/ttyS0 baud:=115200
+               params="name:=MowerBase device:=/dev/ttyS3 baud:=115200
                        max_rpm:=58.0 counts_per_rev:=8896
                        left_joint:=left_wheel_joint right_joint:=right_wheel_joint">
     <ros2_control name="${name}" type="system">

@@ -293,6 +293,18 @@ TIM3 PWM 設定：
 通訊參數目前在產生碼裡是 `115200 8N1`，無硬體流控。
 若重新從 `.ioc` 產生程式碼，USART1 TX 會改到 `PB6`。
 
+Host 是野火 LubanCat 2（RK3568）。它的 40-pin 排針串口是 UART3，裝置檔 `/dev/ttyS3`，預設關閉，要用 `sudo fire-config` 開 UART 或在 `/boot/uEnv/uEnv.txt` 把 uart3 那行的註解拿掉再重開機。接法：
+
+| STM32 | LubanCat 2 40-pin |
+| --- | --- |
+| `PB6` `USART1_TX` | pin 10 `UART3_RXD` |
+| `PA10` `USART1_RX` | pin 8 `UART3_TXD` |
+| `GND` | pin 6 / 9 / 14 GND |
+
+兩邊都是 3.3 V 邏輯，直接接，不要接 pin 2/4 的 5 V。ROS2 launch / xacro 的 device 預設已改成 `/dev/ttyS3`。
+
+同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低。細節見 `BOOTLOADER.md`。
+
 ## SPI-CAN 預留
 
 STM32F411CEUx 本身沒有內建 CAN controller，若要接 CAN bus，使用外部 `MCP2515` SPI-CAN 模組。為了留出硬體 SPI，左右輪 BTS7960 的四個 EN 腳改成共用 `PA4`，釋放 `PA5/PA6/PA7` 給 `SPI1`。
@@ -578,6 +590,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
 | Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper；需實測校正 |
 | Wheel PID settings | internal Flash sector 7 at `0x08060000` | 已新增 C++ storage module；需實車調 PID |
+| UART bootloader | sector 0-1 bootloader，app link 在 `0x08008000`，RAM `0x20000000` 前 32 bytes 為 boot mailbox | 已新增 `bootloader/`、`tools/mower_flash.py`、app `0x0F` handler；linker script、`system_stm32f4xx.c` VTOR、`main.c` 已改；尚未上板實測，bootloader 第一次要用 ST-Link 燒 |
 | BLD120A PWM label / app binding | `PB8/TIM4_CH3`, label `BLD120A_PWM` | 需確認應用層是否使用 `TIM4_CH3` |
 | BLD120A BRK | `PC13` GPIO open-drain, initial low, label `BLD120A_BRK` | `.ioc` 已改；`Core/*` 產生碼仍是舊的 PC13 push-pull 無 label，需重新產生或手動改 `gpio.c`/`main.h`；應用層尚未接 BRK |
 | Passive buzzer | `PB9` = `TIM4_CH4`, label `Buzzer_PWM` | 實測為無源蜂鳴器；C++ wrapper 已改成 TIM4_CH4 2 kHz PWM 發聲 |

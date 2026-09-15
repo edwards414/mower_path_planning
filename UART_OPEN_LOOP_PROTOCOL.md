@@ -45,11 +45,14 @@
 | `0x02` | Host -> STM32 | `lawer_motor` 開環命令 |
 | `0x03` | Host -> STM32 | `ws2812` 模式命令 |
 | `0x04` | Host -> STM32 | 左右輪 PID 設定 |
+| `0x0F` | Host -> STM32 | 重開進 UART bootloader（見 `BOOTLOADER.md`） |
 | `0x81` | STM32 -> Host | 狀態回傳 |
 | `0x82` | STM32 -> Host | `lawer_motor` 狀態回傳格式 |
 | `0x83` | STM32 -> Host | `ws2812` 狀態回傳格式 |
 | `0x84` | STM32 -> Host | PID 設定狀態回傳格式 |
 | `0x85` | STM32 -> Host | 左右輪 PID / encoder 回饋格式 |
+| `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
+| `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
 ## `0x01` Wheel Speed Command
 
@@ -150,8 +153,21 @@ Payload 長度固定 `28` bytes。
 內部 Flash 儲存：
 
 - 使用 STM32F411 internal Flash sector 7，位址 `0x08060000`
-- linker script 已把程式碼 Flash 限制在前 `384KB`，最後 `128KB` 保留給設定
+- linker script 把 app 程式碼放在 sector 2-6（`0x08008000` 起 `352KB`），sector 0-1 是 UART bootloader，最後 `128KB` 保留給設定；bootloader 更新 app 時不會碰 sector 7
 - 不要高頻率寫入 PID；調參時先用 `persist_to_flash=0`，確認後再寫一次 Flash
+
+## `0x0F` Enter Bootloader Command
+
+Payload 長度固定 `8` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint32_t` | `magic` | 固定 `0xB007B007`，不符直接丟掉 |
+| 4 | `uint32_t` | `reserved` | 目前固定填 `0` |
+
+STM32 收到後：拉低 `PC13` 刀片剎車、關中斷、blocking 送出 `0x8F` ack、把 magic 寫進 RAM mailbox，然後 `NVIC_SystemReset()`。Reset 後由 bootloader 接手，所有馬達輸出都會停止。Host 收到 `0x8F` 之後（或 0.5 s 內沒收到也一樣）改送 bootloader 的 `0x10 BL_PING`。整個流程 `tools/mower_flash.py` 已經包好。
+
+`0x8F` payload 固定 `4` bytes：`uint8_t status`（`0` = OK）+ 3 bytes reserved。
 
 ## `0x81` Motor Status
 

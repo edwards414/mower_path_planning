@@ -31,6 +31,7 @@
 #include "motor.hpp"
 #include "ws2812.h"
 #include "boot_animation.hpp"
+#include "boot_shared.h"
 
 /* USER CODE END Includes */
 
@@ -75,7 +76,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  /* We run behind the UART bootloader. SystemInit() already relocated the
+   * vector table (USER_VECT_TAB_ADDRESS in system_stm32f4xx.c); repeat it
+   * here so a CubeMX regeneration of that file cannot silently break boot. */
+  SCB->VTOR = BOOT_APP_START_ADDRESS;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
