@@ -1,0 +1,50 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 50  # Hz; firmware status period is 50 ms, command timeout 300 ms
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    diff_drive_controller:
+      type: diff_drive_controller/DiffDriveController
+
+diff_drive_controller:
+  ros__parameters:
+    left_wheel_names: ["left_wheel_joint"]
+    right_wheel_names: ["right_wheel_joint"]
+
+    # TODO: measure on the real chassis. Placeholders below.
+    wheel_separation: 0.40   # m, centre-to-centre between wheels
+    wheel_radius: 0.10       # m
+
+    wheel_separation_multiplier: 1.0
+    left_wheel_radius_multiplier: 1.0
+    right_wheel_radius_multiplier: 1.0
+
+    publish_rate: 50.0
+    odom_frame_id: odom
+    base_frame_id: base_link
+    pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+    twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+
+    open_loop: false          # use encoder feedback for odometry
+    enable_odom_tf: true
+    position_feedback: true   # 0x85 total_counts -> position interface
+
+    cmd_vel_timeout: 0.5      # s; firmware also stops itself after command_timeout_ms
+    use_stamped_vel: false
+
+    # 58 rpm max wheel speed -> 6.07 rad/s at the wheel.
+    # With r = 0.10 m that is 0.61 m/s linear, ~3.0 rad/s yaw at 0.40 m separation.
+    linear.x.has_velocity_limits: true
+    linear.x.has_acceleration_limits: true
+    linear.x.max_velocity: 0.55
+    linear.x.min_velocity: -0.55
+    linear.x.max_acceleration: 0.8
+    linear.x.min_acceleration: -0.8
+    angular.z.has_velocity_limits: true
+    angular.z.has_acceleration_limits: true
+    angular.z.max_velocity: 2.0
+    angular.z.min_velocity: -2.0
+    angular.z.max_acceleration: 2.0
+    angular.z.min_acceleration: -2.0
