@@ -43,8 +43,9 @@ services:
       - output_root:=/home/mower/.mower/bags
       - record:=false
     environment:
-      # - ROS_DOMAIN_ID = 0
-      - ROS_LOCALHOST_ONLY=1
+      # The graph stays on loopback (CycloneDDS config in the image); the
+      # domain id only separates it from anything else on the box.
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
       - MOWER_STATE_DIR=/home/mower/.mower
       - MOWER_FIRMWARE_SYNC=${MOWER_FIRMWARE_SYNC:-1}
       - MOWER_STM_PORT=/dev/stmcom
@@ -79,7 +80,8 @@ services:
         --ros-args --params-file /config/ublox.yaml
         -r /ublox_gps_node/fix:=/fix
     environment:
-      - ROS_LOCALHOST_ONLY=1
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     network_mode: host
     ipc: host
     pid: host

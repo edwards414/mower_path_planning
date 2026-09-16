@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS config for the robot runtime image (baked in at
+  /etc/mower/cyclonedds.xml, selected by CYCLONEDDS_URI in the Dockerfile).
+
+  Same RMW as every development compose (.devcontainer/*): the stack was
+  never validated on rmw_fastrtps, and on the LubanCat FastDDS' localhost /
+  many-participant discovery left controller_manager services unanswered.
+
+  - Keeps the ROS graph on the loopback interface: nothing on the LAN can
+    join the robot's domain (rosbridge is the only door in). Multicast on lo
+    needs `ip link set lo multicast on`, done by deploy/host/mower.service.
+  - MaxAutoParticipantIndex: the full stack is ~30 participants, the default
+    (~9) fails with "Failed to find a free participant index".
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface address="127.0.0.1" multicast="true"/>
+      </Interfaces>
+      <DontRoute>true</DontRoute>
+    </General>
+    <Discovery>
+      <MaxAutoParticipantIndex>250</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

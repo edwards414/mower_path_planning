@@ -177,6 +177,10 @@ COPY --from=firmware /fw/build/mower_robot_firmware.bin \
                      /fw/bootloader/build/bootloader.bin \
                      /opt/mower/firmware/
 COPY ./firmware/tools/mower_flash.py /opt/mower/firmware/mower_flash.py
+# DDS: same RMW as the development containers, graph kept on loopback.
+COPY ./deploy/ros/cyclonedds.xml /etc/mower/cyclonedds.xml
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    CYCLONEDDS_URI=file:///etc/mower/cyclonedds.xml
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -185,7 +189,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
     && apt-get update \
     && { \
-        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial; \
+        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
         cat /tmp/runtime-apt-packages.txt; \
     } \
         | sort -u \

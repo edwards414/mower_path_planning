@@ -36,6 +36,11 @@ fi
 mkdir -p "$state_dir"/zone_record "$state_dir"/sites "$state_dir"/bags
 chown -R "$user:$user" "$state_dir"
 
+echo "== kernel (DDS)"
+install -m 644 "$here/host/99-mower-dds.conf" /etc/sysctl.d/99-mower-dds.conf
+sysctl -q -p /etc/sysctl.d/99-mower-dds.conf || true
+ip link set lo multicast on || true
+
 echo "== udev"
 install -m 644 "$here/udev/99-mower.rules" /etc/udev/rules.d/99-mower.rules
 udevadm control --reload-rules && udevadm trigger

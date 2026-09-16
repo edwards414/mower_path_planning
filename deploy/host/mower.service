@@ -10,6 +10,9 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/mower
+# CycloneDDS keeps the ROS graph on loopback and discovers over multicast there
+ExecStartPre=/usr/sbin/ip link set lo multicast on
+ExecStartPre=-/usr/sbin/sysctl -q -p /etc/sysctl.d/99-mower-dds.conf
 # `up -d` never pulls (pull_policy: missing); updates go through mower-update.sh.
 ExecStart=/usr/bin/docker compose up -d --remove-orphans
 ExecStop=/usr/bin/docker compose stop

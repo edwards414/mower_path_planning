@@ -62,17 +62,23 @@ def generate_launch_description():
           }
         ),
         # 启动 joint_state_broadcaster
+        # The RK3568 is saturated for the first minute of bring-up: give the
+        # controller manager services time instead of dying after 3 x 10 s.
         Node(
             package='controller_manager',
             executable='spawner',
-            arguments=['joint_state_broadcaster'],
+            arguments=['joint_state_broadcaster',
+                       '--controller-manager-timeout', '120',
+                       '--service-call-timeout', '30'],
             output='screen',
         ),
         # 启动 diff_controller
         Node(
             package='controller_manager',
             executable='spawner',
-            arguments=['diff_controller'],
+            arguments=['diff_controller',
+                       '--controller-manager-timeout', '120',
+                       '--service-call-timeout', '30'],
             output='screen'
         ),
 
