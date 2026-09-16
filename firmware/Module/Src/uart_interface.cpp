@@ -3,6 +3,7 @@
 #include "wheel_controller.hpp"
 #include "ws2812.h"
 #include "boot_animation.hpp"
+#include "led_effects.hpp"
 #include "power_manager.hpp"
 #include "sleep_animation.hpp"
 #include "boot_shared.h"
@@ -22,6 +23,7 @@ constexpr uint16_t UART_DEFAULT_COMMAND_TIMEOUT_MS =
     MOTOR_DEFAULT_COMMAND_TIMEOUT_MS;
 constexpr uint16_t LAWER_PWM_MAX_COUNTS = MOTOR_PWM_MAX_COUNTS;
 constexpr uint16_t WS2812_DEFAULT_EFFECT_PERIOD_MS = 100U;
+constexpr uint16_t WS2812_SOLID_FADE_MS = 400U;
 volatile bool uart_tx_ready = false;
 
 typedef struct {
@@ -269,7 +271,11 @@ void ws2812_set_command(const ws2812_command_payload_t *payload, uint8_t rx_seq)
   g_ws2812_command.g = payload->g;
   g_ws2812_command.b = payload->b;
   g_ws2812_command.effect_period_ms =
-      ws2812_sanitize_period(payload->effect_period_ms);
+      (payload->mode == UART_WS2812_MODE_ORBIT)
+          ? ((payload->effect_period_ms == 0U)
+                 ? (uint16_t)LED_EFFECTS_ORBIT_DEFAULT_PERIOD_MS
+                 : payload->effect_period_ms)
+          : ws2812_sanitize_period(payload->effect_period_ms);
   g_ws2812_command.valid = true;
   g_ws2812_command.last_rx_seq = rx_seq;
   g_ws2812_command.last_update_ms = HAL_GetTick();
@@ -387,9 +393,17 @@ void update_ws2812_control(void) {
   }
 
   if (command_snapshot.valid && !strips_locked) {
-    if ((command_snapshot.mode == UART_WS2812_MODE_FLOW) ||
-        (command_snapshot.mode == UART_WS2812_MODE_TURN_LEFT) ||
-        (command_snapshot.mode == UART_WS2812_MODE_TURN_RIGHT)) {
+    if (command_snapshot.mode == UART_WS2812_MODE_ORBIT) {
+      /* time-based effect; repeated commands only update colour / period */
+      LedEffects_StartOrbit(command_snapshot.r, command_snapshot.g,
+                            command_snapshot.b,
+                            command_snapshot.effect_period_ms);
+      g_ws2812_static_applied = false;
+    } else if ((command_snapshot.mode == UART_WS2812_MODE_FLOW) ||
+               (command_snapshot.mode == UART_WS2812_MODE_TURN_LEFT) ||
+               (command_snapshot.mode == UART_WS2812_MODE_TURN_RIGHT)) {
+      /* legacy steppers write the strips directly */
+      LedEffects_Stop();
       uint32_t now = HAL_GetTick();
       if ((now - g_ws2812_last_step_ms) >= command_snapshot.effect_period_ms) {
         ws2812_step_animation(&command_snapshot);
@@ -398,10 +412,24 @@ void update_ws2812_control(void) {
       g_ws2812_static_applied = false;
     } else if ((!g_ws2812_static_applied) ||
                (g_ws2812_last_static_seq != command_snapshot.last_rx_seq)) {
-      ws2812_apply_static_mode(&command_snapshot);
+      /* CLEAR / ALL_ON glide in from whatever is showing; SHOW is immediate */
+      if (command_snapshot.mode == UART_WS2812_MODE_CLEAR) {
+        LedEffects_FadeToSolid(0U, 0U, 0U, WS2812_SOLID_FADE_MS);
+      } else if (command_snapshot.mode == UART_WS2812_MODE_ALL_ON) {
+        LedEffects_FadeToSolid(command_snapshot.r, command_snapshot.g,
+                               command_snapshot.b, WS2812_SOLID_FADE_MS);
+      } else {
+        LedEffects_Stop();
+        ws2812_apply_static_mode(&command_snapshot);
+      }
       g_ws2812_last_static_seq = command_snapshot.last_rx_seq;
       g_ws2812_static_applied = true;
     }
+    (void)LedEffects_Update();
+  } else if (strips_locked) {
+    /* boot / sleep shows own the strips; drop any effect so it cannot
+     * fight them, it is re-created from the command when they end */
+    LedEffects_Stop();
   }
 
   ws2812_runtime_status_t status = {};

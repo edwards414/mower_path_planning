@@ -20,6 +20,8 @@
 - 每條燈條 LED 數量: `16`
 - 規劃保留 LED index `0-2` 作系統狀態燈，但目前尚未實作獨立狀態燈 mode
 - LED command 沒有 timeout 機制，最後一次收到的效果會一直維持
+- `CLEAR` / `ALL_ON` 不再瞬間切換：從目前燈條上的顏色淡入淡出 400 ms（`Module/Src/led_effects.cpp`）
+- `0x06 ORBIT`：時間驅動的環繞光（次像素位置、指數尾巴、呼吸底光），20 ms 一幀；主機更新軟體時用它顯示琥珀色
 
 完整 UART frame、CRC 與其他 motor command 可另外看 [UART_OPEN_LOOP_PROTOCOL.md](UART_OPEN_LOOP_PROTOCOL.md)。
 
@@ -47,6 +49,7 @@ Payload 固定 `8` bytes。
 | `0x03` | `TURN_LEFT` | 動畫 | `mode + effect_period_ms`，可選 `r/g/b` | 每次步進亮 2 顆，主亮點往左轉方向循環，尾巴半亮 |
 | `0x04` | `TURN_RIGHT` | 動畫 | `mode + effect_period_ms`，可選 `r/g/b` | 每次步進亮 2 顆，主亮點往右轉方向循環，尾巴半亮 |
 | `0x05` | `SHOW` | 靜態 | `mode` 即可 | 只把目前 buffer 再送一次，不會改顏色、不會改 pattern |
+| `0x06` | `ORBIT` | 動畫 | `mode + r/g/b + effect_period_ms` | 一顆彗星平滑繞行整條燈條（前 32 / 後 16 顆同步），`effect_period_ms` = 繞一圈的時間（`0` = 1600 ms），`r/g/b` 全 0 = 預設琥珀 (255,178,0)。從目前畫面淡入 700 ms；重複送同 mode 只改顏色 / 速度、不重來 |
 
 ## 每個 Mode 的細節
 
@@ -272,3 +275,17 @@ motor command 有 timeout，但 LED command 沒有。
 | 右方向燈 | `TURN_RIGHT` | `r=0 g=0 b=0 effect_period_ms=100` |
 
 這樣 ROS 端先把 `joy` 邏輯寫起來會最快，之後再加 `FLOW` 或其他常亮顏色就好。
+
+### `0x06` `ORBIT`
+
+- 每 20 ms 算一幀，彗星頭的位置是連續值（不是一顆一顆跳），尾巴 `exp(-d/tail)`、頭前緣高斯抗鋸齒、頭尖端偏白
+- 底光 4.5% 左右並以 2.8 s 週期輕微呼吸，燈條不會全黑
+- 亮度上限和開機動畫相同（每色 110/255），電流安全
+- 切到 `CLEAR` / `ALL_ON` 時從彗星當下的畫面交叉淡出到目標色（400 ms）
+- 開機 / 關機動畫進行中不會播放；動畫結束後依最後一筆命令自動開始
+
+建議 payload（更新中）:
+
+```text
+mode=0x06, r=255, g=180, b=0, effect_period_ms=1600
+```

@@ -168,3 +168,22 @@ TEST(FirmwareInfo, DecodeAndFormat)
   EXPECT_EQ(f[4], 7);
   EXPECT_EQ(f[5], 0);
 }
+
+TEST(Ws2812, CommandFrameLayout)
+{
+  // orbit, amber, one revolution per 1600 ms
+  auto f = build_ws2812_command(9, kLedOrbit, 255, 180, 0, 1600);
+  ASSERT_EQ(f.size(), kFrameOverhead + 8);
+  EXPECT_EQ(f[3], kWs2812Command);
+  EXPECT_EQ(f[4], 9);
+  EXPECT_EQ(f[5], 8);
+  EXPECT_EQ(f[6], kLedOrbit);
+  EXPECT_EQ(f[7], 255);
+  EXPECT_EQ(f[8], 180);
+  EXPECT_EQ(f[9], 0);
+  EXPECT_EQ(f[10], 1600 & 0xFF);
+  EXPECT_EQ(f[11], 1600 >> 8);
+  EXPECT_EQ(f[12], 0);
+  EXPECT_EQ(f[13], 0);
+  EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
+}

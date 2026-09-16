@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <string>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -44,6 +45,7 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   feedback_timeout_s_ = param_or(info, "feedback_timeout_s", 0.5);
   shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
   firmware_info_topic_ = param_or(info, "firmware_info_topic", firmware_info_topic_.c_str());
+  led_topic_ = param_or(info, "led_topic", led_topic_.c_str());
 
   if (info.joints.size() != 2) {
     RCLCPP_ERROR(logger(), "expected exactly 2 joints (left, right), got %zu", info.joints.size());
@@ -81,18 +83,30 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
   shutdown_acked_ = false;
   firmware_info_valid_ = false;
 
-  // Publishing needs no executor, so a plain node inside the hardware
-  // component is enough. transient_local keeps the last message for late
-  // subscribers (the info aggregator, rosbridge).
-  if (!info_node_ && !firmware_info_topic_.empty()) {
+  // Helper node for the side channels (firmware info out, light requests
+  // in). It is spun on its own thread; the control loop only touches
+  // atomics. transient_local keeps the last message for late joiners.
+  if (!info_node_) {
     try {
       info_node_ = std::make_shared<rclcpp::Node>("mower_hardware_info");
-      firmware_info_pub_ = info_node_->create_publisher<std_msgs::msg::String>(
-        firmware_info_topic_, rclcpp::QoS(1).transient_local().reliable());
+      if (!firmware_info_topic_.empty()) {
+        firmware_info_pub_ = info_node_->create_publisher<std_msgs::msg::String>(
+          firmware_info_topic_, rclcpp::QoS(1).transient_local().reliable());
+      }
+      if (!led_topic_.empty()) {
+        led_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          led_topic_, rclcpp::QoS(1).transient_local().reliable(),
+          [this](const std_msgs::msg::String & msg) { on_led_command(msg); });
+      }
+      node_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+      node_executor_->add_node(info_node_);
+      node_thread_ = std::thread([this]() { node_executor_->spin(); });
     } catch (const std::exception & e) {
-      RCLCPP_WARN(logger(), "firmware_info publisher unavailable: %s", e.what());
-      info_node_.reset();
+      RCLCPP_WARN(logger(), "side-channel node unavailable: %s", e.what());
+      stop_node_thread();
+      led_sub_.reset();
       firmware_info_pub_.reset();
+      info_node_.reset();
     }
   }
 
@@ -103,7 +117,102 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
 CallbackReturn MowerSystem::on_cleanup(const rclcpp_lifecycle::State &)
 {
   port_.close();
+  stop_node_thread();
+  led_sub_.reset();
+  firmware_info_pub_.reset();
+  info_node_.reset();
   return CallbackReturn::SUCCESS;
+}
+
+MowerSystem::~MowerSystem()
+{
+  stop_node_thread();
+}
+
+void MowerSystem::stop_node_thread()
+{
+  if (node_executor_) {
+    node_executor_->cancel();
+  }
+  if (node_thread_.joinable()) {
+    node_thread_.join();
+  }
+  node_executor_.reset();
+}
+
+uint64_t MowerSystem::pack_led(
+  uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t period_ms, uint8_t serial)
+{
+  // serial makes an identical repeated request distinguishable (re-assert)
+  return (static_cast<uint64_t>(serial) << 48) | (static_cast<uint64_t>(period_ms) << 32) |
+         (static_cast<uint64_t>(mode) << 24) | (static_cast<uint64_t>(r) << 16) |
+         (static_cast<uint64_t>(g) << 8) | static_cast<uint64_t>(b);
+}
+
+namespace
+{
+// tiny extractor for the flat JSON the light topic carries; tolerant of
+// spacing and missing keys (missing -> def)
+long json_int(const std::string & s, const char * key, long def)
+{
+  std::string k = std::string("\"") + key + "\"";
+  auto pos = s.find(k);
+  if (pos == std::string::npos) {
+    return def;
+  }
+  pos = s.find(':', pos + k.size());
+  if (pos == std::string::npos) {
+    return def;
+  }
+  ++pos;
+  while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) {
+    ++pos;
+  }
+  char * end = nullptr;
+  long v = std::strtol(s.c_str() + pos, &end, 10);
+  if (end == s.c_str() + pos) {
+    return def;
+  }
+  return v;
+}
+}  // namespace
+
+void MowerSystem::on_led_command(const std_msgs::msg::String & msg)
+{
+  const long mode = json_int(msg.data, "mode", -1);
+  if (mode < 0 || mode > 255) {
+    RCLCPP_WARN(logger(), "ignoring light request without a valid mode: %s", msg.data.c_str());
+    return;
+  }
+  auto clamp8 = [](long v) { return static_cast<uint8_t>(std::clamp(v, 0L, 255L)); };
+  const uint16_t period = static_cast<uint16_t>(std::clamp(json_int(msg.data, "period_ms", 0), 0L, 65535L));
+  static uint8_t serial = 0;
+  led_request_.store(pack_led(
+    static_cast<uint8_t>(mode), clamp8(json_int(msg.data, "r", 0)), clamp8(json_int(msg.data, "g", 0)),
+    clamp8(json_int(msg.data, "b", 0)), period, ++serial));
+  RCLCPP_INFO(logger(), "light request: mode %ld rgb(%ld,%ld,%ld) period %u ms",
+    mode, json_int(msg.data, "r", 0), json_int(msg.data, "g", 0), json_int(msg.data, "b", 0), period);
+}
+
+void MowerSystem::send_led_if_needed(const rclcpp::Time & now)
+{
+  const uint64_t req = led_request_.load();
+  if (req == 0) {
+    return;
+  }
+  const bool changed = req != led_sent_;
+  const bool stale = led_sent_time_.nanoseconds() == 0 ||
+                     (now - led_sent_time_).seconds() >= kLedResendPeriodS;
+  if (!changed && !stale) {
+    return;
+  }
+  auto f = build_ws2812_command(
+    tx_seq_++, static_cast<uint8_t>(req >> 24), static_cast<uint8_t>(req >> 16),
+    static_cast<uint8_t>(req >> 8), static_cast<uint8_t>(req), static_cast<uint16_t>(req >> 32));
+  if (port_.write_all(f.data(), f.size())) {
+    led_sent_ = req;
+    led_sent_time_ = now;
+  }
 }
 
 CallbackReturn MowerSystem::on_activate(const rclcpp_lifecycle::State &)
@@ -301,7 +410,7 @@ bool MowerSystem::send_stop()
   return port_.write_all(f.data(), f.size());
 }
 
-return_type MowerSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
+return_type MowerSystem::write(const rclcpp::Time & time, const rclcpp::Duration &)
 {
   int16_t l = rad_s_to_permille(left_.cmd_velocity);
   int16_t r = rad_s_to_permille(right_.cmd_velocity);
@@ -311,6 +420,7 @@ return_type MowerSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
       port_.last_error().c_str());
     return return_type::ERROR;
   }
+  send_led_if_needed(time);
   return return_type::OK;
 }
 

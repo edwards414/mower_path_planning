@@ -49,6 +49,7 @@ extern "C" {
 #define UART_WS2812_MODE_TURN_LEFT 0x03U
 #define UART_WS2812_MODE_TURN_RIGHT 0x04U
 #define UART_WS2812_MODE_SHOW 0x05U
+#define UART_WS2812_MODE_ORBIT 0x06U /* smooth comet around the strips, see led_effects.hpp */
 
 /* 0x05 power command actions */
 #define UART_POWER_ACTION_NONE 0x00U

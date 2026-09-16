@@ -1,0 +1,9 @@
+[Unit]
+Description=Pull the mower robot image if the channel moved (auto)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mower/host/mower-update.sh --auto

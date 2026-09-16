@@ -26,7 +26,7 @@ state_dir="$home/.mower"
 
 echo "== /opt/mower (user=$user state=$state_dir)"
 mkdir -p /opt/mower/host /opt/mower/gps
-install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" /opt/mower/
+install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" "$here/mediamtx.lan.yml" /opt/mower/
 install -m 644 "$here/gps/ublox.yaml" /opt/mower/gps/
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" /opt/mower/host/
 if [ ! -f /opt/mower/.env ]; then
@@ -45,13 +45,15 @@ for dev in stmcom imu_usb gps_rtk; do
 done
 
 echo "== systemd"
-for unit in mower.service mower-host-request.path mower-host-request.service; do
+for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer; do
   sed "s#/home/cat/.mower#$state_dir#g; s#/home/cat#$home#g" "$here/host/$unit" > "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload
 systemctl enable mower.service >/dev/null
 systemctl enable --now mower-host-request.path >/dev/null
-echo "   enabled mower.service (stack on boot), mower-host-request.path (app-triggered update/restart/poweroff)"
+systemctl enable --now mower-update.timer >/dev/null
+echo "   enabled mower.service (stack on boot), mower-host-request.path (app-triggered update/restart/poweroff),"
+echo "           mower-update.timer (hourly channel check, MOWER_AUTO_UPDATE=0 in .env disables)"
 
 echo "== docker"
 if ! docker info >/dev/null 2>&1; then

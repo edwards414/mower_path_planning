@@ -1,0 +1,15 @@
+# Periodic check of the release channel (IMAGE_TAG in /opt/mower/.env).
+# mower-update.sh --auto skips while the robot is busy; disable with
+#   MOWER_AUTO_UPDATE=0 in .env   or   sudo systemctl disable --now mower-update.timer
+[Unit]
+Description=Check for mower robot software updates
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+Persistent=true
+Unit=mower-update.service
+
+[Install]
+WantedBy=timers.target

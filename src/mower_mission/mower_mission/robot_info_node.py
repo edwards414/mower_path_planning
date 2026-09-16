@@ -34,6 +34,16 @@ from the ros2_control driver (the 0x87 frame), the bundled firmware manifest,
 and the JSON files the host updater / firmware-sync leave in the shared state
 dir (see host_request.py).
 
+Lights: while the host reports an update in progress (``update.state`` in
+``pulling`` / ``restarting`` / ``rebooting``) the node asks the base for the
+amber orbit effect on ``/mower_base/led_command`` (latched JSON, consumed by
+the mower_hardware driver, see firmware/LED_COMMAND_MODES.md mode 0x06) and
+restores the steady white when the update is over.
+
+The node also drops ``<state_dir>/robot_status.json`` (busy / moving /
+nav_running, once a second) so the host-side auto-update timer can tell
+whether the robot is idle without talking ROS.
+
 Services (std_srvs/Trigger):
 
 * ``/system/update``  – ask the host to pull the current image tag and
@@ -81,6 +91,12 @@ class RobotInfoNode(Node):
         self.declare_parameter('nav_active_topic', '/nav_operation_active')
         self.declare_parameter('moving_speed_threshold', 0.02)
         self.declare_parameter('busy_timeout_s', 2.0)
+        self.declare_parameter('led_topic', '/mower_base/led_command')
+        # amber orbit while updating, steady white (the boot show's final
+        # frame) otherwise; period is one revolution in ms
+        self.declare_parameter('led_update_rgb', [255, 180, 0])
+        self.declare_parameter('led_update_period_ms', 1600)
+        self.declare_parameter('led_normal_rgb', [110, 110, 110])
 
         rate = max(0.1, float(self.get_parameter('publish_rate_hz').value))
         self._firmware_manifest_path = str(self.get_parameter('firmware_manifest').value)
@@ -95,11 +111,16 @@ class RobotInfoNode(Node):
         self._last_moving_s = None
         self._nav_running = False
         self._start_s = time.monotonic()
+        self._led_updating = None  # what we last asked the lights to show
 
         latched = QoSProfile(depth=1)
         latched.reliability = QoSReliabilityPolicy.RELIABLE
         latched.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
         self._pub = self.create_publisher(String, '/robot/info', latched)
+        led_topic = str(self.get_parameter('led_topic').value)
+        self._led_pub = (
+            self.create_publisher(String, led_topic, latched) if led_topic else None
+        )
 
         fw_topic = str(self.get_parameter('firmware_info_topic').value)
         if fw_topic:
@@ -183,7 +204,56 @@ class RobotInfoNode(Node):
     # ---- output --------------------------------------------------------------
 
     def _tick(self) -> None:
-        self._pub.publish(String(data=json.dumps(self._snapshot(), separators=(',', ':'))))
+        snapshot = self._snapshot()
+        self._pub.publish(String(data=json.dumps(snapshot, separators=(',', ':'))))
+        self._update_lights(snapshot.get('update') or {})
+        self._write_robot_status(snapshot)
+
+    def _update_lights(self, update: dict) -> None:
+        """Amber orbit while the host updates, steady white afterwards."""
+        if self._led_pub is None:
+            return
+        updating = str(update.get('state', '')) in ('pulling', 'restarting', 'rebooting')
+        if updating == self._led_updating:
+            return
+        self._led_updating = updating
+        if updating:
+            r, g, b = (int(v) for v in self.get_parameter('led_update_rgb').value)
+            request = {
+                'mode': 6,
+                'r': r,
+                'g': g,
+                'b': b,
+                'period_ms': int(self.get_parameter('led_update_period_ms').value),
+            }
+        else:
+            r, g, b = (int(v) for v in self.get_parameter('led_normal_rgb').value)
+            request = {'mode': 1, 'r': r, 'g': g, 'b': b, 'period_ms': 0}
+        self._led_pub.publish(String(data=json.dumps(request, separators=(',', ':'))))
+        self.get_logger().info(f'lights: {"update orbit" if updating else "normal"}')
+
+    def _write_robot_status(self, snapshot: dict) -> None:
+        """Idle/busy for the host auto-update timer (deploy/host/mower-update.sh)."""
+        path = os.path.join(self._state_dir, 'robot_status.json')
+        moving = (
+            self._last_moving_s is not None
+            and (time.monotonic() - self._last_moving_s) <= self._busy_timeout
+        )
+        data = {
+            'time': int(time.time()),
+            'busy': bool(snapshot.get('busy')),
+            'moving': bool(moving),
+            'nav_running': bool(self._nav_running),
+            'software': self._software.get('version'),
+        }
+        try:
+            os.makedirs(self._state_dir, exist_ok=True)
+            tmp = f'{path}.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(data, f)
+            os.replace(tmp, path)
+        except OSError as exc:
+            self.get_logger().warning(f'cannot write robot_status.json: {exc}', throttle_duration_sec=60)
 
     def _snapshot(self) -> dict:
         image = host_request.read_json(host_request.IMAGE_FILE, self._state_dir) or {}

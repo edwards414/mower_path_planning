@@ -31,6 +31,17 @@ enum FrameType : uint8_t {
   kFirmwareInfo = 0x87,
 };
 
+// 0x03 payload mode (firmware/LED_COMMAND_MODES.md)
+enum Ws2812Mode : uint8_t {
+  kLedClear = 0x00,
+  kLedAllOn = 0x01,
+  kLedFlow = 0x02,
+  kLedTurnLeft = 0x03,
+  kLedTurnRight = 0x04,
+  kLedShow = 0x05,
+  kLedOrbit = 0x06,  // smooth comet around the strips (update indicator)
+};
+
 // 0x87 payload build_flags
 constexpr uint8_t kFwBuildFlagDirty = 0x01;
 constexpr uint8_t kFwBuildFlagUnversioned = 0x02;
@@ -140,6 +151,9 @@ std::vector<uint8_t> build_lawer_motor_command(
 std::vector<uint8_t> build_power_command(uint8_t seq, uint8_t action);
 
 std::vector<uint8_t> build_info_request(uint8_t seq);
+
+std::vector<uint8_t> build_ws2812_command(
+  uint8_t seq, uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t effect_period_ms);
 
 // Incremental parser: feed bytes, get callbacks for every CRC-valid frame.
 class FrameParser {

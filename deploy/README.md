@@ -31,8 +31,9 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 | 換頻道或釘版本 | `sudo /opt/mower/host/mower-update.sh --tag v0.6.0`（`stable` / `main` / `vX.Y.Z`） |
 | 回滾 | 同上，指到上一版 tag；韌體跟著 image 一起回去 |
 | 從 App | 設定頁「更新機器人」→ `/system/update`（移動中或導航中會拒絕） |
+| **自動** | `mower-update.timer` 開機 10 分鐘後、之後每小時檢查一次頻道；機器人移動 / 導航中會跳過。`.env` 設 `MOWER_AUTO_UPDATE=0` 或 `systemctl disable --now mower-update.timer` 關閉 |
 
-進度在 `~/.mower/update_status.json`，App 透過 `/robot/info` 看得到（`pulling` → `restarting` → `idle` / `failed`）。
+進度在 `~/.mower/update_status.json`，App 透過 `/robot/info` 看得到（`pulling` → `restarting` → `idle` / `failed`）。更新進行中（`pulling` / `restarting`）機身燈條會跑**琥珀色環繞光**（`robot_info_node` → `/mower_base/led_command` → STM32 mode `0x06`），結束後淡回常亮白。
 
 ## 韌體
 
@@ -47,7 +48,8 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 |---|---|
 | `mower.service` | 開機 `docker compose up -d`（不 pull，避免沒網路時卡開機） |
 | `mower-host-request.path` + `.service` | 監看 `~/.mower/host.request`；容器寫 `update` / `restart` / `reboot` / `poweroff` 進去，host 執行。STM32 電源鍵長按 3 s → 驅動寫 `poweroff` → `systemctl poweroff` |
-| `mower-update.sh` | pull + 比對 digest + `up -d`，寫 `update_status.json`、`image.json` |
+| `mower-update.sh` | pull + 比對 digest + `up -d`，寫 `update_status.json`、`image.json`；`--auto` 給 timer 用（閒置才更新） |
+| `mower-update.timer` + `.service` | 每小時 `mower-update.sh --auto` |
 
 ## 裝置名（`udev/99-mower.rules`）
 

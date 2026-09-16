@@ -5,9 +5,11 @@
 // diagnostics as extra state interfaces on a "base" sensor-like name.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "hardware_interface/handle.hpp"
@@ -32,6 +34,7 @@ public:
   hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
+  ~MowerSystem() override;
 
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
@@ -82,6 +85,24 @@ private:
   rclcpp::Node::SharedPtr info_node_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr firmware_info_pub_;
   std::string firmware_info_topic_ = "/mower_base/firmware_info";
+
+  // WS2812 light request (0x03), from the latched JSON topic
+  //   {"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}
+  // The helper node is spun on its own thread; the callback packs the
+  // request into one atomic word that write() picks up on the control
+  // thread, so the real-time loop never blocks on ROS.
+  std::string led_topic_ = "/mower_base/led_command";
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr led_sub_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> node_executor_;
+  std::thread node_thread_;
+  std::atomic<uint64_t> led_request_{0};  // 0 = nothing requested yet
+  uint64_t led_sent_ = 0;                 // last request written to the port
+  rclcpp::Time led_sent_time_{0, 0, RCL_ROS_TIME};
+  static constexpr double kLedResendPeriodS = 5.0;  // re-assert in case a frame was lost
+  static uint64_t pack_led(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t period_ms, uint8_t serial);
+  void on_led_command(const std_msgs::msg::String & msg);
+  void send_led_if_needed(const rclcpp::Time & now);
+  void stop_node_thread();
 
   SerialPort port_;
   FrameParser parser_;

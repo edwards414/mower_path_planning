@@ -88,15 +88,19 @@ services:
     volumes:
       - ./gps/ublox.yaml:/config/ublox.yaml:ro
 
-  # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.
+  # Camera server. Two configs (MEDIAMTX_CONFIG in .env):
+  #   mediamtx.yml      production: RTSP bound to the WireGuard address only,
+  #                     the public relay serves WHEP to the app
+  #   mediamtx.lan.yml  bench / LAN: WHEP on :8889 and RTSP on all interfaces,
+  #                     the app pulls http://<robot-ip>:8889/<feed>/whep directly
   # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
-  # No USB camera yet: mediamtx.yml serves one synthetic front-camera pattern.
+  # No USB camera yet: both serve synthetic test patterns.
   mediamtx:
     image: bluenviron/mediamtx:latest-ffmpeg
     network_mode: host
     restart: unless-stopped
     volumes:
-      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./${MEDIAMTX_CONFIG:-mediamtx.yml}:/mediamtx.yml:ro
     # When a real USB/v4l2 camera is attached, expose it to the container:
     # devices:
     #   - /dev/video0:/dev/video0

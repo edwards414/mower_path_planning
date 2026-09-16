@@ -123,6 +123,7 @@ Payload 長度固定 `8` bytes。
 - `0x03`: `TURN_LEFT`
 - `0x04`: `TURN_RIGHT`
 - `0x05`: `SHOW`
+- `0x06`: `ORBIT`（平滑環繞光，`effect_period_ms` = 繞一圈時間，見 `LED_COMMAND_MODES.md`）
 
 補充:
 

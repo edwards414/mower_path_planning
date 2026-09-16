@@ -177,6 +177,14 @@ std::vector<uint8_t> build_info_request(uint8_t seq)
   return build_frame(kInfoRequest, seq, nullptr, 0);
 }
 
+std::vector<uint8_t> build_ws2812_command(
+  uint8_t seq, uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t effect_period_ms)
+{
+  uint8_t p[8] = {mode, r, g, b, 0, 0, 0, 0};
+  put_u16(p + 4, effect_period_ms);
+  return build_frame(kWs2812Command, seq, p, sizeof(p));
+}
+
 bool decode_firmware_info(const uint8_t * p, size_t len, FirmwareInfo & out)
 {
   if (len != 16) {
