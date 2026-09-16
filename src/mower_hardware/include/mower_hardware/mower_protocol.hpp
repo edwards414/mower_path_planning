@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace mower_hardware {
@@ -20,13 +21,19 @@ enum FrameType : uint8_t {
   kWs2812Command = 0x03,
   kPidConfigCommand = 0x04,
   kPowerCommand = 0x05,
+  kInfoRequest = 0x06,
   kMotorStatus = 0x81,
   kLawerMotorStatus = 0x82,
   kWs2812Status = 0x83,
   kPidConfigStatus = 0x84,
   kWheelFeedbackStatus = 0x85,
   kPowerStatus = 0x86,
+  kFirmwareInfo = 0x87,
 };
+
+// 0x87 payload build_flags
+constexpr uint8_t kFwBuildFlagDirty = 0x01;
+constexpr uint8_t kFwBuildFlagUnversioned = 0x02;
 
 // 0x05 payload action
 enum PowerAction : uint8_t {
@@ -95,6 +102,30 @@ struct PowerStatus {
   bool shutdown_requested() const { return flags & kPowerFlagShutdownRequested; }
 };
 
+// 0x87: build identity of the running application (firmware_version.h)
+struct FirmwareInfo {
+  uint8_t major = 0;
+  uint8_t minor = 0;
+  uint8_t patch = 0;
+  uint8_t protocol_version = 0;
+  uint32_t git_sha32 = 0;   // first 4 bytes of the commit hash, 0 = unknown
+  uint32_t build_unix = 0;  // build time, 0 = unknown
+  uint8_t build_flags = 0;  // kFwBuildFlag*
+  bool dirty() const { return build_flags & kFwBuildFlagDirty; }
+  bool unversioned() const { return build_flags & kFwBuildFlagUnversioned; }
+  bool operator==(const FirmwareInfo & o) const
+  {
+    return major == o.major && minor == o.minor && patch == o.patch &&
+           protocol_version == o.protocol_version && git_sha32 == o.git_sha32 &&
+           build_unix == o.build_unix && build_flags == o.build_flags;
+  }
+  bool operator!=(const FirmwareInfo & o) const { return !(*this == o); }
+  // "0.6.0", "0.6.0+abc12345.dirty" ... for logs
+  std::string version_string() const;
+  // JSON with all fields, what /mower_base/firmware_info carries
+  std::string to_json() const;
+};
+
 uint16_t crc16_ccitt_false(const uint8_t * data, size_t len);
 
 // Build a complete frame (SOF + header + payload + CRC).
@@ -107,6 +138,8 @@ std::vector<uint8_t> build_lawer_motor_command(
   uint8_t seq, int16_t permille, uint16_t timeout_ms);
 
 std::vector<uint8_t> build_power_command(uint8_t seq, uint8_t action);
+
+std::vector<uint8_t> build_info_request(uint8_t seq);
 
 // Incremental parser: feed bytes, get callbacks for every CRC-valid frame.
 class FrameParser {
@@ -125,5 +158,6 @@ private:
 bool decode_wheel_feedback(uint8_t seq, const uint8_t * payload, size_t len, WheelFeedback & out);
 bool decode_motor_status(const uint8_t * payload, size_t len, MotorStatus & out);
 bool decode_power_status(const uint8_t * payload, size_t len, PowerStatus & out);
+bool decode_firmware_info(const uint8_t * payload, size_t len, FirmwareInfo & out);
 
 }  // namespace mower_hardware

@@ -1,47 +1,58 @@
 <?xml version='1.0'?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <!-- ros2_control configuration -->
+  <!-- ros2_control configuration for the real robot.
+
+       Drivetrain: STM32F411 over UART through src/mower_hardware
+       (firmware/UART_OPEN_LOOP_PROTOCOL.md). The firmware itself lives in
+       firmware/ and the container flashes it at start-up (firmware-sync), so
+       driver and firmware always come from the same build.
+
+       Device paths are the udev names from usb.rules; deploy/docker-compose.yaml
+       passes them into the container. /dev/stmcom is the LubanCat UART3
+       (/dev/ttyS3) or a USB-serial adapter on a bench. -->
   <ros2_control name="RealRobot" type="system">
     <hardware>
-      <plugin>mower_controller/MowerSystemHardware</plugin>
+      <plugin>mower_hardware/MowerSystem</plugin>
       <param name="device">/dev/stmcom</param>
-      <param name="baud_rate">115200</param>
-      <param name="timeout">50</param>
-      <param name="left_wheel_name">left_wheel_joint</param>
-      <param name="right_wheel_name">right_wheel_joint</param>
+      <param name="baud">115200</param>
+      <!-- firmware: 1000 permille == wheel_max_rpm (58 rpm) -->
+      <param name="max_rpm">58.0</param>
+      <!-- FT-555 16 PPR x4 (quadrature) x 139:1 gearbox -->
+      <param name="counts_per_rev">8896</param>
+      <!-- sent in every 0x01 frame; the firmware stops if no command arrives within this -->
+      <param name="command_timeout_ms">300</param>
+      <!-- the driver zeroes reported velocity if no 0x85 feedback within this -->
+      <param name="feedback_timeout_s">0.5</param>
+      <!-- Power button held 3 s: the STM32 asks the host to halt. Inside the
+           container there is no systemd, so hand the request to the host
+           (deploy/host/mower-host-request.service watches this file). -->
+      <param name="shutdown_command">/usr/local/bin/mower-host-request poweroff</param>
+      <!-- 0x87 build identity, latched JSON; /robot/info merges it -->
+      <param name="firmware_info_topic">/mower_base/firmware_info</param>
     </hardware>
-    
+
     <!-- Left Wheel Joint -->
     <joint name="left_wheel_joint">
       <command_interface name="velocity">
-        <param name="min">-10</param>
-        <param name="max">10</param>
+        <param name="min">-6.1</param>
+        <param name="max">6.1</param>
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
-    
+
     <!-- Right Wheel Joint -->
     <joint name="right_wheel_joint">
       <command_interface name="velocity">
-        <param name="min">-10</param>
-        <param name="max">10</param>
+        <param name="min">-6.1</param>
+        <param name="max">6.1</param>
       </command_interface>
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
 
-    <!-- Mower Blade Joint (for mower_blade_controller / JointGroupEffortController) -->
-    <joint name="mower_joint">
-      <command_interface name="effort">
-        <param name="min">-100</param>
-        <param name="max">100</param>
-      </command_interface>
-      <state_interface name="position"/>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
+    <!-- The blade (mower_joint) is not driven through ros2_control on the
+         real robot: production blade actuation is disabled and the legacy
+         mower_controller/MowerSystemHardware effort path was a no-op. -->
   </ros2_control>
-
-
 </robot>

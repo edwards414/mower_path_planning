@@ -1,5 +1,6 @@
 #include "mower_hardware/mower_protocol.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 namespace mower_hardware {
@@ -54,6 +55,11 @@ inline int16_t get_i16(const uint8_t * p)
 inline uint16_t get_u16(const uint8_t * p)
 {
   return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+inline uint32_t get_u32(const uint8_t * p)
+{
+  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+         (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 inline int32_t get_i32(const uint8_t * p)
 {
@@ -164,6 +170,45 @@ bool decode_motor_status(const uint8_t * p, size_t len, MotorStatus & out)
   out.flags = p[10];
   out.last_rx_seq = p[11];
   return true;
+}
+
+std::vector<uint8_t> build_info_request(uint8_t seq)
+{
+  return build_frame(kInfoRequest, seq, nullptr, 0);
+}
+
+bool decode_firmware_info(const uint8_t * p, size_t len, FirmwareInfo & out)
+{
+  if (len != 16) {
+    return false;
+  }
+  out.major = p[0];
+  out.minor = p[1];
+  out.patch = p[2];
+  out.protocol_version = p[3];
+  out.git_sha32 = get_u32(p + 4);
+  out.build_unix = get_u32(p + 8);
+  out.build_flags = p[12];
+  return true;
+}
+
+std::string FirmwareInfo::version_string() const
+{
+  char buf[48];
+  std::snprintf(buf, sizeof(buf), "%u.%u.%u+%08x%s%s", major, minor, patch, git_sha32,
+    dirty() ? ".dirty" : "", unversioned() ? ".unversioned" : "");
+  return buf;
+}
+
+std::string FirmwareInfo::to_json() const
+{
+  char buf[256];
+  std::snprintf(buf, sizeof(buf),
+    "{\"version\":\"%u.%u.%u\",\"semver\":[%u,%u,%u],\"protocol_version\":%u,"
+    "\"git_sha\":\"%08x\",\"git_sha32\":%u,\"build_unix\":%u,\"dirty\":%s,\"unversioned\":%s}",
+    major, minor, patch, major, minor, patch, protocol_version, git_sha32, git_sha32, build_unix,
+    dirty() ? "true" : "false", unversioned() ? "true" : "false");
+  return buf;
 }
 
 bool decode_power_status(const uint8_t * p, size_t len, PowerStatus & out)

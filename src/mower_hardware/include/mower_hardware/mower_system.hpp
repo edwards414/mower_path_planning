@@ -16,6 +16,7 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "std_msgs/msg/string.hpp"
 
 #include "mower_hardware/mower_protocol.hpp"
 #include "mower_hardware/serial_port.hpp"
@@ -70,6 +71,17 @@ private:
   double diag_feedback_age_s_ = 0.0;
   double diag_power_state_ = 0.0;    // 0x86 state
   double diag_power_flags_ = 0.0;    // 0x86 flags
+  double diag_fw_version_ = 0.0;     // 0x87 major*1e6 + minor*1e3 + patch, 0 = not seen yet
+  double diag_fw_git_sha32_ = 0.0;   // 0x87 git_sha32
+  double diag_fw_protocol_ = 0.0;    // 0x87 protocol_version
+
+  // 0x87 build identity; published latched on /mower_base/firmware_info as
+  // JSON so /robot/info (and the app) can show which firmware is running.
+  FirmwareInfo firmware_info_;
+  bool firmware_info_valid_ = false;
+  rclcpp::Node::SharedPtr info_node_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr firmware_info_pub_;
+  std::string firmware_info_topic_ = "/mower_base/firmware_info";
 
   SerialPort port_;
   FrameParser parser_;
@@ -84,6 +96,7 @@ private:
   int16_t rad_s_to_permille(double rad_s) const;
   bool send_stop();
   void on_power_status(const PowerStatus & ps);
+  void on_firmware_info(const FirmwareInfo & fi);
   rclcpp::Logger logger() const { return rclcpp::get_logger("MowerSystem"); }
 };
 

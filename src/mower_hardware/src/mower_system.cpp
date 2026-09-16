@@ -43,6 +43,7 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   command_timeout_ms_ = static_cast<int>(param_or(info, "command_timeout_ms", 300.0));
   feedback_timeout_s_ = param_or(info, "feedback_timeout_s", 0.5);
   shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
+  firmware_info_topic_ = param_or(info, "firmware_info_topic", firmware_info_topic_.c_str());
 
   if (info.joints.size() != 2) {
     RCLCPP_ERROR(logger(), "expected exactly 2 joints (left, right), got %zu", info.joints.size());
@@ -78,6 +79,23 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
   feedback_valid_ = false;
   warned_timeout_ = false;
   shutdown_acked_ = false;
+  firmware_info_valid_ = false;
+
+  // Publishing needs no executor, so a plain node inside the hardware
+  // component is enough. transient_local keeps the last message for late
+  // subscribers (the info aggregator, rosbridge).
+  if (!info_node_ && !firmware_info_topic_.empty()) {
+    try {
+      info_node_ = std::make_shared<rclcpp::Node>("mower_hardware_info");
+      firmware_info_pub_ = info_node_->create_publisher<std_msgs::msg::String>(
+        firmware_info_topic_, rclcpp::QoS(1).transient_local().reliable());
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(logger(), "firmware_info publisher unavailable: %s", e.what());
+      info_node_.reset();
+      firmware_info_pub_.reset();
+    }
+  }
+
   RCLCPP_INFO(logger(), "opened %s", device_.c_str());
   return CallbackReturn::SUCCESS;
 }
@@ -92,6 +110,10 @@ CallbackReturn MowerSystem::on_activate(const rclcpp_lifecycle::State &)
 {
   left_.cmd_velocity = right_.cmd_velocity = 0.0;
   send_stop();
+  // The firmware also sends 0x87 unsolicited every second; asking makes the
+  // version show up in the log right away.
+  auto f = build_info_request(tx_seq_++);
+  port_.write_all(f.data(), f.size());
   return CallbackReturn::SUCCESS;
 }
 
@@ -116,6 +138,9 @@ std::vector<hardware_interface::StateInterface> MowerSystem::export_state_interf
   s.emplace_back("mower_base", "feedback_age_s", &diag_feedback_age_s_);
   s.emplace_back("mower_base", "power_state", &diag_power_state_);
   s.emplace_back("mower_base", "power_flags", &diag_power_flags_);
+  s.emplace_back("mower_base", "firmware_version", &diag_fw_version_);
+  s.emplace_back("mower_base", "firmware_git_sha32", &diag_fw_git_sha32_);
+  s.emplace_back("mower_base", "firmware_protocol", &diag_fw_protocol_);
   return s;
 }
 
@@ -169,6 +194,35 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
     if (decode_power_status(payload, len, ps)) {
       on_power_status(ps);
     }
+  } else if (type == kFirmwareInfo) {
+    FirmwareInfo fi;
+    if (decode_firmware_info(payload, len, fi)) {
+      on_firmware_info(fi);
+    }
+  }
+}
+
+void MowerSystem::on_firmware_info(const FirmwareInfo & fi)
+{
+  if (firmware_info_valid_ && fi == firmware_info_) {
+    return;
+  }
+  firmware_info_ = fi;
+  firmware_info_valid_ = true;
+  diag_fw_version_ = fi.major * 1000000.0 + fi.minor * 1000.0 + fi.patch;
+  diag_fw_git_sha32_ = fi.git_sha32;
+  diag_fw_protocol_ = fi.protocol_version;
+
+  RCLCPP_INFO(logger(), "STM32 firmware %s (protocol %u, built %u)",
+    fi.version_string().c_str(), fi.protocol_version, fi.build_unix);
+  if (fi.protocol_version != kProtocolVersion) {
+    RCLCPP_ERROR(logger(), "firmware speaks protocol %u, this driver expects %u",
+      fi.protocol_version, kProtocolVersion);
+  }
+  if (firmware_info_pub_) {
+    std_msgs::msg::String msg;
+    msg.data = fi.to_json();
+    firmware_info_pub_->publish(msg);
   }
 }
 

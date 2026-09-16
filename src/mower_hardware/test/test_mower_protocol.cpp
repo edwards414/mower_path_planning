@@ -129,3 +129,42 @@ TEST(Power, DecodeStatus)
   EXPECT_EQ(ps.shutdown_elapsed_ms, 250);
   EXPECT_FALSE(decode_power_status(p, 7, ps));
 }
+
+TEST(FirmwareInfo, DecodeAndFormat)
+{
+  // v0.6.1, protocol 1, sha f22f2465, built 1789571662, clean+versioned
+  const uint8_t p[16] = {0x00, 0x06, 0x01, 0x01, 0x65, 0x24, 0x2F, 0xF2,
+                         0x4E, 0xB2, 0xAA, 0x6A, 0x00, 0x00, 0x00, 0x00};
+  FirmwareInfo fi;
+  ASSERT_TRUE(decode_firmware_info(p, sizeof(p), fi));
+  EXPECT_EQ(fi.major, 0);
+  EXPECT_EQ(fi.minor, 6);
+  EXPECT_EQ(fi.patch, 1);
+  EXPECT_EQ(fi.protocol_version, kProtocolVersion);
+  EXPECT_EQ(fi.git_sha32, 0xF22F2465u);
+  EXPECT_EQ(fi.build_unix, 1789571662u);
+  EXPECT_FALSE(fi.dirty());
+  EXPECT_FALSE(fi.unversioned());
+  EXPECT_EQ(fi.version_string(), "0.6.1+f22f2465");
+  EXPECT_EQ(fi.to_json(),
+    "{\"version\":\"0.6.1\",\"semver\":[0,6,1],\"protocol_version\":1,"
+    "\"git_sha\":\"f22f2465\",\"git_sha32\":4063175781,\"build_unix\":1789571662,"
+    "\"dirty\":false,\"unversioned\":false}");
+  EXPECT_FALSE(decode_firmware_info(p, 15, fi));
+
+  uint8_t q[16];
+  std::memcpy(q, p, sizeof(q));
+  q[12] = kFwBuildFlagDirty | kFwBuildFlagUnversioned;
+  FirmwareInfo fj;
+  ASSERT_TRUE(decode_firmware_info(q, sizeof(q), fj));
+  EXPECT_TRUE(fj.dirty());
+  EXPECT_TRUE(fj.unversioned());
+  EXPECT_NE(fi, fj);
+  EXPECT_EQ(fj.version_string(), "0.6.1+f22f2465.dirty.unversioned");
+
+  auto f = build_info_request(7);
+  ASSERT_EQ(f.size(), kFrameOverhead);
+  EXPECT_EQ(f[3], kInfoRequest);
+  EXPECT_EQ(f[4], 7);
+  EXPECT_EQ(f[5], 0);
+}

@@ -20,6 +20,13 @@ description-based API; the logic in `read()`/`write()` does not change.
 | state | `mower_base/command_age_ms` | ms | `0x81` |
 | state | `mower_base/crc_errors` | count | parser |
 | state | `mower_base/feedback_age_s` | s | time since last `0x85` |
+| state | `mower_base/firmware_version` | major·10⁶+minor·10³+patch | `0x87`, 0 until the first frame |
+| state | `mower_base/firmware_git_sha32` | number | `0x87` |
+| state | `mower_base/firmware_protocol` | number | `0x87` |
+
+The `0x87` build identity is also published latched (transient_local) as JSON
+on `/mower_base/firmware_info` (param `firmware_info_topic`, empty disables);
+`/robot/info` merges it for the app.
 
 Two joints, left then right, in the order they appear in the URDF.
 

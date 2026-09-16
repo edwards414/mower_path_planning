@@ -296,7 +296,7 @@ def do_sync(bl: "Bootloader", image_path: str, manifest_path, report_path, force
             os.replace(tmp, report_path)
         return code
 
-    print(f"bundled: v{bundled['version']} sha={bundled['git_sha'][:8]} {bundled['size']} bytes")
+    print(f"bundled: {bundled['version']} sha={bundled['git_sha'][:8]} {bundled['size']} bytes")
     running, saw_app = read_app_info(bl)
     report["running_before"] = running
     if running is not None:
