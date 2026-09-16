@@ -1,8 +1,8 @@
 """Regression checks for real/sim drivetrain geometry and frame alignment."""
 
 import ast
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
@@ -232,7 +232,9 @@ def test_compose_persists_field_data_and_passes_absolute_paths():
     """Image replacement must not erase sites, working geometry, or bags."""
     for compose in (LOCAL_COMPOSE, DEPLOY_COMPOSE):
         source = compose.read_text(encoding='utf-8')
-        assert 'mower_data:/home/mower/.mower' in source
+        # a named volume (local) or a host bind mount (deploy: ~/.mower, which
+        # also carries host.request / firmware_sync.json) must back ~/.mower
+        assert re.search(r'^\s+- \S+:/home/mower/\.mower\s*$', source, re.M), compose
         assert 'zone_record_dir:=/home/mower/.mower/zone_record' in source
         assert 'sites_dir:=/home/mower/.mower/sites' in source
         assert 'output_root:=/home/mower/.mower/bags' in source
