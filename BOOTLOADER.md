@@ -69,6 +69,26 @@ python3 tools/mower_flash.py -p /dev/ttyUSB0 flash Debug/mower_robot_firmware.bi
 - 更新前先停掉 ROS2 node 或其他佔用 serial port 的程式。
 - 60 KB 大約 10 秒（115200 baud、stop-and-wait）。
 
+## 從 LubanCat 2 燒錄（已實測 2026-09-16）
+
+板子：LubanCat-2 v3，Debian 12，kernel 6.1.99-rk356x。一次性設定：
+
+1. 開 UART3（40-pin pin 8 TX / pin 10 RX 是 `UART3_M1`，GPIO3_B7 / GPIO3_C0）：
+   `/boot/uEnv/uEnv.txt` 把 `dtoverlay=/dtb/overlay/rk356x-lubancat-uart3-m1-overlay.dtbo` 那行的 `#` 拿掉，重開機後出現 `/dev/ttyS3`。u-boot 讀的是 `uEnv.txt` 本身，不是 `uEnvLubanCat2-V3.txt`。
+2. `sudo apt install python3-serial`（Debian 12 的 pip 有 PEP 668 限制，用 apt 最省事）。使用者 `cat` 已在 `dialout` 群組。
+3. 把 repo 放到 `~/mower_robot_firmware`。GitHub repo 是 private，板子上沒有金鑰時 `git clone` 會失敗；板子也沒有 `rsync`，從 Mac 用 `tar czf - <files> | ssh cat@lubancat 'tar xzf - -C ~/mower_robot_firmware'` 送，或之後加 deploy key。
+
+之後每次更新：
+
+```bash
+# Mac: CubeIDE build 之後
+scp Debug/mower_robot_firmware.bin cat@192.168.0.113:~/mower_robot_firmware/Debug/
+# LubanCat（先停掉佔用 /dev/ttyS3 的 ROS node）
+python3 ~/mower_robot_firmware/tools/mower_flash.py -p /dev/ttyS3 flash ~/mower_robot_firmware/Debug/mower_robot_firmware.bin
+```
+
+實測 68 KB 的 app 從 LubanCat 燒：erase 約 1 s、write 28.8 s（stop-and-wait，每 128 B 一次來回約 54 ms）、CRC 驗證通過、app 自動啟動。比 Mac 上慢是 RK3568 的 UART 中斷延遲，可接受；要更快可以把 `BOOT_WRITE_CHUNK_MAX` 加大到 256 或 512（bootloader 和 `mower_flash.py` 的 `WRITE_CHUNK_MAX` 一起改）。
+
 ## UART frame
 
 Framing 跟 `UART_OPEN_LOOP_PROTOCOL.md` 完全一樣（`A5 5A`, version `0x01`, type, seq, len, payload, CRC-16/CCITT-FALSE），所以 host 可以沿用同一套 parser。差別只有 bootloader 端接受的 payload 上限是 `4 + 128` bytes（app 端是 32）。
