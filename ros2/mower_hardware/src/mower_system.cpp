@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -41,6 +42,7 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   counts_per_rev_ = param_or(info, "counts_per_rev", 8896.0);
   command_timeout_ms_ = static_cast<int>(param_or(info, "command_timeout_ms", 300.0));
   feedback_timeout_s_ = param_or(info, "feedback_timeout_s", 0.5);
+  shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
 
   if (info.joints.size() != 2) {
     RCLCPP_ERROR(logger(), "expected exactly 2 joints (left, right), got %zu", info.joints.size());
@@ -75,6 +77,7 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
   left_.pos = right_.pos = 0.0;
   feedback_valid_ = false;
   warned_timeout_ = false;
+  shutdown_acked_ = false;
   RCLCPP_INFO(logger(), "opened %s", device_.c_str());
   return CallbackReturn::SUCCESS;
 }
@@ -111,6 +114,8 @@ std::vector<hardware_interface::StateInterface> MowerSystem::export_state_interf
   s.emplace_back("mower_base", "command_age_ms", &diag_command_age_ms_);
   s.emplace_back("mower_base", "crc_errors", &diag_crc_errors_);
   s.emplace_back("mower_base", "feedback_age_s", &diag_feedback_age_s_);
+  s.emplace_back("mower_base", "power_state", &diag_power_state_);
+  s.emplace_back("mower_base", "power_flags", &diag_power_flags_);
   return s;
 }
 
@@ -158,6 +163,41 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
       if (ms.flags & kStatusFlagDriverAlarm) {
         RCLCPP_WARN_THROTTLE(logger(), throttle_clock_, 2000, "driver alarm flag set");
       }
+    }
+  } else if (type == kPowerStatus) {
+    PowerStatus ps;
+    if (decode_power_status(payload, len, ps)) {
+      on_power_status(ps);
+    }
+  }
+}
+
+void MowerSystem::on_power_status(const PowerStatus & ps)
+{
+  diag_power_state_ = ps.state;
+  diag_power_flags_ = ps.flags;
+
+  if (!ps.shutdown_requested()) {
+    shutdown_acked_ = false;  // request cleared (cancelled or rail cut)
+    return;
+  }
+  if (shutdown_acked_) {
+    return;
+  }
+  shutdown_acked_ = true;
+
+  RCLCPP_WARN(logger(), "STM32 requests shutdown (reason %u): acking and running '%s'",
+    ps.shutdown_reason, shutdown_command_.c_str());
+  auto f = build_power_command(tx_seq_++, kPowerActionHostShutdownAck);
+  if (!port_.write_all(f.data(), f.size())) {
+    RCLCPP_ERROR(logger(), "power ack write failed: %s", port_.last_error().c_str());
+  }
+  if (!shutdown_command_.empty()) {
+    // Detached so the control loop keeps acking status frames while the OS halts.
+    std::string cmd = shutdown_command_ + " &";
+    int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+      RCLCPP_ERROR(logger(), "shutdown command returned %d", rc);
     }
   }
 }

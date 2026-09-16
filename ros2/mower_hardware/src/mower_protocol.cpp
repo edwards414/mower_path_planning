@@ -85,6 +85,12 @@ std::vector<uint8_t> build_lawer_motor_command(uint8_t seq, int16_t permille, ui
   return build_frame(kLawerMotorCommand, seq, p, sizeof(p));
 }
 
+std::vector<uint8_t> build_power_command(uint8_t seq, uint8_t action)
+{
+  uint8_t p[4] = {action, 0, 0, 0};
+  return build_frame(kPowerCommand, seq, p, sizeof(p));
+}
+
 void FrameParser::feed(const uint8_t * data, size_t len, const Callback & on_frame)
 {
   buf_.insert(buf_.end(), data, data + len);
@@ -157,6 +163,20 @@ bool decode_motor_status(const uint8_t * p, size_t len, MotorStatus & out)
   out.command_age_ms = get_u16(p + 8);
   out.flags = p[10];
   out.last_rx_seq = p[11];
+  return true;
+}
+
+bool decode_power_status(const uint8_t * p, size_t len, PowerStatus & out)
+{
+  if (len != 8) {
+    return false;
+  }
+  out.state = p[0];
+  out.flags = p[1];
+  out.shutdown_reason = p[2];
+  out.last_rx_seq = p[3];
+  out.press_ms = get_u16(p + 4);
+  out.shutdown_elapsed_ms = get_u16(p + 6);
   return true;
 }
 

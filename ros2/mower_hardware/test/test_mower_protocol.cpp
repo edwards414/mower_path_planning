@@ -102,3 +102,30 @@ TEST(Decode, TotalCountsWrapAround)
   int32_t d = static_cast<int32_t>(static_cast<uint32_t>(now) - static_cast<uint32_t>(prev));
   EXPECT_EQ(d, 31);
 }
+
+TEST(Power, CommandFrameLayout)
+{
+  auto f = build_power_command(3, kPowerActionHostShutdownAck);
+  ASSERT_EQ(f.size(), kFrameOverhead + 4);
+  EXPECT_EQ(f[3], kPowerCommand);
+  EXPECT_EQ(f[4], 3);
+  EXPECT_EQ(f[5], 4);
+  EXPECT_EQ(f[6], kPowerActionHostShutdownAck);
+  EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 4), static_cast<uint16_t>(f[10] | (f[11] << 8)));
+}
+
+TEST(Power, DecodeStatus)
+{
+  // state=3 (shutdown pending), flags=button|main|requested, reason=1 (button),
+  // seq=9, press_ms=3010, elapsed=250
+  const uint8_t p[8] = {0x03, 0x07, 0x01, 0x09, 0xC2, 0x0B, 0xFA, 0x00};
+  PowerStatus ps;
+  ASSERT_TRUE(decode_power_status(p, sizeof(p), ps));
+  EXPECT_EQ(ps.state, kPowerStateShutdownPending);
+  EXPECT_TRUE(ps.shutdown_requested());
+  EXPECT_EQ(ps.shutdown_reason, 1);
+  EXPECT_EQ(ps.last_rx_seq, 9);
+  EXPECT_EQ(ps.press_ms, 3010);
+  EXPECT_EQ(ps.shutdown_elapsed_ms, 250);
+  EXPECT_FALSE(decode_power_status(p, 7, ps));
+}

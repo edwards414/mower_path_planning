@@ -4,6 +4,7 @@
 #include "mg996_servo.hpp"
 #include "power_manager.hpp"
 #include "status_lights.hpp"
+#include "uart_interface.hpp"
 #include "stm32f4xx_hal.h"
 
 namespace {
@@ -28,6 +29,11 @@ void BoardModules_Update10ms(void) {
 
   Buzzer_Update10ms();
   PowerManager_Update10ms();
+  if (PowerManager_ConsumeStatusEvent()) {
+    /* State changed (long press, ack, rail cut...): tell the host now
+     * rather than on the next 50 ms status tick. */
+    uart_send_power_status();
+  }
 
   if ((now - g_last_servo_tick_ms) >= MG996_SERVO_PERIOD_MS) {
     Mg996Servo_Update20ms();

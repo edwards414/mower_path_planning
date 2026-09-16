@@ -45,12 +45,14 @@
 | `0x02` | Host -> STM32 | `lawer_motor` 開環命令 |
 | `0x03` | Host -> STM32 | `ws2812` 模式命令 |
 | `0x04` | Host -> STM32 | 左右輪 PID 設定 |
+| `0x05` | Host -> STM32 | 電源 / 關機命令（ack、請求關機、取消、強制斷電） |
 | `0x0F` | Host -> STM32 | 重開進 UART bootloader（見 `BOOTLOADER.md`） |
 | `0x81` | STM32 -> Host | 狀態回傳 |
 | `0x82` | STM32 -> Host | `lawer_motor` 狀態回傳格式 |
 | `0x83` | STM32 -> Host | `ws2812` 狀態回傳格式 |
 | `0x84` | STM32 -> Host | PID 設定狀態回傳格式 |
 | `0x85` | STM32 -> Host | 左右輪 PID / encoder 回饋格式 |
+| `0x86` | STM32 -> Host | 電源狀態（按鈕、關機請求、主電源） |
 | `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
 | `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
@@ -155,6 +157,25 @@ Payload 長度固定 `28` bytes。
 - 使用 STM32F411 internal Flash sector 7，位址 `0x08060000`
 - linker script 把 app 程式碼放在 sector 2-6（`0x08008000` 起 `352KB`），sector 0-1 是 UART bootloader，最後 `128KB` 保留給設定；bootloader 更新 app 時不會碰 sector 7
 - 不要高頻率寫入 PID；調參時先用 `persist_to_flash=0`，確認後再寫一次 Flash
+
+## `0x05` Power Command
+
+Payload 長度固定 `4` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint8_t` | `action` | 見下表 |
+| 1 | `uint8_t` | `reserved0` | 填 `0` |
+| 2 | `uint16_t` | `reserved1` | 填 `0` |
+
+| `action` | 名稱 | 意義 |
+|---|---|---|
+| `0x01` | `HOST_SHUTDOWN_ACK` | Host 收到關機請求、已開始 `poweroff`。STM32 收到後再等 `8 s`（grace）就切主電源 |
+| `0x02` | `REQUEST_SHUTDOWN` | Host 主動要求關機（例如低電量），流程與長按按鈕相同 |
+| `0x03` | `CANCEL_SHUTDOWN` | 取消尚未斷電的關機請求，回到 `RUNNING` |
+| `0x04` | `FORCE_POWER_OFF` | 立刻切主電源，不做握手（Host 自己已經 halt 完才用） |
+
+STM32 收到 `0x05` 後會立刻回一筆 `0x86`，`seq` 等於這筆命令的 seq。
 
 ## `0x0F` Enter Bootloader Command
 
@@ -276,6 +297,54 @@ Wheel controller flags:
 | 2 | `0x04` | `FLASH_SETTINGS_VALID`，開機有讀到有效 Flash 設定 |
 | 3 | `0x08` | `LAST_SAVE_OK`，最近一次 Flash 儲存成功 |
 
+## `0x86` Power Status
+
+每 `50ms` 送一次；另外在狀態改變時（長按觸發、收到 ack、切電、喚醒）會**立刻**多送一筆，延遲 ≤ 10 ms。Frame header 的 `seq` 等於最近一次接受的 `0x05` seq。
+
+Payload 長度固定 `8` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint8_t` | `state` | 見下表 |
+| 1 | `uint8_t` | `flags` | 見下表 |
+| 2 | `uint8_t` | `shutdown_reason` | `0` 無、`1` 按鈕、`2` Host、`3` 強制 |
+| 3 | `uint8_t` | `last_rx_seq` | 最近一次接受的 `0x05` seq |
+| 4 | `uint16_t` | `press_ms` | 目前按鈕已按住的毫秒數，放開為 `0` |
+| 6 | `uint16_t` | `shutdown_elapsed_ms` | 從關機請求起算的毫秒數，沒有請求時為 `0` |
+
+`state`:
+
+| 值 | 名稱 | 意義 |
+|---|---|---|
+| `0` | `RUNNING` | 正常運作 |
+| `1` | `LOW_POWER` | 主電源已切（`PC15` low），STM32 由小電池供電，只等按鈕喚醒 |
+| `2` | `WAKE_PULSE` | 剛喚醒，`PC14` 拉 high 1 s 通知 LubanCat 開機 |
+| `3` | `SHUTDOWN_PENDING` | 已通知 Host 關機，等 ack / timeout；馬達全部停止、燈光進休眠動畫 |
+| `4` | `LIGHTS_OFF` | 最後 0.9 s 燈光淡出，接著切電 |
+
+`flags`:
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `BUTTON_PRESSED` |
+| 1 | `0x02` | `MAIN_POWER_ENABLED`，`PC15` 目前為 high |
+| 2 | `0x04` | `SHUTDOWN_REQUESTED`，Host 看到這個 bit 就要開始關機並回 `0x05 action=1` |
+| 3 | `0x08` | `HOST_ACK_RECEIVED` |
+| 4 | `0x10` | `WAKE_ASSERTED`，`PC14` 目前為 high |
+
+### 關機流程
+
+1. 使用者長按電源鍵 `3 s`（或 Host 送 `0x05 action=2`）
+2. STM32 立刻：輪子 / 割草馬達 / servo 全停、BTS7960 disable、BLD120A BRK 拉 low，進 `SHUTDOWN_PENDING`，馬上送出 `0x86`（`SHUTDOWN_REQUESTED=1`），燈光開始休眠動畫
+3. Host 收到後回 `0x05 action=1`，然後執行 `systemctl poweroff`
+4. STM32 收到 ack 後等 `8 s`；若一直沒有 ack，`30 s` 後也會繼續
+5. 燈光淡出 `0.9 s`，`PC15` 拉 low 切主電源，進 `LOW_POWER`
+6. `LOW_POWER` 時按住 `1 s`：`PC15` 回 high、`PC14` high 1 s、開機動畫重播
+
+在 `SHUTDOWN_PENDING` / `LIGHTS_OFF` / `LOW_POWER` 期間，`0x01 / 0x02` 馬達命令與 `0x03` 燈光命令會被忽略。
+
+`ros2/mower_hardware` 已實作步驟 3：收到 `SHUTDOWN_REQUESTED` 就回 ack 並執行 `shutdown_command` 參數（預設 `systemctl poweroff`，設空字串停用）。ros2_control 通常不是 root，需要 polkit 允許該使用者 `org.freedesktop.login1.power-off`，或把參數改成 `sudo -n systemctl poweroff` 並在 sudoers 放行。
+
 ## Status Flags
 
 | Bit | Mask | Meaning |
@@ -298,7 +367,7 @@ Wheel controller flags:
 - Host 應該把 `last_rx_seq` 視為「最近一次成功被 STM32 接受的命令」
 - CRC 錯誤、version 不符、type 不支援的 frame，STM32 會直接丟掉
 - 控制命令是 latest-wins，不要依賴 FIFO 語意
-- `0x02 / 0x82 / 0x03 / 0x83 / 0x04 / 0x84 / 0x85` 已接上 runtime path，host 可以直接依本文件封包格式對接
+- `0x02 / 0x82 / 0x03 / 0x83 / 0x04 / 0x84 / 0x85 / 0x05 / 0x86` 已接上 runtime path，host 可以直接依本文件封包格式對接
 
 ## 建議資料流
 

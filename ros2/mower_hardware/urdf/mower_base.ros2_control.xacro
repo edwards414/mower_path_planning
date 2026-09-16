@@ -22,6 +22,8 @@
         <param name="command_timeout_ms">300</param>
         <!-- plugin zeroes reported velocity if no 0x85 within this -->
         <param name="feedback_timeout_s">0.5</param>
+        <!-- run when the power button is held 3 s; "" to disable -->
+        <param name="shutdown_command">systemctl poweroff</param>
       </hardware>
 
       <joint name="${left_joint}">

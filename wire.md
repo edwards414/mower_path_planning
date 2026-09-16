@@ -35,7 +35,7 @@
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
 | 電池電壓量測 | 24 V main / 3.7 V AON battery divider | ADC MUX CH2/CH3 | `ADC1_IN9` through mux | 電阻分壓後進 ADC，輸入不可超過 3.3 V |
 | 輪速 PID / 設定儲存 | FT-555 encoder + internal Flash | `TIM5`, `TIM1`, Flash sector 7 | C++ module | 左右輪 PID 閉迴路；PID 參數存於 `0x08060000` |
-| 電源按鍵 / 低功耗 | Power button / power hold | `PB0`, `PC14`, `PC15` | EXTI input, GPIO output | 長按 3 秒關機；短按 1 秒喚醒 LebanCat；關機後 STM32 由小電池 AON 供電 |
+| 電源按鍵 / 低功耗 | Power button / power hold | `PB0`, `PC14`, `PC15` | EXTI input, GPIO output | 長按 3 秒：停馬達、透過 UART `0x86` 通知 LubanCat 關機、等 ack（最多 30 s）後 `PC15` 切主電源；`LOW_POWER` 時按住 1 秒喚醒 LebanCat（`PC14` high 1 s）；關機後 STM32 由小電池 AON 供電。流程見 `UART_OPEN_LOOP_PROTOCOL.md` 的 `0x05 / 0x86` |
 | 無源蜂鳴器 | Passive buzzer | `PB9` | `TIM4_CH4` PWM | 實測為無源蜂鳴器，DC 只會輕微一聲；用 TIM4_CH4 送 2 kHz 50% 方波發聲，duty 0 靜音 |
 | 板載狀態 | Board status LED | `PC13` | 隨 BRK 動作 | `PC13` 已改給 BLD120A BRK；BlackPill 板載 LED 仍掛在 `PC13`，剎車時會亮，當作剎車指示；狀態燈改用 WS2812 LED 0-2 |
 | Debug / Clock | SWD / HSE | `PA13`, `PA14`, `PH0`, `PH1` | SWD, HSE | 燒錄除錯與 25 MHz 外部時鐘 |

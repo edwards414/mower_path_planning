@@ -11,8 +11,9 @@ namespace {
 
 /* ---- timeline (ms from start) ------------------------------------------ */
 constexpr uint32_t kFrameMs = 20U;
-constexpr uint32_t kIgnitionEndMs = 1200U;
-constexpr uint32_t kSettleEndMs = 2200U; /* ignition tail -> steady white */
+constexpr uint32_t kPreGlowEndMs = 350U;  /* dim bloom at the centre */
+constexpr uint32_t kIgnitionEndMs = 1550U; /* spark runs to both ends */
+constexpr uint32_t kSettleEndMs = 2600U;   /* ignition tail -> steady white */
 
 bool g_active = false;
 uint32_t g_start_ms = 0U;
@@ -25,8 +26,8 @@ struct BuzzerCue {
   uint32_t duration_ms;
 };
 constexpr BuzzerCue kCues[] = {
-    {0U, 60U},
-    {160U, 60U},
+    {kPreGlowEndMs, 60U},
+    {kPreGlowEndMs + 160U, 60U},
     {kIgnitionEndMs, 220U},
 };
 constexpr uint8_t kCueCount = sizeof(kCues) / sizeof(kCues[0]);
@@ -64,8 +65,9 @@ constexpr float kTailFloor = 0.22f;
 void ignition_color(int i, int led_count, float p, float *r, float *g, float *b) {
   float centre = ((float)led_count - 1.0f) * 0.5f;
   float half = (float)led_count * 0.5f;
-  /* ease-out so the spark bursts fast then slows at the ends */
-  float e = 1.0f - (1.0f - p) * (1.0f - p);
+  /* cubic ease-out so the spark bursts fast then glides into the ends */
+  float q = 1.0f - p;
+  float e = 1.0f - q * q * q;
   float head = e * (half + 2.0f);
 
   float d = fabsf((float)i - centre); /* distance from centre */
@@ -78,12 +80,26 @@ void ignition_color(int i, int led_count, float p, float *r, float *g, float *b)
     v = 1.0f; /* bright head */
     white = 1.0f - behind / 1.5f;
   } else {
-    float fade = clamp01(1.0f - (behind - 1.5f) / 6.0f);
+    float fade = clamp01(1.0f - (behind - 1.5f) / 8.0f);
     v = kTailFloor + (1.0f - kTailFloor) * fade;
   }
   *r = v * (0.15f + 0.85f * white);
   *g = v * (0.75f + 0.25f * white);
   *b = v;
+}
+
+/* ---- phase 0: pre-glow ---------------------------------------------------
+ * A faint cyan bloom swells at the centre before the spark, so the strips
+ * do not snap from black straight to the bright head. p in [0,1]. */
+void render_preglow(uint16_t *buf, int led_count, float p) {
+  float centre = ((float)led_count - 1.0f) * 0.5f;
+  float amp = 0.45f * p * p;          /* ease-in */
+  float sigma = 1.0f + 2.5f * p;      /* bloom widens as it brightens */
+  for (int i = 0; i < led_count; ++i) {
+    float d = ((float)i - centre) / sigma;
+    float v = amp * expf(-d * d);
+    put(buf, i, v * 0.15f, v * 0.75f, v);
+  }
 }
 
 void render_ignition(uint16_t *buf, int led_count, float p) {
@@ -118,8 +134,12 @@ void render_white(uint16_t *buf, int led_count) {
 void render_frame(uint32_t t_ms) {
   ws2812_clear_all();
 
-  if (t_ms < kIgnitionEndMs) {
-    float p = (float)t_ms / (float)kIgnitionEndMs;
+  if (t_ms < kPreGlowEndMs) {
+    float p = (float)t_ms / (float)kPreGlowEndMs;
+    render_preglow(ws2812_buf_front, LED_NUM_FRONT, p);
+    render_preglow(ws2812_buf_back, LED_NUM_BACK, p);
+  } else if (t_ms < kIgnitionEndMs) {
+    float p = (float)(t_ms - kPreGlowEndMs) / (float)(kIgnitionEndMs - kPreGlowEndMs);
     render_ignition(ws2812_buf_front, LED_NUM_FRONT, p);
     render_ignition(ws2812_buf_back, LED_NUM_BACK, p);
   } else if (t_ms < kSettleEndMs) {

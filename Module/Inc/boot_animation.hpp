@@ -6,9 +6,10 @@
  * meant to be called from the 20 ms WS2812 runtime loop. While it returns
  * true the UART WS2812 command path must not touch the strips.
  *
- * Sequence (about 1.9 s, then steady):
- *   1. Ignition  : a cyan-white spark grows from the centre of each strip
- *                  outwards with a fading tail.
+ * Sequence (about 2.6 s, then steady):
+ *   0. Pre-glow  : a faint cyan bloom swells at the centre of each strip.
+ *   1. Ignition  : a cyan-white spark bursts from the centre outwards with
+ *                  a long fading tail (cubic ease-out).
  *   2. Settle    : cross-fades into an even white and stays lit. The white
  *                  remains until a UART WS2812 command replaces it.
  *   Buzzer cues : two short chirps at ignition, one long tone as the

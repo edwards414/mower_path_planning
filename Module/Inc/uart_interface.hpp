@@ -29,11 +29,13 @@ extern "C" {
 #define UART_FRAME_TYPE_LAWER_MOTOR_COMMAND 0x02U
 #define UART_FRAME_TYPE_WS2812_COMMAND 0x03U
 #define UART_FRAME_TYPE_PID_CONFIG_COMMAND 0x04U
+#define UART_FRAME_TYPE_POWER_COMMAND 0x05U
 #define UART_FRAME_TYPE_MOTOR_STATUS 0x81U
 #define UART_FRAME_TYPE_LAWER_MOTOR_STATUS 0x82U
 #define UART_FRAME_TYPE_WS2812_STATUS 0x83U
 #define UART_FRAME_TYPE_PID_CONFIG_STATUS 0x84U
 #define UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS 0x85U
+#define UART_FRAME_TYPE_POWER_STATUS 0x86U
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
 
@@ -43,6 +45,20 @@ extern "C" {
 #define UART_WS2812_MODE_TURN_LEFT 0x03U
 #define UART_WS2812_MODE_TURN_RIGHT 0x04U
 #define UART_WS2812_MODE_SHOW 0x05U
+
+/* 0x05 power command actions */
+#define UART_POWER_ACTION_NONE 0x00U
+#define UART_POWER_ACTION_HOST_SHUTDOWN_ACK 0x01U /* host is halting, cut after grace */
+#define UART_POWER_ACTION_REQUEST_SHUTDOWN 0x02U  /* host wants the same flow as the button */
+#define UART_POWER_ACTION_CANCEL_SHUTDOWN 0x03U
+#define UART_POWER_ACTION_FORCE_POWER_OFF 0x04U   /* cut the rail now, no hand-shake */
+
+/* 0x86 power status flags */
+#define UART_POWER_STATUS_FLAG_BUTTON_PRESSED 0x01U
+#define UART_POWER_STATUS_FLAG_MAIN_POWER_ENABLED 0x02U
+#define UART_POWER_STATUS_FLAG_SHUTDOWN_REQUESTED 0x04U
+#define UART_POWER_STATUS_FLAG_HOST_ACK_RECEIVED 0x08U
+#define UART_POWER_STATUS_FLAG_WAKE_ASSERTED 0x10U
 
 #define UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED 0x01U
 #define UART_PID_STATUS_FLAG_FLASH_VALID 0x02U
@@ -150,6 +166,21 @@ typedef struct __attribute__((packed)) {
   uint8_t reserved2;
 } wheel_feedback_status_payload_t;
 
+typedef struct __attribute__((packed)) {
+  uint8_t action;
+  uint8_t reserved0;
+  uint16_t reserved1;
+} power_command_payload_t;
+
+typedef struct __attribute__((packed)) {
+  uint8_t state;           /* power_manager_state_t */
+  uint8_t flags;           /* UART_POWER_STATUS_FLAG_* */
+  uint8_t shutdown_reason; /* power_manager_shutdown_reason_t */
+  uint8_t last_rx_seq;     /* seq of the last accepted 0x05 */
+  uint16_t press_ms;
+  uint16_t shutdown_elapsed_ms;
+} power_status_payload_t;
+
 extern volatile uint16_t uart_last_pos;
 extern uint8_t uart_rx_dma[UART_RX_DMA_BUF_SIZE];
 extern osMessageQueueId_t uartRxQueue;
@@ -157,6 +188,8 @@ extern osMessageQueueId_t uartTxQueue;
 extern osThreadId_t uartTxTaskHandle;
 
 void uart_server(void);
+/* Push a 0x86 power status frame now (also sent every 50 ms). */
+void uart_send_power_status(void);
 
 void UartParserTask(void *arg);
 void MotorTask(void *arg);

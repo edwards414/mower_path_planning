@@ -3,6 +3,8 @@
 #include "wheel_controller.hpp"
 #include "ws2812.h"
 #include "boot_animation.hpp"
+#include "power_manager.hpp"
+#include "sleep_animation.hpp"
 #include "boot_shared.h"
 #include "cmsis_os2.h"
 #include <stddef.h>
@@ -65,6 +67,7 @@ volatile ws2812_runtime_status_t g_ws2812_status = {};
 volatile uint8_t g_pid_last_rx_seq = 0U;
 volatile bool g_pid_last_apply_ok = true;
 
+uint8_t g_power_last_rx_seq = 0U;
 uint8_t g_ws2812_flow_pos = 0U;
 uint8_t g_ws2812_turn_left_pos = 0U;
 uint8_t g_ws2812_turn_right_pos = (uint8_t)(LED_NUM - 1);
@@ -369,14 +372,19 @@ void update_ws2812_control(void) {
   command_snapshot.last_update_ms = g_ws2812_command.last_update_ms;
   uart_exit_critical(primask);
 
-  /* Power-on light show owns the strips until it finishes; a UART command
-   * received meanwhile is applied as soon as it ends. */
-  bool boot_animation_active = BootAnimation_Update();
-  if (boot_animation_active) {
+  /* Power-on / shutdown light shows own the strips until they finish; a
+   * UART command received meanwhile is applied as soon as they end. While
+   * the main rail is off nothing is applied either. */
+  bool sleep_animation_active = SleepAnimation_Update();
+  bool boot_animation_active =
+      sleep_animation_active ? false : BootAnimation_Update();
+  bool strips_locked = boot_animation_active || sleep_animation_active ||
+                       !PowerManager_MotionAllowed();
+  if (strips_locked) {
     g_ws2812_static_applied = false;
   }
 
-  if (command_snapshot.valid && !boot_animation_active) {
+  if (command_snapshot.valid && !strips_locked) {
     if ((command_snapshot.mode == UART_WS2812_MODE_FLOW) ||
         (command_snapshot.mode == UART_WS2812_MODE_TURN_LEFT) ||
         (command_snapshot.mode == UART_WS2812_MODE_TURN_RIGHT)) {
@@ -544,7 +552,8 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
 
   switch (type) {
   case UART_FRAME_TYPE_MOTOR_OPEN_LOOP_COMMAND:
-    if (payload_len != sizeof(motor_open_loop_command_payload_t)) {
+    if ((payload_len != sizeof(motor_open_loop_command_payload_t)) ||
+        !PowerManager_MotionAllowed()) {
       return;
     }
 
@@ -556,7 +565,8 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
     break;
 
   case UART_FRAME_TYPE_LAWER_MOTOR_COMMAND:
-    if (payload_len != sizeof(lawer_motor_command_payload_t)) {
+    if ((payload_len != sizeof(lawer_motor_command_payload_t)) ||
+        !PowerManager_MotionAllowed()) {
       return;
     }
     lawer_motor_command_payload_t lawer_payload;
@@ -582,6 +592,34 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
     memcpy(&pid_payload, payload, sizeof(pid_payload));
     pid_config_set_command(&pid_payload, seq);
     break;
+
+  case UART_FRAME_TYPE_POWER_COMMAND: {
+    if (payload_len != sizeof(power_command_payload_t)) {
+      return;
+    }
+    power_command_payload_t power_payload;
+    memcpy(&power_payload, payload, sizeof(power_payload));
+    g_power_last_rx_seq = seq;
+    switch (power_payload.action) {
+    case UART_POWER_ACTION_HOST_SHUTDOWN_ACK:
+      PowerManager_HostShutdownAck();
+      break;
+    case UART_POWER_ACTION_REQUEST_SHUTDOWN:
+      PowerManager_RequestShutdown(POWER_MANAGER_REASON_HOST);
+      break;
+    case UART_POWER_ACTION_CANCEL_SHUTDOWN:
+      PowerManager_CancelShutdown();
+      break;
+    case UART_POWER_ACTION_FORCE_POWER_OFF:
+      PowerManager_ForcePowerOff();
+      break;
+    default:
+      break;
+    }
+    /* Reply at once so the host sees the effect of its command. */
+    uart_send_power_status();
+    break;
+  }
 
   case BOOT_FRAME_TYPE_ENTER_BOOTLOADER: {
     if (payload_len != sizeof(boot_enter_payload_t)) {
@@ -907,6 +945,37 @@ void uart_server(void) {
   }
 }
 
+void uart_send_power_status(void) {
+  power_manager_status_t pm = {};
+  PowerManager_GetStatus(&pm);
+
+  power_status_payload_t payload = {};
+  payload.state = (uint8_t)pm.state;
+  payload.flags = 0U;
+  if (pm.button_pressed) {
+    payload.flags |= UART_POWER_STATUS_FLAG_BUTTON_PRESSED;
+  }
+  if (pm.main_power_enabled) {
+    payload.flags |= UART_POWER_STATUS_FLAG_MAIN_POWER_ENABLED;
+  }
+  if (pm.shutdown_requested) {
+    payload.flags |= UART_POWER_STATUS_FLAG_SHUTDOWN_REQUESTED;
+  }
+  if (pm.host_ack_received) {
+    payload.flags |= UART_POWER_STATUS_FLAG_HOST_ACK_RECEIVED;
+  }
+  if (pm.lebancat_wake_asserted) {
+    payload.flags |= UART_POWER_STATUS_FLAG_WAKE_ASSERTED;
+  }
+  payload.shutdown_reason = (uint8_t)pm.shutdown_reason;
+  payload.last_rx_seq = g_power_last_rx_seq;
+  payload.press_ms = saturating_u16(pm.press_ms);
+  payload.shutdown_elapsed_ms = saturating_u16(pm.shutdown_elapsed_ms);
+
+  (void)uart_send_frame(UART_FRAME_TYPE_POWER_STATUS, g_power_last_rx_seq,
+                        &payload, (uint8_t)sizeof(payload));
+}
+
 void UartParserTask(void *arg) {
   (void)arg;
 
@@ -937,6 +1006,7 @@ void MotorTask(void *arg) {
       uart_send_lawer_status();
       uart_send_ws2812_status();
       uart_send_pid_config_status();
+      uart_send_power_status();
       last_status_tick = now;
     }
 

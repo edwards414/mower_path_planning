@@ -55,6 +55,9 @@ private:
   double counts_per_rev_ = 8896.0;     // FT-555 16 PPR x4 x 139:1
   int command_timeout_ms_ = 300;
   double feedback_timeout_s_ = 0.5;    // declare failure if no 0x85 for this long
+  // Run when the STM32 reports SHUTDOWN_REQUESTED (button held 3 s). Empty
+  // string disables; the ack is still sent so the STM32 does not wait 30 s.
+  std::string shutdown_command_ = "systemctl poweroff";
 
   Wheel left_;
   Wheel right_;
@@ -65,6 +68,8 @@ private:
   double diag_command_age_ms_ = 0.0;
   double diag_crc_errors_ = 0.0;
   double diag_feedback_age_s_ = 0.0;
+  double diag_power_state_ = 0.0;    // 0x86 state
+  double diag_power_flags_ = 0.0;    // 0x86 flags
 
   SerialPort port_;
   FrameParser parser_;
@@ -72,11 +77,13 @@ private:
   rclcpp::Time last_feedback_time_{0, 0, RCL_ROS_TIME};
   bool feedback_valid_ = false;
   bool warned_timeout_ = false;
+  bool shutdown_acked_ = false;        // ack + command already sent for this request
   rclcpp::Clock throttle_clock_{RCL_STEADY_TIME};  // for *_THROTTLE log macros
 
   void handle_frame(uint8_t type, uint8_t seq, const uint8_t * payload, size_t len, const rclcpp::Time & now);
   int16_t rad_s_to_permille(double rad_s) const;
   bool send_stop();
+  void on_power_status(const PowerStatus & ps);
   rclcpp::Logger logger() const { return rclcpp::get_logger("MowerSystem"); }
 };
 
