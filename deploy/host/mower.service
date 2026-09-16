@@ -1,0 +1,19 @@
+# The robot software stack (Docker Compose) on boot.
+# Installed by deploy/install.sh; edit /opt/mower/.env, not this file.
+[Unit]
+Description=Mower robot stack (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/mower
+# `up -d` never pulls (pull_policy: missing); updates go through mower-update.sh.
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

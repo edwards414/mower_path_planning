@@ -1,0 +1,8 @@
+[Unit]
+Description=Handle a mower host request (update/restart/reboot/poweroff)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mower/host/mower-host-request.sh /home/cat/.mower

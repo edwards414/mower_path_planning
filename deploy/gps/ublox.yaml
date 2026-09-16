@@ -1,0 +1,31 @@
+# ublox_gps parameters for the ZED-F9P over USB (CDC-ACM, /dev/gps_rtk from
+# usb.rules). Opt-in service `gps` in ../docker-compose.yaml.
+#
+# UNVALIDATED on the robot: check `ros2 topic echo /fix` shows a fix with
+# status >= 0 and that covariance reaches the 0.015 m gate with RTK
+# corrections before enabling `--profile gps` for missions. Correction input
+# (NTRIP) is not configured here.
+ublox_gps_node:
+  ros__parameters:
+    device: /dev/gps_rtk
+    frame_id: gps
+    # The F9P enumerates as USB; baudrate is ignored on CDC-ACM but required.
+    uart1:
+      baudrate: 38400
+    rate: 4.0
+    nav_rate: 1
+    dynamic_model: portable
+    fix_mode: auto
+    dr_limit: 0
+    enable_ppp: false
+    publish:
+      all: false
+      nav:
+        all: false
+        pvt: true
+        hpposllh: true
+        status: true
+    save:
+      mask: 0
+    load:
+      mask: 0

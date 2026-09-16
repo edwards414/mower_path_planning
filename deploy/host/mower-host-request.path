@@ -1,0 +1,12 @@
+# Watches the request file the container writes when the app (or the STM32
+# power button, through the ros2_control driver) asks the host for something.
+# See src/mower_mission/mower_mission/host_request.py.
+[Unit]
+Description=Watch for mower host requests
+
+[Path]
+PathChanged=/home/cat/.mower/host.request
+Unit=mower-host-request.service
+
+[Install]
+WantedBy=multi-user.target

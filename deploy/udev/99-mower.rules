@@ -1,0 +1,18 @@
+# Stable device names for the mower (installed by deploy/install.sh as
+# /etc/udev/rules.d/99-mower.rules; the repo-root usb.rules links here).
+# deploy/docker-compose.yaml passes these names into the container.
+
+# WIT IMU on a CH340 USB-serial adapter
+KERNEL=="ttyUSB*", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE:="0666", SYMLINK+="imu_usb"
+
+# STM32 host UART.
+#  - LubanCat 2: on-board UART3 (dtoverlay rk356x-lubancat-uart3-m1, see firmware/BOOTLOADER.md)
+KERNEL=="ttyS3", MODE:="0666", SYMLINK+="stmcom"
+#  - bench: CP2102 USB-serial adapter
+KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE:="0666", SYMLINK+="stmcom"
+
+# u-blox ZED-F9P/F9R RTK receiver (CDC-ACM)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="gps_rtk", MODE="0666", GROUP="plugdev"
+
+# PlayStation joystick
+SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", GROUP="joystick", MODE="0660"

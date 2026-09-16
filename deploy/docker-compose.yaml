@@ -1,16 +1,32 @@
 # Robot deployment: pulls the prebuilt runtime image from GHCR (no local build).
 #
-# Usage on the target host (self-contained; only this folder is needed):
-#   docker login ghcr.io            # once, if the image is private
-#   docker compose pull
-#   docker compose up -d
+# Installed on the robot by deploy/install.sh into /opt/mower together with
+# the host/ systemd units. Day-to-day:
+#
+#   sudo systemctl status mower            # the stack (this file) on boot
+#   sudo /opt/mower/host/mower-update.sh   # pull IMAGE_TAG and restart if it changed
+#   sudo /opt/mower/host/mower-update.sh --tag v0.6.0   # pin / roll back
+#
+# The app triggers the same update through /system/update (mower_mission
+# robot_info_node -> ~/.mower/host.request -> host/mower-host-request.service).
+#
+# Configuration lives in /opt/mower/.env (see .env.example):
+#   IMAGE_TAG          release channel or version: stable (default), main, v0.6.0
+#   MOWER_STATE_DIR    host dir mounted as /home/mower/.mower (zones, sites,
+#                      bags, firmware_sync.json, host.request); must be owned
+#                      by uid 1000 (the container user)
+#   ROSBRIDGE_ADDRESS  rosbridge listen address (WireGuard/relay IP or LAN IP)
+#   MOWER_FIRMWARE_SYNC=0  keep whatever firmware is on the STM32
 #
 # The image is the `runtime` target (linux/arm64) published to GHCR by
-# .github/workflows/build.yml. mediamtx.yml lives alongside this file.
+# .github/workflows/build.yml; it bundles the STM32 firmware from the same
+# commit and flashes it at start-up (utils/firmware-sync).
 services:
   lawan_node:
-    image: ghcr.io/edwards414/mower_path_planning:main
-    pull_policy: always
+    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    # Updates are explicit (host/mower-update.sh): never block a boot on a
+    # registry the robot may not reach.
+    pull_policy: missing
     restart: unless-stopped
     stop_grace_period: 60s
     command:
@@ -19,8 +35,8 @@ services:
       - mower_bringup
       - robot.launch.py
       - use_sim_time:=false
-      # The public relay reaches only this WireGuard interface. Override only
-      # if the mower's VPN address is intentionally different.
+      # The public relay reaches only this WireGuard interface. Override in
+      # .env if the mower's VPN address is intentionally different.
       - rosbridge_address:=${ROSBRIDGE_ADDRESS:-10.77.0.2}
       - zone_record_dir:=/home/mower/.mower/zone_record
       - sites_dir:=/home/mower/.mower/sites
@@ -29,16 +45,48 @@ services:
     environment:
       # - ROS_DOMAIN_ID = 0
       - ROS_LOCALHOST_ONLY=1
+      - MOWER_STATE_DIR=/home/mower/.mower
+      - MOWER_FIRMWARE_SYNC=${MOWER_FIRMWARE_SYNC:-1}
+      - MOWER_STM_PORT=/dev/stmcom
+      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
     network_mode: host
     ipc: host
     pid: host
     stdin_open: true
     tty: true
+    # udev names from usb.rules (deploy/install.sh installs it):
+    #   /dev/stmcom   STM32 host UART (LubanCat ttyS3 or a USB-serial adapter)
+    #   /dev/imu_usb  WIT IMU (CH340)
     devices:
-      - /dev/imu_usb:/dev/imu_usb
       - /dev/stmcom:/dev/stmcom
+      - /dev/imu_usb:/dev/imu_usb
     volumes:
-      - mower_data:/home/mower/.mower
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
+
+  # u-blox RTK receiver -> /fix. Opt-in until the receiver config in gps/ is
+  # validated on the robot:  docker compose --profile gps up -d
+  gps:
+    image: ghcr.io/edwards414/mower_path_planning-gps:${IMAGE_TAG:-stable}
+    pull_policy: missing
+    restart: unless-stopped
+    profiles: [gps]
+    command:
+      - bash
+      - -lc
+      - >-
+        source /opt/ros/$${ROS_DISTRO}/setup.bash &&
+        ros2 run ublox_gps ublox_gps_node
+        --ros-args --params-file /config/ublox.yaml
+        -r /ublox_gps_node/fix:=/fix
+    environment:
+      - ROS_LOCALHOST_ONLY=1
+    network_mode: host
+    ipc: host
+    pid: host
+    devices:
+      - /dev/gps_rtk:/dev/gps_rtk
+    volumes:
+      - ./gps/ublox.yaml:/config/ublox.yaml:ro
 
   # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.
   # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
@@ -52,7 +100,3 @@ services:
     # When a real USB/v4l2 camera is attached, expose it to the container:
     # devices:
     #   - /dev/video0:/dev/video0
-
-volumes:
-  mower_data:
-    name: mower_data
