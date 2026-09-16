@@ -97,7 +97,31 @@ if [ "$auto" -eq 1 ]; then
   fi
 fi
 
+remote_digest() {
+  # manifest digest on the registry (no download); empty if unknown
+  docker manifest inspect -v "$IMAGE" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if isinstance(d, list):
+    d = d[0] if d else {}
+print((d.get("Descriptor") or {}).get("digest", ""))
+' 2>/dev/null
+}
+
 before=$(image_digest)
+remote=$(remote_digest)
+if [ -n "$remote" ] && [ "${before#*@}" = "$remote" ] && [ "$force" -eq 0 ] \
+   && docker compose ps --status running "$SERVICE" 2>/dev/null | grep -q "$SERVICE"; then
+  # nothing new on the channel: say so without entering the pulling state
+  # (which lights the update effect on the robot)
+  write_image_json
+  status up_to_date "already running $remote"
+  exit 0
+fi
+
 status pulling "pulling $IMAGE"
 # plain docker pull: compose pull happily "skips" when a stale local image
 # exists and the registry says denied
