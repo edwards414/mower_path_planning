@@ -46,6 +46,7 @@
 | `0x03` | Host -> STM32 | `ws2812` 模式命令 |
 | `0x04` | Host -> STM32 | 左右輪 PID 設定 |
 | `0x05` | Host -> STM32 | 電源 / 關機命令（ack、請求關機、取消、強制斷電） |
+| `0x06` | Host -> STM32 | 要求回傳韌體版本（無 payload） |
 | `0x0F` | Host -> STM32 | 重開進 UART bootloader（見 `BOOTLOADER.md`） |
 | `0x81` | STM32 -> Host | 狀態回傳 |
 | `0x82` | STM32 -> Host | `lawer_motor` 狀態回傳格式 |
@@ -53,6 +54,7 @@
 | `0x84` | STM32 -> Host | PID 設定狀態回傳格式 |
 | `0x85` | STM32 -> Host | 左右輪 PID / encoder 回饋格式 |
 | `0x86` | STM32 -> Host | 電源狀態（按鈕、關機請求、主電源） |
+| `0x87` | STM32 -> Host | 韌體版本 / build 身分（每 1 s 一次，或回應 `0x06`） |
 | `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
 | `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
@@ -332,6 +334,33 @@ Payload 長度固定 `8` bytes。
 | 3 | `0x08` | `HOST_ACK_RECEIVED` |
 | 4 | `0x10` | `WAKE_ASSERTED`，`PC14` 目前為 high |
 
+## `0x06` Firmware Info Request
+
+Payload 長度 `0`（有 payload 也會被忽略）。STM32 收到後立刻回一筆 `0x87`，`seq` 等於這筆命令的 seq。
+
+## `0x87` Firmware Info
+
+開機後立刻送一筆，之後每 `1000ms` 一次；收到 `0x06` 也會立刻多送一筆。Host 端用途：
+
+- 容器啟動時 `tools/mower_flash.py sync` 比對「正在跑的 build」和「image 內附的 build」，不同才燒錄
+- `mower_hardware` 驅動把它發到 `/mower_base/firmware_info`，再由 `/robot/info` 給 App 顯示
+
+Payload 長度固定 `16` bytes（`firmware_info_payload_t`，值由 `Module/Inc/firmware_version.h` 提供，`make` 從 `git describe` 填入）。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint8_t` | `fw_major` | 語意化版本，來自 repo 的 `vX.Y.Z` tag |
+| 1 | `uint8_t` | `fw_minor` | |
+| 2 | `uint8_t` | `fw_patch` | |
+| 3 | `uint8_t` | `protocol_version` | 本文件的協定版本，目前 `0x01` |
+| 4 | `uint32_t` | `git_sha` | commit hash 前 4 bytes 當數字（`0x12345678` = commit `12345678…`），`0` 未知 |
+| 8 | `uint32_t` | `build_unix` | build 時間（unix 秒）；乾淨的 tree 用 commit 時間，dirty 用當下時間 |
+| 12 | `uint8_t` | `build_flags` | bit0 `DIRTY`：tree 有未 commit 修改；bit1 `UNVERSIONED`：build 系統沒給版本（CubeIDE 直接 build） |
+| 13 | `uint8_t` | `bootloader_version` | 保留，目前 `0` |
+| 14 | `uint16_t` | `reserved` | `0` |
+
+「同一個 build」的定義（`mower_flash.py sync`）：`semver`、`git_sha`、`build_unix`、`DIRTY` 全部相同且沒有 `UNVERSIONED`。
+
 ### 關機流程
 
 1. 使用者長按電源鍵 `3 s`（或 Host 送 `0x05 action=2`）
@@ -367,7 +396,7 @@ Payload 長度固定 `8` bytes。
 - Host 應該把 `last_rx_seq` 視為「最近一次成功被 STM32 接受的命令」
 - CRC 錯誤、version 不符、type 不支援的 frame，STM32 會直接丟掉
 - 控制命令是 latest-wins，不要依賴 FIFO 語意
-- `0x02 / 0x82 / 0x03 / 0x83 / 0x04 / 0x84 / 0x85 / 0x05 / 0x86` 已接上 runtime path，host 可以直接依本文件封包格式對接
+- `0x02 / 0x82 / 0x03 / 0x83 / 0x04 / 0x84 / 0x85 / 0x05 / 0x86 / 0x06 / 0x87` 已接上 runtime path，host 可以直接依本文件封包格式對接
 
 ## 建議資料流
 

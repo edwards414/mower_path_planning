@@ -7,6 +7,7 @@ usage:
   mower_uart.py PORT lawer DUTY [SECONDS]       # permille 0..1000 (blade is single-direction)
   mower_uart.py PORT led MODE [R G B PERIOD_MS] # mode 0..5
   mower_uart.py PORT pid KP KI [KD] [--save]    # both wheels, RAM only unless --save
+  mower_uart.py PORT info                        # ask for the 0x87 firmware info frame
 
 needs: pip install pyserial
 """
@@ -101,6 +102,14 @@ def decode(ftype, seq, p):
         lt, lm, rt, rm, lo, ro, ltot, rtot, fl = struct.unpack("<hhhhhhiiB3x", p)
         return (f"85 WHEEL  L tgt={lt/100:6.2f} meas={lm/100:6.2f} rpm out={lo:5d} tot={ltot:9d} | "
                 f"R tgt={rt/100:6.2f} meas={rm/100:6.2f} rpm out={ro:5d} tot={rtot:9d} | {flags85(fl)}")
+    if ftype == 0x86 and len(p) == 8:
+        st, fl, reason, rxseq, press, elapsed = struct.unpack("<BBBBHH", p)
+        return f"86 POWER  state={st} flags={fl:#04x} reason={reason} press={press}ms elapsed={elapsed}ms rxseq={rxseq}"
+    if ftype == 0x87 and len(p) == 16:
+        ma, mi, pa, proto, sha, built, bflags, blver, _ = struct.unpack("<BBBBIIBBH", p)
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(built)) if built else "unknown"
+        tags = ("dirty " if bflags & 0x01 else "") + ("unversioned" if bflags & 0x02 else "")
+        return f"87 FWINFO v{ma}.{mi}.{pa} proto={proto} sha={sha:08x} built={when} {tags}".rstrip()
     return f"{ftype:02X} seq={seq} payload={p.hex()}"
 
 
@@ -132,6 +141,10 @@ def run(port, cmd, args):
         duration = 1.0
         tx = lambda s: build(0x03, s, struct.pack("<BBBBHBB", mode, r, g, b, per, 0, 0))
         period = 0.2
+    elif cmd == "info":
+        duration = 1.0
+        tx = lambda s: build(0x06, s, b"")
+        period = 0.5
     elif cmd == "pid":
         kp, ki = float(args[0]), float(args[1])
         kd = float(args[2]) if len(args) > 2 and not args[2].startswith("--") else 0.0

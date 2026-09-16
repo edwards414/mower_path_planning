@@ -18,6 +18,7 @@
 # macOS metadata
 .DS_Store
 
-# bootloader build output
+# make build output (app + bootloader)
+/build/
 /bootloader/build/
 __pycache__/

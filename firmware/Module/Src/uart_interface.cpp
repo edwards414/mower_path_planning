@@ -6,6 +6,7 @@
 #include "power_manager.hpp"
 #include "sleep_animation.hpp"
 #include "boot_shared.h"
+#include "firmware_version.h"
 #include "cmsis_os2.h"
 #include <stddef.h>
 #include <string.h>
@@ -68,6 +69,7 @@ volatile uint8_t g_pid_last_rx_seq = 0U;
 volatile bool g_pid_last_apply_ok = true;
 
 uint8_t g_power_last_rx_seq = 0U;
+uint8_t g_info_last_rx_seq = 0U;
 uint8_t g_ws2812_flow_pos = 0U;
 uint8_t g_ws2812_turn_left_pos = 0U;
 uint8_t g_ws2812_turn_right_pos = (uint8_t)(LED_NUM - 1);
@@ -621,6 +623,13 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
     break;
   }
 
+  case UART_FRAME_TYPE_INFO_REQUEST:
+    /* No payload. Answer with the build identity so a host can decide
+     * whether the running app matches the one it bundles. */
+    g_info_last_rx_seq = seq;
+    uart_send_firmware_info();
+    break;
+
   case BOOT_FRAME_TYPE_ENTER_BOOTLOADER: {
     if (payload_len != sizeof(boot_enter_payload_t)) {
       return;
@@ -976,6 +985,22 @@ void uart_send_power_status(void) {
                         &payload, (uint8_t)sizeof(payload));
 }
 
+void uart_send_firmware_info(void) {
+  firmware_info_payload_t payload = {};
+  payload.fw_major = (uint8_t)FW_VERSION_MAJOR;
+  payload.fw_minor = (uint8_t)FW_VERSION_MINOR;
+  payload.fw_patch = (uint8_t)FW_VERSION_PATCH;
+  payload.protocol_version = UART_PROTOCOL_VERSION;
+  payload.git_sha = (uint32_t)FW_GIT_SHA;
+  payload.build_unix = (uint32_t)FW_BUILD_UNIX;
+  payload.build_flags = (uint8_t)FW_BUILD_FLAGS;
+  payload.bootloader_version = 0U;
+  payload.reserved = 0U;
+
+  (void)uart_send_frame(UART_FRAME_TYPE_FIRMWARE_INFO, g_info_last_rx_seq,
+                        &payload, (uint8_t)sizeof(payload));
+}
+
 void UartParserTask(void *arg) {
   (void)arg;
 
@@ -993,6 +1018,9 @@ void MotorTask(void *arg) {
   (void)arg;
 
   uint32_t last_status_tick = HAL_GetTick();
+  /* Send the first 0x87 right away so a host that opens the port sees the
+   * build identity without asking. */
+  uint32_t last_info_tick = last_status_tick - UART_INFO_PERIOD_MS;
 
   for (;;) {
     control_update_50hz();
@@ -1008,6 +1036,10 @@ void MotorTask(void *arg) {
       uart_send_pid_config_status();
       uart_send_power_status();
       last_status_tick = now;
+    }
+    if ((now - last_info_tick) >= UART_INFO_PERIOD_MS) {
+      uart_send_firmware_info();
+      last_info_tick = now;
     }
 
     osDelay(20U);

@@ -47,9 +47,11 @@ Bootloader 期間：`PC13`（BLD120A BRK）拉低 = 刀片剎車、板載 LED �
 
 ## Host 更新流程（`tools/mower_flash.py`）
 
+App 用 repo 根目錄的 `make` 建（`build/mower_robot_firmware.bin` + `.json` manifest）；CubeIDE 的 `Debug/mower_robot_firmware.bin` 也能燒，只是 `0x87` 會回報 `UNVERSIONED`，機器人容器開機時的 firmware-sync 會把它換成 image 內附的版本（要保留 CubeIDE 的 build 就在 compose 設 `MOWER_FIRMWARE_SYNC=0`）。
+
 ```bash
 pip install pyserial          # 一次
-python3 tools/mower_flash.py -p /dev/ttyUSB0 flash Debug/mower_robot_firmware.bin
+python3 tools/mower_flash.py -p /dev/ttyUSB0 flash build/mower_robot_firmware.bin
 ```
 
 工具做的事：
@@ -82,9 +84,9 @@ python3 tools/mower_flash.py -p /dev/ttyUSB0 flash Debug/mower_robot_firmware.bi
 
 ```bash
 # Mac: CubeIDE build 之後
-scp Debug/mower_robot_firmware.bin cat@192.168.0.113:~/mower_robot_firmware/Debug/
+scp build/mower_robot_firmware.bin cat@192.168.0.113:~/mower_robot_firmware/Debug/
 # LubanCat（先停掉佔用 /dev/ttyS3 的 ROS node）
-python3 ~/mower_robot_firmware/tools/mower_flash.py -p /dev/ttyS3 flash ~/mower_robot_firmware/Debug/mower_robot_firmware.bin
+python3 ~/mower_robot_firmware/tools/mower_flash.py -p /dev/ttyS3 flash ~/mower_robot_firmware/build/mower_robot_firmware.bin
 ```
 
 實測 68 KB 的 app 從 LubanCat 燒：erase 約 1 s、write 28.8 s（stop-and-wait，每 128 B 一次來回約 54 ms）、CRC 驗證通過、app 自動啟動。比 Mac 上慢是 RK3568 的 UART 中斷延遲，可接受；要更快可以把 `BOOT_WRITE_CHUNK_MAX` 加大到 256 或 512（bootloader 和 `mower_flash.py` 的 `WRITE_CHUNK_MAX` 一起改）。

@@ -30,14 +30,18 @@ extern "C" {
 #define UART_FRAME_TYPE_WS2812_COMMAND 0x03U
 #define UART_FRAME_TYPE_PID_CONFIG_COMMAND 0x04U
 #define UART_FRAME_TYPE_POWER_COMMAND 0x05U
+#define UART_FRAME_TYPE_INFO_REQUEST 0x06U
 #define UART_FRAME_TYPE_MOTOR_STATUS 0x81U
 #define UART_FRAME_TYPE_LAWER_MOTOR_STATUS 0x82U
 #define UART_FRAME_TYPE_WS2812_STATUS 0x83U
 #define UART_FRAME_TYPE_PID_CONFIG_STATUS 0x84U
 #define UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS 0x85U
 #define UART_FRAME_TYPE_POWER_STATUS 0x86U
+#define UART_FRAME_TYPE_FIRMWARE_INFO 0x87U
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
+/* 0x87 is also sent unsolicited every UART_INFO_PERIOD_MS. */
+#define UART_INFO_PERIOD_MS 1000U
 
 #define UART_WS2812_MODE_CLEAR 0x00U
 #define UART_WS2812_MODE_ALL_ON 0x01U
@@ -172,6 +176,19 @@ typedef struct __attribute__((packed)) {
   uint16_t reserved1;
 } power_command_payload_t;
 
+/* 0x87 payload: build identity of the running application (firmware_version.h) */
+typedef struct __attribute__((packed)) {
+  uint8_t fw_major;
+  uint8_t fw_minor;
+  uint8_t fw_patch;
+  uint8_t protocol_version; /* UART_PROTOCOL_VERSION */
+  uint32_t git_sha;         /* first 4 bytes of the commit hash, 0 = unknown */
+  uint32_t build_unix;      /* build time, unix seconds, 0 = unknown */
+  uint8_t build_flags;      /* FW_BUILD_FLAG_* */
+  uint8_t bootloader_version; /* reserved, 0 (only the bootloader knows it) */
+  uint16_t reserved;
+} firmware_info_payload_t;
+
 typedef struct __attribute__((packed)) {
   uint8_t state;           /* power_manager_state_t */
   uint8_t flags;           /* UART_POWER_STATUS_FLAG_* */
@@ -190,6 +207,8 @@ extern osThreadId_t uartTxTaskHandle;
 void uart_server(void);
 /* Push a 0x86 power status frame now (also sent every 50 ms). */
 void uart_send_power_status(void);
+/* Push a 0x87 firmware info frame now (also sent every UART_INFO_PERIOD_MS). */
+void uart_send_firmware_info(void);
 
 void UartParserTask(void *arg);
 void MotorTask(void *arg);

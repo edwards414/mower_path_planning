@@ -9,11 +9,16 @@ tool asks it to reboot into the bootloader first (frame 0x0F).
     python3 tools/mower_flash.py -p /dev/ttyUSB0 info
     python3 tools/mower_flash.py -p /dev/ttyUSB0 enter     # reboot into bootloader and stay
     python3 tools/mower_flash.py -p /dev/ttyUSB0 run       # jump to the application
+    python3 tools/mower_flash.py -p /dev/ttyS3 app-info    # 0x87 build identity of the running app
+    python3 tools/mower_flash.py -p /dev/ttyS3 sync build/mower_robot_firmware.bin
+        # flash only if the running app differs from the bundled build (firmware-sync)
 
 Requires pyserial. Stop anything else using the port (the ROS2 node) first.
 """
 
 import argparse
+import json
+import os
 import struct
 import sys
 import time
@@ -36,6 +41,13 @@ T_BL_VERIFY = 0x13
 T_BL_RUN_APP = 0x14
 T_BL_INFO = 0x90
 T_BL_ACK = 0x91
+
+# application frames used by app-info / sync (UART_OPEN_LOOP_PROTOCOL.md)
+T_INFO_REQUEST = 0x06
+T_FIRMWARE_INFO = 0x87
+APP_STATUS_TYPES = {0x81, 0x82, 0x83, 0x84, 0x85, 0x86}
+FW_BUILD_FLAG_DIRTY = 0x01
+FW_BUILD_FLAG_UNVERSIONED = 0x02
 
 BOOT_REQUEST_MAGIC = 0xB007B007
 APP_START_ADDRESS = 0x08008000
@@ -193,6 +205,136 @@ class Bootloader:
         )
 
 
+def parse_firmware_info(payload: bytes) -> dict:
+    """Decode a 0x87 FIRMWARE_INFO payload (firmware_info_payload_t)."""
+    major, minor, patch, proto, sha, built, flags, bl_ver, _ = struct.unpack("<BBBBIIBBH", payload)
+    return {
+        "semver": [major, minor, patch],
+        "version": f"{major}.{minor}.{patch}",
+        "protocol_version": proto,
+        "git_sha32": sha,
+        "git_sha": f"{sha:08x}",
+        "build_unix": built,
+        "dirty": bool(flags & FW_BUILD_FLAG_DIRTY),
+        "unversioned": bool(flags & FW_BUILD_FLAG_UNVERSIONED),
+    }
+
+
+def describe_firmware_info(info: dict) -> str:
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info["build_unix"])) if info["build_unix"] else "unknown"
+    tags = ""
+    if info["dirty"]:
+        tags += " dirty"
+    if info["unversioned"]:
+        tags += " unversioned"
+    return f"v{info['version']} sha={info['git_sha']} built={when}{tags}"
+
+
+def read_app_info(bl: "Bootloader", timeout: float = 1.5):
+    """Ask the running application for its build identity.
+
+    Returns (info, saw_app): info is the decoded 0x87 or None; saw_app tells
+    whether any application status frame arrived at all (an old firmware
+    without 0x87 support still streams 0x81).
+    """
+    bl.send(T_INFO_REQUEST)
+    deadline = time.monotonic() + timeout
+    saw_app = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, saw_app
+        frame = bl.reader.read(APP_STATUS_TYPES | {T_FIRMWARE_INFO}, remaining)
+        if frame is None:
+            return None, saw_app
+        if frame[0] == T_FIRMWARE_INFO and len(frame[2]) == 16:
+            return parse_firmware_info(frame[2]), True
+        saw_app = True
+
+
+def load_manifest(image_path: str, manifest_path) -> dict:
+    """Manifest written by tools/fw_manifest.py next to the .bin."""
+    if manifest_path is None:
+        manifest_path = os.path.splitext(image_path)[0] + ".json"
+    with open(manifest_path) as f:
+        return json.load(f)
+
+
+def firmware_matches(running: dict, bundled: dict) -> bool:
+    """Same build if commit, build time and semver agree and the running
+    firmware knows its own version at all."""
+    if running["unversioned"]:
+        return False
+    return (
+        running["semver"] == list(bundled["semver"])
+        and running["git_sha32"] == bundled["git_sha32"]
+        and running["build_unix"] == bundled["build_unix"]
+        and running["dirty"] == bool(bundled.get("dirty", False))
+    )
+
+
+def do_sync(bl: "Bootloader", image_path: str, manifest_path, report_path, force: bool) -> int:
+    """Flash `image_path` only when the running application is a different
+    build. Exit code: 0 up to date / flashed, 1 flash failed, 2 no STM32."""
+    bundled = load_manifest(image_path, manifest_path)
+    report = {
+        "time": int(time.time()),
+        "bundled": {k: bundled.get(k) for k in ("version", "semver", "git_sha", "git_sha32", "build_unix", "dirty", "crc32", "size")},
+        "running_before": None,
+        "running_after": None,
+        "action": None,
+        "error": None,
+    }
+
+    def finish(action: str, code: int, error=None) -> int:
+        report["action"] = action
+        report["error"] = error
+        if report_path:
+            tmp = report_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(report, f, indent=2)
+            os.replace(tmp, report_path)
+        return code
+
+    print(f"bundled: v{bundled['version']} sha={bundled['git_sha'][:8]} {bundled['size']} bytes")
+    running, saw_app = read_app_info(bl)
+    report["running_before"] = running
+    if running is not None:
+        print(f"running: {describe_firmware_info(running)}")
+        if firmware_matches(running, bundled) and not force:
+            print("firmware is up to date")
+            report["running_after"] = running
+            return finish("up_to_date", 0)
+        why = "forced" if force else "different build"
+    elif saw_app:
+        why = "running firmware predates 0x87 (no build identity)"
+        print(f"running: unknown ({why})")
+    else:
+        if bl.ping(0.5) is None:
+            print("no application status and no bootloader answer on this port")
+            return finish("no_device", 2, "no STM32 detected")
+        why = "board is in the bootloader (no valid app?)"
+        print(f"running: none ({why})")
+
+    print(f"flashing: {why}")
+    try:
+        do_flash(bl, image_path, run_after=True)
+    except (RuntimeError, TimeoutError) as exc:
+        print(f"flash failed: {exc}")
+        return finish("failed", 1, str(exc))
+
+    # the app restarts and sends 0x87 within its first second
+    time.sleep(0.3)
+    after, _ = read_app_info(bl, timeout=3.0)
+    report["running_after"] = after
+    if after is None:
+        return finish("failed", 1, "application did not report 0x87 after flashing")
+    print(f"now running: {describe_firmware_info(after)}")
+    if not firmware_matches(after, bundled):
+        return finish("failed", 1, "running build still differs from the bundled one")
+    return finish("flashed", 0)
+
+
 def parse_info(payload: bytes) -> dict:
     app_start, app_max, chunk, version, flags, _ = struct.unpack("<IIHBBI", payload)
     return {
@@ -298,6 +440,12 @@ def main() -> None:
     sub.add_parser("info", help="print bootloader info (reboots the app into it)")
     sub.add_parser("enter", help="reboot into the bootloader and stay there")
     sub.add_parser("run", help="jump from the bootloader to the application")
+    sub.add_parser("app-info", help="print the running application's build identity (0x87)")
+    sy = sub.add_parser("sync", help="flash only if the running app is a different build than IMAGE")
+    sy.add_argument("image")
+    sy.add_argument("--manifest", help="JSON from tools/fw_manifest.py (default: IMAGE with .json)")
+    sy.add_argument("--report", help="write a JSON report of what happened here")
+    sy.add_argument("--force", action="store_true", help="flash even if the build matches")
     args = ap.parse_args()
 
     with serial.Serial(args.port, args.baud, timeout=0.05) as port:
@@ -312,6 +460,19 @@ def main() -> None:
                 status, value = bl.command(T_BL_RUN_APP, b"", timeout=2.0)
                 check(status, "run", value)
                 print("application started")
+            elif args.cmd == "app-info":
+                info, saw_app = read_app_info(bl)
+                if info is not None:
+                    print(describe_firmware_info(info))
+                    print(json.dumps(info))
+                elif saw_app:
+                    sys.exit("application is running but does not answer 0x06 (firmware predates 0x87)")
+                elif bl.ping(0.5) is not None:
+                    sys.exit("board is in the bootloader, no application running")
+                else:
+                    sys.exit("no STM32 detected on this port")
+            elif args.cmd == "sync":
+                sys.exit(do_sync(bl, args.image, args.manifest, args.report, args.force))
         except (RuntimeError, TimeoutError) as exc:
             sys.exit(f"error: {exc}")
 
