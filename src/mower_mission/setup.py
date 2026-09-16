@@ -36,6 +36,7 @@ setup(
             'mower_mission.battery_simulator_node:main',
             'map_manage_node = mower_mission.map_manage_node:main',
             'heartbeat_node = mower_mission.heartbeat_node:main',
+            'robot_info_node = mower_mission.robot_info_node:main',
             'auto_coverage_node = mower_mission.auto_coverage_node:main',
             'path_record_node = mower_mission.path_record_node:main',
             'temp_dock_pose_publisher = '

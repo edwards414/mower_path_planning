@@ -217,6 +217,16 @@ def generate_launch_description():
         }],
     )
 
+    # Version / update state for the app (/robot/info) and the host updater
+    # hand-off (/system/update, /system/restart).
+    robot_info_node = Node(
+        package='mower_mission',
+        executable='robot_info_node',
+        name='robot_info',
+        output='screen',
+        parameters=[{'use_sim_time': False}],
+    )
+
     temp_dock_pose_publisher = Node(
         package='mower_mission',
         executable='temp_dock_pose_publisher',
@@ -249,6 +259,7 @@ def generate_launch_description():
         nav_action_server,
         flutter_adapter_node,
         heartbeat_node,
+        robot_info_node,
         temp_dock_pose_publisher,
         auto_coverage_node,
     ])
