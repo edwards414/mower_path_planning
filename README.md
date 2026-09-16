@@ -31,7 +31,8 @@ legacy ROS node names and service names remain for compatibility; see
 | `mower_mission` | Zone/path recording, map management, coverage planning, navigation action wrapper, Flutter adapter |
 | `mower_interface` | Custom ROS messages, services, and actions |
 | `mower_coverage_core` | Optional Rust/PyO3 coverage-planning backend |
-| `mower_controller` | Real robot `ros2_control` hardware interface for STM32 UART motor/blade control |
+| `mower_hardware` | Real robot `ros2_control` hardware interface for the STM32 base over UART (protocol in `firmware/UART_OPEN_LOOP_PROTOCOL.md`) |
+| `mower_controller` | Legacy STM32 hardware interface (superseded by `mower_hardware`; still hosts the diff-drive controller config and launch) |
 | `mower_description` | URDF/Xacro robot description and mesh assets |
 | `mower_teleop` | Keyboard and joystick teleoperation helpers |
 | `mower_qt` | PyQt operator panel and STM32 UART monitor |
@@ -345,6 +346,13 @@ docker compose exec lawan_node bash
 
 Development and simulation containers are defined under `.devcontainer/`.
 
+The runtime image also builds the STM32 firmware from `firmware/` (same
+commit, `firmware` stage) and flashes it into the base at container start
+(`utils/firmware-sync`), so one image tag is one complete robot version.
+Robot installation, update and rollback are described in
+[deploy/README.md](deploy/README.md); the robot ⇄ app version contract in
+[docs/ROBOT_API.md](docs/ROBOT_API.md).
+
 The `mediamtx` service streams the robot cameras to the app over WebRTC (WHEP).
 Start just the camera server with `docker compose up -d mediamtx`. See
 [docs/webrtc_camera_streaming.md](docs/webrtc_camera_streaming.md) for details,
@@ -371,11 +379,14 @@ colcon test-result --verbose
 ```text
 mower_path_planning/
 ├── .devcontainer/                  # Development, Gazebo, RViz, and Zenoh containers
+├── deploy/                         # Robot install/update flow (compose, systemd, udev)
 ├── docs/                           # Design notes and implementation specs
+├── firmware/                       # STM32F411 base firmware, UART bootloader, bench tools
 ├── img/                            # README and documentation images
 ├── src/
 │   ├── mower_bringup/              # Launch, Nav2, localization, simulation, docking
-│   ├── mower_controller/           # Real robot hardware interface
+│   ├── mower_controller/           # Legacy hardware interface + diff-drive config
+│   ├── mower_hardware/             # Real robot ros2_control hardware interface
 │   ├── mower_coverage_core/        # Rust coverage backend
 │   ├── mower_description/          # Robot model and assets
 │   ├── mower_interface/            # ROS interfaces
