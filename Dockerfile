@@ -126,13 +126,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /fw
 COPY ./firmware /fw
 # No .git in the build context: the identity comes from the build args
-# (.github/workflows/build.yml / make build-release). Empty args fall back to
-# the Makefile defaults (0.0.0, unknown sha, build time = now).
+# (.github/workflows/build.yml). Empty args fall back to the Makefile
+# defaults (0.0.0, unknown sha, build time = now).
 RUN make -j"$(nproc)" TOOLCHAIN_BIN= \
-        ${MOWER_VERSION:+MOWER_VERSION="$MOWER_VERSION"} \
-        ${MOWER_GIT_SHA:+MOWER_GIT_SHA="$MOWER_GIT_SHA"} \
-        ${MOWER_BUILD_UNIX:+MOWER_BUILD_UNIX="$MOWER_BUILD_UNIX"} \
-        ${MOWER_BUILD_DIRTY:+MOWER_BUILD_DIRTY="$MOWER_BUILD_DIRTY"} \
+        MOWER_VERSION="$MOWER_VERSION" \
+        MOWER_GIT_SHA="$MOWER_GIT_SHA" \
+        MOWER_BUILD_UNIX="$MOWER_BUILD_UNIX" \
+        MOWER_BUILD_DIRTY="$MOWER_BUILD_DIRTY" \
     && make -C bootloader TOOLCHAIN_BIN= \
     && cat build/mower_robot_firmware.json
 

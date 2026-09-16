@@ -46,10 +46,20 @@ ifeq ($(GIT_OK),true)
     MOWER_BUILD_UNIX ?= $(shell git log -1 --format=%ct 2>/dev/null)
   endif
 endif
-MOWER_VERSION     ?= 0.0.0
-MOWER_GIT_SHA     ?= 0000000000000000
-MOWER_BUILD_DIRTY ?= 0
-MOWER_BUILD_UNIX  ?= $(shell date +%s)
+# Defaults; an empty value passed on the command line (Docker build args
+# that were not set) also falls back here.
+ifeq ($(strip $(MOWER_VERSION)),)
+  override MOWER_VERSION := 0.0.0
+endif
+ifeq ($(strip $(MOWER_GIT_SHA)),)
+  override MOWER_GIT_SHA := 0000000000000000
+endif
+ifeq ($(strip $(MOWER_BUILD_DIRTY)),)
+  override MOWER_BUILD_DIRTY := 0
+endif
+ifeq ($(strip $(MOWER_BUILD_UNIX)),)
+  override MOWER_BUILD_UNIX := $(shell date +%s)
+endif
 
 # "v0.6.0-3-gabc-dirty" / "0.6.0" -> 0 6 0 ; anything without a leading
 # version number -> 0 0 0 (a bare commit hash from git describe --always).
