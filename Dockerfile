@@ -99,6 +99,44 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
         > /tmp/runtime-apt-packages.txt
 
 ##############################################
+# Stage: firmware (STM32F411 application, cross-compiled)
+# Runs on the build host's own platform (no QEMU) and produces the .bin the
+# runtime image ships in /opt/mower/firmware; firmware-sync flashes it at
+# container start. Same commit as the ros2_control driver in src/mower_hardware.
+##############################################
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS firmware
+
+ARG MOWER_VERSION
+ARG MOWER_GIT_SHA
+ARG MOWER_BUILD_UNIX
+ARG MOWER_BUILD_DIRTY
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc-arm-none-eabi \
+        libnewlib-arm-none-eabi \
+        libstdc++-arm-none-eabi-newlib \
+        make \
+        python3
+
+WORKDIR /fw
+COPY ./firmware /fw
+# No .git in the build context: the identity comes from the build args
+# (.github/workflows/build.yml / make build-release). Empty args fall back to
+# the Makefile defaults (0.0.0, unknown sha, build time = now).
+RUN make -j"$(nproc)" TOOLCHAIN_BIN= \
+        ${MOWER_VERSION:+MOWER_VERSION="$MOWER_VERSION"} \
+        ${MOWER_GIT_SHA:+MOWER_GIT_SHA="$MOWER_GIT_SHA"} \
+        ${MOWER_BUILD_UNIX:+MOWER_BUILD_UNIX="$MOWER_BUILD_UNIX"} \
+        ${MOWER_BUILD_DIRTY:+MOWER_BUILD_DIRTY="$MOWER_BUILD_DIRTY"} \
+    && make -C bootloader TOOLCHAIN_BIN= \
+    && cat build/mower_robot_firmware.json
+
+##############################################
 # Stage 3: Runtime
 ##############################################
 FROM ros:${ROS_DISTRO}-ros-core AS runtime
@@ -110,10 +148,21 @@ ARG USER_ID=1000
 ARG GROUP_NAME=mower
 ARG GROUP_ID=1000
 
+# Build identity, reported on /robot/info (mower_mission/version.py).
+ARG MOWER_VERSION=dev
+ARG MOWER_GIT_SHA=
+ARG MOWER_BUILD_UNIX=
+ARG MOWER_IMAGE=
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV WORKSPACE=${WORKSPACE}
 ENV HOME=/home/${USER_NAME}
+ENV MOWER_VERSION=${MOWER_VERSION} \
+    MOWER_GIT_SHA=${MOWER_GIT_SHA} \
+    MOWER_BUILD_UNIX=${MOWER_BUILD_UNIX} \
+    MOWER_IMAGE=${MOWER_IMAGE} \
+    MOWER_FIRMWARE_MANIFEST=/opt/mower/firmware/mower_robot_firmware.json
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR ${WORKSPACE}
@@ -121,15 +170,22 @@ WORKDIR ${WORKSPACE}
 COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
 COPY --from=builder /tmp/runtime-apt-packages.txt /tmp/runtime-apt-packages.txt
 COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY ./utils/firmware-sync ./utils/mower-host-request /usr/local/bin/
+# STM32 firmware built from this same commit + the tool that flashes it.
+COPY --from=firmware /fw/build/mower_robot_firmware.bin \
+                     /fw/build/mower_robot_firmware.json \
+                     /fw/bootloader/build/bootloader.bin \
+                     /opt/mower/firmware/
+COPY ./firmware/tools/mower_flash.py /opt/mower/firmware/mower_flash.py
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
     && apt-get update \
     && { \
-        printf '%s\n' libcurl4 libusb-1.0-0; \
+        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial; \
         cat /tmp/runtime-apt-packages.txt; \
     } \
         | sort -u \

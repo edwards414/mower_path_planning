@@ -1,0 +1,41 @@
+#!/bin/bash
+# Bring the STM32 to the firmware bundled in this image, before ROS starts.
+#
+# The runtime image carries /opt/mower/firmware/mower_robot_firmware.bin (+
+# .json manifest) built from the same commit as the ros2_control driver.
+# mower_flash.py sync asks the running application for its 0x87 build
+# identity and only flashes (through the UART bootloader) when it differs.
+# Motors are stopped by the bootloader during the ~20 s flash, which is why
+# this runs at container start and never while ROS is up.
+#
+#   MOWER_FIRMWARE_SYNC=0   skip (keep whatever is on the board, e.g. a
+#                           CubeIDE debug build)
+#   MOWER_STM_PORT          serial device, default /dev/stmcom
+#   MOWER_STATE_DIR         where the report (firmware_sync.json) goes,
+#                           default ~/.mower; /robot/info shows it
+set -u
+dir=/opt/mower/firmware
+port="${MOWER_STM_PORT:-/dev/stmcom}"
+state="${MOWER_STATE_DIR:-$HOME/.mower}"
+
+case "${MOWER_FIRMWARE_SYNC:-1}" in
+  0|false|no|off) echo "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"; exit 0 ;;
+esac
+if [ ! -e "$port" ]; then
+  echo "[firmware-sync] $port not present, skipping"
+  exit 0
+fi
+if [ ! -f "$dir/mower_robot_firmware.bin" ]; then
+  echo "[firmware-sync] no bundled firmware in $dir, skipping"
+  exit 0
+fi
+mkdir -p "$state"
+echo "[firmware-sync] bundled $(python3 -c "import json;d=json.load(open('$dir/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])" 2>/dev/null) on $port"
+python3 "$dir/mower_flash.py" -p "$port" sync "$dir/mower_robot_firmware.bin" --report "$state/firmware_sync.json"
+rc=$?
+case $rc in
+  0) ;;
+  2) echo "[firmware-sync] no STM32 answering on $port (continuing without it)" ;;
+  *) echo "[firmware-sync] FAILED (rc=$rc); continuing, the driver will report the mismatch" ;;
+esac
+exit 0

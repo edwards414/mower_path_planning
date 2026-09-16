@@ -1,0 +1,22 @@
+#!/bin/sh
+# Ask the host OS for something the container cannot do itself: update the
+# robot software, restart the container, reboot or power off the board.
+#
+#   mower-host-request update|restart|reboot|poweroff [requested_by]
+#
+# Writes <MOWER_STATE_DIR>/host.request (default ~/.mower, which
+# deploy/docker-compose.yaml bind-mounts from the host). The host side is
+# deploy/host/mower-host-request.path + .service. Same format as
+# mower_mission/host_request.py; the ros2_control driver uses this script as
+# its shutdown_command when the STM32 reports the power button.
+set -u
+action="${1:-}"
+by="${2:-container}"
+dir="${MOWER_STATE_DIR:-$HOME/.mower}"
+case "$action" in
+  update|restart|reboot|poweroff) ;;
+  *) echo "usage: mower-host-request update|restart|reboot|poweroff [requested_by]" >&2; exit 2 ;;
+esac
+mkdir -p "$dir" || exit 1
+printf '{"action":"%s","time":%s,"requested_by":"%s"}\n' "$action" "$(date +%s)" "$by" > "$dir/host.request.tmp" \
+  && mv -f "$dir/host.request.tmp" "$dir/host.request"

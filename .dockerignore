@@ -24,6 +24,15 @@ logs/
 workspace/
 zone_record/
 
+# STM32 firmware: sources are needed (built in the `firmware` stage), local
+# build output is not
+firmware/build/
+firmware/bootloader/build/
+firmware/Debug/
+firmware/Release/
+firmware/tools/s3_uart_bridge/.pio/
+firmware/.settings/
+
 # Packages excluded from the production image (sim / GUI / visualization only)
 src/mower_sim/
 src/mower_qt/
