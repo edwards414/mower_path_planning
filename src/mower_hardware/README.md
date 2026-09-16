@@ -1,7 +1,7 @@
 # mower_hardware
 
 ros2_control `SystemInterface` for the mower base: STM32F411 over UART using
-the frame protocol in `../../UART_OPEN_LOOP_PROTOCOL.md`.
+the frame protocol in `../../firmware/UART_OPEN_LOOP_PROTOCOL.md`.
 
 Tested against ros2_control on **Humble / Jazzy** API (`on_init(HardwareInfo)`,
 `export_*_interfaces()` returning handles). If your distro is newer and the
@@ -37,8 +37,7 @@ Two joints, left then right, in the order they appear in the URDF.
 ## Bring-up
 
 ```bash
-# in your ROS 2 workspace
-ln -s /path/to/mower_robot_firmware/ros2/mower_hardware src/mower_hardware
+# this package is part of the mower_path_planning workspace
 colcon build --packages-select mower_hardware
 source install/setup.bash
 
