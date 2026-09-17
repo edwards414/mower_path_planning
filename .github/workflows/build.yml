@@ -137,7 +137,10 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    # Native arm64 (GitHub standard runner, counts against the plan's included
+    # minutes like ubuntu-latest). Both images are arm64-only for the robot;
+    # building them under QEMU on x86 took 82 min, native is ~10 min.
+    runs-on: ubuntu-24.04-arm
     needs: [python-tests, firmware, driver-tests]
 
     # Only the images something actually pulls from GHCR:
@@ -221,12 +224,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        # both remaining targets push linux/arm64; PRs build amd64 only,
-        # except the runtime job which also does an arm64 release build
-        if: github.event_name != 'pull_request' || matrix.name == 'runtime'
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -280,7 +277,9 @@ jobs:
             MOWER_GIT_SHA=${{ github.sha }}
             MOWER_BUILD_UNIX=${{ steps.identity.outputs.build_unix }}
             MOWER_IMAGE=ghcr.io/${{ env.REPOSITORY_LC }}${{ matrix.image_suffix }}:${{ steps.meta.outputs.version }}
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || matrix.push_platforms }}
+          # arm64 everywhere, PRs included: the runner is arm64 so the PR
+          # image loads and smoke-tests natively.
+          platforms: ${{ matrix.push_platforms }}
           push: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/') }}
           load: ${{ github.event_name == 'pull_request' && matrix.name == 'runtime' && !contains(github.event.pull_request.labels.*.name, 'push-image') }}
           # Always keep the fast GitHub Actions cache. Additionally publish a
@@ -333,26 +332,3 @@ jobs:
             test -n "${MOWER_VERSION}"
             echo "image ${MOWER_IMAGE} version ${MOWER_VERSION} sha ${MOWER_GIT_SHA}"
           '
-
-      - name: Build runtime ARM64 release target
-        if: github.event_name == 'pull_request' && matrix.name == 'runtime'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          target: ${{ matrix.target }}
-          build-args: |
-            ${{ matrix.build_args }}
-            MOWER_VERSION=${{ steps.identity.outputs.version }}
-            MOWER_GIT_SHA=${{ github.sha }}
-            MOWER_BUILD_UNIX=${{ steps.identity.outputs.build_unix }}
-            MOWER_IMAGE=ghcr.io/${{ env.REPOSITORY_LC }}${{ matrix.image_suffix }}:${{ steps.meta.outputs.version }}
-          platforms: linux/arm64
-          push: false
-          cache-from: |
-            type=gha,scope=${{ matrix.name }}
-            type=gha,scope=${{ matrix.name }}-arm64-pr
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-arm64-pr
-          provenance: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
