@@ -103,6 +103,35 @@ struct MotorStatus {
   uint8_t last_rx_seq = 0;
 };
 
+// 0x83: what the strips are currently showing
+struct Ws2812Status {
+  uint8_t mode = 0;
+  uint8_t r = 0;
+  uint8_t g = 0;
+  uint8_t b = 0;
+  uint16_t effect_period_ms = 0;
+  uint8_t flags = 0;
+  uint8_t last_rx_seq = 0;
+};
+
+// 0x84 payload flags
+constexpr uint8_t kPidFlagClosedLoop = 0x01;
+constexpr uint8_t kPidFlagFlashValid = 0x02;
+constexpr uint8_t kPidFlagLastSaveOk = 0x04;
+constexpr uint8_t kPidFlagLastApplyOk = 0x08;
+
+// 0x84: PID gains the wheel controller is running with
+struct PidConfigStatus {
+  float left_kp = 0.0f;
+  float left_ki = 0.0f;
+  float left_kd = 0.0f;
+  float right_kp = 0.0f;
+  float right_ki = 0.0f;
+  float right_kd = 0.0f;
+  uint8_t flags = 0;
+  uint8_t last_rx_seq = 0;
+};
+
 struct PowerStatus {
   uint8_t state = 0;
   uint8_t flags = 0;
@@ -172,6 +201,8 @@ private:
 bool decode_wheel_feedback(uint8_t seq, const uint8_t * payload, size_t len, WheelFeedback & out);
 bool decode_motor_status(const uint8_t * payload, size_t len, MotorStatus & out);
 bool decode_power_status(const uint8_t * payload, size_t len, PowerStatus & out);
+bool decode_ws2812_status(const uint8_t * payload, size_t len, Ws2812Status & out);
+bool decode_pid_config_status(const uint8_t * payload, size_t len, PidConfigStatus & out);
 bool decode_firmware_info(const uint8_t * payload, size_t len, FirmwareInfo & out);
 
 }  // namespace mower_hardware

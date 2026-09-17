@@ -86,6 +86,26 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr firmware_info_pub_;
   std::string firmware_info_topic_ = "/mower_base/firmware_info";
 
+  // Raw STM32 status frames, republished as one JSON message on
+  // /mower_base/telemetry at telemetry_rate_hz (0 disables) so the parameter
+  // dashboard can plot wheel target vs. measured RPM, PID output / gains,
+  // light state and power state without touching ros2_control.
+  std::string telemetry_topic_ = "/mower_base/telemetry";
+  double telemetry_rate_hz_ = 10.0;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr telemetry_pub_;
+  rclcpp::Time telemetry_sent_time_{0, 0, RCL_ROS_TIME};
+  WheelFeedback last_wheel_feedback_;
+  MotorStatus last_motor_status_;
+  PidConfigStatus last_pid_config_;
+  Ws2812Status last_ws2812_status_;
+  PowerStatus last_power_status_;
+  bool have_motor_status_ = false;
+  bool have_pid_config_ = false;
+  bool have_ws2812_status_ = false;
+  bool have_power_status_ = false;
+  void publish_telemetry_if_due(const rclcpp::Time & now);
+  std::string telemetry_json() const;
+
   // WS2812 light request (0x03), from the latched JSON topic
   //   {"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}
   // The helper node is spun on its own thread; the callback packs the

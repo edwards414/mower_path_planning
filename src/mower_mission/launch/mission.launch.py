@@ -227,6 +227,19 @@ def generate_launch_description():
         parameters=[{'use_sim_time': False}],
     )
 
+    # Read-only parameter feed for the desktop dashboard (/robot/telemetry):
+    # GPS/RTK, IMU, wheel PID, lights, LTE signal, versions in one JSON topic.
+    telemetry_node = Node(
+        package='mower_mission',
+        executable='telemetry_node',
+        name='telemetry',
+        output='screen',
+        parameters=[{
+            'use_sim_time': False,
+            'gps_fix_topic': gps_fix_topic,
+        }],
+    )
+
     temp_dock_pose_publisher = Node(
         package='mower_mission',
         executable='temp_dock_pose_publisher',
@@ -260,6 +273,7 @@ def generate_launch_description():
         flutter_adapter_node,
         heartbeat_node,
         robot_info_node,
+        telemetry_node,
         temp_dock_pose_publisher,
         auto_coverage_node,
     ])

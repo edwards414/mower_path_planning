@@ -187,3 +187,39 @@ TEST(Ws2812, CommandFrameLayout)
   EXPECT_EQ(f[13], 0);
   EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
 }
+
+TEST(Ws2812, DecodeStatus)
+{
+  // mode=flow, r/g/b=10/20/30, period=1600, flags=1, seq=7
+  const uint8_t p[8] = {kLedFlow, 10, 20, 30, 0x40, 0x06, 0x01, 0x07};
+  Ws2812Status st;
+  ASSERT_TRUE(decode_ws2812_status(p, sizeof(p), st));
+  EXPECT_EQ(st.mode, kLedFlow);
+  EXPECT_EQ(st.r, 10);
+  EXPECT_EQ(st.g, 20);
+  EXPECT_EQ(st.b, 30);
+  EXPECT_EQ(st.effect_period_ms, 1600);
+  EXPECT_EQ(st.flags, 1);
+  EXPECT_EQ(st.last_rx_seq, 7);
+  EXPECT_FALSE(decode_ws2812_status(p, 7, st));
+}
+
+TEST(Pid, DecodeConfigStatus)
+{
+  // the firmware defaults: 2.0 / 0.6 / 0.0 per wheel, closed loop + flash valid
+  uint8_t p[28] = {};
+  const float gains[6] = {2.0f, 0.6f, 0.0f, 2.0f, 0.6f, 0.0f};
+  std::memcpy(p, gains, sizeof(gains));
+  p[24] = kPidFlagClosedLoop | kPidFlagFlashValid;
+  p[25] = 3;
+  PidConfigStatus st;
+  ASSERT_TRUE(decode_pid_config_status(p, sizeof(p), st));
+  EXPECT_FLOAT_EQ(st.left_kp, 2.0f);
+  EXPECT_FLOAT_EQ(st.left_ki, 0.6f);
+  EXPECT_FLOAT_EQ(st.left_kd, 0.0f);
+  EXPECT_FLOAT_EQ(st.right_kp, 2.0f);
+  EXPECT_FLOAT_EQ(st.right_ki, 0.6f);
+  EXPECT_EQ(st.flags, kPidFlagClosedLoop | kPidFlagFlashValid);
+  EXPECT_EQ(st.last_rx_seq, 3);
+  EXPECT_FALSE(decode_pid_config_status(p, 27, st));
+}

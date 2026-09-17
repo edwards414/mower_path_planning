@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -46,6 +47,8 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
   firmware_info_topic_ = param_or(info, "firmware_info_topic", firmware_info_topic_.c_str());
   led_topic_ = param_or(info, "led_topic", led_topic_.c_str());
+  telemetry_topic_ = param_or(info, "telemetry_topic", telemetry_topic_.c_str());
+  telemetry_rate_hz_ = param_or(info, "telemetry_rate_hz", telemetry_rate_hz_);
 
   if (info.joints.size() != 2) {
     RCLCPP_ERROR(logger(), "expected exactly 2 joints (left, right), got %zu", info.joints.size());
@@ -93,6 +96,10 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
         firmware_info_pub_ = info_node_->create_publisher<std_msgs::msg::String>(
           firmware_info_topic_, rclcpp::QoS(1).transient_local().reliable());
       }
+      if (!telemetry_topic_.empty() && telemetry_rate_hz_ > 0.0) {
+        telemetry_pub_ = info_node_->create_publisher<std_msgs::msg::String>(
+          telemetry_topic_, rclcpp::QoS(1).best_effort());
+      }
       if (!led_topic_.empty()) {
         led_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
           led_topic_, rclcpp::QoS(1).transient_local().reliable(),
@@ -106,6 +113,7 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
       stop_node_thread();
       led_sub_.reset();
       firmware_info_pub_.reset();
+      telemetry_pub_.reset();
       info_node_.reset();
     }
   }
@@ -283,6 +291,7 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
     integrate(left_, fb.left_total_counts, fb.left_measured_rpm);
     integrate(right_, fb.right_total_counts, fb.right_measured_rpm);
     diag_flags_ = fb.flags;
+    last_wheel_feedback_ = fb;
     last_feedback_time_ = now;
     feedback_valid_ = true;
     if (warned_timeout_) {
@@ -292,6 +301,8 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
   } else if (type == kMotorStatus) {
     MotorStatus ms;
     if (decode_motor_status(payload, len, ms)) {
+      last_motor_status_ = ms;
+      have_motor_status_ = true;
       diag_motor_flags_ = ms.flags;
       diag_command_age_ms_ = ms.command_age_ms;
       if (ms.flags & kStatusFlagDriverAlarm) {
@@ -301,7 +312,21 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
   } else if (type == kPowerStatus) {
     PowerStatus ps;
     if (decode_power_status(payload, len, ps)) {
+      last_power_status_ = ps;
+      have_power_status_ = true;
       on_power_status(ps);
+    }
+  } else if (type == kPidConfigStatus) {
+    PidConfigStatus st;
+    if (decode_pid_config_status(payload, len, st)) {
+      last_pid_config_ = st;
+      have_pid_config_ = true;
+    }
+  } else if (type == kWs2812Status) {
+    Ws2812Status st;
+    if (decode_ws2812_status(payload, len, st)) {
+      last_ws2812_status_ = st;
+      have_ws2812_status_ = true;
     }
   } else if (type == kFirmwareInfo) {
     FirmwareInfo fi;
@@ -382,6 +407,7 @@ return_type MowerSystem::read(const rclcpp::Time & time, const rclcpp::Duration 
       [&](uint8_t t, uint8_t s, const uint8_t * p, size_t l) { handle_frame(t, s, p, l, time); });
   }
   diag_crc_errors_ = static_cast<double>(parser_.crc_errors());
+  publish_telemetry_if_due(time);
 
   if (feedback_valid_) {
     diag_feedback_age_s_ = (time - last_feedback_time_).seconds();
@@ -394,6 +420,55 @@ return_type MowerSystem::read(const rclcpp::Time & time, const rclcpp::Duration 
     }
   }
   return return_type::OK;
+}
+
+void MowerSystem::publish_telemetry_if_due(const rclcpp::Time & now)
+{
+  if (!telemetry_pub_ || !feedback_valid_) {
+    return;
+  }
+  const double period_s = 1.0 / telemetry_rate_hz_;
+  if (telemetry_sent_time_.nanoseconds() != 0 && (now - telemetry_sent_time_).seconds() < period_s) {
+    return;
+  }
+  telemetry_sent_time_ = now;
+  std_msgs::msg::String msg;
+  msg.data = telemetry_json();
+  telemetry_pub_->publish(msg);
+}
+
+std::string MowerSystem::telemetry_json() const
+{
+  const WheelFeedback & fb = last_wheel_feedback_;
+  const MotorStatus & ms = last_motor_status_;
+  const PidConfigStatus & pid = last_pid_config_;
+  const Ws2812Status & led = last_ws2812_status_;
+  const PowerStatus & ps = last_power_status_;
+  char buf[1024];
+  std::snprintf(buf, sizeof(buf),
+    "{\"feedback_age_s\":%.3f,\"crc_errors\":%u,"
+    "\"wheel\":{\"left\":{\"target_rpm\":%.2f,\"measured_rpm\":%.2f,\"pid_output\":%d,\"total_counts\":%d},"
+    "\"right\":{\"target_rpm\":%.2f,\"measured_rpm\":%.2f,\"pid_output\":%d,\"total_counts\":%d},"
+    "\"flags\":%u,\"seq\":%u},"
+    "\"motor\":{\"valid\":%s,\"cmd_left_permille\":%d,\"cmd_right_permille\":%d,"
+    "\"pwm_left\":%d,\"pwm_right\":%d,\"command_age_ms\":%u,\"flags\":%u},"
+    "\"pid\":{\"valid\":%s,\"left\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},"
+    "\"right\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},\"flags\":%u},"
+    "\"led\":{\"valid\":%s,\"mode\":%u,\"r\":%u,\"g\":%u,\"b\":%u,\"period_ms\":%u,\"flags\":%u},"
+    "\"power\":{\"valid\":%s,\"state\":%u,\"flags\":%u,\"shutdown_reason\":%u,"
+    "\"press_ms\":%u,\"shutdown_elapsed_ms\":%u}}",
+    diag_feedback_age_s_, static_cast<unsigned>(parser_.crc_errors()),
+    fb.left_target_rpm, fb.left_measured_rpm, fb.left_pid_output, fb.left_total_counts,
+    fb.right_target_rpm, fb.right_measured_rpm, fb.right_pid_output, fb.right_total_counts,
+    fb.flags, fb.seq,
+    have_motor_status_ ? "true" : "false", ms.commanded_left_permille, ms.commanded_right_permille,
+    ms.applied_left_pwm, ms.applied_right_pwm, ms.command_age_ms, ms.flags,
+    have_pid_config_ ? "true" : "false", pid.left_kp, pid.left_ki, pid.left_kd,
+    pid.right_kp, pid.right_ki, pid.right_kd, pid.flags,
+    have_ws2812_status_ ? "true" : "false", led.mode, led.r, led.g, led.b, led.effect_period_ms, led.flags,
+    have_power_status_ ? "true" : "false", ps.state, ps.flags, ps.shutdown_reason,
+    ps.press_ms, ps.shutdown_elapsed_ms);
+  return buf;
 }
 
 int16_t MowerSystem::rad_s_to_permille(double rad_s) const

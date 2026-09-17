@@ -1,0 +1,13 @@
+# Samples LTE signal (AT+CSQ on /dev/lte_at), Wi-Fi RSSI and interface state
+# into /home/cat/.mower/link_status.json for /robot/telemetry.
+[Unit]
+Description=Mower network link status sampler
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/mower/host/mower-link-status.py /home/cat/.mower
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

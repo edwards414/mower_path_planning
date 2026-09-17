@@ -233,4 +233,38 @@ bool decode_power_status(const uint8_t * p, size_t len, PowerStatus & out)
   return true;
 }
 
+bool decode_ws2812_status(const uint8_t * p, size_t len, Ws2812Status & out)
+{
+  if (len != 8) {
+    return false;
+  }
+  out.mode = p[0];
+  out.r = p[1];
+  out.g = p[2];
+  out.b = p[3];
+  out.effect_period_ms = get_u16(p + 4);
+  out.flags = p[6];
+  out.last_rx_seq = p[7];
+  return true;
+}
+
+bool decode_pid_config_status(const uint8_t * p, size_t len, PidConfigStatus & out)
+{
+  if (len != 28) {
+    return false;
+  }
+  // IEEE-754 little-endian floats, same layout as the STM32 writes them
+  float gains[6];
+  std::memcpy(gains, p, sizeof(gains));
+  out.left_kp = gains[0];
+  out.left_ki = gains[1];
+  out.left_kd = gains[2];
+  out.right_kp = gains[3];
+  out.right_ki = gains[4];
+  out.right_kd = gains[5];
+  out.flags = p[24];
+  out.last_rx_seq = p[25];
+  return true;
+}
+
 }  // namespace mower_hardware

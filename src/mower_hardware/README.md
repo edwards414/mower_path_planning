@@ -28,6 +28,12 @@ The `0x87` build identity is also published latched (transient_local) as JSON
 on `/mower_base/firmware_info` (param `firmware_info_topic`, empty disables);
 `/robot/info` merges it for the app.
 
+The raw status frames (`0x81` motor, `0x83` lights, `0x84` PID gains, `0x85`
+wheel feedback, `0x86` power) are republished together as one JSON message on
+`/mower_base/telemetry` at `telemetry_rate_hz` (default 10 Hz, best-effort;
+param `telemetry_topic` empty or rate 0 disables). `mower_mission`
+`telemetry_node` folds it into `/robot/telemetry` for the parameter dashboard.
+
 Two joints, left then right, in the order they appear in the URDF.
 
 ## Parameters (`<hardware><param>`)
