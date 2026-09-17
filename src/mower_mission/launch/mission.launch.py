@@ -64,7 +64,7 @@ def generate_launch_description():
 
     declare_heartbeat_source_topic = DeclareLaunchArgument(
         'heartbeat_source_topic',
-        default_value='/odom',
+        default_value='/odom_slow',
         description='Topic whose freshness drives the /robot/online heartbeat',
     )
 
@@ -202,6 +202,19 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    # /odom is 50 Hz and rclpy costs ~5 ms per Odometry message on the
+    # LubanCat (throttled A55), i.e. ~28 % of a core per Python subscriber.
+    # The status nodes below only need a few Hz, so they read this C++
+    # throttled copy instead.
+    odom_throttle = Node(
+        package='topic_tools',
+        executable='throttle',
+        name='odom_throttle',
+        output='screen',
+        arguments=['messages', '/odom', '5.0', '/odom_slow'],
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
     # Robot liveness heartbeat: publishes /robot/online (LWT-style). Uses wall
     # clock (use_sim_time=False) so staleness reflects real message arrival.
     heartbeat_node = Node(
@@ -224,7 +237,7 @@ def generate_launch_description():
         executable='robot_info_node',
         name='robot_info',
         output='screen',
-        parameters=[{'use_sim_time': False}],
+        parameters=[{'use_sim_time': False, 'odom_topic': '/odom_slow'}],
     )
 
     # Read-only parameter feed for the desktop dashboard (/robot/telemetry):
@@ -237,6 +250,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': False,
             'gps_fix_topic': gps_fix_topic,
+            'odom_topic': '/odom_slow',
         }],
     )
 
@@ -265,6 +279,7 @@ def generate_launch_description():
         declare_r2_env_file,
         declare_git_repo_dir,
         rosbridge_launch,
+        odom_throttle,
         *recorder_entries,
         path_record_node,
         map_manage_node,

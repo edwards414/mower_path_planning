@@ -19,6 +19,14 @@
       <Interfaces>
         <NetworkInterface address="127.0.0.1" multicast="true"/>
       </Interfaces>
+      <!-- spdp: multicast only for participant discovery. With ~30
+           processes on one host and multicast user data, every process
+           receives and parses every other process's samples whether or not
+           it subscribes (kernel delivers the multicast to all sockets);
+           on the LubanCat that alone was ~1000 packets/s per process and
+           idle rclpy nodes sat at 30-40 % CPU. Unicast data goes only to
+           matched readers. -->
+      <AllowMulticast>spdp</AllowMulticast>
       <DontRoute>true</DontRoute>
     </General>
     <Discovery>

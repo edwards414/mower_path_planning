@@ -250,7 +250,16 @@ def generate_launch_description():
                 name='lifecycle_manager_navigation',
                 output='screen',
                 arguments=['--ros-args', '--log-level', log_level],
-                parameters=[{'autostart': autostart}, {'node_names': lifecycle_nodes}],
+                # bond_timeout 0 = no bond heartbeats. On the LubanCat every
+                # server's reliable /bond reader ACKNACKs every other bond
+                # writer (N x M mesh at 10 Hz): ~2000 packets/s on loopback
+                # and 15-30 % CPU in every node. bond_heartbeat_period: 0.0 in
+                # the params file switches the servers' side off too.
+                parameters=[
+                    {'autostart': autostart},
+                    {'node_names': lifecycle_nodes},
+                    {'bond_timeout': 0.0},
+                ],
             ),
         ],
     )
@@ -322,7 +331,8 @@ def generate_launch_description():
                         plugin='nav2_lifecycle_manager::LifecycleManager',
                         name='lifecycle_manager_navigation',
                         parameters=[
-                            {'autostart': autostart, 'node_names': lifecycle_nodes}
+                            {'autostart': autostart, 'node_names': lifecycle_nodes,
+                             'bond_timeout': 0.0}
                         ],
                     ),
                 ],

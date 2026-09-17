@@ -12,6 +12,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <!-- rosbridge_auth_proxy (pairing gate in front of rosbridge) -->
   <exec_depend>python3-websockets</exec_depend>
