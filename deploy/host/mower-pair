@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Robot identity and pairing QR code (run on the robot, as root or the robot user).
+
+    sudo mower-pair              # create identity.json if missing, print id + QR
+    sudo mower-pair --rotate     # new secret: every paired phone must re-scan
+    sudo mower-pair --json       # machine-readable
+    sudo mower-pair --name 前院   # set the display name
+
+Identity lives in <state_dir>/identity.json (default /home/cat/.mower, the
+directory the robot container sees as /home/mower/.mower). The QR payload is a
+URL the app understands:
+
+    https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=<secret>&h=<relay>&l=<lan>
+
+  id  robot id, derived once from /etc/machine-id
+  s   pairing secret (base32); the app proves it on every connection
+      (see src/mower_mission/mower_mission/identity.py)
+  h   relay WebSocket URL (PAIR_RELAY_URL in /opt/mower/.env), may be empty
+  l   current LAN address (informational; the app can edit it)
+
+Printed with qrencode when installed (install.sh does that), otherwise as text.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import pwd
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.parse
+
+ID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+PAIR_BASE_URL = 'https://mower.fxrbindi.com/pair'
+
+
+def robot_id_from_seed(seed: bytes) -> str:
+    digest = hashlib.sha256(b'mower-robot-id:' + seed).digest()
+    return 'MW-' + ''.join(ID_ALPHABET[b % len(ID_ALPHABET)] for b in digest[:6])
+
+
+def machine_seed() -> bytes:
+    for path in ('/etc/machine-id', '/var/lib/dbus/machine-id'):
+        try:
+            with open(path) as f:
+                value = f.read().strip()
+            if value:
+                return value.encode()
+        except OSError:
+            continue
+    return socket.gethostname().encode() + secrets.token_bytes(8)
+
+
+def new_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip('=')
+
+
+def read_env(path: str) -> dict:
+    env = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return env
+
+
+def lan_address() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('10.255.255.255', 1))
+        return s.getsockname()[0]
+    except OSError:
+        return ''
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def load(path: str):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get('robot_id') and data.get('secret'):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def save(path: str, data: dict, owner: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f, indent=2)
+        f.write('\n')
+    os.chmod(tmp, 0o600)
+    try:
+        pw = pwd.getpwnam(owner)
+        os.chown(tmp, pw.pw_uid, pw.pw_gid)
+    except (KeyError, PermissionError):
+        pass
+    os.replace(tmp, path)
+
+
+def pair_url(identity: dict, relay: str, lan: str) -> str:
+    params = {'v': '1', 'id': identity['robot_id'], 's': identity['secret']}
+    if identity.get('name'):
+        params['n'] = identity['name']
+    if relay:
+        params['h'] = relay
+    if lan:
+        params['l'] = lan
+    return PAIR_BASE_URL + '?' + urllib.parse.urlencode(params)
+
+
+def print_qr(text: str) -> None:
+    exe = shutil.which('qrencode')
+    if not exe:
+        print('(install qrencode to print the QR code here)')
+        return
+    subprocess.run([exe, '-t', 'ANSIUTF8', '-m', '2', text], check=False)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--state-dir', default=os.environ.get('MOWER_STATE_DIR', '/home/cat/.mower'))
+    ap.add_argument('--owner', default='cat', help='owner of identity.json (the robot user)')
+    ap.add_argument('--env', default='/opt/mower/.env')
+    ap.add_argument('--name', help='display name shown in the app')
+    ap.add_argument('--rotate', action='store_true', help='generate a new secret')
+    ap.add_argument('--json', action='store_true')
+    ap.add_argument('--no-qr', action='store_true')
+    args = ap.parse_args()
+
+    path = os.path.join(args.state_dir, 'identity.json')
+    identity = load(path)
+    changed = False
+    if identity is None:
+        identity = {
+            'robot_id': robot_id_from_seed(machine_seed()),
+            'name': socket.gethostname(),
+            'secret': new_secret(),
+            'created': int(time.time()),
+        }
+        changed = True
+    if args.rotate:
+        identity['secret'] = new_secret()
+        identity['rotated'] = int(time.time())
+        changed = True
+    if args.name:
+        identity['name'] = args.name
+        changed = True
+    if changed:
+        save(path, identity, args.owner)
+
+    env = read_env(args.env)
+    relay = env.get('PAIR_RELAY_URL', '')
+    lan = lan_address()
+    url = pair_url(identity, relay, lan)
+
+    if args.json:
+        print(json.dumps({**identity, 'relay': relay, 'lan': lan, 'url': url}, indent=2))
+        return 0
+
+    print(f"robot_id : {identity['robot_id']}")
+    print(f"name     : {identity.get('name', '')}")
+    print(f"relay    : {relay or '(none, LAN only)'}")
+    print(f"lan      : {lan or '?'}:9090")
+    print(f"identity : {path}{'  (new secret)' if changed else ''}")
+    if args.rotate:
+        print('secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower')
+    print()
+    print(url)
+    print()
+    if not args.no_qr:
+        print_qr(url)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

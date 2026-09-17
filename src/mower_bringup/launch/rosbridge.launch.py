@@ -27,6 +27,23 @@ def generate_launch_description():
         ),
     )
 
+    # The app's door is the pairing gate (mower_mission/rosbridge_auth_proxy):
+    # it listens on `address:port`, checks the pairing headers of every
+    # connection against ~/.mower/identity.json and pipes the frames to
+    # rosbridge, which only ever listens on loopback. Without an identity
+    # file (development, simulation) the gate passes everything through.
+    auth_proxy = Node(
+        package='mower_mission',
+        executable='rosbridge_auth_proxy',
+        name='rosbridge_auth_proxy',
+        output='screen',
+        arguments=[
+            '--address', LaunchConfiguration('address'),
+            '--port', LaunchConfiguration('port'),
+            '--upstream', 'ws://127.0.0.1:9091',
+        ],
+    )
+
     rosbridge_websocket = Node(
         package='rosbridge_server',
         executable='rosbridge_websocket',
@@ -35,8 +52,8 @@ def generate_launch_description():
         parameters=[
             rosbridge_config,
             {
-                'port': LaunchConfiguration('port'),
-                'address': LaunchConfiguration('address'),
+                'port': 9091,
+                'address': '127.0.0.1',
             },
         ],
     )
@@ -54,6 +71,7 @@ def generate_launch_description():
     return LaunchDescription([
         port_arg,
         address_arg,
+        auth_proxy,
         rosbridge_websocket,
         rosapi,
     ])

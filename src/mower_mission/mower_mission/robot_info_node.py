@@ -66,6 +66,7 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from mower_mission import host_request
+from mower_mission import identity as ident
 from mower_mission.version import ROBOT_API_VERSION, software_identity
 
 
@@ -84,9 +85,14 @@ class RobotInfoNode(Node):
             ),
         )
         self.declare_parameter('state_dir', host_request.state_dir())
+        # identity.json (deploy/host/mower-pair) wins; env / hostname are the
+        # development fallback
+        identity = ident.load_identity(host_request.state_dir()) or {}
         self.declare_parameter(
-            'robot_id', os.environ.get('MOWER_ROBOT_ID') or socket.gethostname()
+            'robot_id',
+            identity.get('robot_id') or os.environ.get('MOWER_ROBOT_ID') or socket.gethostname(),
         )
+        self.declare_parameter('robot_name', identity.get('name') or socket.gethostname())
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('nav_active_topic', '/nav_operation_active')
         self.declare_parameter('moving_speed_threshold', 0.02)
@@ -102,6 +108,8 @@ class RobotInfoNode(Node):
         self._firmware_manifest_path = str(self.get_parameter('firmware_manifest').value)
         self._state_dir = str(self.get_parameter('state_dir').value)
         self._robot_id = str(self.get_parameter('robot_id').value)
+        self._robot_name = str(self.get_parameter('robot_name').value)
+        self._paired = bool(identity)
         self._moving_threshold = float(self.get_parameter('moving_speed_threshold').value)
         self._busy_timeout = float(self.get_parameter('busy_timeout_s').value)
 
@@ -288,6 +296,8 @@ class RobotInfoNode(Node):
 
         return {
             'robot_id': self._robot_id,
+            'name': self._robot_name,
+            'pairing_required': self._paired,
             'api_version': ROBOT_API_VERSION,
             'software': software,
             'firmware': {

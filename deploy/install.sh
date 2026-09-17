@@ -29,12 +29,21 @@ mkdir -p /opt/mower/host /opt/mower/gps
 install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" "$here/mediamtx.lan.yml" /opt/mower/
 install -m 644 "$here/gps/ublox.yaml" /opt/mower/gps/
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" /opt/mower/host/
+install -m 755 "$here/host/mower-pair" /opt/mower/host/
+ln -sf /opt/mower/host/mower-pair /usr/local/bin/mower-pair
 if [ ! -f /opt/mower/.env ]; then
   sed "s#/home/cat/.mower#$state_dir#" "$here/.env.example" > /opt/mower/.env
   echo "   wrote /opt/mower/.env (edit IMAGE_TAG / ROSBRIDGE_ADDRESS there)"
 fi
 mkdir -p "$state_dir"/zone_record "$state_dir"/sites "$state_dir"/bags
 chown -R "$user:$user" "$state_dir"
+
+echo "== identity / pairing"
+if ! command -v qrencode >/dev/null 2>&1; then
+  apt-get install -y -qq qrencode >/dev/null 2>&1 || echo "   (qrencode not installed; mower-pair prints the URL only)"
+fi
+/opt/mower/host/mower-pair --state-dir "$state_dir" --owner "$user" --env /opt/mower/.env --no-qr | sed 's/^/   /'
+echo "   sudo mower-pair   # prints the pairing QR code for the app"
 
 echo "== kernel (DDS)"
 install -m 644 "$here/host/99-mower-dds.conf" /etc/sysctl.d/99-mower-dds.conf

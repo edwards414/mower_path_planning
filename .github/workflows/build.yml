@@ -52,7 +52,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install test dependencies
-        run: python -m pip install numpy opencv-python-headless pytest
+        run: python -m pip install numpy opencv-python-headless pytest websockets
 
       - name: Run ROS-free mower_mission tests
         working-directory: src/mower_mission
@@ -71,6 +71,7 @@ jobs:
             test/test_image_mask_import.py \
             test/test_map_safety.py \
             test/test_nav_map_fusion.py \
+            test/test_pairing.py \
             test/test_path_validator.py \
             test/test_qos_configuration.py \
             test/test_robot_info.py \

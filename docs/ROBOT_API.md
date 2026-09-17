@@ -30,6 +30,29 @@
 | api_version | 機器人版本 | 變更 |
 |---|---|---|
 | 1 | 0.1.0 | 首版：`/robot/info`、`/system/update`、`/system/restart` 加入；App 開始檢查 `api_version`。之前的 API（`/adapter/*`、zone / site / coverage services、`/robot/online`）視為 1。 |
+| 2 | 0.2.0 | **配對**：機器人的 WebSocket 入口改為 `rosbridge_auth_proxy`，每次連線要帶配對 HMAC 標頭（見下方「配對」）；`/robot/info` 多 `name`、`pairing_required`。沒配對的 App 連不上（HTTP 401）。 |
+
+## 配對（pairing）
+
+每台機器人安裝時由 `deploy/host/mower-pair` 產生 `~/.mower/identity.json`：`robot_id`（由 machine-id 導出，如 `MW-7K3Q9P`）、`name`、`secret`（160-bit，base32）。`sudo mower-pair` 印出 QR：
+
+```
+https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=<secret>&n=<name>&h=<relay wss url>&l=<lan ip>
+```
+
+App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連線**在 HTTP upgrade 帶：
+
+| Header | 值 |
+|---|---|
+| `X-Mower-Robot` | `robot_id` |
+| `X-Mower-Client` | 這支手機 / App 安裝的固定 id |
+| `X-Mower-Time` | unix 秒 |
+| `X-Mower-Nonce` | 每次連線新的 16–32 bytes hex |
+| `X-Mower-Mac` | `hex(HMAC-SHA256(base32decode(secret), "robot_id\nclient\ntime\nnonce"))` |
+
+機器人端 `rosbridge_auth_proxy`（`src/mower_mission/mower_mission/rosbridge_auth_proxy.py`）在 `rosbridge_address:9090` 驗證（時間差 ±60 s、nonce 不可重放、`robot_id` 要對），通過才把 frame 轉給只聽 loopback 的 rosbridge（`127.0.0.1:9091`）。沒有 `identity.json`（模擬、開發）時 proxy 直接放行。App 連上後再比對 `/robot/info.robot_id` 等於掃到的那台。撤銷：`sudo mower-pair --rotate` 換 secret，所有手機重新掃碼。
+
+測試向量（Python `test/test_pairing.py` 與 App `test/pairing_test.dart` 共用）：secret 全 0（`AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`）、robot `MW-7K3Q9P`、client `iphone-1234`、time `1789600000`、nonce `00112233445566778899aabbccddeeff` → mac `d33d2137cf8c6bb75ba80ff22b9afbf32a09f2346e83617e41e96026aa2cfd42`。
 
 ## `/robot/info`（std_msgs/String，JSON，latched + 1 Hz）
 

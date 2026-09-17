@@ -29,7 +29,7 @@ variables. Outside a container they fall back to "dev".
 
 import os
 
-ROBOT_API_VERSION = 1
+ROBOT_API_VERSION = 2
 
 
 def software_identity() -> dict:
