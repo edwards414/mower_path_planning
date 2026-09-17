@@ -23,6 +23,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        ccache \
         curl \
         git \
         libcurl4-openssl-dev \
@@ -38,6 +39,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         wget \
     && if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi \
     && rosdep update
+
+##############################################
+# Stage 1b: package manifests only (for the builder's rosdep layer)
+##############################################
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS manifests
+COPY ./src /src
+RUN find /src -type f ! -name package.xml -delete \
+    && find /src -mindepth 1 -type d -empty -delete
 
 ##############################################
 # Stage 2: Builder
@@ -57,11 +66,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain stable --no-modify-path \
     && pip3 install --no-cache-dir --break-system-packages maturin
 
-COPY ./src ${WORKSPACE}/src
-COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh
+# rosdep only needs the package manifests. Copying them on their own (the
+# `manifests` stage below strips everything else) keeps this apt layer
+# cached across source edits: under QEMU it is ~16 min per miss.
+COPY --from=manifests /src ${WORKSPACE}/src
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -69,13 +77,32 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && source /opt/ros/${ROS_DISTRO}/setup.bash \
     && rosdep install --ignore-src --from-paths src -i --rosdistro ${ROS_DISTRO} -y
 
+COPY ./src ${WORKSPACE}/src
+COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh
+
+# Incremental builds. The three cache mounts (colcon build tree incl. the
+# cargo target dir, ccache, cargo registry) are persisted between CI runs by
+# buildkit-cache-dance in .github/workflows/build.yml; the workflow also
+# restores git mtimes so make/rosidl only redo what actually changed and
+# ccache catches the rest. BUILD_TESTING=OFF: the gtests are built and run
+# natively in the driver-tests job, not in the image.
 # Do not use --symlink-install here, otherwise the runtime stage will
 # inherit broken links after copying only the install tree.
+ENV CCACHE_DIR=/root/.ccache \
+    CARGO_TARGET_DIR=${WORKSPACE}/build/cargo-target \
+    MAKEFLAGS=-j4
 RUN --mount=type=cache,target=${WORKSPACE}/build \
+    --mount=type=cache,target=/root/.ccache \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     source /opt/ros/${ROS_DISTRO}/setup.bash \
-    && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+    && colcon build --parallel-workers 4 \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    && ccache -s | head -6
 
 # Harvest the runtime apt dependencies.
 # NOTE: do NOT pass --ignore-src here. --ignore-src drops keys for any ament
@@ -85,18 +112,21 @@ RUN --mount=type=cache,target=${WORKSPACE}/build \
 # it, rosdep keys lists every exec dep; the workspace's own mower_* packages have
 # no rosdep rule, so `rosdep resolve` fails for them and they are naturally
 # excluded -- giving exactly the external apt packages the runtime needs.
+# One `rosdep resolve` with every key at once (it keeps going past the
+# unresolvable mower_* keys and prints a #ROSDEP[...] block per key); the
+# old one-process-per-key loop took 4 min under QEMU.
 RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
     && rosdep keys --from-paths src --dependency-types=exec --rosdistro ${ROS_DISTRO} \
         | sort -u \
-        | while read -r key; do \
-            rosdep resolve --rosdistro ${ROS_DISTRO} "${key}" 2>/dev/null \
-                | awk '/^#apt$/{getline; print}' || true; \
-        done \
+        | { xargs rosdep resolve --rosdistro ${ROS_DISTRO} 2>/dev/null || true; } \
+        | awk '/^#apt$/{getline; print}' \
         | tr ' ' '\n' \
         | sed -e '/^[[:space:]]*$/d' \
         | sort -u \
         | grep -vxE 'ros-jazzy-(rviz2|joint-state-publisher-gui)' \
-        > /tmp/runtime-apt-packages.txt
+        > /tmp/runtime-apt-packages.txt \
+    && test -s /tmp/runtime-apt-packages.txt \
+    && wc -l /tmp/runtime-apt-packages.txt
 
 ##############################################
 # Stage: firmware (STM32F411 application, cross-compiled)
@@ -167,8 +197,23 @@ ENV MOWER_VERSION=${MOWER_VERSION} \
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR ${WORKSPACE}
 
-COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
+# apt first, keyed only on the dependency list, so the (~10 min under QEMU)
+# layer is reused until a package.xml changes; the install tree, which
+# changes every commit, is copied in afterwards.
 COPY --from=builder /tmp/runtime-apt-packages.txt /tmp/runtime-apt-packages.txt
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update \
+    && { \
+        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
+        cat /tmp/runtime-apt-packages.txt; \
+    } \
+        | sort -u \
+        | xargs -r apt-get install -y --no-install-recommends \
+    && rm -rf /tmp/runtime-apt-packages.txt
+
+COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
 COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY ./utils/firmware-sync ./utils/mower-host-request /usr/local/bin/
 # STM32 firmware built from this same commit + the tool that flashes it.
@@ -182,19 +227,8 @@ COPY ./deploy/ros/cyclonedds.xml /etc/mower/cyclonedds.xml
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
     CYCLONEDDS_URI=file:///etc/mower/cyclonedds.xml
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
-    && apt-get update \
-    && { \
-        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
-        cat /tmp/runtime-apt-packages.txt; \
-    } \
-        | sort -u \
-        | xargs -r apt-get install -y --no-install-recommends \
-    && rm -rf /tmp/runtime-apt-packages.txt
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request
 
 RUN if getent group ${GROUP_ID} > /dev/null; then \
         existing_group="$(getent group ${GROUP_ID} | cut -d: -f1)"; \

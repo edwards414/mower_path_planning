@@ -18,6 +18,8 @@ deploy/server/tunnel-credentials.json
 **/id_ed25519
 
 build/
+# CI: buildkit-cache-dance staging dir for the builder cache mounts
+.buildkit-cache/
 install/
 log/
 logs/
