@@ -238,8 +238,8 @@ jobs:
       - name: Restore git mtimes
         if: matrix.name == 'runtime'
         run: |
-          pipx install git-restore-mtime >/dev/null 2>&1 || python3 -m pip install --user git-restore-mtime
-          git restore-mtime --skip-missing || ~/.local/bin/git-restore-mtime --skip-missing
+          sudo apt-get install -y --no-install-recommends git-restore-mtime
+          git restore-mtime --skip-missing
           ls -l --time-style=+%F src/mower_hardware/package.xml
 
       - name: Restore build caches
