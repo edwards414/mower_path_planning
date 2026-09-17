@@ -15,9 +15,6 @@ on:
       - 'utils/**'
       - 'firmware/**'
       - 'docker-compose.yaml'
-      - '.devcontainer/Dockerfile'
-      - '.devcontainer/Dockerfile.gazebo'
-      - '.devcontainer/apt-*-packages'
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
@@ -29,9 +26,6 @@ on:
       - 'src/**'
       - 'utils/**'
       - 'docker-compose.yaml'
-      - '.devcontainer/Dockerfile'
-      - '.devcontainer/Dockerfile.gazebo'
-      - '.devcontainer/apt-*-packages'
 
 permissions:
   contents: read
@@ -146,20 +140,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [python-tests, firmware, driver-tests]
 
+    # Only the images something actually pulls from GHCR:
+    #   runtime  deploy/docker-compose.yaml  (robot, arm64)
+    #   gps      deploy/docker-compose.yaml --profile gps  (robot, arm64)
+    # The devcontainer and gazebo images are built locally by
+    # .devcontainer/docker-compose.dev.yaml and were never pulled from GHCR.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: dev
-            dockerfile: .devcontainer/Dockerfile
-            context: .devcontainer
-            target: dev
-            image_suffix: -dev
-            build_args: |
-              USER_ID=1000
-              GROUP_ID=1000
-            push_platforms: linux/amd64,linux/arm64
-
           - name: runtime
             dockerfile: Dockerfile
             context: .
@@ -167,14 +156,6 @@ jobs:
             image_suffix: ""
             build_args: ""
             push_platforms: linux/arm64
-
-          - name: gazebo
-            dockerfile: .devcontainer/Dockerfile.gazebo
-            context: .
-            target: ""
-            image_suffix: -gazebo
-            build_args: ""
-            push_platforms: linux/amd64
 
           - name: gps
             dockerfile: Dockerfile
@@ -241,11 +222,51 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
+        # both remaining targets push linux/arm64; PRs build amd64 only,
+        # except the runtime job which also does an arm64 release build
         if: github.event_name != 'pull_request' || matrix.name == 'runtime'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # Incremental workspace builds for the runtime image. Checkout gives
+      # every file a fresh mtime, which would make make/rosidl rebuild the
+      # whole workspace even with the build tree restored; git-restore-mtime
+      # sets each file to its last commit time so only changed packages are
+      # rebuilt (ccache covers the rest). The colcon build tree (incl. the
+      # cargo target dir), ccache and the cargo registry live in BuildKit
+      # cache mounts (see Dockerfile builder stage), which buildkit-cache-dance
+      # round-trips through actions/cache.
+      - name: Restore git mtimes
+        if: matrix.name == 'runtime'
+        run: |
+          pipx install git-restore-mtime >/dev/null 2>&1 || python3 -m pip install --user git-restore-mtime
+          git restore-mtime --skip-missing || ~/.local/bin/git-restore-mtime --skip-missing
+          ls -l --time-style=+%F src/mower_hardware/package.xml
+
+      - name: Restore build caches
+        if: matrix.name == 'runtime'
+        id: build-cache
+        uses: actions/cache@v4
+        with:
+          path: .buildkit-cache
+          key: runtime-build-cache-${{ github.sha }}
+          restore-keys: |
+            runtime-build-cache-
+
+      - name: Inject build caches into BuildKit
+        if: matrix.name == 'runtime'
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          cache-map: |
+            {
+              ".buildkit-cache/colcon-build": "/mower_ws/build",
+              ".buildkit-cache/ccache": "/root/.ccache",
+              ".buildkit-cache/cargo-registry": "/usr/local/cargo/registry",
+              ".buildkit-cache/cargo-git": "/usr/local/cargo/git"
+            }
+          skip-extraction: ${{ steps.build-cache.outputs.cache-hit }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
