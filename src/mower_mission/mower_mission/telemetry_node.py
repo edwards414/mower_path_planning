@@ -18,6 +18,9 @@ subscription and none of the raw sensor topics have to be exposed::
       "odom": {"valid": true, "age_s": 0.02, "x": .., "y": .., "yaw_deg": ..,
                "vx": .., "wz": ..},
       "base": {"valid": true, "age_s": 0.05, ...the /mower_base/telemetry JSON...},
+      "battery": {"valid": true, "age_s": 0.4, "present": true, "pct": 0.63,
+                  "voltage_v": 23.4, "current_a": null, "status": "discharging",
+                  "aon": {"present": true, "pct": 0.8, "voltage_v": 3.9} | null},
       "link": {"valid": true, "age_s": 2.1, ...link_status.json from the host...},
       "host": {"load1": 0.8, "mem_used_pct": 41.2, "cpu_temp_c": 52.0, "uptime_s": ...},
       "info": {...the latest /robot/info JSON... } | null
@@ -25,6 +28,7 @@ subscription and none of the raw sensor topics have to be exposed::
 
 Sources: ``/fix`` (+ ``/gps/filtered``, optional u-blox ``navpvt``),
 ``/imu/data``, ``/odom``, ``/mower_base/telemetry`` (mower_hardware),
+``/battery_state`` + ``/aon_battery_state`` (battery_state_node),
 ``/robot/info`` (robot_info_node), ``<state_dir>/link_status.json``
 (deploy/host/mower-link-status.py) and /proc for host load.
 
@@ -44,7 +48,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
 
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
+from sensor_msgs.msg import BatteryState, Imu, NavSatFix, NavSatStatus
 from std_msgs.msg import String
 
 from mower_mission import host_request
@@ -53,6 +57,13 @@ try:  # only present in the gps image / a dev container with the driver
     from ublox_msgs.msg import NavPVT
 except ImportError:  # pragma: no cover - depends on the image
     NavPVT = None
+
+BATTERY_STATUS_TEXT = {
+    BatteryState.POWER_SUPPLY_STATUS_CHARGING: 'charging',
+    BatteryState.POWER_SUPPLY_STATUS_DISCHARGING: 'discharging',
+    BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING: 'not_charging',
+    BatteryState.POWER_SUPPLY_STATUS_FULL: 'full',
+}
 
 FIX_STATUS_TEXT = {
     NavSatStatus.STATUS_NO_FIX: 'NO FIX',
@@ -117,6 +128,8 @@ class TelemetryNode(Node):
         self.declare_parameter('imu_topic', '/imu/data')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('base_telemetry_topic', '/mower_base/telemetry')
+        self.declare_parameter('battery_topic', '/battery_state')
+        self.declare_parameter('aon_battery_topic', '/aon_battery_state')
         self.declare_parameter('robot_info_topic', '/robot/info')
         self.declare_parameter('state_dir', host_request.state_dir())
         self.declare_parameter(
@@ -135,6 +148,8 @@ class TelemetryNode(Node):
         self._imu = _Sample()
         self._odom = _Sample()
         self._base = _Sample()
+        self._battery = _Sample()
+        self._aon_battery = _Sample()
         self._info = _Sample()
         self._link = _Sample()
         self._link_mtime = None
@@ -174,6 +189,12 @@ class TelemetryNode(Node):
         )
         self.create_subscription(
             String, p('base_telemetry_topic'), self._on_base, best_effort
+        )
+        self.create_subscription(
+            BatteryState, p('battery_topic'), lambda m: self._store(self._battery, m), 10
+        )
+        self.create_subscription(
+            BatteryState, p('aon_battery_topic'), lambda m: self._store(self._aon_battery, m), 10
         )
         self.create_subscription(String, p('robot_info_topic'), self._on_info, latched)
 
@@ -319,6 +340,14 @@ class TelemetryNode(Node):
             })
         return block
 
+    def _battery_block(self, now):
+        """``/battery_state`` (main pack) with the AON cell nested under ``aon``."""
+        block = {'valid': self._battery.msg is not None, 'age_s': self._battery.age(now)}
+        block.update(battery_fields(self._battery.msg))
+        aon = self._aon_battery.msg
+        block['aon'] = None if aon is None else battery_fields(aon)
+        return block
+
     def _json_block(self, sample, now):
         block = {'valid': sample.msg is not None, 'age_s': sample.age(now)}
         if sample.msg is not None:
@@ -340,6 +369,7 @@ class TelemetryNode(Node):
             'imu': self._imu_block(now),
             'odom': self._odom_block(now),
             'base': self._json_block(self._base, now),
+            'battery': self._battery_block(now),
             'link': self._json_block(self._link, now),
             'host': host,
             'info': self._info.msg,
@@ -347,6 +377,20 @@ class TelemetryNode(Node):
         msg = String()
         msg.data = json.dumps(_finite(doc), separators=(',', ':'))
         self._pub.publish(msg)
+
+
+def battery_fields(msg):
+    """Pick the BatteryState fields the dashboard shows; NaN -> null via _finite."""
+    if msg is None:
+        return {'present': False, 'pct': None, 'voltage_v': None, 'current_a': None,
+                'status': None}
+    return {
+        'present': bool(msg.present),
+        'pct': round(float(msg.percentage), 3),
+        'voltage_v': round(float(msg.voltage), 2),
+        'current_a': round(float(msg.current), 2),
+        'status': BATTERY_STATUS_TEXT.get(int(msg.power_supply_status), 'unknown'),
+    }
 
 
 def _finite(value):
