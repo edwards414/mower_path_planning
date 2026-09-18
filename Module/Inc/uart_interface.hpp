@@ -41,6 +41,7 @@ extern "C" {
 #define UART_FRAME_TYPE_POWER_STATUS 0x86U
 #define UART_FRAME_TYPE_CHARGER_STATUS 0x89U
 #define UART_FRAME_TYPE_SERVO_STATUS 0x88U
+#define UART_FRAME_TYPE_ANALOG_STATUS 0x8AU
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
 
@@ -70,6 +71,14 @@ extern "C" {
 #define UART_SERVO_STATUS_FLAG_LIMIT_ACTIVE 0x02U
 #define UART_SERVO_STATUS_FLAG_OUTPUT_ACTIVE 0x04U
 #define UART_SERVO_STATUS_FLAG_TIMED_OUT 0x08U
+
+/* 0x8A analog status flags */
+#define UART_ANALOG_STATUS_FLAG_MAIN_BATTERY_VALID 0x01U
+#define UART_ANALOG_STATUS_FLAG_AON_BATTERY_VALID 0x02U
+#define UART_ANALOG_STATUS_FLAG_BOARD_TEMP_VALID 0x04U
+#define UART_ANALOG_STATUS_FLAG_MG996_CURRENT_VALID 0x08U
+#define UART_ANALOG_STATUS_FLAG_VDDA_CALIBRATED 0x10U /* VREFINT read OK */
+#define UART_ANALOG_STATUS_FLAG_MG996_LIMIT_ACTIVE 0x20U
 
 /* 0x89 charger status flags */
 #define UART_CHARGER_STATUS_FLAG_ONLINE 0x01U        /* RS485 replies OK */
@@ -215,6 +224,16 @@ typedef struct __attribute__((packed)) {
 } servo_status_payload_t;
 
 typedef struct __attribute__((packed)) {
+  uint16_t main_battery_cv;   /* 24 V main battery, x0.01 V; 0 if invalid */
+  uint16_t aon_battery_cv;    /* 3.7 V AON battery, x0.01 V; 0 if invalid */
+  int16_t board_temp_dc;      /* NTC board temperature, x0.1 C; INT16_MIN if invalid */
+  uint16_t vdda_mv;           /* ADC reference used for the conversions, mV */
+  uint16_t mg996_current_raw; /* raw 12-bit ADC counts of the current sensor */
+  uint8_t flags;              /* UART_ANALOG_STATUS_FLAG_* */
+  uint8_t reserved;
+} analog_status_payload_t;
+
+typedef struct __attribute__((packed)) {
   uint16_t vin_cv;    /* input voltage, x0.01 V */
   uint16_t vout_cv;   /* output / battery voltage, x0.01 V */
   uint16_t iout_ca;   /* charge current, x0.01 A */
@@ -240,6 +259,8 @@ void uart_send_power_status(void);
 void uart_send_charger_status(void);
 /* Push a 0x88 servo status frame (also sent every 50 ms). */
 void uart_send_servo_status(void);
+/* Push a 0x8A analog status frame (also sent every 50 ms). */
+void uart_send_analog_status(void);
 
 void UartParserTask(void *arg);
 void MotorTask(void *arg);

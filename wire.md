@@ -605,10 +605,10 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5/PA6/PA7` 已從 `.ioc` 釋放，目前空著 |
 | RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，尚未有實物測試 |
 | MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上，尚未接實物測 |
-| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），實測四通道可讀；韌體換算仍假設 VDDA = 3.3 V，實際 rail 約 2.9 V 時讀值會偏高約 12%，建議改用 VREFINT 校正 |
+| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），實測四通道可讀；每次 update 先讀 VREFINT 算出實際 VDDA 再換算（`0x8A VDDA_CALIBRATED`），不再假設 3.3 V |
 | MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
 | Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
-| Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper；需實測校正 |
+| Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper，每 50 ms 由 `0x8A` 送給 host（x0.01 V）；分壓比需實測校正 |
 | Wheel PID settings | internal Flash sector 7 at `0x08060000` | 已新增 C++ storage module；需實車調 PID |
 | UART bootloader | sector 0-1 bootloader，app link 在 `0x08008000`，RAM `0x20000000` 前 32 bytes 為 boot mailbox | 已新增 `bootloader/`、`tools/mower_flash.py`、app `0x0F` handler；linker script、`system_stm32f4xx.c` VTOR、`main.c` 已改；尚未上板實測，bootloader 第一次要用 ST-Link 燒 |
 | BLD120A PWM label / app binding | `PB8/TIM4_CH3`, label `BLD120A_PWM` | 需確認應用層是否使用 `TIM4_CH3` |

@@ -24,6 +24,10 @@ typedef struct {
   float board_temperature_c;
   float main_battery_v;
   float aon_battery_v;
+  /* ADC reference actually measured through VREFINT; falls back to 3.3 V
+   * (vdda_calibrated = false) when the internal channel cannot be read. */
+  float vdda_v;
+  bool vdda_calibrated;
   bool mg996_current_limit;
   bool adc_available;
 } analog_monitor_snapshot_t;
