@@ -20,9 +20,11 @@
 #define ADC_MUX_S0_GPIO_Port GPIOB
 #endif
 
+/* S1 lives on PA6: PB11 is not bonded out on the UFQFPN48 STM32F411CEU6
+ * (Black Pill), so the original PB11 assignment could never toggle. */
 #ifndef ADC_MUX_S1_Pin
-#define ADC_MUX_S1_Pin GPIO_PIN_11
-#define ADC_MUX_S1_GPIO_Port GPIOB
+#define ADC_MUX_S1_Pin GPIO_PIN_6
+#define ADC_MUX_S1_GPIO_Port GPIOA
 #endif
 
 #ifndef POWER_BUTTON_N_Pin

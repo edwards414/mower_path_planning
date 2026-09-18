@@ -27,10 +27,10 @@
 | 電壓邏輯轉換器 | FT-555 A/B level shifter | `PA0`, `PA1`, `PA8`, `PA9` | 5 V to 3.3 V logic | 左右輪 encoder PP A/B 訊號降壓後進 STM32 |
 | WS2812 燈條 | Front/Back LED strip | `PB4`, `PB5` | `TIM3_CH1/CH2` PWM + DMA | 800 kHz data，GRB 順序；後燈 16 顆，前燈 4 條串聯共 32 顆；LED 0-2 保留給狀態燈號 |
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
-| RS485 充電模組 | 數控 30V5A 帶 OFF CC/CV 充電模組（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀 Vin / Vout / Iout / CC / CV。`PA6/PA7` 空著（原 SPI-CAN 已取消） |
+| RS485 充電模組 | 數控 30V5A 帶 OFF CC/CV 充電模組（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀 Vin / Vout / Iout / CC / CV。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
 | MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x07` 控制 |
-| 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PB11` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
+| 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PA6` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
 | 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
 | 電池電壓量測 | 24 V main / 3.7 V AON battery divider | ADC MUX CH2/CH3 | `ADC1_IN9` through mux | 電阻分壓後進 ADC，輸入不可超過 3.3 V |
@@ -88,7 +88,7 @@ flowchart LR
   STM32 -->|PC14 GPIO OUT| LEBANCAT_WAKE[LebanCat wake / PWRKEY]
 
   STM32 -->|PB2 GPIO OUT| ADC_MUX_S0[ADC mux S0]
-  STM32 -->|PB11 GPIO OUT| ADC_MUX_S1[ADC mux S1]
+  STM32 -->|PA6 GPIO OUT| ADC_MUX_S1[ADC mux S1]
   CURRENT_SENSOR[MG996 current sensor AO] --> ADC_MUX[Analog mux 4ch]
   BOARD_NTC[Board NTC divider] --> ADC_MUX
   MAIN_BAT[24V main battery divider] --> ADC_MUX
@@ -129,7 +129,7 @@ flowchart LR
 | 右輪 BTS7960 | `PA3` | `TIM2_CH4` PWM | `RR_Motor_PWM` | output | Right wheel BTS7960 R_PWM |
 | 左右輪 BTS7960 | `PA4` | GPIO output | `BTS7960_Motor_EN` | output | Shared EN, connects to left/right BTS7960 `L_EN` and `R_EN` |
 | RS485 充電模組 | `PA5` | GPIO output, initial low | `RS485_DE` | output | MAX485 `DE` + `RE`（短接），high = 發送、low = 接收；韌體在 TC 中斷放下 |
-| 空腳 | `PA6` | - | - | - | 未使用（原 SPI-CAN 取消） |
+| 類比監控 / ADC MUX | `PA6` | GPIO output | `ADC_MUX_S1` | output | Analog mux select bit 1（原本指定 `PB11`，但 UFQFPN48 封裝沒有 PB11，2026-09-18 改到這裡） |
 | 空腳 | `PA7` | - | - | - | 未使用（原 SPI-CAN 取消） |
 | 右輪 FT-555 Encoder | `PA8` | `TIM1_CH1` encoder interface | - | input | Right FT-555 channel 1, 5 V through level shifter |
 | 右輪 FT-555 Encoder | `PA9` | `TIM1_CH2` encoder interface | - | input | Right FT-555 channel 2, 5 V through level shifter |
@@ -147,7 +147,6 @@ flowchart LR
 | BLD120A 割草馬達 | `PB8` | `TIM4_CH3` PWM | `BLD120A_PWM` | output | BLD120A PWM / speed control |
 | 無源蜂鳴器 | `PB9` | `TIM4_CH4` PWM | `Buzzer_PWM` | output | Passive buzzer tone, 2 kHz 50% duty = on, 0% = off |
 | MG996 Servo | `PB10` | GPIO output | `MG996_PWM` | output | Servo control pulse, 50 Hz, 0.5–2.5 ms high, timed by `TIM10` update / CC1 interrupts |
-| 類比監控 / ADC MUX | `PB11` | GPIO output | `ADC_MUX_S1` | output | Analog mux select bit 1 |
 | 右輪 BTS7960 | `PB12` | `EXTI12` rising, pulldown | `RR_Motor_Alarm` | input | Right wheel BTS7960 R alarm/diagnostic |
 | 右輪 BTS7960 | `PB13` | `EXTI13` rising, pulldown | `RL_Motor_Alarm` | input | Right wheel BTS7960 L alarm/diagnostic |
 | 左輪 BTS7960 | `PB14` | `EXTI14` rising, pulldown | `LR_Motor_Alarm` | input | Left wheel BTS7960 R alarm/diagnostic |
@@ -432,7 +431,7 @@ ADC mux 控制：
 | --- | --- | --- | --- |
 | ADC mux output | `PB1 / ADC1_IN9` | `ADC_MUX_OUT` | 類比多工器 common output |
 | ADC mux select 0 | `PB2` | `ADC_MUX_S0` | channel select bit 0 |
-| ADC mux select 1 | `PB11` | `ADC_MUX_S1` | channel select bit 1 |
+| ADC mux select 1 | `PA6` | `ADC_MUX_S1` | channel select bit 1 |
 
 通道配置：
 
@@ -605,7 +604,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5/PA6/PA7` 已從 `.ioc` 釋放，目前空著 |
 | RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，尚未有實物測試 |
 | MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上，尚未接實物測 |
-| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），實測四通道可讀；每次 update 先讀 VREFINT 算出實際 VDDA 再換算（`0x8A VDDA_CALIBRATED`），不再假設 3.3 V |
+| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PA6` = mux select（S1 原本是不存在的 PB11，CH2/CH3 之前不可能被選到，「四通道可讀」需重測） | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），CH0/CH1 實測可讀，CH2/CH3 需在 S1 接到 PA6 後重測；每次 update 先讀 VREFINT 算出實際 VDDA 再換算（`0x8A VDDA_CALIBRATED`），不再假設 3.3 V |
 | MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
 | Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
 | Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper，每 50 ms 由 `0x8A` 送給 host（x0.01 V）；分壓比需實測校正 |

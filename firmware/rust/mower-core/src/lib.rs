@@ -17,10 +17,12 @@
 //! | `modbus_rtu.cpp`       | [`modbus`]                |
 //! | `charger_rs485.cpp`    | [`charger`] (state only)  |
 //! | `mg996_servo.cpp`      | [`servo`] (state only)    |
+//! | `analog_monitor.cpp`   | [`analog`] (maths only)   |
 
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_code)]
 
+pub mod analog;
 pub mod charger;
 pub mod command;
 pub mod modbus;

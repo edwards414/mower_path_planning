@@ -15,14 +15,16 @@ rust/
 │   ├── settings  flash record (CRC-32), sanitising, defaults
 │   ├── modbus    Modbus RTU CRC-16, FC03/FC16 requests, echo-tolerant reply scan
 │   ├── charger   RS485 charger snapshot, online logic, 0x89 flags
-│   └── servo     MG996 command state: clamp, hold timeout, limit gating, 0x88
+│   ├── servo     MG996 command state: clamp, hold timeout, limit gating, 0x88
+│   └── analog    ADC mux maths: VREFINT → VDDA, dividers, NTC, 0x8A
 └── mower-fw/     Embassy firmware for STM32F411CE
     ├── board.rs   pin map / timers / flash (mirrors the .ioc)
     ├── shared.rs  cross-task state (Mutex<RefCell>, Channel, Signal)
     ├── fault.rs   panic + HardFault → motors off, blade braked, servo/RS485 released
     ├── charger.rs USART6 + MAX485 DE poll task (DMA, idle-line, 200 ms timeout)
     ├── servo.rs   TIM10 update/compare ISR → PB10 pulse
-    └── main.rs    uart_rx_task · motor_task · uart_tx_task · charger_task
+    ├── analog.rs  ADC1 + PB2/PA6 mux select scan task (200 ms)
+    └── main.rs    uart_rx_task · motor_task · uart_tx_task · charger_task · analog_task
 ```
 
 ## What is ported
@@ -39,19 +41,20 @@ rust/
 | `modbus_rtu.cpp`           | `modbus.rs`                  | vendor example frames as unit tests                |
 | `charger_rs485.cpp`        | `charger.rs` (both crates)   | USART6 PA11/PA12, PA5 DE, 500 ms poll, `0x89`     |
 | `mg996_servo.cpp`          | `servo.rs` (both crates)     | TIM10 ISR on PB10, `0x07` command, `0x88` status   |
+| `analog_monitor.cpp`       | `analog.rs` (both crates)    | ADC1 IN9 behind the mux, VREFINT calibration, `0x8A`; feeds the servo current limit |
 
 Status frames sent every 50 ms: `0x81` motor, `0x85` wheel feedback, `0x82`
 blade, `0x84` PID config, `0x86` power (always "running, rail on"), `0x88`
-servo, `0x89` charger.
+servo, `0x89` charger, `0x8A` analog (batteries, board temperature).
 
 ## Not ported (yet)
 
 Power button / shutdown hand-shake, WS2812 light shows and boot animation,
-buzzer, ADC monitor. `0x03` WS2812 commands are accepted and ignored; the
-`0x83` status frame is not sent so the host can tell the feature is absent.
-Without the ADC monitor the servo current limit never trips, and without the
+buzzer. `0x03` WS2812 commands are accepted and ignored; the `0x83` status
+frame is not sent so the host can tell the feature is absent. Without the
 power manager the charger is polled for the whole run (the C++ build pauses
-while the rail is off). PC15 `MAIN_POWER_EN` is held high and
+while the rail is off). The MG996 current-limit threshold is fixed at the
+C++ default (4095 = never trips) because no host command sets it yet. PC15 `MAIN_POWER_EN` is held high and
 PC14 `LEBANCAT_WAKE` low for the whole run.
 
 ## Where the safety comes from
@@ -91,7 +94,7 @@ On this Mac the Homebrew `cargo` shadows rustup's; use the rustup one:
 export PATH="$HOME/.rustup/toolchains/1.95.0-aarch64-apple-darwin/bin:$PATH"
 
 cd rust
-cargo test                       # mower-core unit tests on the host (56 tests)
+cargo test                       # mower-core unit tests on the host (63 tests)
 cd mower-fw
 cargo build --release            # -> ../target.nosync/thumbv7em-none-eabihf/release/mower-fw
 cargo clippy --release
