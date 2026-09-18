@@ -123,6 +123,7 @@ class PidAutotuneNode(Node):
         self._tel = None
         self._tel_time = 0.0
         self._tel_seq = None
+        self._alarm_logged = False
         self._nav_active = False
         self._recording = None          # dict wheel -> list[Sample] while recording
 
@@ -247,9 +248,15 @@ class PidAutotuneNode(Node):
             timeout_s = float(self._p('telemetry_timeout_s'))
         if tel is None or time.monotonic() - self._tel_time > timeout_s:
             raise Precondition('no /mower_base/telemetry (is the base driver running?)')
+        # motor.flags DRIVER_ALARM is the BTS7960 IS pin read as a GPIO: an
+        # analog current-sense output that goes high with normal drive current
+        # (firmware motor.hpp MOTOR_ALARM_DISABLES_OUTPUT 0). Advisory only, so
+        # it is logged, never a reason to stop; the BTS7960 protects itself.
         motor = tel.get('motor') or {}
         if motor.get('valid') and int(motor.get('flags', 0)) & MOTOR_FLAG_DRIVER_ALARM:
-            raise Precondition('motor driver alarm')
+            if not self._alarm_logged:
+                self._alarm_logged = True
+                self.get_logger().info('driver alarm flag set (BTS7960 IS current sense); ignored')
         power = tel.get('power') or {}
         if power.get('valid') and int(power.get('state', 0)) != POWER_STATE_RUNNING:
             raise Precondition(f'power state {power.get("state")} is not RUNNING')
@@ -372,6 +379,7 @@ class PidAutotuneNode(Node):
     # ---------------------------------------------------------------- the run
     def _run(self):
         self._started_mono = time.monotonic()
+        self._alarm_logged = False
         with self._mutex:
             self._status = self._blank_status('precheck', 'checking the base')
             self._status['started_at'] = time.time()

@@ -110,7 +110,7 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 ## `/pid_autotune`（mower_interface/srv/PidAutotune）、`/pid_autotune/status`（std_msgs/String，JSON，latched）
 
 輪速 PID 自動校正（`src/mower_mission/mower_mission/pid_autotune_node.py`），給 Mower Studio 的「PID 自動校正」按鈕用。
-新增於 api 2 之後，App 用「service 有沒有」判斷。**校正時左右輪會以最高 70 % duty 空轉**：呼叫 `start` 之前 App 必須讓操作者確認車輛已架高、兩輪懸空、刀片停止；機器人端無法自行檢查這件事，只會拒絕「導航中 / 手動移動中 / 電源非 RUNNING / 驅動器 alarm / 沒有 base telemetry」。
+新增於 api 2 之後，App 用「service 有沒有」判斷。**校正時左右輪會以最高 70 % duty 空轉**：呼叫 `start` 之前 App 必須讓操作者確認車輛已架高、兩輪懸空、刀片停止；機器人端無法自行檢查這件事，只會拒絕「導航中 / 手動移動中 / 電源非 RUNNING / 沒有 base telemetry」（`0x81` 的 `DRIVER_ALARM` 是 BTS7960 `IS` 類比電流感測，馬達一有電流就會亮，只記錄不擋）。
 
 Request `op`：
 

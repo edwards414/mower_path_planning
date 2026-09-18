@@ -45,6 +45,7 @@ class FakeBase(Node):
         self.pid_commands = []
         self.override = (0, 0, 0.0)  # left, right, expires (monotonic)
         self.max_override = 0
+        self.motor_flags = 0x01  # 0x81 flags; 0x04 = DRIVER_ALARM (BTS7960 IS, advisory)
         self.rpm = {'left': 0.0, 'right': 0.0}
         self.integral = {'left': 0.0, 'right': 0.0}
         self.hist = {'left': [0.0, 0.0, 0.0], 'right': [0.0, 0.0, 0.0]}
@@ -109,7 +110,7 @@ class FakeBase(Node):
                     'pid_output': int(round(self.pwm[w])), 'total_counts': 0}
                 for w in ('left', 'right')
             } | {'flags': 0x01 | (0x02 if self.closed_loop else 0), 'seq': self.seq},
-            'motor': {'valid': True, 'flags': 0x01, 'command_age_ms': 10},
+            'motor': {'valid': True, 'flags': self.motor_flags, 'command_age_ms': 10},
             'pid': {'valid': True, 'left': self.gains['left'], 'right': self.gains['right'],
                     'flags': flags, 'last_rx_seq': self.pid_seq},
             'led': {'valid': True, 'mode': 1},
@@ -249,6 +250,21 @@ def test_discard_restores_previous_gains():
         time.sleep(0.3)
         assert h.base.gains == old
         assert h.base.persist_count == 0
+    finally:
+        h.close()
+
+
+def test_driver_alarm_flag_does_not_block_a_run():
+    # the BTS7960 IS pin trips on ordinary drive current; the run must go on
+    h = Harness(**FAST)
+    try:
+        h.base.motor_flags = 0x05
+        time.sleep(0.5)
+        assert h.call('start').success
+        st = h.wait_state('review', 'failed', 'aborted', timeout=40)
+        assert st['state'] == 'review', st['message']
+        h.call('discard')
+        h.wait_state('idle', timeout=10)
     finally:
         h.close()
 
