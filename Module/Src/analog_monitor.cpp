@@ -27,14 +27,17 @@ float g_vdda_v = ADC_REF_V;
 bool g_vdda_calibrated = false;
 
 void configure_mux_pins(void) {
+  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   GPIO_InitTypeDef gpio = {};
-  gpio.Pin = ADC_MUX_S0_Pin | ADC_MUX_S1_Pin;
   gpio.Mode = GPIO_MODE_OUTPUT_PP;
   gpio.Pull = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &gpio);
+  gpio.Pin = ADC_MUX_S0_Pin;
+  HAL_GPIO_Init(ADC_MUX_S0_GPIO_Port, &gpio);
+  gpio.Pin = ADC_MUX_S1_Pin;
+  HAL_GPIO_Init(ADC_MUX_S1_GPIO_Port, &gpio);
 }
 
 void select_mux_channel(analog_monitor_channel_t channel) {
