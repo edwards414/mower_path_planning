@@ -229,14 +229,19 @@ def test_final_velocity_guard_owns_the_only_mux_to_controller_boundary():
 
 
 def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
-    """rust_nodes:=true swaps in mower_rs velocity_command_guard: same
+    """rust_guards:=true swaps in mower_rs velocity_command_guard: same
     remappings, session requirement, limits, stop barriers and clocks."""
     core = VELOCITY_GUARD_RS.read_text(encoding='utf-8')
     main = VELOCITY_GUARD_RS_MAIN.read_text(encoding='utf-8')
     mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
     assert "package='mower_rs'" in mux_launch
-    assert "condition=IfCondition(rust_nodes)" in mux_launch
-    assert "condition=UnlessCondition(rust_nodes)" in mux_launch
+    assert "condition=IfCondition(rust_guards)" in mux_launch
+    assert "condition=UnlessCondition(rust_guards)" in mux_launch
+    robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    for switch in ('rust_status', 'rust_guards'):
+        assert f"'{switch}': {switch}," in robot_launch
+        assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
     assert 'command_timeout_s", 0.20' in main
     assert 'max_input_age_s", 0.25' in main

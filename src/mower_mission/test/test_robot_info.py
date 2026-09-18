@@ -86,7 +86,7 @@ def test_api_version_is_documented():
 
 
 def test_rust_robot_status_reports_the_same_api_version():
-    """The r2r robot_status process publishes /robot/info too (rust_nodes:=true)."""
+    """The r2r robot_status process publishes /robot/info too (rust_status:=true)."""
     source = RUST_ROBOT_STATUS.read_text(encoding='utf-8')
     match = re.search(r'pub const ROBOT_API_VERSION: i64 = (\d+);', source)
     assert match, 'ROBOT_API_VERSION constant missing from mower_rs robot_status'

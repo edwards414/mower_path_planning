@@ -10,12 +10,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
-    # rust_nodes:=true swaps both velocity guards for the mower_rs binary
+    # rust_guards:=true swaps both velocity guards for the mower_rs binary
     # (src/mower_rs/crates/velocity_command_guard): same rules, same
     # remappings and parameters, ~1 % of a core each instead of 13-18 %.
     # The Rust guard stamps with the wall clock only, so it is production
     # only (robot.launch.py already enforces use_sim_time:=false there).
-    rust_nodes = LaunchConfiguration('rust_nodes')
+    rust_guards = LaunchConfiguration('rust_guards')
 
     twist_mux_config = os.path.join(
         get_package_share_directory('mower_bringup'),
@@ -47,7 +47,7 @@ def generate_launch_description():
         executable='velocity_command_guard',
         name='manual_velocity_guard',
         output='screen',
-        condition=UnlessCondition(rust_nodes),
+        condition=UnlessCondition(rust_guards),
         parameters=[{
             'use_sim_time': use_sim_time,
             'require_command_session': True,
@@ -60,7 +60,7 @@ def generate_launch_description():
         executable='velocity_command_guard',
         name='velocity_command_guard',
         output='screen',
-        condition=UnlessCondition(rust_nodes),
+        condition=UnlessCondition(rust_guards),
         parameters=[{'use_sim_time': use_sim_time}],
         remappings=final_guard_remappings,
     )
@@ -70,7 +70,7 @@ def generate_launch_description():
         executable='velocity_command_guard',
         name='manual_velocity_guard',
         output='screen',
-        condition=IfCondition(rust_nodes),
+        condition=IfCondition(rust_guards),
         parameters=[{'require_command_session': True}],
         remappings=manual_guard_remappings,
     )
@@ -80,13 +80,13 @@ def generate_launch_description():
         executable='velocity_command_guard',
         name='velocity_command_guard',
         output='screen',
-        condition=IfCondition(rust_nodes),
+        condition=IfCondition(rust_guards),
         remappings=final_guard_remappings,
     )
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('rust_nodes', default_value='false'),
+        DeclareLaunchArgument('rust_guards', default_value='false'),
         manual_velocity_guard,
         manual_velocity_guard_rs,
         twist_mux,

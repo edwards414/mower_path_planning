@@ -62,7 +62,8 @@ def generate_launch_description():
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
-    rust_nodes = LaunchConfiguration('rust_nodes')
+    rust_status = LaunchConfiguration('rust_status')
+    rust_guards = LaunchConfiguration('rust_guards')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -76,7 +77,7 @@ def generate_launch_description():
             ),
             'enable_keyboard_teleop': enable_keyboard_teleop,
             'gps_fix_topic': gps_fix_topic,
-            'rust_nodes': rust_nodes,
+            'rust_guards': rust_guards,
         }.items(),
     )
 
@@ -96,7 +97,7 @@ def generate_launch_description():
             'git_repo_dir': git_repo_dir,
             'gps_fix_topic': gps_fix_topic,
             'require_navigation_health': require_navigation_health,
-            'rust_nodes': rust_nodes,
+            'rust_status': rust_status,
         }.items(),
     )
 
@@ -171,11 +172,19 @@ def generate_launch_description():
             default_value='true',
             description='Fail closed when pose or precise GPS becomes stale',
         ),
+        # Staged roll-out of the mower_rs (Rust) processes, one switch per
+        # process so the safety-critical guards can follow the status node.
         DeclareLaunchArgument(
-            'rust_nodes',
+            'rust_status',
             default_value='false',
-            description='Run the mower_rs processes (robot_status, both '
-                        'velocity guards) instead of their rclpy versions',
+            description='mower_rs robot_status instead of the rclpy '
+                        'heartbeat / robot_info / telemetry nodes',
+        ),
+        DeclareLaunchArgument(
+            'rust_guards',
+            default_value='false',
+            description='mower_rs velocity_command_guard for both guard '
+                        'instances instead of the rclpy guard',
         ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,

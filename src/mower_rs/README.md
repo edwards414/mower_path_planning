@@ -7,11 +7,12 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 
 | binary | replaces | switch |
 |---|---|---|
-| `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `mission.launch.py rust_nodes:=true` |
-| `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_nodes:=true` |
+| `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `mission.launch.py rust_status:=true` |
+| `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
 
-`robot.launch.py rust_nodes:=true` (compose: `RUST_NODES=true` in `.env`)
-forwards the switch to both launch files.
+`robot.launch.py` takes both switches (compose: `RUST_STATUS` / `RUST_GUARDS`
+in `/opt/mower/.env`) so the safety-critical guards can be enabled after the
+status process, following a supervised drive.
 
 ## Build
 
@@ -71,5 +72,5 @@ Unit tests: `cargo test`. Shadow comparison against the Python nodes on
 synthetic inputs (identical `/robot/info`, identical `/robot/telemetry` apart
 from `robot_id`, identical `/robot/online`): see the record in
 `docs/RUST_REFACTOR_PLAN.md`. Production switch-over: deploy with
-`rust_nodes:=false`, run the binary manually next to the Python nodes with
+`rust_status:=false`, run the binary manually next to the Python nodes with
 its outputs remapped to `/shadow/...`, compare, then flip the launch argument.

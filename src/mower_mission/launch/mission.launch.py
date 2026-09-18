@@ -68,10 +68,10 @@ def generate_launch_description():
         description='Topic whose freshness drives the /robot/online heartbeat',
     )
 
-    rust_nodes = LaunchConfiguration('rust_nodes')
+    rust_status = LaunchConfiguration('rust_status')
 
-    declare_rust_nodes = DeclareLaunchArgument(
-        'rust_nodes',
+    declare_rust_status = DeclareLaunchArgument(
+        'rust_status',
         default_value='false',
         description='Run the mower_rs (Rust) robot_status process instead of '
                     'the rclpy heartbeat_node + robot_info_node + '
@@ -253,7 +253,7 @@ def generate_launch_description():
         executable='heartbeat_node',
         name='robot_heartbeat',
         output='screen',
-        condition=UnlessCondition(rust_nodes),
+        condition=UnlessCondition(rust_status),
         parameters=[{
             'use_sim_time': False,
             'source_topic': heartbeat_source_topic,
@@ -269,7 +269,7 @@ def generate_launch_description():
         executable='robot_info_node',
         name='robot_info',
         output='screen',
-        condition=UnlessCondition(rust_nodes),
+        condition=UnlessCondition(rust_status),
         parameters=[{'use_sim_time': False, 'odom_topic': '/odom_slow'}],
     )
 
@@ -280,7 +280,7 @@ def generate_launch_description():
         executable='telemetry_node',
         name='telemetry',
         output='screen',
-        condition=UnlessCondition(rust_nodes),
+        condition=UnlessCondition(rust_status),
         parameters=[{
             'use_sim_time': False,
             'gps_fix_topic': gps_fix_topic,
@@ -288,7 +288,7 @@ def generate_launch_description():
         }],
     )
 
-    # rust_nodes:=true -- the three status nodes above as one r2r process
+    # rust_status:=true -- the three status nodes above as one r2r process
     # (src/mower_rs/crates/robot_status). Same topics, services, state-dir
     # files and LED behaviour; ~1 % of a core instead of ~30 %.
     robot_status_rs = Node(
@@ -296,7 +296,7 @@ def generate_launch_description():
         executable='robot_status',
         name='robot_status',
         output='screen',
-        condition=IfCondition(rust_nodes),
+        condition=IfCondition(rust_status),
         parameters=[{
             'heartbeat_source_topic': heartbeat_source_topic,
             'heartbeat_stale_timeout_s': 2.0,
@@ -345,7 +345,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
-        declare_rust_nodes,
+        declare_rust_status,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,

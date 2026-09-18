@@ -45,8 +45,8 @@ def generate_launch_description():
     enable_keyboard_teleop = LaunchConfiguration('enable_keyboard_teleop')
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
 
-    declare_rust_nodes = DeclareLaunchArgument(
-        'rust_nodes',
+    declare_rust_guards = DeclareLaunchArgument(
+        'rust_guards',
         default_value='false',
         description='Run the mower_rs velocity guards instead of the rclpy ones',
     )
@@ -140,7 +140,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'rust_nodes': LaunchConfiguration('rust_nodes'),
+            'rust_guards': LaunchConfiguration('rust_guards'),
         }.items(),
     )
 
@@ -263,7 +263,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
-        declare_rust_nodes,
+        declare_rust_guards,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
         declare_enable_navigation,

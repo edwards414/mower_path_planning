@@ -115,7 +115,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 1. 新增 ament_cmake 套件 `src/mower_rs/`：一個 Cargo workspace，多個 bin（`mower_telemetry`、`velocity_command_guard`、`mower_adapter`、`mower_imu`、`mower_ws_bridge`）。`CMakeLists.txt` 比照 `mower_coverage_core` 在建置時呼叫 `cargo build --release`，把 bin 安裝到 `lib/mower_rs/`，所以 `ros2 run mower_rs <bin>` 和 launch 的 `Node(package='mower_rs', executable=...)` 都照舊。`package.xml` `<depend>mower_interface</depend>` 讓 colcon 先建訊息。
 2. Dockerfile builder stage：apt 加 `libclang-dev`（bindgen）；`.cargo/config.toml` 設 `IDL_PACKAGE_FILTER`（std_msgs、geometry_msgs、nav_msgs、sensor_msgs、tf2_msgs、std_srvs、rcl_interfaces、visualization_msgs、builtin_interfaces、action_msgs、unique_identifier_msgs、mower_interface、robot_localization）。首次 arm64 冷建約 5–8 分鐘，之後由 buildkit-cache-dance 快取。
 3. Runtime stage 不變：bin 動態連結 /opt/ros/jazzy 的 librcl/rmw/typesupport，都已在映像裡。
-4. Launch：每個節點加 launch 參數 `rust_nodes:=true|false`（預設 false，逐節點切換），同一映像同時帶 Python 與 Rust 版，回滾只改參數。
+4. Launch：每個 process 一個 launch 參數（`rust_status`、`rust_guards`，預設 false，逐一切換），同一映像同時帶 Python 與 Rust 版，回滾只改參數。
 5. 開發環境：Mac 上 `cargo test` 跑純邏輯單元測試（不需 ROS）；需要 ROS 的整合測試在 devcontainer / CI arm64 runner。
 
 ### 6.1 Phase 1 執行紀錄（2026-09-19）
@@ -123,7 +123,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 - `src/mower_rs/`：ament_cmake 套件（`project(mower_rs NONE)`），`CMakeLists.txt` 在建置時跑 `cargo build --release --locked`（target dir 跟著 `CARGO_TARGET_DIR` 進 colcon build tree / CI cache），bin 裝到 `lib/mower_rs/`；`ros2 run mower_rs robot_status`、`ros2 pkg executables mower_rs` 都正常。Cargo workspace：`crates/mower_rs_common`（參數、JSON 四捨五入、state dir 檔案、host.request）+ `crates/robot_status`。
 - r2r 0.9.7 在 Jazzy arm64 驗證通過：`IDL_PACKAGE_FILTER` 必須列出 `mower_interface` 的遞移相依（visualization_msgs 等，r2r 不自動解析）；冷建 41 s、暖建 16 s；bin 1.4 MB，只動態連結 /opt/ros/jazzy 與 `mower_interface` 的 typesupport。
 - Dockerfile builder 加 `libclang-dev`（bindgen）。
-- 切換：`mission.launch.py` / `robot.launch.py` 新增 `rust_nodes`（預設 false）；compose 讀 `.env` 的 `RUST_NODES`。`rust_nodes:=true` 時只有 `/robot_status` 起來，false 時是原本三個 Python 節點（本機容器實測）。
+- 切換：每個 process 一個開關。`mission.launch.py` `rust_status`、`twist_mux.launch.py` `rust_guards`，`robot.launch.py` 兩個都收；compose 讀 `.env` 的 `RUST_STATUS` / `RUST_GUARDS`（預設 false）。`rust_status:=true` 時只有 `/robot_status` 起來，false 時是原本三個 Python 節點（本機容器實測）。
 
 ### 7.1 `robot_status`（pilot）執行紀錄
 
@@ -131,7 +131,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 影子比對（本機容器，合成輸入 5 Hz odom / imu / fix / battery / base telemetry，state dir 放 image.json、update_status.json、firmware_sync.json、link_status.json、identity.json）：`/robot/info` 0 個欄位差異；`/robot/telemetry` 70 vs 70 筆、唯一差異是 `robot_id`（Python 版用 hostname，Rust 版用 identity.json 的配對 ID，刻意）；`/robot/online` 相同；`/system/update` 寫出 host.request、`robot_status.json` 內容一致；SIGTERM 正常關閉。單元測試 10 個（`cargo test`）。
 
-待辦：真機影子比對（remap 到 `/shadow/...` 跑 30 分鐘）→ `.env` 設 `RUST_NODES=true` → 24 h 觀察 → 拿掉 Python 版。
+真機影子比對（映像 5be6ee5，300 s，remap 到 `/shadow/...`，與正在跑的 Python 節點並行）：`/robot/info` 301 vs 296 筆、0 個欄位差異；`/robot/telemetry` 2997 vs 2953 筆，10 次快照只差 `robot_id`（刻意）與 IMU 加速度的取樣時刻抖動（兩邊各自取到不同筆 IMU）；`/robot/online` 601 vs 591 筆全部 true；Rust 版各區塊的 `age_s` 更小（處理更快）。待辦：`.env` 設 `RUST_STATUS=true` → 24 h 觀察 → 拿掉 Python 版。
 
 ### 7.2 `velocity_command_guard` 執行紀錄
 
@@ -139,7 +139,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 差分測試（本機容器，`guard_compare.py`）：兩個實作吃同一串命令（零時戳 ×3、watchdog、帶時戳 ×3、過期、超速、側向、NaN、重播兩次、逾時重播、明確零；session 模式：零時戳、錯誤 id、正確 id ×3），輸出序列與 reject/timeout log **完全一致**。
 
-切換：`twist_mux.launch.py` 新增 `rust_nodes`，兩個 guard 各有 Python / Rust 版本互斥；`mower.launch.py`、`robot.launch.py` 轉發。本機容器 `rust_nodes:=true` → 2 個 Rust guard、0 個 Python；`false` 反之。`test_controller_configuration.py` 新增 `test_rust_velocity_guard_keeps_the_same_rules_and_wiring`。
+切換：`twist_mux.launch.py` 新增 `rust_guards`，兩個 guard 各有 Python / Rust 版本互斥；`mower.launch.py`、`robot.launch.py` 轉發（compose `RUST_GUARDS`）。本機容器 `rust_guards:=true` → 2 個 Rust guard、0 個 Python；`false` 反之。**真機切換前必須有人監督**：app 搖桿手動駕駛（含放開搖桿要在 0.2 s 內停）、一次導航任務、`/navigation_safety_stop` 介入；這一步留給現場。`test_controller_configuration.py` 新增 `test_rust_velocity_guard_keeps_the_same_rules_and_wiring`。
 
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
@@ -151,7 +151,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 | 4 | `mower_imu` | wit_ros2_imu（第三方 Python） | ~300 | 6% → ≈ 0.5% | `serialport` crate；保留「丟棄積壓、只接受完整新樣本」行為；比對 `/imu/data` 率與數值 |
 | 5 | `rosbridge_auth_proxy` | 148 行 Python TCP relay | 148 | 5.6% → 併入 Phase 3（若 Phase 3 延後，先用 tokio 做獨立版） | 現有 HMAC 標頭測試 |
 
-每個 bin 的驗收：影子比對通過 → `rust_nodes` 切換 → 真機 24 h 觀察（CPU、`/robot/online` 連續性、app 功能）→ 下一個。
+每個 bin 的驗收：影子比對通過 → 對應的 `rust_*` 開關切換 → 真機 24 h 觀察（CPU、`/robot/online` 連續性、app 功能）→ 下一個。
 
 ## 8. Phase 3：`mower_ws_bridge`（取代 rosbridge_websocket + rosapi + auth proxy，54% → ≈ 6%）
 
