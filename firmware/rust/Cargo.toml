@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["mower-core", "mower-fw"]
+# mower-fw only builds for thumbv7em-none-eabihf; `cargo test` at the root
+# would try to build it for the host, so it is excluded from the default set.
+default-members = ["mower-core"]
+
+[profile.release]
+debug = 2          # keep symbols for openocd/gdb; stripped from the .bin anyway
+lto = "fat"
+opt-level = "s"
+codegen-units = 1
+incremental = false
+
+[profile.dev]
+opt-level = 1      # embassy timers are unusably slow at opt-level 0
+debug = 2

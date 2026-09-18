@@ -47,6 +47,7 @@
 | `0x04` | Host -> STM32 | 左右輪 PID 設定 |
 | `0x05` | Host -> STM32 | 電源 / 關機命令（ack、請求關機、取消、強制斷電） |
 | `0x06` | Host -> STM32 | 要求回傳韌體版本（無 payload） |
+| `0x07` | Host -> STM32 | MG996 servo 脈寬命令 |
 | `0x0F` | Host -> STM32 | 重開進 UART bootloader（見 `BOOTLOADER.md`） |
 | `0x81` | STM32 -> Host | 狀態回傳 |
 | `0x82` | STM32 -> Host | `lawer_motor` 狀態回傳格式 |
@@ -55,6 +56,8 @@
 | `0x85` | STM32 -> Host | 左右輪 PID / encoder 回饋格式 |
 | `0x86` | STM32 -> Host | 電源狀態（按鈕、關機請求、主電源） |
 | `0x87` | STM32 -> Host | 韌體版本 / build 身分（每 1 s 一次，或回應 `0x06`） |
+| `0x88` | STM32 -> Host | MG996 servo 狀態 |
+| `0x89` | STM32 -> Host | RS485 充電模組狀態（Vin / Vout / Iout / CC / CV） |
 | `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
 | `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
@@ -179,6 +182,21 @@ Payload 長度固定 `4` bytes。
 | `0x04` | `FORCE_POWER_OFF` | 立刻切主電源，不做握手（Host 自己已經 halt 完才用） |
 
 STM32 收到 `0x05` 後會立刻回一筆 `0x86`，`seq` 等於這筆命令的 seq。
+
+## `0x07` Servo Command
+
+MG996 servo（`PB10`，TIM10 中斷計時，50 Hz）。Payload 長度固定 `8` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint16_t` | `pulse_us` | 脈寬 `500 ~ 2500` µs（超出會被夾住）；`0` = 停止送脈波，servo 放鬆 |
+| 2 | `uint16_t` | `hold_timeout_ms` | `0` = 一直保持到下一筆命令；非 `0` = 最後一筆命令後過這麼久就停止脈波（host 掛掉時機構放鬆） |
+| 4 | `uint16_t` | `reserved0` | 固定 `0` |
+| 6 | `uint16_t` | `reserved1` | 固定 `0` |
+
+跟馬達命令一樣，`SHUTDOWN_PENDING / LIGHTS_OFF / LOW_POWER` 期間會被忽略；關機流程會直接 disable servo。ADC 電流限位觸發（`0x88 LIMIT_ACTIVE`）時脈波暫停，限位解除後自動恢復，不用重送命令。
+
+角度換算由 host 做：`pulse_us = 500 + angle_deg / 180 * 2000`（MG996R 的實際端點請實測）。
 
 ## `0x0F` Enter Bootloader Command
 
@@ -374,6 +392,59 @@ Payload 長度固定 `16` bytes（`firmware_info_payload_t`，值由 `Module/Inc
 在 `SHUTDOWN_PENDING` / `LIGHTS_OFF` / `LOW_POWER` 期間，`0x01 / 0x02` 馬達命令與 `0x03` 燈光命令會被忽略。
 
 `ros2/mower_hardware` 已實作步驟 3：收到 `SHUTDOWN_REQUESTED` 就回 ack 並執行 `shutdown_command` 參數（預設 `systemctl poweroff`，設空字串停用）。ros2_control 通常不是 root，需要 polkit 允許該使用者 `org.freedesktop.login1.power-off`，或把參數改成 `sudo -n systemctl poweroff` 並在 sudoers 放行。
+
+## `0x89` Charger Status
+
+STM32 每 `50ms` 送一次，資料來源是 `USART6`（PA11/PA12）接的 RS485 數控 30V5A 充電模組，STM32 每 `500ms` 用 Modbus RTU（站號 `0x01`、9600 8N1、FC03 讀 Reg0-4）輪詢一次，所以數值每 500 ms 才會更新。Frame header 的 `seq` 固定 `0`。主電源關閉（`0x86 MAIN_POWER_ENABLED=0`）時暫停輪詢。
+
+Payload 長度固定 `16` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint16_t` | `vin_cv` | 充電模組輸入電壓，x0.01 V |
+| 2 | `uint16_t` | `vout_cv` | 輸出電壓 = 電池端電壓，x0.01 V |
+| 4 | `uint16_t` | `iout_ca` | 充電電流，x0.01 A |
+| 6 | `uint16_t` | `set_cc_ca` | 模組設定的 CC 限流，x0.01 A |
+| 8 | `uint16_t` | `set_cv_cv` | 模組設定的 CV 電壓，x0.01 V |
+| 10 | `uint8_t` | `flags` | 見下表 |
+| 11 | `uint8_t` | `comm_error_count` | 開機以來 RS485 timeout / CRC 錯誤次數，8-bit 回捲 |
+| 12 | `uint16_t` | `age_ms` | 距離最近一次有效回應的毫秒數，`0xFFFF` = 開機後從未收到 |
+| 14 | `uint8_t` | `last_exception_code` | 最近一次 Modbus exception code，`0` 無 |
+| 15 | `uint8_t` | `reserved` | 固定 `0` |
+
+`flags`:
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `ONLINE`，最近的輪詢有正確回應（連續 3 次失敗後清除） |
+| 1 | `0x02` | `CHARGING`，`iout >= 0.05 A` |
+| 2 | `0x04` | `CV_PHASE`，`vout >= set_cv - 0.10 V`，代表進入恆壓／快充飽階段 |
+| 3 | `0x08` | `INPUT_PRESENT`，`vin >= 5.00 V` |
+| 4 | `0x10` | `EVER_SEEN`，開機後至少收到過一次有效回應 |
+
+`ONLINE=0` 時 `vin/vout/iout/cc/cv` 是最後一次有效值（或全 `0`），Host 應以 `flags` 為準。
+`CHARGING / CV_PHASE / INPUT_PRESENT` 只在 `ONLINE=1` 時才會被設定。
+
+## `0x88` Servo Status
+
+每 `50ms` 送一次；frame header 的 `seq` 等於最近一次接受的 `0x07` seq。Payload 長度固定 `8` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint16_t` | `pulse_us` | 目前目標脈寬 |
+| 2 | `uint16_t` | `hold_timeout_ms` | 目前的 hold timeout |
+| 4 | `uint16_t` | `command_age_ms` | 距離最近一筆 `0x07` 的毫秒數，飽和在 `0xFFFF` |
+| 6 | `uint8_t` | `flags` | 見下表 |
+| 7 | `uint8_t` | `last_rx_seq` | 最近一次接受的 `0x07` seq |
+
+`flags`:
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `ENABLED`，host 有要求輸出 |
+| 1 | `0x02` | `LIMIT_ACTIVE`，電流限位中，脈波暫停 |
+| 2 | `0x04` | `OUTPUT_ACTIVE`，脈波實際在輸出（= `ENABLED && !LIMIT_ACTIVE`） |
+| 3 | `0x08` | `TIMED_OUT`，`hold_timeout_ms` 到期停掉了 |
 
 ## Status Flags
 

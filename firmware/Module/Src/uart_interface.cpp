@@ -4,6 +4,8 @@
 #include "ws2812.h"
 #include "boot_animation.hpp"
 #include "led_effects.hpp"
+#include "charger_rs485.hpp"
+#include "mg996_servo.hpp"
 #include "power_manager.hpp"
 #include "sleep_animation.hpp"
 #include "boot_shared.h"
@@ -605,6 +607,22 @@ void uart_handle_frame(uint8_t version, uint8_t type, uint8_t seq,
                                 lawer_payload.command_timeout_ms, seq);
     break;
 
+  case UART_FRAME_TYPE_SERVO_COMMAND: {
+    if ((payload_len != sizeof(servo_command_payload_t)) ||
+        !PowerManager_MotionAllowed()) {
+      return;
+    }
+    servo_command_payload_t servo_payload;
+    memcpy(&servo_payload, payload, sizeof(servo_payload));
+    if (servo_payload.pulse_us == 0U) {
+      Mg996Servo_Disable();
+    } else {
+      Mg996Servo_SetPulseUs(servo_payload.pulse_us,
+                            servo_payload.hold_timeout_ms, seq);
+    }
+    break;
+  }
+
   case UART_FRAME_TYPE_WS2812_COMMAND:
     if (payload_len != sizeof(ws2812_command_payload_t)) {
       return;
@@ -1029,6 +1047,57 @@ void uart_send_firmware_info(void) {
                         &payload, (uint8_t)sizeof(payload));
 }
 
+void uart_send_servo_status(void) {
+  mg996_servo_status_t servo = {};
+  Mg996Servo_GetStatus(&servo);
+
+  servo_status_payload_t payload = {};
+  payload.pulse_us = servo.pulse_us;
+  payload.hold_timeout_ms = servo.hold_timeout_ms;
+  payload.command_age_ms = servo.command_age_ms;
+  payload.flags = servo.flags; /* same bit layout as MG996_SERVO_FLAG_* */
+  payload.last_rx_seq = servo.last_rx_seq;
+
+  (void)uart_send_frame(UART_FRAME_TYPE_SERVO_STATUS, servo.last_rx_seq,
+                        &payload, (uint8_t)sizeof(payload));
+}
+
+void uart_send_charger_status(void) {
+  charger_rs485_snapshot_t ch = {};
+  ChargerRs485_GetSnapshot(&ch);
+
+  charger_status_payload_t payload = {};
+  payload.vin_cv = ch.vin_cv;
+  payload.vout_cv = ch.vout_cv;
+  payload.iout_ca = ch.iout_ca;
+  payload.set_cc_ca = ch.set_cc_ca;
+  payload.set_cv_cv = ch.set_cv_cv;
+  payload.flags = 0U;
+  if (ch.online) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_ONLINE;
+  }
+  if (ChargerRs485_IsCharging(&ch)) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_CHARGING;
+  }
+  if (ChargerRs485_IsCvPhase(&ch)) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_CV_PHASE;
+  }
+  if (ChargerRs485_IsInputPresent(&ch)) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_INPUT_PRESENT;
+  }
+  if (ch.ever_seen) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_EVER_SEEN;
+  }
+  payload.comm_error_count = ch.comm_error_count;
+  payload.age_ms = ch.ever_seen ? saturating_u16(HAL_GetTick() - ch.last_ok_ms)
+                                : 0xFFFFU;
+  payload.last_exception_code = ch.last_exception_code;
+  payload.reserved = 0U;
+
+  (void)uart_send_frame(UART_FRAME_TYPE_CHARGER_STATUS, 0U, &payload,
+                        (uint8_t)sizeof(payload));
+}
+
 void UartParserTask(void *arg) {
   (void)arg;
 
@@ -1063,6 +1132,8 @@ void MotorTask(void *arg) {
       uart_send_ws2812_status();
       uart_send_pid_config_status();
       uart_send_power_status();
+      uart_send_charger_status();
+      uart_send_servo_status();
       last_status_tick = now;
     }
     if ((now - last_info_tick) >= UART_INFO_PERIOD_MS) {
@@ -1106,6 +1177,10 @@ void UartTxTask(void *arg) {
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart == &huart6) {
+    ChargerRs485_OnTxComplete(); /* drop MAX485 DE */
+    return;
+  }
   if ((huart == &huart1) && (uartTxTaskHandle != NULL)) {
     (void)osThreadFlagsSet(uartTxTaskHandle, 0x01U);
   }

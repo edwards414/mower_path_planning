@@ -1,0 +1,11 @@
+[package]
+name = "mower-core"
+version = "0.1.0"
+edition = "2021"
+description = "Hardware-independent logic for the mower firmware: UART protocol, PID, wheel control, settings record"
+
+[dependencies]
+zerocopy = { version = "0.8", features = ["derive"] }
+heapless = "0.9"
+
+[dev-dependencies]

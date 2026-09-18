@@ -8,6 +8,7 @@ usage:
   mower_uart.py PORT led MODE [R G B PERIOD_MS] # mode 0..5
   mower_uart.py PORT pid KP KI [KD] [--save]    # both wheels, RAM only unless --save
   mower_uart.py PORT info                        # ask for the 0x87 firmware info frame
+  mower_uart.py PORT servo PULSE_US [HOLD_MS] [SECONDS]  # 500..2500, 0 = release; HOLD_MS 0 = hold forever
 
 needs: pip install pyserial
 """
@@ -85,6 +86,25 @@ def flags85(f):
     return "|".join(s) or "none"
 
 
+def flags87(f):
+    s = []
+    if f & 1: s.append("ONLINE")
+    if f & 2: s.append("CHARGING")
+    if f & 4: s.append("CV")
+    if f & 8: s.append("VIN")
+    if f & 16: s.append("SEEN")
+    return "|".join(s) or "none"
+
+
+def flags88(f):
+    s = []
+    if f & 1: s.append("ENABLED")
+    if f & 2: s.append("LIMIT")
+    if f & 4: s.append("OUTPUT")
+    if f & 8: s.append("TIMED_OUT")
+    return "|".join(s) or "none"
+
+
 def decode(ftype, seq, p):
     if ftype == 0x81 and len(p) == 12:
         cl, cr, al, ar, age, fl, rxseq = struct.unpack("<hhhhHBB", p)
@@ -110,6 +130,15 @@ def decode(ftype, seq, p):
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(built)) if built else "unknown"
         tags = ("dirty " if bflags & 0x01 else "") + ("unversioned" if bflags & 0x02 else "")
         return f"87 FWINFO v{ma}.{mi}.{pa} proto={proto} sha={sha:08x} built={when} {tags}".rstrip()
+    if ftype == 0x89 and len(p) == 16:
+        vin, vout, iout, cc, cv, fl, err, age, exc, _ = struct.unpack("<HHHHHBBHBB", p)
+        age_s = "never" if age == 0xFFFF else f"{age}ms"
+        return (f"89 CHARGE Vin={vin/100:5.2f}V Vout={vout/100:5.2f}V Iout={iout/100:4.2f}A "
+                f"set CC={cc/100:4.2f}A CV={cv/100:5.2f}V  {flags87(fl)}  err={err} exc={exc} age={age_s}")
+    if ftype == 0x88 and len(p) == 8:
+        pulse, hold, age, fl, rxseq = struct.unpack("<HHHBB", p)
+        hold_s = "forever" if hold == 0 else f"{hold}ms"
+        return f"88 SERVO  pulse={pulse:4d}us hold={hold_s} age={age:5d}ms {flags88(fl)} rxseq={rxseq}"
     return f"{ftype:02X} seq={seq} payload={p.hex()}"
 
 
@@ -144,6 +173,12 @@ def run(port, cmd, args):
     elif cmd == "info":
         duration = 1.0
         tx = lambda s: build(0x06, s, b"")
+    elif cmd == "servo":
+        pulse = int(args[0])
+        hold = int(args[1]) if len(args) > 1 else 0
+        duration = float(args[2]) if len(args) > 2 else 1.0
+        f = build(0x07, 0, struct.pack("<HHHH", pulse, hold, 0, 0))
+        tx = lambda s: f
         period = 0.5
     elif cmd == "pid":
         kp, ki = float(args[0]), float(args[1])
