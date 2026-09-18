@@ -616,7 +616,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 - AON 小電池已規劃使用 ADC mux CH3 量測 raw 3.7 V 電池；需確認小電池類型、最低電壓門檻與充電/保護模組。
 - ADC mux 型號需確認；mux 供電 3.3 V，所有 analog input 需在 0-3.3 V 範圍內。
 - MG996 限位電流 threshold 與持續判定時間需實測校正。
-- 左右輪 PID 預設值已加入韌體，但 Kp/Ki/Kd 需在實車上調整；確認後再寫入 internal Flash。
+- 左右輪 PID 預設值已加入韌體，但 Kp/Ki/Kd 需在實車上調整；確認後再寫入 internal Flash。調參走 host 端自動校正：Mower Studio「自動校正」按鈕 → `mower_path_planning` `pid_autotune_node`（開環 step → 一階模型 → SIMC PI → 閉環驗證 → 確認後 `0x04 persist=1`），韌體不用改，車要先架高。
 - FT-555 A/B 已按 PP push-pull 輸出規劃；需確認選用的電壓邏輯轉換器可接受 5 V push-pull input 並輸出 3.3 V 給 STM32。
 - BLD120A PWM 需求為 5 V、1-3 kHz；STM32 `PB8/TIM4_CH3` 是 3.3 V，需電平轉換或確認 BLD120A 可接受 3.3 V high。
 - BLD120A BRK 已改用 `PC13` open-drain，EN 硬體接 GND 常開。2026-09-10 實測確認：duty 歸零同時 `PC13` 拉低，馬達瞬間煞住；BRK 低 = 剎車的極性正確。
