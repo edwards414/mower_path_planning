@@ -109,8 +109,9 @@ async fn serve_listener(listener: TcpListener, shared: Arc<Shared>, gate: Option
         let gate = gate.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, peer, shared, gate).await {
-                // closed connections are routine; only log the odd ones
-                if !e.contains("Connection reset") && !e.contains("closed") {
+                // closed connections and the app's plain-TCP reachability
+                // probes (no WebSocket handshake) are routine
+                if !e.contains("Connection reset") && !e.contains("closed") && !e.contains("Handshake not finished") {
                     eprintln!("[mower_ws_bridge] {peer}: {e}");
                 }
             }

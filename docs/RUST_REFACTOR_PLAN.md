@@ -62,9 +62,9 @@
 | 階段 | 整機 CPU（sum of one-core %） | 附帶效果 |
 |---|---|---|
 | 現在 | 388%（97%） | 1.1–1.4 GHz 熱降頻、84 °C、load 9–20 |
-| Phase 0（純 Python 修正） | ≈ 240%（60%） | 脫離熱降頻 |
-| Phase 2（Rust 搬運節點） | ≈ 165%（41%） | |
-| Phase 3（Rust bridge） | ≈ 120%（30%） | 第一筆 heartbeat < 0.5 s、service call < 100 ms |
+| Phase 0（純 Python 修正） | ≈ 240%（60%）→ **實測 285%** | 脫離熱降頻 |
+| Phase 2（Rust 搬運節點） | ≈ 165%（41%）→ **實測 259%（guards 未切）** | |
+| Phase 3（Rust bridge） | ≈ 120%（30%）→ **實測 212%（guards 未切；nav_action_server 45% 未移植）** | 第一筆 heartbeat 425 ms、service call 1–2 ms（bridge 本身）+ 服務端處理 |
 
 驗收指標（同一組腳本再量一次）：sum-of-process CPU、load avg < 3、溫度 < 70 °C 且時脈不降、rosbridge 連線後第一筆 `/robot/online` < 0.5 s、service call p95 < 100 ms、`/adapter/robot_pose` 5 Hz jitter < 50 ms。
 
@@ -165,7 +165,9 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 與 rosbridge_websocket 在同一張圖上比對（本機容器）：String / Bool / BatteryState（NaN → null）/ NavSatFix / Header / PoseStamped 的 `msg` JSON **完全相同**；service 回應相同（含 1.5 s 的慢服務）；publish 到達 ROS 訂閱者；未列入白名單的 subscribe / publish / service 被拒（rosbridge 是靜默不回，Rust 版回 status / result=false）；`/rosapi/topics` 依白名單回答；gate：無標頭 401、重播 nonce 401、壞 MAC 401、正確握手接受並立即收到 latched `/robot/online`。開關 `rust_bridge`（compose `RUST_BRIDGE`），`rosbridge.launch.py` 在 true 時只起 `mower_ws_bridge` + `mower_agent`。
 
-尚未做：真機影子測試（可先開在另一個 port：`--port 9097 --loopback-port none`，用 app 的 DEV_PAIR_URL 指過去）、`fragment` / `png` / actions（客戶端不用）。
+真機影子測試（`--port 9097 --loopback-port none`，從 Mac 走 gate 重放 app 的 21 個訂閱 + 2 個 service）：連線 134 → 14 ms；第一筆訊息 Python 567–1966 ms（逐一處理）、Rust 213–612 ms（並行）；`/robot/online` 第一筆 1386 → 425 ms；`/check_nav_status` 1780 → 507 ms；訊息數與內容相同（`/robot/telemetry` 只差取樣時刻）；`/rosapi/topics` 相同。
+
+**2026-09-19 已切換 `RUST_BRIDGE=true`**：iOS app、Studio、agent 都重新連上；Python rosbridge / rosapi / auth proxy 0 個 process；整機 **388% → 212%**（Python 298 → 106）；溫度 84 → 79 °C。切換後發現兩件事並已修：(1) 剛建立的 service client 在 DDS 配對完成前送出的 request 會被丟掉、永遠等不到回應（app 連線後第一次 `/check_nav_status` 30 s timeout）→ 先等 `is_available`（上限 5 s）再送；(2) Studio 用 `/rosapi/get_time` 量延遲 → 原生回答。並行壓力測試：同一 service 40 筆並行全部回應、1 Hz 輪詢延遲 1–2 ms、不存在的 service 5 s 內回 result=false。未做：`fragment` / `png` / actions（客戶端不用）。
 
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 

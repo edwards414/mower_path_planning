@@ -17,6 +17,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::client::ClientHandle;
 
+/// How long a call waits for its service to be matched before failing.
+const AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Requests that need the node thread.
 pub enum Cmd {
     /// One shared subscription for `topic` (creating it if needed).
@@ -95,7 +98,7 @@ struct NodeState {
     logger: String,
     topics: HashMap<String, Arc<TopicEntry>>,
     publishers: HashMap<String, (String, r2r::PublisherUntyped)>,
-    clients: HashMap<String, r2r::ClientUntyped>,
+    clients: HashMap<String, Arc<r2r::ClientUntyped>>,
 }
 
 impl Hub {
@@ -238,7 +241,7 @@ impl NodeState {
                 if !self.clients.contains_key(&service) {
                     match self.node.create_client_untyped(&service, &service_type, QosProfile::services_default()) {
                         Ok(c) => {
-                            self.clients.insert(service.clone(), c);
+                            self.clients.insert(service.clone(), Arc::new(c));
                         }
                         Err(e) => {
                             let _ = reply.send(Err(format!("cannot create client for {service} ({service_type}): {e:?}")));
@@ -246,27 +249,30 @@ impl NodeState {
                         }
                     }
                 }
-                let client = self.clients.get(&service).expect("just inserted");
-                let available = match r2r::Node::is_available(client) {
+                let client = self.clients.get(&service).expect("just inserted").clone();
+                let available = match r2r::Node::is_available(client.as_ref()) {
                     Ok(f) => f,
                     Err(e) => {
                         let _ = reply.send(Err(format!("{service}: {e:?}")));
                         return;
                     }
                 };
-                let request = match client.request(args) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let _ = reply.send(Err(format!("{service}: request failed: {e:?}")));
-                        return;
-                    }
-                };
-                // Resolve on the runtime so the node thread keeps spinning.
+                // Resolve on the runtime so the node thread keeps spinning. The
+                // request is only sent once the server is matched: a request
+                // sent by a freshly created client before discovery completes
+                // is silently dropped by DDS and would never be answered.
                 runtime.spawn(async move {
-                    if available.await.is_err() {
+                    if tokio::time::timeout(AVAILABILITY_TIMEOUT, available).await.map(|r| r.is_err()).unwrap_or(true) {
                         let _ = reply.send(Err(format!("{service}: service unavailable")));
                         return;
                     }
+                    let request = match client.request(args) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = reply.send(Err(format!("{service}: request failed: {e:?}")));
+                            return;
+                        }
+                    };
                     let result = match request.await {
                         Ok(Ok(v)) => Ok(v),
                         Ok(Err(e)) => Err(format!("{service}: {e:?}")),

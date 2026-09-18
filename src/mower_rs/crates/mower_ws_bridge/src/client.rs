@@ -2,9 +2,9 @@
 //!
 //! Supported ops are the ones the app, the studio and the relay use:
 //! subscribe (type, throttle_rate), unsubscribe, advertise, unadvertise,
-//! publish, call_service (with `/rosapi/topics` answered natively) and
-//! status replies on errors. Fragments, compression and actions are not
-//! implemented.
+//! publish, call_service (with `/rosapi/topics` and `/rosapi/get_time`
+//! answered natively) and status replies on errors. Fragments, compression
+//! and actions are not implemented.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -143,6 +143,10 @@ impl Client {
                 let args = doc.get("args").cloned().unwrap_or_else(|| json!({}));
                 let response = if service == "/rosapi/topics" {
                     Ok(self.rosapi_topics().await)
+                } else if service == "/rosapi/get_time" {
+                    // the studio's latency ping
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    Ok(json!({"time": {"sec": now.as_secs() as i64, "nanosec": now.subsec_nanos()}}))
                 } else {
                     match self.policy.service_type(&service) {
                         None => Err(format!("service {service} is not allowed")),
