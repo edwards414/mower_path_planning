@@ -61,5 +61,9 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 
 ## 遠端存取
 
+前鏡頭：主機端 `mower-camera.service`（`host/mower-camera.sh`）用 GStreamer 從 `/dev/video0` 抓 MJPG，
+交給 Rockchip VPU 硬體解 JPEG、硬體編 H.264（約佔一核的 2%），以 RTSP 發布進 mediamtx 容器，App 再以 WebRTC/WHEP 讀。
+參數在 `.env` 的 `CAMERA_*`。相機在暗處會因自動曝光掉到約 5 fps，戶外正常。
+
 `server/` 是舊的公網 relay（cloudflared + WireGuard，只對一台機器人），影像目前仍走它；控制連線改由 `../backend/`
 （Cloudflare Worker，`MOWER_BACKEND_URL` / `MOWER_PROVISION_TOKEN` 在 `.env`）中繼，見 `docs/BACKEND_ARCHITECTURE.md`。`ROSBRIDGE_ADDRESS` 預設 `10.77.0.2` 是機器人的 WireGuard 位址，桌上測試改成 LAN IP。

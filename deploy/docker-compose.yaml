@@ -99,14 +99,12 @@ services:
   #                     the public relay serves WHEP to the app
   #   mediamtx.lan.yml  bench / LAN: WHEP on :8889 and RTSP on all interfaces,
   #                     the app pulls http://<robot-ip>:8889/<feed>/whep directly
-  # Uses the -ffmpeg image variant so runOnDemand can encode the feeds.
-  # The front feed is the USB camera on /dev/video0 (mediamtx*.yml).
+  # The front feed is published into it by the host service
+  # mower-camera.service (USB camera -> Rockchip MPP H.264), so the container
+  # itself needs no camera device. The -ffmpeg variant stays for test patterns.
   mediamtx:
     image: bluenviron/mediamtx:latest-ffmpeg
     network_mode: host
     restart: unless-stopped
     volumes:
       - ./${MEDIAMTX_CONFIG:-mediamtx.yml}:/mediamtx.yml:ro
-    # USB/v4l2 front camera (udev may renumber it; check `ls -l /dev/video*`).
-    devices:
-      - /dev/video0:/dev/video0

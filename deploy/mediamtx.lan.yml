@@ -7,10 +7,8 @@
 #   http://<robot-ip>:8889/front/whep
 # (see `whepUrl()` in mower_lawer_app/lib/providers/mission_mock_provider.dart)
 #
-# The front feed is the USB camera on /dev/video0 (docker-compose.yaml maps the
-# device into the mediamtx container). ffmpeg starts only while a viewer is
-# connected. Without a camera, swap the v4l2 input for a test pattern:
-#   -re -f lavfi -i testsrc2=size=1280x720:rate=25
+# The front feed is published by the host service mower-camera.service (USB
+# camera -> Rockchip MPP hardware H.264), see host/mower-camera.sh.
 
 logLevel: info
 
@@ -43,17 +41,11 @@ authInternalUsers:
         path: front
 
 paths:
-  # Front USB camera (Global Shutter Camera, MJPG) on /dev/video0.
+  # Front USB camera. The host service mower-camera.service (host/mower-camera.sh)
+  # captures MJPG from /dev/video0, decodes and encodes H.264 on the Rockchip
+  # VPU and publishes here over RTSP; mediamtx re-serves it over WebRTC/WHEP.
+  # Without a camera, publish a test pattern from the host instead:
+  #   ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=25 -c:v libx264 \
+  #     -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/front
   front:
-    # runOnDemand: ffmpeg starts only when the app (a reader) connects, and is
-    # torn down shortly after the last reader leaves — same lifecycle a real
-    # camera capture would want.
-    runOnDemand: >
-      ffmpeg -hide_banner
-      -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 25 -i /dev/video0
-      -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
-      -profile:v baseline -level 3.1 -bf 0 -g 50
-      -b:v 2000k -maxrate 2000k -bufsize 2000k
-      -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
-    runOnDemandRestart: yes
-    runOnDemandCloseAfter: 10s
+    source: publisher

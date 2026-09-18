@@ -1,0 +1,15 @@
+# Front USB camera -> Rockchip MPP hardware H.264 -> RTSP publish into the
+# mediamtx container (see host/mower-camera.sh). Restarts until mediamtx is up.
+[Unit]
+Description=Mower front camera publisher (MJPG -> MPP H.264 -> mediamtx)
+After=network.target docker.service
+
+[Service]
+User=cat
+SupplementaryGroups=video
+ExecStart=/opt/mower/host/mower-camera.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
