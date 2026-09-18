@@ -68,8 +68,12 @@ def test_robot_pose_relay_and_health_gate_reject_stale_source_data():
     adapter = FLUTTER_ADAPTER.read_text(encoding='utf-8')
     server = NAV_SERVER.read_text(encoding='utf-8')
     assert "declare_parameter('robot_pose_max_age_s', 1.0)" in adapter
-    assert "tf.header.frame_id != 'map'" in adapter
+    assert 'odom.header.frame_id != source_frame' in adapter
+    assert 'odom.child_frame_id != child_frame' in adapter
     assert 'not -0.5 <= age_s <= max_age_s' in adapter
+    # The relay must read the EKF map pose, never the 77 Hz /tf stream.
+    assert 'from tf2_ros import' not in adapter
+    assert 'from tf2_ros import' not in PATH_RECORDER.read_text(encoding='utf-8')
     assert "msg.header.frame_id != 'map'" in server
     assert '_source_stamp_block_reason(' in server
     assert 'not -90.0 <= lat <= 90.0' in server

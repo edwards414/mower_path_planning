@@ -113,7 +113,12 @@ class PidAutotuneNode(Node):
         self._override_pub = self.create_publisher(String, self._p('override_topic'), best_effort)
         led_topic = self._p('led_topic')
         self._led_pub = self.create_publisher(String, led_topic, latched) if led_topic else None
-        self.create_subscription(String, self._p('telemetry_topic'), self._on_telemetry, best_effort)
+        # /mower_base/telemetry runs at ~17 Hz and rclpy costs ~6 ms per
+        # message on the LubanCat, so the subscription only exists while a
+        # tuning session runs (created on `start`, dropped by _tick once the
+        # worker has finished). Idle, this node then costs nothing.
+        self._telemetry_qos = best_effort
+        self._telemetry_sub = None
         self.create_subscription(Bool, self._p('nav_active_topic'), self._on_nav_active, 10)
         self.create_service(PidAutotune, '/pid_autotune', self._on_service)
         self._lock_client = self.create_client(MissionOperationLock, self._p('lock_service'))
@@ -134,7 +139,10 @@ class PidAutotuneNode(Node):
         self._decision_event = threading.Event()
         self._started_mono = 0.0
         self._status = self._blank_status('idle', 'ready')
-        self.create_timer(0.2, self._tick)
+        # Progress is republished at 5 Hz only while a session is active; the
+        # timer stays cancelled otherwise so the executor never wakes for it.
+        self._tick_timer = self.create_timer(0.2, self._tick)
+        self._tick_timer.cancel()
         self._publish_status()
         self.get_logger().info('pid_autotune ready: service /pid_autotune, status on ' + self._p('status_topic'))
 
@@ -177,6 +185,22 @@ class PidAutotuneNode(Node):
     def _tick(self):
         if self._active():
             self._publish_status()
+            return
+        # Session over: stop listening to the base and go back to sleep.
+        self._stop_telemetry()
+        self._tick_timer.cancel()
+
+    def _start_telemetry(self):
+        if self._telemetry_sub is None:
+            self._tel = None
+            self._tel_time = 0.0
+            self._telemetry_sub = self.create_subscription(
+                String, self._p('telemetry_topic'), self._on_telemetry, self._telemetry_qos)
+
+    def _stop_telemetry(self):
+        sub, self._telemetry_sub = self._telemetry_sub, None
+        if sub is not None:
+            self.destroy_subscription(sub)
 
     def _rel(self, mono):
         return round(mono - self._started_mono, 3)
@@ -217,6 +241,8 @@ class PidAutotuneNode(Node):
             self._abort.clear()
             self._decision = None
             self._decision_event.clear()
+            self._start_telemetry()
+            self._tick_timer.reset()
             self._worker = threading.Thread(target=self._run, name='pid_autotune', daemon=True)
             self._worker.start()
             res.success, res.message = True, 'auto-tune started'
@@ -243,9 +269,17 @@ class PidAutotuneNode(Node):
         """Latest base telemetry, or raise when the base has gone quiet."""
         if self._abort.is_set():
             raise Aborted()
-        tel = self._tel
         if timeout_s is None:
             timeout_s = float(self._p('telemetry_timeout_s'))
+        # The subscription is created on `start`, so the first frame of a
+        # session may still be in flight: give the base one timeout window
+        # (worker thread; the executor keeps delivering meanwhile).
+        deadline = time.monotonic() + timeout_s
+        while self._tel is None and time.monotonic() < deadline:
+            if self._abort.is_set():
+                raise Aborted()
+            time.sleep(0.02)
+        tel = self._tel
         if tel is None or time.monotonic() - self._tel_time > timeout_s:
             raise Precondition('no /mower_base/telemetry (is the base driver running?)')
         # motor.flags DRIVER_ALARM is the BTS7960 IS pin read as a GPIO: an

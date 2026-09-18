@@ -700,14 +700,15 @@ class NavActionServer(Node):
             self._monitor_uncertain_nav2_task,
             callback_group=self._control_callback_group,
         )
+        # One 20 Hz tick runs the health monitor and then the fail-safe lock
+        # heartbeat. Both used to be separate 0.05 s timers in this same
+        # mutually-exclusive group, so they already ran back to back; a
+        # single timer halves the rclpy executor wake-ups (~6 ms of CPU each
+        # on the LubanCat) without changing the twist_mux heartbeat cadence
+        # (/navigation_safety_stop timeout 0.2 s, coordinator lock 0.3 s).
         self.create_timer(
             0.05,
-            self._monitor_navigation_health,
-            callback_group=self._health_callback_group,
-        )
-        self.create_timer(
-            0.05,
-            self._publish_safety_stop_if_needed,
+            self._health_tick,
             callback_group=self._health_callback_group,
         )
 
@@ -1124,6 +1125,11 @@ class NavActionServer(Node):
                 return self._imu_rejection_reason
             return 'IMU is unavailable or stale'
         return None
+
+    def _health_tick(self) -> None:
+        """20 Hz: cancel on stale health, then heartbeat the fail-safe lock."""
+        self._monitor_navigation_health()
+        self._publish_safety_stop_if_needed()
 
     def _monitor_navigation_health(self) -> None:
         """Cancel an accepted mission if pose or GPS health becomes stale."""

@@ -159,6 +159,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'save_dir': zone_record_dir,
             'sites_dir': sites_dir,
+            'robot_pose_source_topic': '/odometry/global_slow',
         }],
     )
 
@@ -199,7 +200,10 @@ def generate_launch_description():
         executable='flutter_adapter_node',
         name='flutter_adapter',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'robot_pose_source_topic': '/odometry/global_slow',
+        }],
     )
 
     # /odom is 50 Hz and rclpy costs ~5 ms per Odometry message on the
@@ -212,6 +216,22 @@ def generate_launch_description():
         name='odom_throttle',
         output='screen',
         arguments=['messages', '/odom', '5.0', '/odom_slow'],
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # Same idea for the map-frame pose. /odometry/global is the EKF map
+    # filter's 30 Hz map -> base_footprint estimate; flutter_adapter and
+    # path_record_node are pointed at this 5 Hz copy (robot_pose_source_topic)
+    # instead of running a tf2 TransformListener, which would cost each of
+    # them the full 77 Hz /tf stream (~50 % of a core per node in rclpy).
+    global_odom_throttle = Node(
+        package='topic_tools',
+        executable='throttle',
+        name='global_odom_throttle',
+        output='screen',
+        arguments=[
+            'messages', '/odometry/global', '5.0', '/odometry/global_slow',
+        ],
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -301,6 +321,7 @@ def generate_launch_description():
         declare_git_repo_dir,
         rosbridge_launch,
         odom_throttle,
+        global_odom_throttle,
         *recorder_entries,
         path_record_node,
         map_manage_node,

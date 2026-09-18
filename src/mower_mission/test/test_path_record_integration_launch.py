@@ -3,8 +3,6 @@
 import tempfile
 import time
 
-from geometry_msgs.msg import TransformStamped
-
 import launch
 
 import launch_ros.actions
@@ -21,13 +19,14 @@ from mower_interface.srv import (
 import pytest
 
 import rclpy
+from nav_msgs.msg import Odometry
+
 from rclpy.node import Node
+from rclpy.publisher import Publisher
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
-
-from tf2_ros import TransformBroadcaster
 
 from visualization_msgs.msg import MarkerArray
 
@@ -76,22 +75,24 @@ def _call_trigger(node: Node, service_name: str):
     return _spin_until_future(node, future)
 
 
-def _broadcast_robot_tf(
+def _publish_robot_pose(
     node: Node,
-    broadcaster: TransformBroadcaster,
+    publisher: Publisher,
     x: float,
     y: float,
     repeat_count: int = 20,
 ):
+    # path_record_node reads its map -> base_footprint pose from the EKF map
+    # odometry topic (robot_pose_source_topic, default /odometry/global).
     for _ in range(repeat_count):
-        transform = TransformStamped()
-        transform.header.stamp = node.get_clock().now().to_msg()
-        transform.header.frame_id = 'map'
-        transform.child_frame_id = 'base_footprint'
-        transform.transform.translation.x = x
-        transform.transform.translation.y = y
-        transform.transform.rotation.w = 1.0
-        broadcaster.sendTransform(transform)
+        odom = Odometry()
+        odom.header.stamp = node.get_clock().now().to_msg()
+        odom.header.frame_id = 'map'
+        odom.child_frame_id = 'base_footprint'
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
+        odom.pose.pose.orientation.w = 1.0
+        publisher.publish(odom)
         rclpy.spin_once(node, timeout_sec=0.05)
 
 
@@ -111,9 +112,10 @@ class TestPathRecordLaunch:
             rclpy.shutdown()
 
     def setup_method(self):
-        """Create a ROS client node and TF broadcaster for each test."""
+        """Create a ROS client node and pose publisher for each test."""
         self.node = rclpy.create_node('path_record_launch_test_client')
-        self.tf_broadcaster = TransformBroadcaster(self.node)
+        self.pose_publisher = self.node.create_publisher(
+            Odometry, '/odometry/global', 10)
         self._lock_owner = None
 
         def operation_lock(req, res):
@@ -161,11 +163,11 @@ class TestPathRecordLaunch:
             10,
         )
 
-        _broadcast_robot_tf(self.node, self.tf_broadcaster, 0.0, 0.0)
+        _publish_robot_pose(self.node, self.pose_publisher, 0.0, 0.0)
         start_response = _call_trigger(self.node, '/chennal_record_start')
         assert start_response.success
 
-        _broadcast_robot_tf(self.node, self.tf_broadcaster, 0.6, 0.0)
+        _publish_robot_pose(self.node, self.pose_publisher, 0.6, 0.0)
         end_response = _call_trigger(self.node, '/chennal_record_end')
         assert end_response.success
 
@@ -192,11 +194,11 @@ class TestPathRecordLaunch:
 
     def test_channel_alias_services_share_chennal_path_list(self):
         """Record via channel aliases and read the shared channel list."""
-        _broadcast_robot_tf(self.node, self.tf_broadcaster, 1.0, 0.0)
+        _publish_robot_pose(self.node, self.pose_publisher, 1.0, 0.0)
         start_response = _call_trigger(self.node, '/channel_record_start')
         assert start_response.success
 
-        _broadcast_robot_tf(self.node, self.tf_broadcaster, 1.8, 0.0)
+        _publish_robot_pose(self.node, self.pose_publisher, 1.8, 0.0)
         end_response = _call_trigger(self.node, '/channel_record_end')
         assert end_response.success
 

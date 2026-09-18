@@ -24,7 +24,7 @@ from mower_interface.srv import ChannelPathList, ChannelRoute, EditZone, \
 
 from geometry_msgs.msg import Point, PoseStamped
 
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 
 from mower_interface.srv import ChennalPathList
 
@@ -38,7 +38,6 @@ from std_msgs.msg import String
 
 from std_srvs.srv import Trigger
 
-from tf2_ros import Buffer, TransformListener
 
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -76,6 +75,12 @@ class PathRecorder(Node, NavigationActivityGuard):
         super().__init__('path_recorder')
 
         self.declare_parameter('odom_topic', '/odom')
+        # map -> base_footprint source. The EKF map filter publishes exactly
+        # this pose on /odometry/global; mission.launch.py points the node at
+        # the 5 Hz throttled copy. A tf2 TransformListener would instead cost
+        # the full 77 Hz /tf stream (~50 % of a LubanCat core in rclpy).
+        self.declare_parameter('robot_pose_source_topic', '/odometry/global')
+        self.declare_parameter('robot_pose_max_age_s', 1.0)
         self.declare_parameter('min_dist', 0.05)
         self.declare_parameter('min_dt', 0.10)
         self.declare_parameter('frame_id', 'map')
@@ -197,8 +202,14 @@ class PathRecorder(Node, NavigationActivityGuard):
         self.last_pt = None
         self.last_t = self.get_clock().now()
 
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self._robot_pose_source = None
+        self._robot_pose_unavailable_logged = False
+        self.create_subscription(
+            Odometry,
+            str(self.get_parameter('robot_pose_source_topic').value),
+            self._on_robot_pose_source,
+            10,
+        )
 
         self.last_robot_pos = None
         self.initialized = False
@@ -268,25 +279,45 @@ class PathRecorder(Node, NavigationActivityGuard):
                 self.path_pub.publish(self.path)
                 self.init_timer.cancel()
             else:
-                self.get_logger().warn('等待TF可用以初始化機器人位置...')
+                self.get_logger().warn('等待機器人位置（map 座標）以完成初始化...')
+
+    def _on_robot_pose_source(self, odom: Odometry) -> None:
+        """Cache the latest map-frame pose sample (see robot_pose_source_topic)."""
+        if (odom.header.frame_id != self.get_parameter('frame_id').value
+                or odom.child_frame_id != 'base_footprint'):
+            return
+        position = odom.pose.pose.position
+        orientation = odom.pose.pose.orientation
+        values = (position.x, position.y, position.z,
+                  orientation.x, orientation.y, orientation.z, orientation.w)
+        if not all(math.isfinite(float(value)) for value in values):
+            return
+        if abs(math.sqrt(sum(float(v) ** 2 for v in values[3:])) - 1.0) > 1e-2:
+            return
+        pose = PoseStamped()
+        pose.header = odom.header
+        pose.pose = odom.pose.pose
+        self._robot_pose_source = pose
 
     def get_robot_pos(self):
-        """讀取tf，將odom座標轉換成目標map座標系下的位置."""
-        try:
-            now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform(
-                'map', 'base_footprint', now)
-            pose = PoseStamped()
-            pose.header.stamp = trans.header.stamp
-            pose.header.frame_id = 'map'
-            pose.pose.position.x = trans.transform.translation.x
-            pose.pose.position.y = trans.transform.translation.y
-            pose.pose.position.z = trans.transform.translation.z
-            pose.pose.orientation = trans.transform.rotation
-            return pose
-        except Exception as e:
-            self.get_logger().warn(f'TF查詢失敗: {e}')
-            return None
+        """回傳最新的 map 座標系機器人位置（過期或尚未收到時回傳 None）."""
+        pose = self._robot_pose_source
+        if pose is not None:
+            age_s = (self.get_clock().now()
+                     - rclpy.time.Time.from_msg(pose.header.stamp)
+                     ).nanoseconds * 1e-9
+            max_age_s = max(
+                0.1, float(self.get_parameter('robot_pose_max_age_s').value))
+            if -0.5 <= age_s <= max_age_s:
+                self._robot_pose_unavailable_logged = False
+                return copy.deepcopy(pose)
+        if not self._robot_pose_unavailable_logged:
+            self._robot_pose_unavailable_logged = True
+            self.get_logger().warn(
+                '機器人位置不可用: '
+                f'{self.get_parameter("robot_pose_source_topic").value} '
+                '尚未收到或已過期')
+        return None
 
     def create_polygon_from_path(self, poses):
         """根據路徑創建多邊形."""
@@ -2110,6 +2141,9 @@ class PathRecorder(Node, NavigationActivityGuard):
 def main():
     rclpy.init()
     node = PathRecorder()
+    # Service callbacks block on the mission-operation lock client
+    # (navigation_guard._wait_for_lock_response), which another executor
+    # thread has to service, so this node cannot run single-threaded.
     executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(node)
     try:

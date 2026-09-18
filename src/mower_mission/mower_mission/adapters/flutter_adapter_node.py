@@ -14,7 +14,7 @@ import math
 
 from geometry_msgs.msg import Point, PoseStamped
 from mower_interface.srv import ZoneMapList
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from robot_localization.srv import ToLL
 import rclpy
 from rcl_interfaces.srv import GetParameters
@@ -25,7 +25,6 @@ from rclpy.qos import (
     QoSReliabilityPolicy,
 )
 from std_msgs.msg import String
-from tf2_ros import Buffer, LookupException, TransformException, TransformListener
 from visualization_msgs.msg import MarkerArray
 
 from mower_mission.adapters.dto import (
@@ -113,9 +112,23 @@ class FlutterAdapter(Node):
             PoseStamped, '/adapter/robot_pose', 10
         )
         self.declare_parameter('robot_pose_max_age_s', 1.0)
-        self._tf_buffer = Buffer()
-        self._tf_listener = TransformListener(self._tf_buffer, self)
-        self.create_timer(0.2, self._publish_robot_pose)  # 5 Hz
+        # The map -> base_footprint pose comes straight from the EKF map
+        # filter's odometry output. mission.launch.py points this at the
+        # 5 Hz throttled copy /odometry/global_slow; the raw 30 Hz topic is
+        # the default so the node also works in the simulation launches and
+        # under a bare `ros2 run`. A tf2 TransformListener would instead
+        # subscribe to the whole 77 Hz /tf stream, and rclpy costs ~6 ms of
+        # CPU per message on the LubanCat, which made this node the busiest
+        # process on the robot for a 5 Hz relay.
+        self.declare_parameter('robot_pose_source_topic', '/odometry/global')
+        self.declare_parameter('robot_pose_source_frame', 'map')
+        self.declare_parameter('robot_pose_child_frame', 'base_footprint')
+        self.create_subscription(
+            Odometry,
+            str(self.get_parameter('robot_pose_source_topic').value),
+            self._on_robot_pose_source,
+            10,
+        )
 
         # Parameter snapshots are accumulated asynchronously by callbacks and
         # published from the latest cached values on every coverage_settings
@@ -184,30 +197,26 @@ class FlutterAdapter(Node):
 
     # ── robot pose ───────────────────────────────────────────────────────────
 
-    def _publish_robot_pose(self) -> None:
-        try:
-            tf = self._tf_buffer.lookup_transform(
-                'map', 'base_footprint', rclpy.time.Time()
-            )
-        except (LookupException, TransformException):
-            return  # TF not yet available — just skip this tick
-
+    def _on_robot_pose_source(self, odom: Odometry) -> None:
+        """Relay a validated map-frame odometry sample as /adapter/robot_pose."""
         stamp_ns = (
-            int(tf.header.stamp.sec) * 1_000_000_000
-            + int(tf.header.stamp.nanosec)
+            int(odom.header.stamp.sec) * 1_000_000_000
+            + int(odom.header.stamp.nanosec)
         )
         age_s = (
             (self.get_clock().now().nanoseconds - stamp_ns)
             / 1_000_000_000.0
         ) if stamp_ns > 0 else math.inf
+        position = odom.pose.pose.position
+        orientation = odom.pose.pose.orientation
         values = (
-            tf.transform.translation.x,
-            tf.transform.translation.y,
-            tf.transform.translation.z,
-            tf.transform.rotation.x,
-            tf.transform.rotation.y,
-            tf.transform.rotation.z,
-            tf.transform.rotation.w,
+            position.x,
+            position.y,
+            position.z,
+            orientation.x,
+            orientation.y,
+            orientation.z,
+            orientation.w,
         )
         quaternion_norm = math.sqrt(sum(
             float(value) ** 2 for value in values[3:]
@@ -216,23 +225,22 @@ class FlutterAdapter(Node):
             0.1,
             float(self.get_parameter('robot_pose_max_age_s').value),
         )
+        source_frame = str(self.get_parameter('robot_pose_source_frame').value)
+        child_frame = str(self.get_parameter('robot_pose_child_frame').value)
         if (
-            tf.header.frame_id != 'map'
-            or tf.child_frame_id != 'base_footprint'
+            odom.header.frame_id != source_frame
+            or odom.child_frame_id != child_frame
             or not all(math.isfinite(float(value)) for value in values)
             or not math.isfinite(quaternion_norm)
             or abs(quaternion_norm - 1.0) > 1e-2
             or not -0.5 <= age_s <= max_age_s
         ):
-            # Do not turn a frozen/invalid TF into a fresh 5 Hz pose relay.
+            # Do not turn a frozen/invalid pose into a fresh pose relay.
             return
 
         pose = PoseStamped()
-        pose.header = tf.header
-        pose.pose.position.x = tf.transform.translation.x
-        pose.pose.position.y = tf.transform.translation.y
-        pose.pose.position.z = tf.transform.translation.z
-        pose.pose.orientation = tf.transform.rotation
+        pose.header = odom.header
+        pose.pose = odom.pose.pose
         self._robot_pose_pub.publish(pose)
 
     # ── coverage settings snapshot ───────────────────────────────────────────
