@@ -47,3 +47,20 @@ def test_finite_unwraps_numpy_scalars():
     out = telemetry_node._finite({'b': np.bool_(True), 'f': np.float64(1.5), 'n': np.float32('nan')})
     assert out == {'b': True, 'f': 1.5, 'n': None}
     json.dumps(out, allow_nan=False)
+
+
+def test_battery_fields_map_status_and_absent_pack():
+    from sensor_msgs.msg import BatteryState
+
+    absent = telemetry_node.battery_fields(None)
+    assert absent['present'] is False and absent['pct'] is None
+
+    msg = BatteryState()
+    msg.present = True
+    msg.percentage = 0.6321
+    msg.voltage = 23.456
+    msg.current = math.nan
+    msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
+    fields = telemetry_node._finite(telemetry_node.battery_fields(msg))
+    assert fields == {'present': True, 'pct': 0.632, 'voltage_v': 23.46,
+                      'current_a': None, 'status': 'charging'}
