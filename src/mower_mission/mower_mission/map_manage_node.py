@@ -165,9 +165,16 @@ class MapManage(Node, NavigationActivityGuard):
         self.map_msg = self.build_demo_map()
         self.global_map_msg = copy.deepcopy(self.map_msg)
 
-        self.timer = self.create_timer(1.0, self.timer_cb)
+        # /map_grid and /map_grid_global are latched (TRANSIENT_LOCAL): every
+        # consumer (nav2 static layers, flutter_adapter -> app) receives the
+        # last sample when it subscribes, so the maps are published once here
+        # and afterwards only when they change (_commit_navigation_maps).
+        # The former 1 Hz republish made flutter_adapter re-encode ~214 KB of
+        # JSON and rosbridge re-send it to every phone every second.
+        self._publish_current_navigation_maps()
         self.get_logger().info(
-            'Publishing OccupancyGrid on /map_grid and /map_grid_global'
+            'Publishing OccupancyGrid on /map_grid and /map_grid_global '
+            '(latched, on change)'
         )
 
     def on_parameters_changed(self, params):
@@ -340,7 +347,8 @@ class MapManage(Node, NavigationActivityGuard):
         msg.data = grid.flatten().tolist()
         return msg
 
-    def timer_cb(self):
+    def _publish_current_navigation_maps(self):
+        """Emit the last committed navigation maps with a fresh stamp."""
         with self._map_lock:
             map_msg = copy.deepcopy(self.map_msg)
             global_map_msg = copy.deepcopy(self.global_map_msg)

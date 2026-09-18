@@ -106,5 +106,9 @@ services:
     image: bluenviron/mediamtx:latest-ffmpeg
     network_mode: host
     restart: unless-stopped
+    environment:
+      # Interface(s) whose addresses are offered as WebRTC ICE candidates
+      # (see mediamtx.lan.yml); comma-separated, default the wired LAN port.
+      - MTX_WEBRTCIPSFROMINTERFACESLIST=${WEBRTC_INTERFACES:-eth1}
     volumes:
       - ./${MEDIAMTX_CONFIG:-mediamtx.yml}:/mediamtx.yml:ro

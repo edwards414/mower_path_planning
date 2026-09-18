@@ -22,6 +22,13 @@ moq: false
 webrtcAddress: :8889
 # UDP mux for WebRTC media (ICE host candidates). Open on the LAN via host net.
 webrtcLocalUDPAddress: :8189
+# ICE host candidates only from the LAN interface. By default MediaMTX offers
+# every interface (127.0.0.1, docker0 172.17.0.1, tailscale0, ...), so the
+# phone spends its connectivity checks on unreachable pairs or lands on the
+# wrong one. Per-robot override: WEBRTC_INTERFACES in .env (docker-compose
+# passes it as MTX_WEBRTCIPSFROMINTERFACESLIST, comma-separated).
+webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfacesList: [eth1]
 
 # Internal RTSP that the ffmpeg producers publish to; re-served over WebRTC.
 rtspAddress: :8554
