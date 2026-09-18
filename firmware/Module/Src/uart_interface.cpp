@@ -1,4 +1,5 @@
 #include "uart_interface.hpp"
+#include "analog_monitor.hpp"
 #include "settings_storage.hpp"
 #include "wheel_controller.hpp"
 #include "ws2812.h"
@@ -107,6 +108,14 @@ int16_t permille_to_lawer_pwm(int16_t command_permille) {
   int32_t scaled =
       (int32_t)clamp_permille(command_permille) * (int32_t)LAWER_PWM_MAX_COUNTS;
   return (int16_t)(scaled / MOTOR_COMMAND_PERMILLE_LIMIT);
+}
+
+uint16_t volts_to_cv(float volts) {
+  if (volts <= 0.0f) {
+    return 0U;
+  }
+  float cv = (volts * 100.0f) + 0.5f;
+  return (cv >= 65535.0f) ? 0xFFFFU : (uint16_t)cv;
 }
 
 uint16_t saturating_u16(uint32_t value) {
@@ -1098,6 +1107,47 @@ void uart_send_charger_status(void) {
                         (uint8_t)sizeof(payload));
 }
 
+void uart_send_analog_status(void) {
+  analog_monitor_snapshot_t analog = {};
+  AnalogMonitor_GetSnapshot(&analog);
+
+  analog_status_payload_t payload = {};
+  payload.flags = 0U;
+  if (analog.valid[ANALOG_MONITOR_CHANNEL_MAIN_BATTERY]) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_MAIN_BATTERY_VALID;
+    payload.main_battery_cv = volts_to_cv(analog.main_battery_v);
+  }
+  if (analog.valid[ANALOG_MONITOR_CHANNEL_AON_BATTERY]) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_AON_BATTERY_VALID;
+    payload.aon_battery_cv = volts_to_cv(analog.aon_battery_v);
+  }
+  payload.board_temp_dc = INT16_MIN;
+  if (analog.valid[ANALOG_MONITOR_CHANNEL_BOARD_TEMP] &&
+      (analog.board_temperature_c > -100.0f)) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_BOARD_TEMP_VALID;
+    float dc = analog.board_temperature_c * 10.0f;
+    if (dc > 3000.0f) {
+      dc = 3000.0f;
+    }
+    payload.board_temp_dc = (int16_t)(dc + ((dc >= 0.0f) ? 0.5f : -0.5f));
+  }
+  if (analog.valid[ANALOG_MONITOR_CHANNEL_MG996_CURRENT]) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_MG996_CURRENT_VALID;
+    payload.mg996_current_raw = analog.raw[ANALOG_MONITOR_CHANNEL_MG996_CURRENT];
+  }
+  if (analog.vdda_calibrated) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_VDDA_CALIBRATED;
+  }
+  if (analog.mg996_current_limit) {
+    payload.flags |= UART_ANALOG_STATUS_FLAG_MG996_LIMIT_ACTIVE;
+  }
+  payload.vdda_mv = (uint16_t)((analog.vdda_v * 1000.0f) + 0.5f);
+  payload.reserved = 0U;
+
+  (void)uart_send_frame(UART_FRAME_TYPE_ANALOG_STATUS, 0U, &payload,
+                        (uint8_t)sizeof(payload));
+}
+
 void UartParserTask(void *arg) {
   (void)arg;
 
@@ -1134,6 +1184,7 @@ void MotorTask(void *arg) {
       uart_send_power_status();
       uart_send_charger_status();
       uart_send_servo_status();
+      uart_send_analog_status();
       last_status_tick = now;
     }
     if ((now - last_info_tick) >= UART_INFO_PERIOD_MS) {

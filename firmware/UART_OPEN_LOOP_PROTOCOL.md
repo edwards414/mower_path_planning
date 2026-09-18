@@ -58,6 +58,7 @@
 | `0x87` | STM32 -> Host | 韌體版本 / build 身分（每 1 s 一次，或回應 `0x06`） |
 | `0x88` | STM32 -> Host | MG996 servo 狀態 |
 | `0x89` | STM32 -> Host | RS485 充電模組狀態（Vin / Vout / Iout / CC / CV） |
+| `0x8A` | STM32 -> Host | 類比監控（主電池 / AON 小電池電壓、板溫、MG996 電流、VDDA） |
 | `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
 | `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
@@ -445,6 +446,35 @@ Payload 長度固定 `16` bytes。
 | 1 | `0x02` | `LIMIT_ACTIVE`，電流限位中，脈波暫停 |
 | 2 | `0x04` | `OUTPUT_ACTIVE`，脈波實際在輸出（= `ENABLED && !LIMIT_ACTIVE`） |
 | 3 | `0x08` | `TIMED_OUT`，`hold_timeout_ms` 到期停掉了 |
+
+## `0x8A` Analog Status
+
+STM32 每 `50ms` 送一次，資料來源是 `PB1/ADC1_IN9` 經 4 通道 analog mux 讀到的四個慢速類比訊號（見 `wire.md`），STM32 每 `200ms` 掃一輪，所以數值每 200 ms 才會更新。每輪掃描前會先讀 `VREFINT` 算出實際 VDDA，所有換算都用這個值而不是假設 3.3 V。Frame header 的 `seq` 固定 `0`。
+
+Payload 長度固定 `12` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint16_t` | `main_battery_cv` | 24 V 主電池電壓（`270k/33k` 分壓還原），x0.01 V；無效時 `0` |
+| 2 | `uint16_t` | `aon_battery_cv` | 3.7 V AON 小電池電壓（`100k/300k` 分壓還原），x0.01 V；無效時 `0` |
+| 4 | `int16_t` | `board_temp_dc` | 板溫 NTC（10k / beta 3950），x0.1 °C；無效時 `INT16_MIN` (`-32768`) |
+| 6 | `uint16_t` | `vdda_mv` | 這輪換算用的 ADC 參考電壓，mV（未校正時 `3300`） |
+| 8 | `uint16_t` | `mg996_current_raw` | MG996 電流感測原始 12-bit ADC 值 |
+| 10 | `uint8_t` | `flags` | 見下表 |
+| 11 | `uint8_t` | `reserved` | 固定 `0` |
+
+`flags`:
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `MAIN_BATTERY_VALID`，CH2 這輪讀取成功 |
+| 1 | `0x02` | `AON_BATTERY_VALID`，CH3 這輪讀取成功 |
+| 2 | `0x04` | `BOARD_TEMP_VALID`，CH1 讀取成功且 NTC 在合理範圍（開路 / 短路會清掉） |
+| 3 | `0x08` | `MG996_CURRENT_VALID`，CH0 這輪讀取成功 |
+| 4 | `0x10` | `VDDA_CALIBRATED`，`VREFINT` 讀取成功，`vdda_mv` 是實測值 |
+| 5 | `0x20` | `MG996_LIMIT_ACTIVE`，電流超過限位 threshold（與 `0x88 LIMIT_ACTIVE` 同源） |
+
+Host 應以 `flags` 為準：對應 bit 為 `0` 時該欄位沒有意義。分壓電阻比與 NTC 參數尚未實測校正，`main_battery_cv` 目前當作相對值使用。
 
 ## Status Flags
 
