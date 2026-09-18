@@ -11,10 +11,12 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_adapter` | `flutter_adapter_node` (`/adapter/map_layers/*`, `/adapter/marker_layers/*`, `/adapter/robot_pose`, `/adapter/coverage_settings`, `/adapter/zone_summaries`, `/adapter/map_datum`) | `mission.launch.py rust_adapter:=true` |
 | `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
 | `mower_imu` | `wit_ros2_imu` (WIT serial IMU on `/dev/imu_usb`, `/imu/data`) | `mower.launch.py rust_imu:=true` |
+| `mower_ws_bridge` | `rosbridge_auth_proxy` + `rosbridge_websocket` + `rosapi` (pairing gate on `address:9090`, loopback 9091 for the agent, rosbridge v2 subset, `/rosapi/topics`) | `rosbridge.launch.py rust_bridge:=true` |
 
-`robot.launch.py` takes all four switches (compose: `RUST_STATUS` /
-`RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` in `/opt/mower/.env`) so the
-safety-critical guards can be enabled last, after a supervised drive.
+`robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
+`RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
+`/opt/mower/.env`) so the safety-critical guards can be enabled last, after
+a supervised drive.
 
 ## Build
 
@@ -89,6 +91,29 @@ than 88 bytes queue up, an orientation frame published only with fresh
 accel and gyro frames, serial errors end the process. Differential test
 through socat pty pairs: identical `/imu/data` sequences, drops and
 checksum handling to the Python driver.
+
+## mower_ws_bridge
+
+The rosbridge v2 subset the clients use: `subscribe` (type, throttle_rate),
+`unsubscribe`, `advertise`/`unadvertise`, `publish`, `call_service` (with
+`/rosapi/topics` answered natively) and `status` replies on errors; no
+fragments, compression or actions. The allow-lists and the service types
+live in `mower_bringup/config/ws_bridge.yaml` (a test keeps them equal to
+`rosbridge_params.yaml`; r2r has no service-type graph query, so a new
+service needs its type there). One ROS subscription per topic, its QoS
+matched to the publishers like rosbridge, one serialisation per message
+fanned out to every subscribed client, latched topics replayed to late
+subscribers; service clients are reused and answered off the node thread
+(no serial `call_services_in_new_thread` queue). The pairing gate is the
+same X-Mower-* HMAC hand-shake as `identity.py` (401 otherwise) on the
+public listener; the loopback listener has no gate, as before.
+
+Compared against rosbridge_websocket on the same graph: identical `msg` JSON
+for String, Bool, BatteryState (NaN -> null), NavSatFix, Header and
+PoseStamped, identical service responses including a 1.5 s call, publish
+reaching the ROS subscriber, allow-list denials, `/rosapi/topics`, and the
+gate (401 without headers / replayed nonce / bad MAC, accepted with a valid
+hand-shake and the latched `/robot/online` delivered immediately).
 
 ## Verification
 

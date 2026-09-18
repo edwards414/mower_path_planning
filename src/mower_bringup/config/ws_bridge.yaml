@@ -1,0 +1,54 @@
+# Policy of the mower_rs WebSocket bridge (src/mower_rs/crates/mower_ws_bridge),
+# the rust_bridge:=true replacement for rosbridge_websocket + rosapi +
+# rosbridge_auth_proxy. Keep in sync with rosbridge_params.yaml
+# (test_controller_configuration.py checks it):
+#   topics_sub  = topics_sub_glob (also the /rosapi/topics answer)
+#   topics_pub  = topics_pub_glob
+#   services    = services_glob, each with its type (the bridge has no
+#                 service-type graph query, so a new service needs its type here)
+topics_sub:
+  - '/adapter/*'
+  - '/site_list'
+  - '/robot/online'
+  - '/robot/info'
+  - '/robot/telemetry'
+  - '/pid_autotune/status'
+  - '/battery_state'
+  - '/fix'
+  - '/gps/fix'
+  - '/manual_command_clock'
+  - '/*/online'
+  - '/*/robot_pose'
+  - '/*/battery_state'
+  - '/mower_recorder/status'
+  - '/mower_recorder/bags'
+  - '/mower_recorder/command_result'
+topics_pub:
+  - '/app_joy_cmd'
+  - '/mower_recorder/command'
+services:
+  /record_zone_start: std_srvs/srv/Trigger
+  /record_zone_end: std_srvs/srv/Trigger
+  /risk_zone_start: std_srvs/srv/Trigger
+  /risk_zone_end: std_srvs/srv/Trigger
+  /channel_record_start: std_srvs/srv/Trigger
+  /channel_record_end: std_srvs/srv/Trigger
+  /record_cancel: std_srvs/srv/Trigger
+  /save_zone_list: std_srvs/srv/Trigger
+  /load_zone_list: std_srvs/srv/Trigger
+  /create_free_space: std_srvs/srv/Trigger
+  /create_risk_map: std_srvs/srv/Trigger
+  /create_chennal_map: std_srvs/srv/Trigger
+  /generate_coverage_path: std_srvs/srv/Trigger
+  /restore_free_space_coverage: std_srvs/srv/Trigger
+  /import_image_mask: mower_interface/srv/ImportImageMask
+  /edit_zone: mower_interface/srv/EditZone
+  /site_op: mower_interface/srv/SiteOp
+  /zone_exec_path: mower_interface/srv/ZoneExecPath
+  /cancel_nav2: std_srvs/srv/Trigger
+  /cencel_nav2: std_srvs/srv/Trigger
+  /check_nav_status: std_srvs/srv/Trigger
+  /system/update: std_srvs/srv/Trigger
+  /system/restart: std_srvs/srv/Trigger
+  /pid_autotune: mower_interface/srv/PidAutotune
+  /boustrophedon_coverage/set_parameters: rcl_interfaces/srv/SetParameters

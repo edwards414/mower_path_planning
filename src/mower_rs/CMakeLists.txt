@@ -24,7 +24,7 @@ else()
   set(_cargo_target_dir "${CMAKE_CURRENT_BINARY_DIR}/cargo-target")
 endif()
 
-set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu)
+set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge)
 
 add_custom_target(mower_rs_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env

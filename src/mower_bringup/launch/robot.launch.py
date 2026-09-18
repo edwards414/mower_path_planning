@@ -66,6 +66,7 @@ def generate_launch_description():
     rust_adapter = LaunchConfiguration('rust_adapter')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
+    rust_bridge = LaunchConfiguration('rust_bridge')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -102,6 +103,7 @@ def generate_launch_description():
             'require_navigation_health': require_navigation_health,
             'rust_status': rust_status,
             'rust_adapter': rust_adapter,
+            'rust_bridge': rust_bridge,
         }.items(),
     )
 
@@ -200,6 +202,12 @@ def generate_launch_description():
             'rust_imu',
             default_value='false',
             description='mower_rs mower_imu instead of the wit_ros2_imu driver',
+        ),
+        DeclareLaunchArgument(
+            'rust_bridge',
+            default_value='false',
+            description='mower_rs mower_ws_bridge instead of rosbridge_auth_proxy '
+                        '+ rosbridge_websocket + rosapi',
         ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,

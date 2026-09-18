@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -14,11 +15,25 @@ def generate_launch_description():
         'rosbridge_params.yaml',
     )
 
+    ws_bridge_policy = os.path.join(
+        get_package_share_directory('mower_bringup'),
+        'config',
+        'ws_bridge.yaml',
+    )
+
     port_arg = DeclareLaunchArgument(
         'port',
         default_value='9090',
         description='WebSocket port for rosbridge_websocket',
     )
+    rust_bridge_arg = DeclareLaunchArgument(
+        'rust_bridge',
+        default_value='false',
+        description='Run the mower_rs WebSocket bridge (pairing gate built '
+                    'in, rosbridge protocol subset, rosapi/topics) instead of '
+                    'rosbridge_auth_proxy + rosbridge_websocket + rosapi',
+    )
+    rust_bridge = LaunchConfiguration('rust_bridge')
     address_arg = DeclareLaunchArgument(
         'address',
         default_value='127.0.0.1',
@@ -37,6 +52,7 @@ def generate_launch_description():
         executable='rosbridge_auth_proxy',
         name='rosbridge_auth_proxy',
         output='screen',
+        condition=UnlessCondition(rust_bridge),
         arguments=[
             '--address', LaunchConfiguration('address'),
             '--port', LaunchConfiguration('port'),
@@ -66,6 +82,7 @@ def generate_launch_description():
         executable='rosbridge_websocket',
         name='rosbridge_websocket',
         output='screen',
+        condition=UnlessCondition(rust_bridge),
         parameters=[
             rosbridge_config,
             {
@@ -80,16 +97,38 @@ def generate_launch_description():
         executable='rosapi_node',
         name='rosapi',
         output='screen',
+        condition=UnlessCondition(rust_bridge),
         # Apply the same topics/services/params allowlists as websocket so
         # rosapi cannot bypass the bridge policy through parameter services.
         parameters=[rosbridge_config],
     )
 
+    # rust_bridge:=true -- the three processes above as one r2r process
+    # (src/mower_rs/crates/mower_ws_bridge): same door for the app and the
+    # relay (`address:port`, X-Mower-* pairing headers), the same loopback
+    # port 9091 for the agent's own watch, the allow-lists and service types
+    # from config/ws_bridge.yaml.
+    ws_bridge = Node(
+        package='mower_rs',
+        executable='mower_ws_bridge',
+        name='mower_ws_bridge',
+        output='screen',
+        condition=IfCondition(rust_bridge),
+        arguments=[
+            '--address', LaunchConfiguration('address'),
+            '--port', LaunchConfiguration('port'),
+            '--loopback-port', '9091',
+            '--policy', ws_bridge_policy,
+        ],
+    )
+
     return LaunchDescription([
         port_arg,
         address_arg,
+        rust_bridge_arg,
         auth_proxy,
         agent,
         rosbridge_websocket,
         rosapi,
+        ws_bridge,
     ])

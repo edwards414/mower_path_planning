@@ -1,0 +1,24 @@
+[package]
+name = "mower_ws_bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "rosbridge-protocol WebSocket bridge with the pairing gate built in (replaces rosbridge_websocket + rosapi + rosbridge_auth_proxy)"
+
+[[bin]]
+name = "mower_ws_bridge"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-tungstenite = "0.24"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+data-encoding = "2"

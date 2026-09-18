@@ -153,6 +153,14 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 `crates/mower_imu`：`wit.rs` 是 WIT 11-byte frame parser（0x51/0x52/0x53/0x54、checksum、與上游相同的比例係數、Python 版的四元數公式），3 個單元測試；`main.rs` 用 `serialport` crate（不帶 libudev）以 9600 8N1 讀 `/dev/imu_usb`（新增 `port` 參數），保留 fail-closed 規則（200 ms host gap 或 >88 bytes backlog 就清空、姿態 frame 只在 accel/gyro 都新鮮時發、serial 錯誤讓整個 process 以 exit 1 結束）。差分測試（socat pty 兩對、相同 frame 串流 30 週期 + 過期姿態 + 壞 checksum）：`/imu/data` 序列 31 vs 31 筆 **完全相同**，drop 與 checksum 處理一致，covariance 相同。開關 `rust_imu`（compose `RUST_IMU`）。
 
+### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
+
+`crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
+
+與 rosbridge_websocket 在同一張圖上比對（本機容器）：String / Bool / BatteryState（NaN → null）/ NavSatFix / Header / PoseStamped 的 `msg` JSON **完全相同**；service 回應相同（含 1.5 s 的慢服務）；publish 到達 ROS 訂閱者；未列入白名單的 subscribe / publish / service 被拒（rosbridge 是靜默不回，Rust 版回 status / result=false）；`/rosapi/topics` 依白名單回答；gate：無標頭 401、重播 nonce 401、壞 MAC 401、正確握手接受並立即收到 latched `/robot/online`。開關 `rust_bridge`（compose `RUST_BRIDGE`），`rosbridge.launch.py` 在 true 時只起 `mower_ws_bridge` + `mower_agent`。
+
+尚未做：真機影子測試（可先開在另一個 port：`--port 9097 --loopback-port none`，用 app 的 DEV_PAIR_URL 指過去）、`fragment` / `png` / actions（客戶端不用）。
+
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
 | 順序 | Rust bin | 取代 | Python 行數 | 現在 → 之後 | 驗證 |

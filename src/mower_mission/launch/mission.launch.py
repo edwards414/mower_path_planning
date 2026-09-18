@@ -81,6 +81,13 @@ def generate_launch_description():
 
     rust_adapter = LaunchConfiguration('rust_adapter')
 
+    declare_rust_bridge = DeclareLaunchArgument(
+        'rust_bridge',
+        default_value='false',
+        description='Run the mower_rs WebSocket bridge instead of '
+                    'rosbridge_auth_proxy + rosbridge_websocket + rosapi.',
+    )
+
     declare_rust_adapter = DeclareLaunchArgument(
         'rust_adapter',
         default_value='false',
@@ -120,7 +127,10 @@ def generate_launch_description():
                 'launch', 'rosbridge.launch.py',
             )
         ),
-        launch_arguments={'address': rosbridge_address}.items(),
+        launch_arguments={
+            'address': rosbridge_address,
+            'rust_bridge': LaunchConfiguration('rust_bridge'),
+        }.items(),
     )
 
     # ── Bag recorder ─────────────────────────────────────────────────────────
@@ -369,6 +379,7 @@ def generate_launch_description():
         declare_heartbeat_source_topic,
         declare_rust_status,
         declare_rust_adapter,
+        declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,

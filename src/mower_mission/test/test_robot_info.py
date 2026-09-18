@@ -91,3 +91,33 @@ def test_rust_robot_status_reports_the_same_api_version():
     match = re.search(r'pub const ROBOT_API_VERSION: i64 = (\d+);', source)
     assert match, 'ROBOT_API_VERSION constant missing from mower_rs robot_status'
     assert int(match.group(1)) == ROBOT_API_VERSION
+
+
+def _rosbridge_glob(name, section='rosbridge_websocket'):
+    text = ROSBRIDGE_CONFIG.read_text(encoding='utf-8')
+    # the file starts with the rosbridge_websocket section (no leading newline)
+    text = ('\n' + text).split(f'\n{section}:', 1)[1]
+    match = re.search(rf'^\s*{name}: "\[(.*)\]"', text, flags=re.M)
+    assert match, name
+    return sorted(v.strip().strip("'") for v in match.group(1).split(',') if v.strip())
+
+
+def test_ws_bridge_policy_matches_the_rosbridge_allow_lists():
+    """rust_bridge:=true must expose exactly what rosbridge exposes."""
+    import ast
+    policy = (PACKAGE_DIR.parent / 'mower_bringup/config/ws_bridge.yaml').read_text(encoding='utf-8')
+
+    def yaml_list(key):
+        block = re.search(rf'^{key}:\n((?:  - .*\n)+)', policy, flags=re.M)
+        assert block, key
+        return sorted(ast.literal_eval(line.strip()[2:]) for line in block.group(1).splitlines())
+
+    assert yaml_list('topics_sub') == _rosbridge_glob('topics_sub_glob')
+    assert yaml_list('topics_pub') == _rosbridge_glob('topics_pub_glob')
+    services = re.search(r'^services:\n((?:  /.*\n)+)', policy, flags=re.M)
+    assert services
+    typed = dict(line.strip().split(': ') for line in services.group(1).splitlines())
+    assert sorted(typed) == _rosbridge_glob('services_glob')
+    assert all(re.fullmatch(r'[a-z_]+/srv/[A-Za-z0-9]+', t) for t in typed.values()), typed
+    # the same topics feed the fleet discovery answer (/rosapi/topics)
+    assert yaml_list('topics_sub') == _rosbridge_glob('topics_glob', section='rosapi')

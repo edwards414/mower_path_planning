@@ -240,7 +240,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_guards', 'rust_imu'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
