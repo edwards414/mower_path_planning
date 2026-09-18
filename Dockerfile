@@ -201,9 +201,21 @@ WORKDIR ${WORKSPACE}
 # layer is reused until a package.xml changes; the install tree, which
 # changes every commit, is copied in afterwards.
 COPY --from=builder /tmp/runtime-apt-packages.txt /tmp/runtime-apt-packages.txt
+# Runtime-only image: dpkg skips docs/man/locales at unpack time (~170 MB),
+# and the headers / static libs the ROS and -dev debs ship are deleted
+# afterwards (~250 MB); nothing compiles inside this image.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
+    && printf '%s\n' \
+        'path-exclude /usr/share/doc/*' \
+        'path-include /usr/share/doc/*/copyright' \
+        'path-exclude /usr/share/man/*' \
+        'path-exclude /usr/share/info/*' \
+        'path-exclude /usr/share/locale/*' \
+        'path-include /usr/share/locale/locale.alias' \
+        > /etc/dpkg/dpkg.cfg.d/01_runtime_nodoc \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
     && apt-get update \
     && { \
         printf '%s\n' libcurl4 libusb-1.0-0 python3-serial ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
@@ -211,7 +223,25 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     } \
         | sort -u \
         | xargs -r apt-get install -y --no-install-recommends \
-    && rm -rf /tmp/runtime-apt-packages.txt
+    && rm -rf /tmp/runtime-apt-packages.txt \
+    # Debs pulled in by dependency metadata but never used on a headless
+    # robot. Verified (see docs/IMAGE_SIZE.md): every launched binary, nav2
+    # plugin and Python module still resolves. --force-depends because ROS
+    # debs declare Depends on the -dev/tool packages; nothing here compiles.
+    #   Mesa software GL + LLVM (libGL stays via glvnd; OpenCV/Qt never render)
+    #   ruby (Gazebo CLI wrapper from gz-tools-vendor)
+    #   sanitizer libs + toolchain dev packages, proj grid data (via GDAL)
+    && dpkg --purge --force-depends \
+        libgl1-mesa-dri mesa-libgallium libllvm20 libvulkan1 \
+        libasan8 libtsan2 libubsan1 liblsan0 libgcc-13-dev libstdc++-13-dev \
+        libboost-dev libboost1.83-dev proj-data \
+        $(dpkg-query -W -f '${Package}\n' | grep -E '^(ruby|libruby|rubygems)') \
+    && rm -f /usr/bin/cmake /usr/bin/ctest /usr/bin/cpack \
+    && rm -rf /usr/include /opt/ros/${ROS_DISTRO}/include \
+        /usr/lib/aarch64-linux-gnu/cmake /usr/lib/cmake /usr/share/cmake* \
+    && find /usr/lib /opt/ros/${ROS_DISTRO}/lib -name '*.a' -delete \
+    && find /opt/ros/${ROS_DISTRO}/share -path '*/cmake/*' -delete \
+    && du -xsh /usr /opt /var 2>/dev/null || true
 
 COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
 COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

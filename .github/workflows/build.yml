@@ -329,6 +329,12 @@ jobs:
             python3 /opt/mower/firmware/mower_flash.py --help >/dev/null
             test -x /usr/local/bin/firmware-sync
             test -x /usr/local/bin/mower-host-request
+            # the slimmed image (docs/IMAGE_SIZE.md) must still load everything
+            ros2 launch mower_nav2 navigation.launch.py --show-args >/dev/null
+            python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server, rosapi, mower_coverage_core; from nav2_simple_commander.robot_navigator import BasicNavigator"
+            for b in /opt/ros/${ROS_DISTRO}/lib/{nav2_*,robot_localization,controller_manager,joy,twist_mux,topic_tools,opennav_docking,apriltag_ros}/* /opt/ros/${ROS_DISTRO}/lib/libnav2_*.so "${WORKSPACE}"/install/mower_hardware/lib/*.so; do
+              if ldd "$b" 2>/dev/null | grep -q "not found"; then echo "missing shared libs: $b"; ldd "$b" | grep "not found"; exit 1; fi
+            done
             test -n "${MOWER_VERSION}"
             echo "image ${MOWER_IMAGE} version ${MOWER_VERSION} sha ${MOWER_GIT_SHA}"
           '
