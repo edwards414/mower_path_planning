@@ -32,7 +32,8 @@ pub mod frame_type {
     pub const WS2812_COMMAND: u8 = 0x03;
     pub const PID_CONFIG_COMMAND: u8 = 0x04;
     pub const POWER_COMMAND: u8 = 0x05;
-    pub const SERVO_COMMAND: u8 = 0x06;
+    /// 0x06 is INFO_REQUEST in the mower_path_planning/firmware build.
+    pub const SERVO_COMMAND: u8 = 0x07;
     pub const ENTER_BOOTLOADER: u8 = 0x0F;
     pub const MOTOR_STATUS: u8 = 0x81;
     pub const LAWER_MOTOR_STATUS: u8 = 0x82;
@@ -40,8 +41,9 @@ pub mod frame_type {
     pub const PID_CONFIG_STATUS: u8 = 0x84;
     pub const WHEEL_FEEDBACK_STATUS: u8 = 0x85;
     pub const POWER_STATUS: u8 = 0x86;
-    pub const CHARGER_STATUS: u8 = 0x87;
+    /// 0x87 is FIRMWARE_INFO in the mower_path_planning/firmware build.
     pub const SERVO_STATUS: u8 = 0x88;
+    pub const CHARGER_STATUS: u8 = 0x89;
     pub const ENTER_BOOTLOADER_ACK: u8 = 0x8F;
 }
 

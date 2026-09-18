@@ -30,14 +30,16 @@ extern "C" {
 #define UART_FRAME_TYPE_WS2812_COMMAND 0x03U
 #define UART_FRAME_TYPE_PID_CONFIG_COMMAND 0x04U
 #define UART_FRAME_TYPE_POWER_COMMAND 0x05U
-#define UART_FRAME_TYPE_SERVO_COMMAND 0x06U
+/* 0x06 (INFO_REQUEST) and 0x87 (FIRMWARE_INFO) are taken by the build
+ * identity frames of the mower_path_planning/firmware build; keep clear. */
+#define UART_FRAME_TYPE_SERVO_COMMAND 0x07U
 #define UART_FRAME_TYPE_MOTOR_STATUS 0x81U
 #define UART_FRAME_TYPE_LAWER_MOTOR_STATUS 0x82U
 #define UART_FRAME_TYPE_WS2812_STATUS 0x83U
 #define UART_FRAME_TYPE_PID_CONFIG_STATUS 0x84U
 #define UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS 0x85U
 #define UART_FRAME_TYPE_POWER_STATUS 0x86U
-#define UART_FRAME_TYPE_CHARGER_STATUS 0x87U
+#define UART_FRAME_TYPE_CHARGER_STATUS 0x89U
 #define UART_FRAME_TYPE_SERVO_STATUS 0x88U
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
@@ -69,7 +71,7 @@ extern "C" {
 #define UART_SERVO_STATUS_FLAG_OUTPUT_ACTIVE 0x04U
 #define UART_SERVO_STATUS_FLAG_TIMED_OUT 0x08U
 
-/* 0x87 charger status flags */
+/* 0x89 charger status flags */
 #define UART_CHARGER_STATUS_FLAG_ONLINE 0x01U        /* RS485 replies OK */
 #define UART_CHARGER_STATUS_FLAG_CHARGING 0x02U      /* Iout above threshold */
 #define UART_CHARGER_STATUS_FLAG_CV_PHASE 0x04U      /* Vout at set CV */
@@ -207,9 +209,9 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
   uint16_t pulse_us;        /* current target pulse */
   uint16_t hold_timeout_ms;
-  uint16_t command_age_ms;  /* since the last 0x06, saturates */
+  uint16_t command_age_ms;  /* since the last 0x07, saturates */
   uint8_t flags;            /* UART_SERVO_STATUS_FLAG_* */
-  uint8_t last_rx_seq;      /* seq of the last accepted 0x06 */
+  uint8_t last_rx_seq;      /* seq of the last accepted 0x07 */
 } servo_status_payload_t;
 
 typedef struct __attribute__((packed)) {
@@ -234,7 +236,7 @@ extern osThreadId_t uartTxTaskHandle;
 void uart_server(void);
 /* Push a 0x86 power status frame now (also sent every 50 ms). */
 void uart_send_power_status(void);
-/* Push a 0x87 charger status frame (also sent every 50 ms). */
+/* Push a 0x89 charger status frame (also sent every 50 ms). */
 void uart_send_charger_status(void);
 /* Push a 0x88 servo status frame (also sent every 50 ms). */
 void uart_send_servo_status(void);

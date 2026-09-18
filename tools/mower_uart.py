@@ -121,10 +121,10 @@ def decode(ftype, seq, p):
         lt, lm, rt, rm, lo, ro, ltot, rtot, fl = struct.unpack("<hhhhhhiiB3x", p)
         return (f"85 WHEEL  L tgt={lt/100:6.2f} meas={lm/100:6.2f} rpm out={lo:5d} tot={ltot:9d} | "
                 f"R tgt={rt/100:6.2f} meas={rm/100:6.2f} rpm out={ro:5d} tot={rtot:9d} | {flags85(fl)}")
-    if ftype == 0x87 and len(p) == 16:
+    if ftype == 0x89 and len(p) == 16:
         vin, vout, iout, cc, cv, fl, err, age, exc, _ = struct.unpack("<HHHHHBBHBB", p)
         age_s = "never" if age == 0xFFFF else f"{age}ms"
-        return (f"87 CHARGE Vin={vin/100:5.2f}V Vout={vout/100:5.2f}V Iout={iout/100:4.2f}A "
+        return (f"89 CHARGE Vin={vin/100:5.2f}V Vout={vout/100:5.2f}V Iout={iout/100:4.2f}A "
                 f"set CC={cc/100:4.2f}A CV={cv/100:5.2f}V  {flags87(fl)}  err={err} exc={exc} age={age_s}")
     if ftype == 0x88 and len(p) == 8:
         pulse, hold, age, fl, rxseq = struct.unpack("<HHHBB", p)
@@ -165,7 +165,7 @@ def run(port, cmd, args):
         pulse = int(args[0])
         hold = int(args[1]) if len(args) > 1 else 0
         duration = float(args[2]) if len(args) > 2 else 1.0
-        f = build(0x06, 0, struct.pack("<HHHH", pulse, hold, 0, 0))
+        f = build(0x07, 0, struct.pack("<HHHH", pulse, hold, 0, 0))
         tx = lambda s: f
         period = 0.5
     elif cmd == "pid":

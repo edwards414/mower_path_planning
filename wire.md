@@ -29,7 +29,7 @@
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
 | RS485 充電模組 | 數控 30V5A 帶 OFF CC/CV 充電模組（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀 Vin / Vout / Iout / CC / CV。`PA6/PA7` 空著（原 SPI-CAN 已取消） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
-| MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x06` 控制 |
+| MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x07` 控制 |
 | 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PB11` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
 | 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
@@ -50,7 +50,7 @@
 | 左輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Left FT-555, `PA0/PA1` (`TIM5`) | `PA15/PB3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與右輪共用 |
 | 右輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Right FT-555, `PA8/PA9` (`TIM1`) | `PA2/PA3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與左輪共用 |
 | 專門割草馬達 | 待補 | BLD120A | - | `PB8/TIM4_CH3` PWM, `PB7` DIR, `PC13` BRK | PWM 使用獨立 TIM4；EN 硬體常開，BRK 為韌體唯一快速停刀手段；label/應用層待同步 |
-| 機構 servo | MG996 / MG996R | Servo PWM input | Current sensor, `PB1/ADC1_IN9` | `PB10` GPIO, `TIM10` 中斷計時 | `0x06/0x88` 已接上；以電流門檻當限位 |
+| 機構 servo | MG996 / MG996R | Servo PWM input | Current sensor, `PB1/ADC1_IN9` | `PB10` GPIO, `TIM10` 中斷計時 | `0x07/0x88` 已接上；以電流門檻當限位 |
 
 ## 接線總覽
 
@@ -336,14 +336,14 @@ Modbus holding registers（FC03 讀，FC16 寫）：
 
 範例：發 `01 03 00 00 00 05 85 C9`，回 `01 03 0A 04 EB 01 F1 00 00 00 FA 01 F4 DE B2` = Vin 12.59 V、Vout 4.97 V、Iout 0 A、CC 2.50 A、CV 5.00 V。CRC 是 Modbus CRC-16（低位元組先送）。改站號用 FC06、站號 `0x00`，總線上只能有一台。
 
-韌體：`Module/charger_rs485` 每 500 ms 輪詢一次 Reg0-4（`HAL_UARTEx_ReceiveToIdle_IT` 收回應，request 前先武裝 RX，所以 `RE` 接地讓 RO 回送 echo 也能用），`PA5` DE 在送 request 前拉高、`USART6` TC 中斷（最後一個 stop bit 送完）放下，結果經 `0x87` 每 50 ms 回給 host；主電源關閉時停止輪詢。純 codec 在 `Module/modbus_rtu`，可在 Mac 上跑單元測試。
+韌體：`Module/charger_rs485` 每 500 ms 輪詢一次 Reg0-4（`HAL_UARTEx_ReceiveToIdle_IT` 收回應，request 前先武裝 RX，所以 `RE` 接地讓 RO 回送 echo 也能用），`PA5` DE 在送 request 前拉高、`USART6` TC 中斷（最後一個 stop bit 送完）放下，結果經 `0x89` 每 50 ms 回給 host；主電源關閉時停止輪詢。純 codec 在 `Module/modbus_rtu`，可在 Mac 上跑單元測試。
 
 注意事項：
 
 - MAX485 用 5 V 供電、與 STM32 共地；`RO` 5 V 輸出接 `PA12`（5 V-tolerant）沒問題，其它非 FT 腳不要拿來接 RO。
 - `PA11/PA12` 同時是 BlackPill 板載 USB-C 的 D-/D+，用 RS485 期間不能插 USB 資料線。
 - 「帶 OFF」版的輸出開關暫存器文件沒寫（文件只到 Reg4），拿到實物後用 `01 03 00 00 00 08` 探 Reg5+。
-- 目前只讀不寫；之後若要由 STM32 設 CC/CV，`ModbusRtu_BuildWriteMultiple` 已備好，host 協議預留 `0x07`。
+- 目前只讀不寫；之後若要由 STM32 設 CC/CV，`ModbusRtu_BuildWriteMultiple` 已備好，host 協議另外編號。
 
 ## BLD120A 割草馬達
 
@@ -603,8 +603,8 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | 項目 | `.ioc` 目前規劃 | 目前產生碼狀態 |
 | --- | --- | --- |
 | BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5/PA6/PA7` 已從 `.ioc` 釋放，目前空著 |
-| RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x87` 已接上，尚未有實物測試 |
-| MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x06` 命令 / `0x88` 狀態已接上，尚未接實物測 |
+| RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，尚未有實物測試 |
+| MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上，尚未接實物測 |
 | Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），實測四通道可讀；韌體換算仍假設 VDDA = 3.3 V，實際 rail 約 2.9 V 時讀值會偏高約 12%，建議改用 VREFINT 校正 |
 | MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
 | Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |

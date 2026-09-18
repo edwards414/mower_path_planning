@@ -66,7 +66,7 @@ pub static TELEMETRY: Mutex<CriticalSectionRawMutex, RefCell<Telemetry>> = Mutex
     pid_last_apply_ok: true,
 }));
 
-/// Last RS485 charger poll, written by the charger task, read for 0x87.
+/// Last RS485 charger poll, written by the charger task, read for 0x89.
 pub static CHARGER: Mutex<CriticalSectionRawMutex, RefCell<charger::Snapshot>> =
     Mutex::new(RefCell::new(charger::Snapshot::ZERO));
 

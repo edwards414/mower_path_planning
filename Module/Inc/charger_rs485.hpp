@@ -59,7 +59,7 @@ void ChargerRs485_GetSnapshot(charger_rs485_snapshot_t *snapshot);
  * TxCplt callback in uart_interface.cpp. */
 void ChargerRs485_OnTxComplete(void);
 
-/* Derived state helpers used by the 0x87 status frame. */
+/* Derived state helpers used by the 0x89 status frame. */
 bool ChargerRs485_IsCharging(const charger_rs485_snapshot_t *s);
 bool ChargerRs485_IsCvPhase(const charger_rs485_snapshot_t *s);
 bool ChargerRs485_IsInputPresent(const charger_rs485_snapshot_t *s);

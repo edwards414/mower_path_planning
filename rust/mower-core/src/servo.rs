@@ -46,7 +46,7 @@ impl Servo {
         }
     }
 
-    /// A `0x06` arrived. `pulse_us == 0` releases the servo (no pulses).
+    /// A `0x07` arrived. `pulse_us == 0` releases the servo (no pulses).
     pub fn command(&mut self, pulse_us: u16, hold_timeout_ms: u16, rx_seq: u8, now_ms: u32) {
         if pulse_us == 0 {
             self.disable();

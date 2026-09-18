@@ -14,7 +14,7 @@ rust/
 │   ├── command   dead-man timeout for host commands
 │   ├── settings  flash record (CRC-32), sanitising, defaults
 │   ├── modbus    Modbus RTU CRC-16, FC03/FC16 requests, echo-tolerant reply scan
-│   ├── charger   RS485 charger snapshot, online logic, 0x87 flags
+│   ├── charger   RS485 charger snapshot, online logic, 0x89 flags
 │   └── servo     MG996 command state: clamp, hold timeout, limit gating, 0x88
 └── mower-fw/     Embassy firmware for STM32F411CE
     ├── board.rs   pin map / timers / flash (mirrors the .ioc)
@@ -37,12 +37,12 @@ rust/
 | `settings_storage.cpp`     | `settings.rs`, `board.rs`    | same record layout in sector 7                     |
 | bootloader hand-off (0x0F) | `main.rs::enter_bootloader`  | same RAM mailbox + reset                           |
 | `modbus_rtu.cpp`           | `modbus.rs`                  | vendor example frames as unit tests                |
-| `charger_rs485.cpp`        | `charger.rs` (both crates)   | USART6 PA11/PA12, PA5 DE, 500 ms poll, `0x87`     |
-| `mg996_servo.cpp`          | `servo.rs` (both crates)     | TIM10 ISR on PB10, `0x06` command, `0x88` status   |
+| `charger_rs485.cpp`        | `charger.rs` (both crates)   | USART6 PA11/PA12, PA5 DE, 500 ms poll, `0x89`     |
+| `mg996_servo.cpp`          | `servo.rs` (both crates)     | TIM10 ISR on PB10, `0x07` command, `0x88` status   |
 
 Status frames sent every 50 ms: `0x81` motor, `0x85` wheel feedback, `0x82`
-blade, `0x84` PID config, `0x86` power (always "running, rail on"), `0x87`
-charger, `0x88` servo.
+blade, `0x84` PID config, `0x86` power (always "running, rail on"), `0x88`
+servo, `0x89` charger.
 
 ## Not ported (yet)
 
@@ -139,7 +139,7 @@ $LT/llvm-objcopy -O binary target.nosync/thumbv7em-none-eabihf/release/mower-fw 
    20.00 ms period, 1.500 ms high; `0x88` reports `ENABLED|OUTPUT`. Try 500 /
    2500 for the MG996R end stops, then `servo 0` releases it.
 7. Charger (MAX485 on PA11/PA12, DE+RE on PA5, module at Modbus addr 1):
-   `0x87` should show `ONLINE|SEEN` within ~1 s and `Vout` close to the
+   `0x89` should show `ONLINE|SEEN` within ~1 s and `Vout` close to the
    battery voltage; `comm_error_count` must stay put. If it climbs, scope
    PA5: DE has to fall before the module's reply starts (≈ 3–5 ms after the
    request). With RE tied to GND instead of PA5 the echoed request is

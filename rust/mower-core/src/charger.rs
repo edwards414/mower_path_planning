@@ -1,6 +1,6 @@
 //! RS485 charger (数控 30V5A CC/CV module) — the hardware-free half of
 //! `Module/Src/charger_rs485.cpp`: what the last poll said, whether the
-//! module counts as online, and how that maps onto the `0x87` frame.
+//! module counts as online, and how that maps onto the `0x89` frame.
 //!
 //! The firmware task does the UART work (request, reply, timeout) and calls
 //! [`Snapshot::record_success`] / [`Snapshot::record_failure`].
@@ -120,7 +120,7 @@ impl Snapshot {
             | (if self.ever_seen() { charger_status_flag::EVER_SEEN } else { 0 })
     }
 
-    /// The `0x87` payload as of `now_ms`.
+    /// The `0x89` payload as of `now_ms`.
     pub fn status(&self, now_ms: u32) -> ChargerStatus {
         ChargerStatus {
             vin_cv: self.vin_cv,
