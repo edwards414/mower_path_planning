@@ -313,6 +313,23 @@ class PidAutotuneNode(Node):
             return pid
         raise Precondition('base did not acknowledge the PID settings')
 
+    def _persist(self, gains):
+        """0x04 with persist=1, confirmed by FLASH_VALID + LAST_APPLY_OK. The
+        sector erase stalls the STM32 for ~1 s. One retry: firmware before
+        cef0d1e fails the first save after a bootloader jump because of a
+        stale FLASH_SR error bit, and the failed attempt clears it."""
+        last = None
+        for attempt in (1, 2):
+            seq0 = self._send_pid(gains, closed_loop=True, persist=True)
+            try:
+                self._wait_pid(gains, seq0, closed_loop=True, timeout_s=4.0, persisted=True)
+                return
+            except Precondition as e:
+                diag = ((self._tel or {}).get('pid') or {}).get('flash_diag', 0)
+                last = Precondition(f'{e} (flash save attempt {attempt}, flash_diag=0x{int(diag or 0):04x})')
+                self.get_logger().warning(str(last))
+        raise last
+
     def _override(self, left, right, ttl_ms=300):
         self._override_pub.publish(String(data=json.dumps(
             {'left_permille': int(left), 'right_permille': int(right), 'ttl_ms': int(ttl_ms)},
@@ -471,8 +488,7 @@ class PidAutotuneNode(Node):
                 raise Aborted()
             if self._decision == 'apply':
                 self._set('saving', 0.95, 'writing gains to STM32 flash')
-                seq0 = self._send_pid(new_gains, closed_loop=True, persist=True)
-                self._wait_pid(new_gains, seq0, closed_loop=True, timeout_s=3.0, persisted=True)
+                self._persist(new_gains)
                 outcome = ('done', 'new gains saved to flash')
                 old_gains = None  # keep the new ones
             else:

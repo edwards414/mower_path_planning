@@ -148,6 +148,9 @@ struct PidConfigStatus {
   float right_kd = 0.0f;
   uint8_t flags = 0;
   uint8_t last_rx_seq = 0;
+  // low byte: HAL flash error of the last failed persist (0 = ok), high
+  // byte: FLASH_SR error bits found pending before it; 0 on older firmware
+  uint16_t flash_diag = 0;
 };
 
 // 0x04: gains to run with (and optionally persist). Same float layout as

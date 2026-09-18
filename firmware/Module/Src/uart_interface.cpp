@@ -951,6 +951,11 @@ void uart_send_pid_config_status(void) {
   payload.right_kd = settings.right_wheel_pid.kd;
   payload.flags = 0U;
   payload.last_rx_seq = last_seq;
+  /* was "reserved": flash diagnostics for a failed persist (see
+   * settings_storage_status_t); 0 when the last save went through */
+  payload.reserved =
+      (uint16_t)storage_status.last_flash_error |
+      ((uint16_t)storage_status.stale_flash_flags << 8);
   if (settings.closed_loop_enabled != 0U) {
     payload.flags |= UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED;
   }

@@ -114,6 +114,27 @@ def test_step_metrics_detects_overshoot_and_never_settling():
     assert met.settle_s is None
 
 
+def test_fit_of_a_sample_fast_wheel_stays_in_range():
+    # the real base (2026-09-19 run): the speed settles within one 50 ms sample,
+    # the refinement must not walk tau below TAU_RANGE and then reject it
+    s = open_loop_response(0.3, 0.03, 0.04, 80, 140, dt=0.05, noise=0.3)
+    m = pt.fit_fopdt(s, t_step=0.5)
+    assert pt.TAU_RANGE[0] <= m.tau <= 0.12
+    assert abs(m.gain - 0.3) / 0.3 < 0.1
+
+
+def test_simc_designs_against_a_tau_floor():
+    # the real base: tau at the fit's lower bound, 44 ms dead time, K 0.3
+    m = pt.FopdtModel(gain=0.296, tau=0.0207, delay=0.044, y0=21, y_ss=39, u0=80, u1=140, fit_r2=0.6)
+    g = pt.simc_pi(m)
+    assert g.kp / g.ki == pytest.approx(pt.TAU_DESIGN_MIN, rel=1e-3)  # Ti = tau floor (gains are rounded)
+    assert 1.0 < g.kp < 3.0 and 20 < g.ki < 60
+    sim = pt.simulate_closed_loop(pt.FopdtModel(gain=0.296, tau=0.04, delay=0.04, y0=0, y_ss=0, u0=0, u1=0, fit_r2=1),
+                                  g, target=29.0, duration=3.0)
+    met = pt.step_metrics(sim, t_step=0.0, target=29.0)
+    assert met.overshoot_pct < 25.0 and met.settle_s is not None and met.settle_s < 1.0
+
+
 def test_gains_are_clamped():
     m = pt.FopdtModel(gain=0.02, tau=3.0, delay=0.0, y0=0, y_ss=0, u0=0, u1=0, fit_r2=1)
     g = pt.simc_pi(m, tau_c_factor=0.01, kp_max=10.0, ki_max=5.0)

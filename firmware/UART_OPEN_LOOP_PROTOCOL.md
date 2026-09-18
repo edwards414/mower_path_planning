@@ -164,6 +164,8 @@ Payload 長度固定 `28` bytes。
 - 使用 STM32F411 internal Flash sector 7，位址 `0x08060000`
 - linker script 把 app 程式碼放在 sector 2-6（`0x08008000` 起 `352KB`），sector 0-1 是 UART bootloader，最後 `128KB` 保留給設定；bootloader 更新 app 時不會碰 sector 7
 - 不要高頻率寫入 PID；調參時先用 `persist_to_flash=0`，確認後再寫一次 Flash
+- 寫 Flash 時 sector 7 erase 會讓 MCU 停約 1 秒（這段時間沒有 status frame），host 端等 `0x84` 的 `LAST_APPLY_OK` 要給 3 秒以上；韌體會先清掉 `FLASH_SR` 殘留的 error bits 再 erase（bootloader 跳進 app 不經 reset，殘留 bits 會讓第一次 erase 直接失敗），失敗會自動重試一次，結果在 `flash_diag`
+- `0x04` 只帶 Kp/Ki/Kd；integral clamp 固定 ±80 rpm·s，但韌體會再把它縮到 `output_max / Ki`，所以大 Ki（自動校正常見 30–50）不會累積出超過滿輸出的積分
 
 ## `0x05` Power Command
 
@@ -274,7 +276,7 @@ Payload 長度固定 `28` bytes。
 | 20 | `float` | `right_kd` | 目前右輪 Kd |
 | 24 | `uint8_t` | `flags` | PID/status flags |
 | 25 | `uint8_t` | `last_rx_seq` | 最近一次成功接收 PID command 的 seq |
-| 26 | `uint16_t` | `reserved` | 目前固定 `0` |
+| 26 | `uint16_t` | `flash_diag` | Flash 儲存診斷（舊版固定 `0`）：低 byte = 最近一次失敗儲存的 HAL flash error code（`HAL_FLASH_ERROR_*`，`0` = 上次儲存成功，`0xFF` = unlock 失敗）；高 byte = 儲存前發現已經掛著的 `FLASH_SR` error bits（`OPERR/WRPERR/PGAERR/PGPERR/PGSERR`） |
 
 PID status flags:
 

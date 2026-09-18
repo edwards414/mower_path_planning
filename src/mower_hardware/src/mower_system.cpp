@@ -426,6 +426,7 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
     last_wheel_feedback_ = fb;
     last_feedback_time_ = now;
     feedback_valid_ = true;
+    telemetry_pending_ = true;
     if (warned_timeout_) {
       RCLCPP_INFO(logger(), "feedback resumed");
       warned_timeout_ = false;
@@ -568,13 +569,18 @@ return_type MowerSystem::read(const rclcpp::Time & time, const rclcpp::Duration 
 
 void MowerSystem::publish_telemetry_if_due(const rclcpp::Time & now)
 {
-  if (!telemetry_pub_ || !feedback_valid_) {
+  if (!telemetry_pub_ || !feedback_valid_ || !telemetry_pending_) {
     return;
   }
-  const double period_s = 1.0 / telemetry_rate_hz_;
+  // One message per new 0x85 (every 50 ms), so the PID auto-tune sees every
+  // sample instead of a 50 Hz loop beating against a 20 Hz gate. The rate
+  // parameter only throttles when set below the frame rate; the 0.8 keeps
+  // frame jitter from dropping every other message at the nominal 20 Hz.
+  const double period_s = 0.8 / telemetry_rate_hz_;
   if (telemetry_sent_time_.nanoseconds() != 0 && (now - telemetry_sent_time_).seconds() < period_s) {
     return;
   }
+  telemetry_pending_ = false;
   telemetry_sent_time_ = now;
   std_msgs::msg::String msg;
   msg.data = telemetry_json(now);
@@ -599,7 +605,7 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     "\"motor\":{\"valid\":%s,\"cmd_left_permille\":%d,\"cmd_right_permille\":%d,"
     "\"pwm_left\":%d,\"pwm_right\":%d,\"command_age_ms\":%u,\"flags\":%u},"
     "\"pid\":{\"valid\":%s,\"left\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},"
-    "\"right\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},\"flags\":%u,\"last_rx_seq\":%u},"
+    "\"right\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},\"flags\":%u,\"last_rx_seq\":%u,\"flash_diag\":%u},"
     "\"led\":{\"valid\":%s,\"mode\":%u,\"r\":%u,\"g\":%u,\"b\":%u,\"period_ms\":%u,\"flags\":%u},"
     "\"power\":{\"valid\":%s,\"state\":%u,\"flags\":%u,\"shutdown_reason\":%u,"
     "\"press_ms\":%u,\"shutdown_elapsed_ms\":%u},"
@@ -616,7 +622,7 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     have_motor_status_ ? "true" : "false", ms.commanded_left_permille, ms.commanded_right_permille,
     ms.applied_left_pwm, ms.applied_right_pwm, ms.command_age_ms, ms.flags,
     have_pid_config_ ? "true" : "false", pid.left_kp, pid.left_ki, pid.left_kd,
-    pid.right_kp, pid.right_ki, pid.right_kd, pid.flags, pid.last_rx_seq,
+    pid.right_kp, pid.right_ki, pid.right_kd, pid.flags, pid.last_rx_seq, pid.flash_diag,
     have_ws2812_status_ ? "true" : "false", led.mode, led.r, led.g, led.b, led.effect_period_ms, led.flags,
     have_power_status_ ? "true" : "false", ps.state, ps.flags, ps.shutdown_reason,
     ps.press_ms, ps.shutdown_elapsed_ms,

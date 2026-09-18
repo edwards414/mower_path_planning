@@ -117,7 +117,7 @@ Request `op`：
 | op | 作用 |
 |---|---|
 | `start` | 開始。取 `/mission_operation_lock`、燈條琥珀色環繞、切開環 → `0 → 40 % → 70 %` duty 各 2.5 s（兩輪同時，取 `0x85` 的 `pid_output` / `measured_rpm`）→ 擬合一階加延遲模型 → SIMC PI → 用新增益閉環 step 到 50 % 速度驗證（超調 ≤ 25 %、±5 % 安定 ≤ 1.5 s、穩態誤差 ≤ 1.5 rpm）→ `review`。增益此時只在 RAM。 |
-| `apply` | 只在 `review` 有效：把新增益寫進 STM32 Flash（`0x04 persist=1`），等 `0x84` 確認 → `done`。 |
+| `apply` | 只在 `review` 有效：把新增益寫進 STM32 Flash（`0x04 persist=1`），等 `0x84` 的 `FLASH_VALID + LAST_APPLY_OK`（sector erase 會讓 STM32 停約 1 s，最多等 4 s）→ `done`。沒確認就自動重送一次；兩次都失敗 → `failed`，`error` 帶 `flash_diag=0x....`（`0x84` 的 flash 診斷字，見韌體 `UART_OPEN_LOOP_PROTOCOL.md`）並還原原本的增益。 |
 | `discard` | 只在 `review` 有效：還原原本的增益 → `idle`。`review` 超過 5 分鐘沒回應視同 `discard`。 |
 | `abort` | 任何階段：停輪、還原原本增益、釋放 lock → `aborted`。 |
 
