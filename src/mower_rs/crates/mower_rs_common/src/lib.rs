@@ -50,6 +50,17 @@ pub mod params {
         }
     }
 
+    pub fn bool(node: &Node, name: &str, default: bool) -> bool {
+        match value(node, name) {
+            ParameterValue::Bool(v) => v,
+            ParameterValue::NotSet => default,
+            other => {
+                r2r::log_warn!(node.logger(), "parameter {name}: expected bool, got {other:?}; using default");
+                default
+            }
+        }
+    }
+
     pub fn i64(node: &Node, name: &str, default: i64) -> i64 {
         match value(node, name) {
             ParameterValue::Integer(v) => v,

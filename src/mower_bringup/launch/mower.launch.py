@@ -45,6 +45,12 @@ def generate_launch_description():
     enable_keyboard_teleop = LaunchConfiguration('enable_keyboard_teleop')
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
 
+    declare_rust_nodes = DeclareLaunchArgument(
+        'rust_nodes',
+        default_value='false',
+        description='Run the mower_rs velocity guards instead of the rclpy ones',
+    )
+
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -132,7 +138,10 @@ def generate_launch_description():
                 'twist_mux.launch.py'
             )
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'rust_nodes': LaunchConfiguration('rust_nodes'),
+        }.items(),
     )
 
     robot_localization_launch = IncludeLaunchDescription(
@@ -254,6 +263,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        declare_rust_nodes,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
         declare_enable_navigation,

@@ -133,6 +133,14 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 待辦：真機影子比對（remap 到 `/shadow/...` 跑 30 分鐘）→ `.env` 設 `RUST_NODES=true` → 24 h 觀察 → 拿掉 Python 版。
 
+### 7.2 `velocity_command_guard` 執行紀錄
+
+`crates/velocity_command_guard`：`core.rs` 是純邏輯（Limits 夾值與有限性檢查、時戳屏障、payload 規則、重播判定、steady-clock watchdog），每條規則一個測試向量，共 7 個測試；`main.rs` 是 r2r 外殼（相對 topic 名 `cmd_vel_in`/`cmd_vel_out`/`command_clock`，啟動與 SIGINT/SIGTERM 時發零，出站時戳用機器人 wall clock，`/dev/urandom` 產生 session id，無 parameter service 所以限制不可在執行期更改）。與 Python 版的差異：不支援 `use_sim_time`（只有 production 用；`robot.launch.py` 本來就強制 `use_sim_time:=false`）；Python 版在 SIGINT 時的最後一筆零其實發不出去（context 已關閉，會丟 `RCLError`），Rust 版在關閉前先發。
+
+差分測試（本機容器，`guard_compare.py`）：兩個實作吃同一串命令（零時戳 ×3、watchdog、帶時戳 ×3、過期、超速、側向、NaN、重播兩次、逾時重播、明確零；session 模式：零時戳、錯誤 id、正確 id ×3），輸出序列與 reject/timeout log **完全一致**。
+
+切換：`twist_mux.launch.py` 新增 `rust_nodes`，兩個 guard 各有 Python / Rust 版本互斥；`mower.launch.py`、`robot.launch.py` 轉發。本機容器 `rust_nodes:=true` → 2 個 Rust guard、0 個 Python；`false` 反之。`test_controller_configuration.py` 新增 `test_rust_velocity_guard_keeps_the_same_rules_and_wiring`。
+
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
 | 順序 | Rust bin | 取代 | Python 行數 | 現在 → 之後 | 驗證 |

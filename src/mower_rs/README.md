@@ -7,7 +7,11 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 
 | binary | replaces | switch |
 |---|---|---|
-| `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `ros2 launch mower_mission mission.launch.py rust_nodes:=true` |
+| `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `mission.launch.py rust_nodes:=true` |
+| `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_nodes:=true` |
+
+`robot.launch.py rust_nodes:=true` (compose: `RUST_NODES=true` in `.env`)
+forwards the switch to both launch files.
 
 ## Build
 
@@ -44,6 +48,22 @@ passed before.
 Known intentional difference: `/robot/telemetry`'s `robot_id` is the paired
 identity (`identity.json`, as on `/robot/info`) instead of the container
 hostname.
+
+## velocity_command_guard
+
+The decision rules are in `crates/velocity_command_guard/src/core.rs`, free
+of ROS, one test vector per rule (stale / future / backward stamps, NaN,
+lateral components, speed limits, replay after a stop, receipt-time
+watchdog, command session). `main.rs` is the r2r shell: relative
+`cmd_vel_in` / `cmd_vel_out` / `command_clock` topics, zero published at
+start and on SIGINT/SIGTERM, outgoing stamps from the robot's wall clock,
+receipt timeouts on a steady clock. Limits are read once and there is no
+parameter service, so they cannot be changed at runtime. The Rust guard
+does not follow `use_sim_time`, hence production only.
+
+Differential test (`scratch guard_compare.py`): the Python and Rust guards
+fed the same command stream produced identical output sequences and
+identical rejection / timeout logs, with and without command sessions.
 
 ## Verification
 

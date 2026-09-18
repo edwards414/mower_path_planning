@@ -1,0 +1,16 @@
+[package]
+name = "velocity_command_guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Final robot-side validation and watchdog for drivetrain commands (port of mower_bringup/velocity_command_guard.py)"
+
+[[bin]]
+name = "velocity_command_guard"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true

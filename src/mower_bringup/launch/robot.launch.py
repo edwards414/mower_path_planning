@@ -76,6 +76,7 @@ def generate_launch_description():
             ),
             'enable_keyboard_teleop': enable_keyboard_teleop,
             'gps_fix_topic': gps_fix_topic,
+            'rust_nodes': rust_nodes,
         }.items(),
     )
 
@@ -173,8 +174,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rust_nodes',
             default_value='false',
-            description='Run the mower_rs robot_status process instead of '
-                        'the rclpy heartbeat/robot_info/telemetry nodes',
+            description='Run the mower_rs processes (robot_status, both '
+                        'velocity guards) instead of their rclpy versions',
         ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,

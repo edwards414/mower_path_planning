@@ -39,6 +39,12 @@ TELEOP_SETUP = SRC_DIR / 'mower_teleop/setup.py'
 KEYBOARD_TELEOP = SRC_DIR / 'mower_teleop/mower_teleop/teleop_keyboard.py'
 TWIST_MUX_LAUNCH = SRC_DIR / 'mower_bringup/launch/twist_mux.launch.py'
 SYSTEM_TEST_LAUNCH = SRC_DIR / 'mower_bringup/launch/system_test.launch.py'
+VELOCITY_GUARD_RS = (
+    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/core.rs'
+)
+VELOCITY_GUARD_RS_MAIN = (
+    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/main.rs'
+)
 VELOCITY_GUARD = (
     SRC_DIR / 'mower_bringup/mower_bringup/velocity_command_guard.py'
 )
@@ -220,6 +226,42 @@ def test_final_velocity_guard_owns_the_only_mux_to_controller_boundary():
         _scalar(NAV2_CONFIG, 'stamp_smoothed_velocity_with_smoothing_time')
         == 'false'
     )
+
+
+def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
+    """rust_nodes:=true swaps in mower_rs velocity_command_guard: same
+    remappings, session requirement, limits, stop barriers and clocks."""
+    core = VELOCITY_GUARD_RS.read_text(encoding='utf-8')
+    main = VELOCITY_GUARD_RS_MAIN.read_text(encoding='utf-8')
+    mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
+    assert "package='mower_rs'" in mux_launch
+    assert "condition=IfCondition(rust_nodes)" in mux_launch
+    assert "condition=UnlessCondition(rust_nodes)" in mux_launch
+    assert "parameters=[{'require_command_session': True}]" in mux_launch
+    assert 'command_timeout_s", 0.20' in main
+    assert 'max_input_age_s", 0.25' in main
+    assert 'max_future_skew_s", 0.05' in main
+    assert 'max_linear_x_m_s", 0.50' in main
+    assert 'max_angular_z_rad_s", 1.00' in main
+    for rule in (
+        'velocity timestamp is too far in the future',
+        'velocity source timestamp moved backward',
+        'velocity timestamp is stale',
+        'manual velocity command session is missing or stale',
+        'manual velocity requires the robot command clock',
+        'velocity contains NaN or infinity',
+        'unsupported lateral or non-yaw velocity component',
+        'linear velocity exceeds robot safety limit',
+        'angular velocity exceeds robot safety limit',
+        'replayed velocity cannot resume stopped motion',
+    ):
+        assert rule in core, rule
+    assert 'is_finite()' in core
+    # receipt timeouts on a steady clock, stamps from the robot's own clock
+    assert 'Instant' in core
+    assert 'msg.header.stamp = stamp_now()' in main
+    assert 'publisher.publish(&twist(0.0, 0.0))' in main
+    assert 'make_parameter_handler' not in main  # limits are immutable
 
 
 def test_local_compose_builds_full_runtime_stage():
