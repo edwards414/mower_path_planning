@@ -8,11 +8,12 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | binary | replaces | switch |
 |---|---|---|
 | `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `mission.launch.py rust_status:=true` |
+| `mower_adapter` | `flutter_adapter_node` (`/adapter/map_layers/*`, `/adapter/marker_layers/*`, `/adapter/robot_pose`, `/adapter/coverage_settings`, `/adapter/zone_summaries`, `/adapter/map_datum`) | `mission.launch.py rust_adapter:=true` |
 | `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
 
-`robot.launch.py` takes both switches (compose: `RUST_STATUS` / `RUST_GUARDS`
-in `/opt/mower/.env`) so the safety-critical guards can be enabled after the
-status process, following a supervised drive.
+`robot.launch.py` takes all three switches (compose: `RUST_STATUS` /
+`RUST_ADAPTER` / `RUST_GUARDS` in `/opt/mower/.env`) so the safety-critical
+guards can be enabled last, after a supervised drive.
 
 ## Build
 
@@ -65,6 +66,17 @@ does not follow `use_sim_time`, hence production only.
 Differential test (`scratch guard_compare.py`): the Python and Rust guards
 fed the same command stream produced identical output sequences and
 identical rejection / timeout logs, with and without command sessions.
+
+## mower_adapter
+
+`crates/mower_adapter/src/dto.rs` holds the JSON conversions (OccupancyGrid
+-> base64 map layer, MarkerArray -> marker layer, ZoneMap[] -> summaries,
+rcl_interfaces ParameterValue -> JSON, datum bearing) with unit tests
+against the Python DTO layout; `main.rs` owns the latched relays, the pose
+gate and the three service clients (get_parameters x2 at 1 Hz, zone map list
+at 2 Hz, toLL until the datum locks, 3 s timeout each). Shadow run against
+the Python node on identical inputs and fake services: every `/adapter/*`
+document identical, map layers byte for byte.
 
 ## Verification
 

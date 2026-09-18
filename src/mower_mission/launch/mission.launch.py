@@ -79,6 +79,15 @@ def generate_launch_description():
                     'src/mower_rs/README.md.',
     )
 
+    rust_adapter = LaunchConfiguration('rust_adapter')
+
+    declare_rust_adapter = DeclareLaunchArgument(
+        'rust_adapter',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_adapter process instead of '
+                    'the rclpy flutter_adapter_node (same /adapter/* topics).',
+    )
+
     auto_coverage = LaunchConfiguration('auto_coverage')
 
     declare_auto_coverage = DeclareLaunchArgument(
@@ -211,10 +220,23 @@ def generate_launch_description():
         executable='flutter_adapter_node',
         name='flutter_adapter',
         output='screen',
+        condition=UnlessCondition(rust_adapter),
         parameters=[{
             'use_sim_time': use_sim_time,
             'robot_pose_source_topic': '/odometry/global_slow',
         }],
+    )
+
+    # rust_adapter:=true -- the same relay as an r2r process
+    # (src/mower_rs/crates/mower_adapter): identical /adapter/* JSON, a 214 KB
+    # map grid encodes in ~2 ms instead of ~60 ms.
+    mower_adapter_rs = Node(
+        package='mower_rs',
+        executable='mower_adapter',
+        name='flutter_adapter',
+        output='screen',
+        condition=IfCondition(rust_adapter),
+        parameters=[{'robot_pose_source_topic': '/odometry/global_slow'}],
     )
 
     # /odom is 50 Hz and rclpy costs ~5 ms per Odometry message on the
@@ -346,6 +368,7 @@ def generate_launch_description():
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
         declare_rust_status,
+        declare_rust_adapter,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,
@@ -361,6 +384,7 @@ def generate_launch_description():
         coverage_node,
         nav_action_server,
         flutter_adapter_node,
+        mower_adapter_rs,
         heartbeat_node,
         robot_info_node,
         telemetry_node,

@@ -63,6 +63,7 @@ def generate_launch_description():
         'require_navigation_health'
     )
     rust_status = LaunchConfiguration('rust_status')
+    rust_adapter = LaunchConfiguration('rust_adapter')
     rust_guards = LaunchConfiguration('rust_guards')
 
     mower_launch = IncludeLaunchDescription(
@@ -98,6 +99,7 @@ def generate_launch_description():
             'gps_fix_topic': gps_fix_topic,
             'require_navigation_health': require_navigation_health,
             'rust_status': rust_status,
+            'rust_adapter': rust_adapter,
         }.items(),
     )
 
@@ -179,6 +181,12 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs robot_status instead of the rclpy '
                         'heartbeat / robot_info / telemetry nodes',
+        ),
+        DeclareLaunchArgument(
+            'rust_adapter',
+            default_value='false',
+            description='mower_rs mower_adapter instead of the rclpy '
+                        'flutter_adapter_node',
         ),
         DeclareLaunchArgument(
             'rust_guards',

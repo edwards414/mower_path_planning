@@ -141,6 +141,14 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 切換：`twist_mux.launch.py` 新增 `rust_guards`，兩個 guard 各有 Python / Rust 版本互斥；`mower.launch.py`、`robot.launch.py` 轉發（compose `RUST_GUARDS`）。本機容器 `rust_guards:=true` → 2 個 Rust guard、0 個 Python；`false` 反之。**真機切換前必須有人監督**：app 搖桿手動駕駛（含放開搖桿要在 0.2 s 內停）、一次導航任務、`/navigation_safety_stop` 介入；這一步留給現場。`test_controller_configuration.py` 新增 `test_rust_velocity_guard_keeps_the_same_rules_and_wiring`。
 
+### 7.3 `mower_adapter` 執行紀錄
+
+`crates/mower_adapter`：`dto.rs` 是純轉換（OccupancyGrid → base64 map layer、MarkerArray → marker layer（顏色用 round-half-to-even 對齊 Python `round`）、ZoneMap[] → summaries、ParameterValue → JSON、datum bearing），5 個單元測試比對 Python DTO 版面；`main.rs` 保留節點名 `flutter_adapter`（launch 參數不變）、latched relays、pose gate（與 Phase 0 的 Python 版同一套檢查）、三種 service client（get_parameters ×2 每秒、zone map list 2 Hz、toLL 直到鎖定，各 3 s timeout；先等服務出現再開始輪詢）。需要 `geographic_msgs`、`robot_localization` 進 `IDL_PACKAGE_FILTER` 與 package.xml。
+
+影子比對（本機容器，300×200 grid、兩個 marker、fake `/boustrophedon_coverage` / `/map_manage` 參數節點、fake ZoneMapList 與 toLL 服務、10 筆 odometry）：13 個 `/adapter/*` topic 與 `robot_pose` 全部 **IDENTICAL**（map layer JSON 逐位元組相同）。開關 `rust_adapter`（compose `RUST_ADAPTER`）。
+
+備註：ZoneMapList 每 0.5 s 回傳所有 zone 的完整 OccupancyGrid 只為了數 pose、看 data 是否為空，map_manage（Python）那一側每次都要序列化——這是 map_manage 閒置 3% 的來源之一，之後可改成 map_manage 發一個小的 summary topic。
+
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
 | 順序 | Rust bin | 取代 | Python 行數 | 現在 → 之後 | 驗證 |

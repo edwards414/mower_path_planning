@@ -46,6 +46,7 @@ services:
       # each (src/mower_rs/README.md). Set in .env after the shadow check;
       # RUST_GUARDS only after a supervised drive.
       - rust_status:=${RUST_STATUS:-false}
+      - rust_adapter:=${RUST_ADAPTER:-false}
       - rust_guards:=${RUST_GUARDS:-false}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the

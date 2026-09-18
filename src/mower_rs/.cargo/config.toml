@@ -6,4 +6,4 @@
 # std_msgs; the action/service plumbing needs action_msgs,
 # unique_identifier_msgs and service_msgs.
 [env]
-IDL_PACKAGE_FILTER = "builtin_interfaces;std_msgs;std_srvs;geometry_msgs;nav_msgs;sensor_msgs;visualization_msgs;rcl_interfaces;action_msgs;unique_identifier_msgs;service_msgs;mower_interface"
+IDL_PACKAGE_FILTER = "builtin_interfaces;std_msgs;std_srvs;geometry_msgs;nav_msgs;sensor_msgs;visualization_msgs;rcl_interfaces;action_msgs;unique_identifier_msgs;service_msgs;geographic_msgs;robot_localization;mower_interface"
