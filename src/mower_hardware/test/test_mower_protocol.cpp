@@ -250,6 +250,15 @@ TEST(Pid, ConfigCommandMatchesReference)
   ASSERT_TRUE(decode_pid_config_status(f.data() + 6, 28, st));
   EXPECT_FLOAT_EQ(st.left_kp, 2.5f);
   EXPECT_FLOAT_EQ(st.right_kd, 0.125f);
+  EXPECT_EQ(st.flash_diag, 0u);
+
+  // bytes 26..27 carry the flash diagnostics on newer firmware
+  uint8_t p[28] = {};
+  std::memcpy(p, f.data() + 6, 26);
+  p[26] = 0x20;  // HAL_FLASH_ERROR_OPERATION
+  p[27] = 0x80;  // PGSERR was pending
+  ASSERT_TRUE(decode_pid_config_status(p, 28, st));
+  EXPECT_EQ(st.flash_diag, 0x8020u);
 }
 
 TEST(Charger, DecodeStatus)

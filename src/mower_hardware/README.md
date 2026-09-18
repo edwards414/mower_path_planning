@@ -30,10 +30,12 @@ on `/mower_base/firmware_info` (param `firmware_info_topic`, empty disables);
 
 The raw status frames (`0x81` motor, `0x83` lights, `0x84` PID gains, `0x85`
 wheel feedback, `0x86` power, `0x89` RS485 charger, `0x8A` analog/battery)
-are republished together as one JSON message on `/mower_base/telemetry` at
-`telemetry_rate_hz` (default 20 Hz = the `0x85` period, best-effort; param
+are republished together as one JSON message on `/mower_base/telemetry`, one
+per `0x85` frame (every 50 ms, so the PID auto-tune sees every sample;
+`telemetry_rate_hz` only throttles when set below that; best-effort; param
 `telemetry_topic` empty or rate 0 disables). Each message carries `t` (ROS
-time, s). `mower_mission` `telemetry_node` folds it into `/robot/telemetry`
+time, s) and `pid.flash_diag`, the `0x84` flash-save diagnostic word (0 unless
+a persist failed). `mower_mission` `telemetry_node` folds it into `/robot/telemetry`
 for the parameter dashboard; `battery_state_node` turns the `analog` +
 `charger` objects into `/battery_state` (see `docs/BATTERY.md`).
 

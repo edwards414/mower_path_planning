@@ -308,6 +308,7 @@ bool decode_pid_config_status(const uint8_t * p, size_t len, PidConfigStatus & o
   out.right_kd = gains[5];
   out.flags = p[24];
   out.last_rx_seq = p[25];
+  out.flash_diag = get_u16(p + 26);
   return true;
 }
 

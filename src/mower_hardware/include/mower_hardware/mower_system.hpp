@@ -98,6 +98,7 @@ private:
   double telemetry_rate_hz_ = 20.0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr telemetry_pub_;
   rclcpp::Time telemetry_sent_time_{0, 0, RCL_ROS_TIME};
+  bool telemetry_pending_ = false;   // a new 0x85 arrived since the last publish
   WheelFeedback last_wheel_feedback_;
   MotorStatus last_motor_status_;
   PidConfigStatus last_pid_config_;

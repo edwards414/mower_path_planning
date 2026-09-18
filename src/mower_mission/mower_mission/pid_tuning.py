@@ -151,17 +151,19 @@ def fit_fopdt(samples: Iterable[Sample], t_step: float, *, t_end: float | None =
         return err, dy
 
     best = (float('inf'), TAU_RANGE[0], 0.0, 0.0)
-    taus = [TAU_RANGE[0] * (TAU_RANGE[1] / TAU_RANGE[0]) ** (i / 59) for i in range(60)]
-    delays = [i * 0.01 for i in range(int(DELAY_MAX / 0.01) + 1)]
+    # coarse grid (40 x 31, then refined below); the RK3568 needs ~1 s per
+    # wheel for this in pure Python, the old 60 x 61 grid took 2.7 s
+    taus = [TAU_RANGE[0] * (TAU_RANGE[1] / TAU_RANGE[0]) ** (i / 39) for i in range(40)]
+    delays = [i * 0.02 for i in range(int(DELAY_MAX / 0.02) + 1)]
     for tau in taus:
         for delay in delays:
             e, dy = solve(tau, delay)
             if e < best[0]:
                 best = (e, tau, delay, dy)
-    for _ in range(2):  # refine around the coarse optimum
+    for _ in range(2):  # refine around the coarse optimum, inside the plausible ranges
         _, tau, delay, _ = best
-        for tau_c in [tau * (1 + 0.05 * k) for k in range(-6, 7)]:
-            for delay_c in [max(0.0, delay + 0.002 * k) for k in range(-5, 6)]:
+        for tau_c in [min(max(tau * (1 + 0.05 * k), TAU_RANGE[0]), TAU_RANGE[1]) for k in range(-6, 7)]:
+            for delay_c in [min(max(delay + 0.004 * k, 0.0), DELAY_MAX) for k in range(-5, 6)]:
                 e, dy = solve(tau_c, delay_c)
                 if e < best[0]:
                     best = (e, tau_c, delay_c, dy)
@@ -197,14 +199,22 @@ def check_model(m: FopdtModel, *, noise: float = 0.0) -> None:
         raise TuningError(f'step response does not look first order (fit residual {m.fit_rmse:.2f} rpm)')
 
 
+# A wheel whose speed settles within one 50 ms sample fits as tau at the
+# bottom of TAU_RANGE (seen on the real base: tau ~0.02 s, delay ~0.04 s).
+# SIMC would then set Ti = tau = the control period itself, a pure-integral
+# controller with no margin. Design against at least one sample of tau.
+TAU_DESIGN_MIN = 0.05
+
+
 def simc_pi(m: FopdtModel, *, tau_c_factor: float = 1.0, kp_max: float = 50.0,
-            ki_max: float = 100.0) -> Gains:
+            ki_max: float = 100.0, tau_min: float = TAU_DESIGN_MIN) -> Gains:
     """SIMC PI gains for the firmware loop (counts per rpm, counts per rpm*s)."""
-    tau_c = max(m.delay, tau_c_factor * m.tau)
+    tau = max(m.tau, tau_min)
+    tau_c = max(m.delay, tau_c_factor * tau)
     if tau_c + m.delay <= 0:
         raise TuningError('degenerate model')
-    kp = m.tau / (m.gain * (tau_c + m.delay))
-    ti = min(m.tau, 4.0 * (tau_c + m.delay))
+    kp = tau / (m.gain * (tau_c + m.delay))
+    ti = min(tau, 4.0 * (tau_c + m.delay))
     ki = kp / ti
     kp = min(kp, kp_max)
     ki = min(ki, ki_max)

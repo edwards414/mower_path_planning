@@ -46,6 +46,8 @@ class FakeBase(Node):
         self.override = (0, 0, 0.0)  # left, right, expires (monotonic)
         self.max_override = 0
         self.motor_flags = 0x01  # 0x81 flags; 0x04 = DRIVER_ALARM (BTS7960 IS, advisory)
+        self.fail_persists = 0   # first N persist requests fail like a stale FLASH_SR bit
+        self.apply_ok = True
         self.rpm = {'left': 0.0, 'right': 0.0}
         self.integral = {'left': 0.0, 'right': 0.0}
         self.hist = {'left': [0.0, 0.0, 0.0], 'right': [0.0, 0.0, 0.0]}
@@ -69,9 +71,14 @@ class FakeBase(Node):
         self.pid_commands.append(d)
         self.gains = {w: {k: float(d[w][k]) for k in ('kp', 'ki', 'kd')} for w in ('left', 'right')}
         self.closed_loop = bool(d.get('closed_loop', 1))
+        self.apply_ok = True
         if d.get('persist'):
             self.persist_count += 1
-            self.flash_valid = True
+            if self.fail_persists > 0:
+                self.fail_persists -= 1
+                self.apply_ok = False
+            else:
+                self.flash_valid = True
         self.pid_seq = (self.pid_seq + 7) % 256
 
     def _step(self):
@@ -102,7 +109,7 @@ class FakeBase(Node):
             self._publish()
 
     def _publish(self):
-        flags = (0x01 if self.closed_loop else 0) | (0x02 if self.flash_valid else 0) | 0x08
+        flags = (0x01 if self.closed_loop else 0) | (0x02 if self.flash_valid else 0) | (0x08 if self.apply_ok else 0)
         doc = {
             't': time.time(), 'feedback_age_s': 0.01, 'crc_errors': 0,
             'wheel': {
@@ -112,7 +119,8 @@ class FakeBase(Node):
             } | {'flags': 0x01 | (0x02 if self.closed_loop else 0), 'seq': self.seq},
             'motor': {'valid': True, 'flags': self.motor_flags, 'command_age_ms': 10},
             'pid': {'valid': True, 'left': self.gains['left'], 'right': self.gains['right'],
-                    'flags': flags, 'last_rx_seq': self.pid_seq},
+                    'flags': flags, 'last_rx_seq': self.pid_seq,
+                    'flash_diag': 0 if self.apply_ok else 0x8020},
             'led': {'valid': True, 'mode': 1},
             'power': {'valid': True, 'state': 0, 'flags': 0x02},
         }
@@ -250,6 +258,42 @@ def test_discard_restores_previous_gains():
         time.sleep(0.3)
         assert h.base.gains == old
         assert h.base.persist_count == 0
+    finally:
+        h.close()
+
+
+def test_apply_retries_a_failed_flash_save_once():
+    # firmware before cef0d1e: the first save after a bootloader jump fails
+    h = Harness(**FAST)
+    try:
+        h.base.fail_persists = 1
+        time.sleep(0.5)
+        assert h.call('start').success
+        st = h.wait_state('review', 'failed', 'aborted', timeout=40)
+        assert st['state'] == 'review', st['message']
+        assert h.call('apply').success
+        st = h.wait_state('done', 'failed', timeout=15)
+        assert st['state'] == 'done', st['message']
+        assert h.base.persist_count == 2
+        assert h.base.flash_valid
+    finally:
+        h.close()
+
+
+def test_apply_reports_flash_diag_when_both_saves_fail():
+    h = Harness(**FAST)
+    try:
+        h.base.fail_persists = 2
+        time.sleep(0.5)
+        assert h.call('start').success
+        st = h.wait_state('review', 'failed', 'aborted', timeout=40)
+        assert st['state'] == 'review', st['message']
+        assert h.call('apply').success
+        st = h.wait_state('done', 'failed', timeout=15)
+        assert st['state'] == 'failed'
+        assert 'flash_diag=0x8020' in st['error'] and 'attempt 2' in st['error']
+        time.sleep(0.3)
+        assert h.base.gains['left']['kp'] == 2.0  # previous gains restored
     finally:
         h.close()
 
