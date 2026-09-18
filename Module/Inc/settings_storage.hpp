@@ -24,6 +24,12 @@ typedef struct {
   bool flash_valid;
   bool last_save_ok;
   uint32_t sequence;
+  /* Diagnostics for the 0x84 status frame. last_flash_error is the HAL
+   * flash error code of the last failed save (HAL_FLASH_ERROR_*, 0 = none);
+   * stale_flash_flags is FLASH_SR error bits found pending before the last
+   * save started (they make the first erase fail unless cleared). */
+  uint8_t last_flash_error;
+  uint8_t stale_flash_flags;
 } settings_storage_status_t;
 
 void SettingsStorage_Init(void);

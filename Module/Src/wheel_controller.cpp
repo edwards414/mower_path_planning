@@ -79,9 +79,30 @@ bool command_is_zero(int16_t command_permille) {
          (command_permille >= -WHEEL_CONTROLLER_COMMAND_DEADBAND_PERMILLE);
 }
 
+/* The stored integral clamp (rpm*s) was sized for the default Ki = 0.6. A
+ * tuned loop can have Ki around 40, where the same clamp lets the integral
+ * term reach ~15x full output: a wheel held back by grass would then run
+ * flat out for seconds after it frees. Never let the integral alone exceed
+ * the output range, whatever Ki is. */
+pid_gains_t clamp_integral_to_output(const pid_gains_t &gains) {
+  pid_gains_t effective = gains;
+  if (gains.ki > 0.0f) {
+    float span = gains.output_max / gains.ki;
+    if (effective.integral_max > span) {
+      effective.integral_max = span;
+    }
+    if (effective.integral_min < -span) {
+      effective.integral_min = -span;
+    }
+  }
+  return effective;
+}
+
 void configure_pid_from_settings(void) {
-  g_left_pid.Configure(g_runtime_settings.left_wheel_pid);
-  g_right_pid.Configure(g_runtime_settings.right_wheel_pid);
+  g_left_pid.Configure(
+      clamp_integral_to_output(g_runtime_settings.left_wheel_pid));
+  g_right_pid.Configure(
+      clamp_integral_to_output(g_runtime_settings.right_wheel_pid));
 }
 
 void update_status_flags(bool output_enabled) {
