@@ -124,16 +124,12 @@ bool record_is_valid(const settings_record_t *record) {
   return expected == record->crc32;
 }
 
-bool write_record_to_flash(const settings_record_t *record) {
-  if (record == NULL) {
-    return false;
-  }
+constexpr uint32_t FLASH_ERROR_FLAGS = FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
+                                       FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR |
+                                       FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR |
+                                       FLASH_FLAG_RDERR;
 
-  HAL_StatusTypeDef status = HAL_FLASH_Unlock();
-  if (status != HAL_OK) {
-    return false;
-  }
-
+HAL_StatusTypeDef erase_and_program(const settings_record_t *record) {
   FLASH_EraseInitTypeDef erase = {};
   uint32_t sector_error = 0U;
   erase.TypeErase = FLASH_TYPEERASE_SECTORS;
@@ -141,18 +137,52 @@ bool write_record_to_flash(const settings_record_t *record) {
   erase.NbSectors = 1U;
   erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
 
-  status = HAL_FLASHEx_Erase(&erase, &sector_error);
-  if (status == HAL_OK) {
-    const uint32_t *words = reinterpret_cast<const uint32_t *>(record);
-    uint32_t address = SETTINGS_STORAGE_FLASH_ADDRESS;
-    for (uint32_t i = 0U; i < (sizeof(settings_record_t) / sizeof(uint32_t));
-         ++i) {
-      status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address, words[i]);
-      if (status != HAL_OK) {
-        break;
-      }
-      address += sizeof(uint32_t);
+  HAL_StatusTypeDef status = HAL_FLASHEx_Erase(&erase, &sector_error);
+  if (status != HAL_OK) {
+    return status;
+  }
+  const uint32_t *words = reinterpret_cast<const uint32_t *>(record);
+  uint32_t address = SETTINGS_STORAGE_FLASH_ADDRESS;
+  for (uint32_t i = 0U; i < (sizeof(settings_record_t) / sizeof(uint32_t));
+       ++i) {
+    status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address, words[i]);
+    if (status != HAL_OK) {
+      return status;
     }
+    address += sizeof(uint32_t);
+  }
+  return HAL_OK;
+}
+
+bool write_record_to_flash(const settings_record_t *record) {
+  if (record == NULL) {
+    return false;
+  }
+
+  if (HAL_FLASH_Unlock() != HAL_OK) {
+    g_status.last_flash_error = 0xFFU;
+    return false;
+  }
+
+  /* FLASH_SR error bits survive the bootloader's jump into the app (no
+   * reset in between) and any stray write to a flash address; the HAL
+   * refuses to start an erase while one is pending and only clears them on
+   * that failed attempt, so the first save after boot would always fail.
+   * Remember what was pending for the 0x84 diagnostics, then clear. */
+  g_status.stale_flash_flags = (uint8_t)(FLASH->SR & 0xF2U);
+  __HAL_FLASH_CLEAR_FLAG(FLASH_ERROR_FLAGS);
+
+  HAL_StatusTypeDef status = erase_and_program(record);
+  if (status != HAL_OK) {
+    g_status.last_flash_error = (uint8_t)HAL_FLASH_GetError();
+    __HAL_FLASH_CLEAR_FLAG(FLASH_ERROR_FLAGS);
+    status = erase_and_program(record); /* one retry with a clean SR */
+    if (status != HAL_OK) {
+      g_status.last_flash_error = (uint8_t)HAL_FLASH_GetError();
+    }
+  }
+  if (status == HAL_OK) {
+    g_status.last_flash_error = 0U;
   }
 
   (void)HAL_FLASH_Lock();
