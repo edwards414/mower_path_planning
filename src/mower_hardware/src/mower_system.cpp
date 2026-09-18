@@ -47,6 +47,8 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
   firmware_info_topic_ = param_or(info, "firmware_info_topic", firmware_info_topic_.c_str());
   led_topic_ = param_or(info, "led_topic", led_topic_.c_str());
+  pid_topic_ = param_or(info, "pid_topic", pid_topic_.c_str());
+  override_topic_ = param_or(info, "override_topic", override_topic_.c_str());
   telemetry_topic_ = param_or(info, "telemetry_topic", telemetry_topic_.c_str());
   telemetry_rate_hz_ = param_or(info, "telemetry_rate_hz", telemetry_rate_hz_);
 
@@ -105,6 +107,16 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
           led_topic_, rclcpp::QoS(1).transient_local().reliable(),
           [this](const std_msgs::msg::String & msg) { on_led_command(msg); });
       }
+      if (!pid_topic_.empty()) {
+        pid_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          pid_topic_, rclcpp::QoS(4).reliable(),
+          [this](const std_msgs::msg::String & msg) { on_pid_command(msg); });
+      }
+      if (!override_topic_.empty()) {
+        override_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          override_topic_, rclcpp::QoS(1).best_effort(),
+          [this](const std_msgs::msg::String & msg) { on_wheel_override(msg); });
+      }
       node_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
       node_executor_->add_node(info_node_);
       node_thread_ = std::thread([this]() { node_executor_->spin(); });
@@ -112,6 +124,8 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
       RCLCPP_WARN(logger(), "side-channel node unavailable: %s", e.what());
       stop_node_thread();
       led_sub_.reset();
+      pid_sub_.reset();
+      override_sub_.reset();
       firmware_info_pub_.reset();
       telemetry_pub_.reset();
       info_node_.reset();
@@ -127,6 +141,8 @@ CallbackReturn MowerSystem::on_cleanup(const rclcpp_lifecycle::State &)
   port_.close();
   stop_node_thread();
   led_sub_.reset();
+  pid_sub_.reset();
+  override_sub_.reset();
   firmware_info_pub_.reset();
   info_node_.reset();
   return CallbackReturn::SUCCESS;
@@ -183,6 +199,39 @@ long json_int(const std::string & s, const char * key, long def)
   }
   return v;
 }
+
+// same, for a float value; `key` may be nested one level ("left" -> "kp")
+double json_double(const std::string & s, const char * section, const char * key, double def)
+{
+  size_t from = 0;
+  if (section) {
+    std::string sec = std::string("\"") + section + "\"";
+    from = s.find(sec);
+    if (from == std::string::npos) {
+      return def;
+    }
+    from += sec.size();
+  }
+  std::string k = std::string("\"") + key + "\"";
+  auto pos = s.find(k, from);
+  if (pos == std::string::npos) {
+    return def;
+  }
+  pos = s.find(':', pos + k.size());
+  if (pos == std::string::npos) {
+    return def;
+  }
+  ++pos;
+  while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) {
+    ++pos;
+  }
+  char * end = nullptr;
+  double v = std::strtod(s.c_str() + pos, &end);
+  if (end == s.c_str() + pos || !std::isfinite(v)) {
+    return def;
+  }
+  return v;
+}
 }  // namespace
 
 void MowerSystem::on_led_command(const std_msgs::msg::String & msg)
@@ -221,6 +270,89 @@ void MowerSystem::send_led_if_needed(const rclcpp::Time & now)
     led_sent_ = req;
     led_sent_time_ = now;
   }
+}
+
+void MowerSystem::on_pid_command(const std_msgs::msg::String & msg)
+{
+  PidConfig cfg;
+  const double nan = std::nan("");
+  const double lkp = json_double(msg.data, "left", "kp", nan);
+  const double rkp = json_double(msg.data, "right", "kp", nan);
+  if (std::isnan(lkp) || std::isnan(rkp)) {
+    RCLCPP_WARN(logger(), "ignoring pid request without left/right kp: %s", msg.data.c_str());
+    return;
+  }
+  cfg.left_kp = static_cast<float>(lkp);
+  cfg.left_ki = static_cast<float>(json_double(msg.data, "left", "ki", 0.0));
+  cfg.left_kd = static_cast<float>(json_double(msg.data, "left", "kd", 0.0));
+  cfg.right_kp = static_cast<float>(rkp);
+  cfg.right_ki = static_cast<float>(json_double(msg.data, "right", "ki", 0.0));
+  cfg.right_kd = static_cast<float>(json_double(msg.data, "right", "kd", 0.0));
+  cfg.persist_to_flash = json_int(msg.data, "persist", 0) != 0;
+  cfg.closed_loop_enabled = json_int(msg.data, "closed_loop", 1) != 0;
+  {
+    std::lock_guard<std::mutex> lock(pid_mutex_);
+    pid_request_ = cfg;
+  }
+  pid_serial_.fetch_add(1);
+  RCLCPP_INFO(logger(), "pid request: L %.3f/%.3f/%.3f R %.3f/%.3f/%.3f persist=%d closed_loop=%d",
+    cfg.left_kp, cfg.left_ki, cfg.left_kd, cfg.right_kp, cfg.right_ki, cfg.right_kd,
+    cfg.persist_to_flash, cfg.closed_loop_enabled);
+}
+
+void MowerSystem::send_pid_if_needed()
+{
+  const uint32_t serial = pid_serial_.load();
+  if (serial == pid_sent_serial_) {
+    return;
+  }
+  PidConfig cfg;
+  {
+    std::lock_guard<std::mutex> lock(pid_mutex_);
+    cfg = pid_request_;
+  }
+  auto f = build_pid_config_command(tx_seq_++, cfg);
+  if (port_.write_all(f.data(), f.size())) {
+    pid_sent_serial_ = serial;
+  }
+}
+
+void MowerSystem::on_wheel_override(const std_msgs::msg::String & msg)
+{
+  const long ttl = std::clamp(json_int(msg.data, "ttl_ms", 0), 0L, kOverrideMaxTtlMs);
+  const long l = std::clamp(json_int(msg.data, "left_permille", 0), -1000L, 1000L);
+  const long r = std::clamp(json_int(msg.data, "right_permille", 0), -1000L, 1000L);
+  override_request_.store(
+    (static_cast<uint64_t>(ttl) << 32) |
+    (static_cast<uint64_t>(static_cast<uint16_t>(static_cast<int16_t>(l))) << 16) |
+    static_cast<uint64_t>(static_cast<uint16_t>(static_cast<int16_t>(r))));
+  override_serial_.fetch_add(1);
+}
+
+bool MowerSystem::override_permille(const rclcpp::Time & now, int16_t & left, int16_t & right)
+{
+  const uint32_t serial = override_serial_.load();
+  if (serial != override_seen_serial_) {
+    override_seen_serial_ = serial;
+    const uint64_t req = override_request_.load();
+    override_until_ = now + rclcpp::Duration::from_seconds(static_cast<double>(req >> 32) / 1000.0);
+    left = static_cast<int16_t>(static_cast<uint16_t>(req >> 16));
+    right = static_cast<int16_t>(static_cast<uint16_t>(req));
+    override_left_ = left;
+    override_right_ = right;
+  }
+  const bool active = override_until_.nanoseconds() != 0 && now < override_until_;
+  if (active != override_active_) {
+    override_active_ = active;
+    RCLCPP_INFO(logger(), active ? "wheel override active (controller command bypassed)"
+                                 : "wheel override expired, back to controller command");
+  }
+  if (!active) {
+    return false;
+  }
+  left = override_left_;
+  right = override_right_;
+  return true;
 }
 
 CallbackReturn MowerSystem::on_activate(const rclcpp_lifecycle::State &)
@@ -333,6 +465,18 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
     if (decode_firmware_info(payload, len, fi)) {
       on_firmware_info(fi);
     }
+  } else if (type == kChargerStatus) {
+    ChargerStatus st;
+    if (decode_charger_status(payload, len, st)) {
+      last_charger_status_ = st;
+      have_charger_status_ = true;
+    }
+  } else if (type == kAnalogStatus) {
+    AnalogStatus st;
+    if (decode_analog_status(payload, len, st)) {
+      last_analog_status_ = st;
+      have_analog_status_ = true;
+    }
   }
 }
 
@@ -433,41 +577,60 @@ void MowerSystem::publish_telemetry_if_due(const rclcpp::Time & now)
   }
   telemetry_sent_time_ = now;
   std_msgs::msg::String msg;
-  msg.data = telemetry_json();
+  msg.data = telemetry_json(now);
   telemetry_pub_->publish(msg);
 }
 
-std::string MowerSystem::telemetry_json() const
+std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
 {
   const WheelFeedback & fb = last_wheel_feedback_;
   const MotorStatus & ms = last_motor_status_;
   const PidConfigStatus & pid = last_pid_config_;
   const Ws2812Status & led = last_ws2812_status_;
   const PowerStatus & ps = last_power_status_;
-  char buf[1024];
+  const ChargerStatus & ch = last_charger_status_;
+  const AnalogStatus & an = last_analog_status_;
+  char buf[1536];
   std::snprintf(buf, sizeof(buf),
-    "{\"feedback_age_s\":%.3f,\"crc_errors\":%u,"
+    "{\"t\":%.3f,\"feedback_age_s\":%.3f,\"crc_errors\":%u,"
     "\"wheel\":{\"left\":{\"target_rpm\":%.2f,\"measured_rpm\":%.2f,\"pid_output\":%d,\"total_counts\":%d},"
     "\"right\":{\"target_rpm\":%.2f,\"measured_rpm\":%.2f,\"pid_output\":%d,\"total_counts\":%d},"
     "\"flags\":%u,\"seq\":%u},"
     "\"motor\":{\"valid\":%s,\"cmd_left_permille\":%d,\"cmd_right_permille\":%d,"
     "\"pwm_left\":%d,\"pwm_right\":%d,\"command_age_ms\":%u,\"flags\":%u},"
     "\"pid\":{\"valid\":%s,\"left\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},"
-    "\"right\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},\"flags\":%u},"
+    "\"right\":{\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f},\"flags\":%u,\"last_rx_seq\":%u},"
     "\"led\":{\"valid\":%s,\"mode\":%u,\"r\":%u,\"g\":%u,\"b\":%u,\"period_ms\":%u,\"flags\":%u},"
     "\"power\":{\"valid\":%s,\"state\":%u,\"flags\":%u,\"shutdown_reason\":%u,"
-    "\"press_ms\":%u,\"shutdown_elapsed_ms\":%u}}",
-    diag_feedback_age_s_, static_cast<unsigned>(parser_.crc_errors()),
+    "\"press_ms\":%u,\"shutdown_elapsed_ms\":%u},"
+    "\"charger\":{\"valid\":%s,\"online\":%s,\"charging\":%s,\"cv_phase\":%s,\"input_present\":%s,"
+    "\"vin_v\":%.2f,\"vout_v\":%.2f,\"iout_a\":%.2f,\"set_cc_a\":%.2f,\"set_cv_v\":%.2f,"
+    "\"flags\":%u,\"comm_errors\":%u,\"age_ms\":%u},"
+    "\"analog\":{\"valid\":%s,\"main_battery_v\":%.2f,\"main_battery_valid\":%s,"
+    "\"aon_battery_v\":%.2f,\"aon_battery_valid\":%s,\"board_temp_c\":%.1f,\"board_temp_valid\":%s,"
+    "\"vdda_mv\":%u,\"vdda_calibrated\":%s,\"mg996_current_raw\":%u,\"flags\":%u}}",
+    now.seconds(), diag_feedback_age_s_, static_cast<unsigned>(parser_.crc_errors()),
     fb.left_target_rpm, fb.left_measured_rpm, fb.left_pid_output, fb.left_total_counts,
     fb.right_target_rpm, fb.right_measured_rpm, fb.right_pid_output, fb.right_total_counts,
     fb.flags, fb.seq,
     have_motor_status_ ? "true" : "false", ms.commanded_left_permille, ms.commanded_right_permille,
     ms.applied_left_pwm, ms.applied_right_pwm, ms.command_age_ms, ms.flags,
     have_pid_config_ ? "true" : "false", pid.left_kp, pid.left_ki, pid.left_kd,
-    pid.right_kp, pid.right_ki, pid.right_kd, pid.flags,
+    pid.right_kp, pid.right_ki, pid.right_kd, pid.flags, pid.last_rx_seq,
     have_ws2812_status_ ? "true" : "false", led.mode, led.r, led.g, led.b, led.effect_period_ms, led.flags,
     have_power_status_ ? "true" : "false", ps.state, ps.flags, ps.shutdown_reason,
-    ps.press_ms, ps.shutdown_elapsed_ms);
+    ps.press_ms, ps.shutdown_elapsed_ms,
+    have_charger_status_ ? "true" : "false", ch.online() ? "true" : "false",
+    ch.charging() ? "true" : "false", ch.cv_phase() ? "true" : "false",
+    ch.input_present() ? "true" : "false",
+    ch.vin_cv / 100.0, ch.vout_cv / 100.0, ch.iout_ca / 100.0, ch.set_cc_ca / 100.0,
+    ch.set_cv_cv / 100.0, ch.flags, ch.comm_error_count, ch.age_ms,
+    have_analog_status_ ? "true" : "false",
+    an.main_battery_cv / 100.0, an.main_battery_valid() ? "true" : "false",
+    an.aon_battery_cv / 100.0, an.aon_battery_valid() ? "true" : "false",
+    an.board_temp_valid() ? an.board_temp_dc / 10.0 : 0.0, an.board_temp_valid() ? "true" : "false",
+    an.vdda_mv, (an.flags & kAnalogFlagVddaCalibrated) ? "true" : "false",
+    an.mg996_current_raw, an.flags);
   return buf;
 }
 
@@ -487,8 +650,12 @@ bool MowerSystem::send_stop()
 
 return_type MowerSystem::write(const rclcpp::Time & time, const rclcpp::Duration &)
 {
-  int16_t l = rad_s_to_permille(left_.cmd_velocity);
-  int16_t r = rad_s_to_permille(right_.cmd_velocity);
+  int16_t l = 0;
+  int16_t r = 0;
+  if (!override_permille(time, l, r)) {
+    l = rad_s_to_permille(left_.cmd_velocity);
+    r = rad_s_to_permille(right_.cmd_velocity);
+  }
   auto f = build_wheel_speed_command(tx_seq_++, l, r, static_cast<uint16_t>(command_timeout_ms_));
   if (!port_.write_all(f.data(), f.size())) {
     RCLCPP_ERROR_THROTTLE(logger(), throttle_clock_, 2000, "serial write error: %s",
@@ -496,6 +663,7 @@ return_type MowerSystem::write(const rclcpp::Time & time, const rclcpp::Duration
     return return_type::ERROR;
   }
   send_led_if_needed(time);
+  send_pid_if_needed();
   return return_type::OK;
 }
 

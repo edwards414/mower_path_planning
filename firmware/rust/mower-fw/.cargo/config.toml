@@ -1,0 +1,11 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+rustflags = [
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+]
+# Flash through the same OpenOCD config the C++ build uses. Replace with
+# `probe-rs run --chip STM32F411CEUx` once probe-rs is installed.
+runner = "openocd -f ../../mower_robot_debug.cfg -c 'program {} verify reset exit'"

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -89,9 +90,12 @@ private:
   // Raw STM32 status frames, republished as one JSON message on
   // /mower_base/telemetry at telemetry_rate_hz (0 disables) so the parameter
   // dashboard can plot wheel target vs. measured RPM, PID output / gains,
-  // light state and power state without touching ros2_control.
+  // light state, power state, charger (0x89) and battery/analog readings
+  // (0x8A, consumed by mower_mission battery_state_node) without touching
+  // ros2_control. 20 Hz matches
+  // the 0x85 period, which the PID auto-tune needs to sample a step response.
   std::string telemetry_topic_ = "/mower_base/telemetry";
-  double telemetry_rate_hz_ = 10.0;
+  double telemetry_rate_hz_ = 20.0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr telemetry_pub_;
   rclcpp::Time telemetry_sent_time_{0, 0, RCL_ROS_TIME};
   WheelFeedback last_wheel_feedback_;
@@ -99,12 +103,16 @@ private:
   PidConfigStatus last_pid_config_;
   Ws2812Status last_ws2812_status_;
   PowerStatus last_power_status_;
+  ChargerStatus last_charger_status_;
+  AnalogStatus last_analog_status_;
   bool have_motor_status_ = false;
   bool have_pid_config_ = false;
   bool have_ws2812_status_ = false;
   bool have_power_status_ = false;
+  bool have_charger_status_ = false;
+  bool have_analog_status_ = false;
   void publish_telemetry_if_due(const rclcpp::Time & now);
-  std::string telemetry_json() const;
+  std::string telemetry_json(const rclcpp::Time & now) const;
 
   // WS2812 light request (0x03), from the latched JSON topic
   //   {"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}
@@ -123,6 +131,38 @@ private:
   void on_led_command(const std_msgs::msg::String & msg);
   void send_led_if_needed(const rclcpp::Time & now);
   void stop_node_thread();
+
+  // PID gains request (0x04), JSON on a reliable topic:
+  //   {"left":{"kp":2,"ki":0.6,"kd":0},"right":{...},"persist":0,"closed_loop":1}
+  // Sent once per message; the STM32 answers with 0x84 (LAST_APPLY_OK /
+  // LAST_SAVE_OK in the telemetry pid.flags). Used by the PID auto-tune node.
+  std::string pid_topic_ = "/mower_base/pid_command";
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr pid_sub_;
+  std::mutex pid_mutex_;
+  PidConfig pid_request_;
+  std::atomic<uint32_t> pid_serial_{0};   // bumped per request
+  uint32_t pid_sent_serial_ = 0;
+  void on_pid_command(const std_msgs::msg::String & msg);
+  void send_pid_if_needed();
+
+  // Raw wheel command override, JSON:
+  //   {"left_permille":400,"right_permille":400,"ttl_ms":300}
+  // While the ttl has not expired write() sends these permille instead of
+  // the controller's velocity command, bypassing diff_drive_controller's
+  // acceleration limits so an auto-tune step is a real step. ttl is clamped
+  // to kOverrideMaxTtlMs; the requester has to keep re-publishing.
+  std::string override_topic_ = "/mower_base/wheel_override";
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr override_sub_;
+  static constexpr long kOverrideMaxTtlMs = 1000;
+  std::atomic<uint64_t> override_request_{0};  // packed: [63:32] ttl_ms, [31:16] left, [15:0] right
+  std::atomic<uint32_t> override_serial_{0};
+  uint32_t override_seen_serial_ = 0;
+  rclcpp::Time override_until_{0, 0, RCL_ROS_TIME};
+  int16_t override_left_ = 0;
+  int16_t override_right_ = 0;
+  bool override_active_ = false;
+  void on_wheel_override(const std_msgs::msg::String & msg);
+  bool override_permille(const rclcpp::Time & now, int16_t & left, int16_t & right);
 
   SerialPort port_;
   FrameParser parser_;

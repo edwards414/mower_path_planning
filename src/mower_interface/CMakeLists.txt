@@ -28,6 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MissionOperationLock.srv"
   "srv/ConfirmNavigationDispatch.srv"
   "srv/CancelNavigationDispatch.srv"
+  "srv/PidAutotune.srv"
   "action/Waypoint.action"
   DEPENDENCIES std_msgs geometry_msgs nav_msgs visualization_msgs action_msgs
 )

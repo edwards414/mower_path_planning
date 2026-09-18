@@ -40,6 +40,8 @@
 https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=<secret>&n=<name>&h=<relay wss url>&l=<lan ip>
 ```
 
+要貼在車身上的版本：在工作機 `ssh cat@<robot> mower-pair --json --no-qr > pair.json && python3 deploy/mower-pair-sheet.py pair.json --pdf mower_pair_qr.pdf`（A4 四張 80×100 mm 貼紙、EC level H；需 `pip install segno`，用 Chrome 轉 PDF）。換過 secret 要重印。
+
 App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連線**在 HTTP upgrade 帶：
 
 | Header | 值 |
@@ -82,7 +84,59 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 
 ## `/robot/telemetry`（std_msgs/String，JSON，10 Hz）
 
-給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態，來自 STM32 的 `0x81/0x83/0x84/0x85/0x86`）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（load / 記憶體 / CPU 溫度）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
+> `base` 來源 `/mower_base/telemetry` 本身是 20 Hz（與 STM32 `0x85` 同步，PID 自動校正需要這個取樣率），並多了 `t`（ROS time）與 `pid.last_rx_seq`。
+
+給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態、充電模組 `charger`、電池電壓 `analog`，來自 STM32 的 `0x81/0x83/0x84/0x85/0x86/0x89/0x8A`）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（load / 記憶體 / CPU 溫度）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
+
+## `/battery_state`（sensor_msgs/BatteryState，1 Hz）
+
+真機上由 `mower_mission` `battery_state_node` 發（`src/mower_mission/launch/mission.launch.py`），資料來源是 STM32 `0x8A` 的主電池電壓與 `0x89` 的充電模組狀態，SOC 是 6S 鋰電 OCV 查表加濾波（設計與限制見 `docs/BATTERY.md`）。模擬環境仍由 `battery_simulator_node` 發同一個 topic。
+
+| 欄位 | 內容 |
+|---|---|
+| `present` | STM32 5 s 內有回報有效電壓才 `true`；`false` 時其他欄位是 NaN / UNKNOWN，App 應顯示「--」 |
+| `voltage` | 濾波後的電池組電壓（V） |
+| `percentage` | `0.0 ~ 1.0`；負載下誤差約 ±10 %，靜置較準 |
+| `current` | 充電時 = 充電模組輸出電流（A，正值）；沒接充電器時 NaN（目前沒有放電電流感測） |
+| `power_supply_status` | `CHARGING` / `FULL` / `NOT_CHARGING`（接著充電器但沒電流）/ `DISCHARGING` |
+| `cell_voltage` | 6 個平均值（沒有逐 cell 量測） |
+
+`/aon_battery_state` 同格式，是維持 STM32 常開的 3.7 V 小電池，App 目前不顯示。
+
+## `/pid_autotune`（mower_interface/srv/PidAutotune）、`/pid_autotune/status`（std_msgs/String，JSON，latched）
+
+輪速 PID 自動校正（`src/mower_mission/mower_mission/pid_autotune_node.py`），給 Mower Studio 的「PID 自動校正」按鈕用。
+新增於 api 2 之後，App 用「service 有沒有」判斷。**校正時左右輪會以最高 70 % duty 空轉**：呼叫 `start` 之前 App 必須讓操作者確認車輛已架高、兩輪懸空、刀片停止；機器人端無法自行檢查這件事，只會拒絕「導航中 / 手動移動中 / 電源非 RUNNING / 驅動器 alarm / 沒有 base telemetry」。
+
+Request `op`：
+
+| op | 作用 |
+|---|---|
+| `start` | 開始。取 `/mission_operation_lock`、燈條琥珀色環繞、切開環 → `0 → 40 % → 70 %` duty 各 2.5 s（兩輪同時，取 `0x85` 的 `pid_output` / `measured_rpm`）→ 擬合一階加延遲模型 → SIMC PI → 用新增益閉環 step 到 50 % 速度驗證（超調 ≤ 25 %、±5 % 安定 ≤ 1.5 s、穩態誤差 ≤ 1.5 rpm）→ `review`。增益此時只在 RAM。 |
+| `apply` | 只在 `review` 有效：把新增益寫進 STM32 Flash（`0x04 persist=1`），等 `0x84` 確認 → `done`。 |
+| `discard` | 只在 `review` 有效：還原原本的增益 → `idle`。`review` 超過 5 分鐘沒回應視同 `discard`。 |
+| `abort` | 任何階段：停輪、還原原本增益、釋放 lock → `aborted`。 |
+
+Response：`success` / `message`。`start` 回 `success=true` 只代表已開始，過程與結果看 status。
+
+`/pid_autotune/status` JSON：
+
+```
+{"state": "idle|precheck|open_loop|fitting|verify|review|saving|done|failed|aborted",
+ "progress": 0.0-1.0, "message": "...", "error": null|"...",
+ "started_at": unix_s, "updated_at": unix_s,
+ "old_gains": {"left": {"kp","ki","kd"}, "right": {...}} | null,
+ "new_gains": {...} | null,
+ "model":  {"left": {"gain" (rpm/count), "tau" (s), "delay" (s), "y0","y_ss","u0","u1","fit_r2","fit_rmse"}, "right": {...}} | null,
+ "verify": {"left": {"target","overshoot_pct","settle_s","ss_error","rise_s"}, "right": {...}} | null,
+ "samples": {"open_loop": {"left": [[t, pwm_counts, rpm], ...], "right": [...]},
+             "verify":    {"left": [...], "right": [...]}},
+ "marks": {"open_loop_low": t, "open_loop_high": t, "verify": t}}
+```
+
+`t` 是自 `started_at` 起的秒數。執行中 5 Hz 更新，結束後 latched 留著最後一筆；任何非 `done` / `idle` 的結束都會把原本的增益寫回 RAM（Flash 不動）。
+
+機器人端依賴 mower_hardware 的兩個側通道：`/mower_base/pid_command`（`0x04`）與 `/mower_base/wheel_override`（繞過 `diff_drive_controller` 加速度限制的原始 permille 指令，ttl ≤ 1 s 要一直重送，沒送就回到控制器指令），見 `src/mower_hardware/README.md`。
 
 ## `/system/update`、`/system/restart`（std_srvs/Trigger）
 

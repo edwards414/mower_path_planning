@@ -20,9 +20,11 @@
 #define ADC_MUX_S0_GPIO_Port GPIOB
 #endif
 
+/* S1 lives on PA6: PB11 is not bonded out on the UFQFPN48 STM32F411CEU6
+ * (Black Pill), so the original PB11 assignment could never toggle. */
 #ifndef ADC_MUX_S1_Pin
-#define ADC_MUX_S1_Pin GPIO_PIN_11
-#define ADC_MUX_S1_GPIO_Port GPIOB
+#define ADC_MUX_S1_Pin GPIO_PIN_6
+#define ADC_MUX_S1_GPIO_Port GPIOA
 #endif
 
 #ifndef POWER_BUTTON_N_Pin
@@ -40,14 +42,14 @@
 #define MAIN_POWER_EN_GPIO_Port GPIOC
 #endif
 
-#ifndef CAN_CS_Pin
-#define CAN_CS_Pin GPIO_PIN_12
-#define CAN_CS_GPIO_Port GPIOA
-#endif
-
-#ifndef CAN_INT_Pin
-#define CAN_INT_Pin GPIO_PIN_11
-#define CAN_INT_GPIO_Port GPIOA
+/* PA11/PA12: USART6 TX/RX to the MAX485 TTL module (DI / RO).
+ * PA5: MAX485 DE and RE tied together. High = drive the bus, low = listen.
+ * Set CHARGER_RS485_USE_DE_PIN to 0 for an auto-direction transceiver.
+ * PA6/PA7 are free since the SPI-CAN was dropped. */
+#define CHARGER_RS485_USE_DE_PIN 1
+#ifndef RS485_DE_Pin
+#define RS485_DE_Pin GPIO_PIN_5
+#define RS485_DE_GPIO_Port GPIOA
 #endif
 
 /* PC13: BLD120A BRK, open-drain. Low = brake, high (high-Z) = release. */

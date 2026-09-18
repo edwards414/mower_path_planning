@@ -25,6 +25,7 @@ topics:
   - /adapter/marker_layers/risk_zones
   - /robot/online                                # heartbeat (latched)
   - /battery_state
+  - /aon_battery_state
 
   # -- Engineering / raw (for Foxglove + post-mortem, NOT needed by the app) -----
   - /odom
@@ -33,6 +34,7 @@ topics:
   - /cmd_vel
   - /fix                                         # GPS (sensor_msgs/NavSatFix)
   - /imu/data
+  - /mower_base/telemetry                        # STM32 raw status incl. charger Vout/Iout (charge curves)
   - /risk_map_inflated                           # raw OccupancyGrid (latched)
   - /free_space_inflated                         # raw OccupancyGrid (latched)
   - /navigate_to_pose/_action/feedback

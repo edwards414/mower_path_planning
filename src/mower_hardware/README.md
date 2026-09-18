@@ -29,10 +29,28 @@ on `/mower_base/firmware_info` (param `firmware_info_topic`, empty disables);
 `/robot/info` merges it for the app.
 
 The raw status frames (`0x81` motor, `0x83` lights, `0x84` PID gains, `0x85`
-wheel feedback, `0x86` power) are republished together as one JSON message on
-`/mower_base/telemetry` at `telemetry_rate_hz` (default 10 Hz, best-effort;
-param `telemetry_topic` empty or rate 0 disables). `mower_mission`
-`telemetry_node` folds it into `/robot/telemetry` for the parameter dashboard.
+wheel feedback, `0x86` power, `0x89` RS485 charger, `0x8A` analog/battery)
+are republished together as one JSON message on `/mower_base/telemetry` at
+`telemetry_rate_hz` (default 20 Hz = the `0x85` period, best-effort; param
+`telemetry_topic` empty or rate 0 disables). Each message carries `t` (ROS
+time, s). `mower_mission` `telemetry_node` folds it into `/robot/telemetry`
+for the parameter dashboard; `battery_state_node` turns the `analog` +
+`charger` objects into `/battery_state` (see `docs/BATTERY.md`).
+
+`charger` = `{valid, online, charging, cv_phase, input_present, vin_v, vout_v,
+iout_a, set_cc_a, set_cv_v, flags, comm_errors, age_ms}` — values are the
+last Modbus reply, meaningful only while `online`.
+`analog` = `{valid, main_battery_v, main_battery_valid, aon_battery_v,
+aon_battery_valid, board_temp_c, board_temp_valid, vdda_mv, vdda_calibrated,
+mg996_current_raw, flags}` — refreshed by the STM32 every 200 ms.
+
+Two command side channels (JSON on `std_msgs/String`), used by the
+`mower_mission` `pid_autotune_node`:
+
+| Topic | Payload | Effect |
+| --- | --- | --- |
+| `/mower_base/pid_command` | `{"left":{"kp","ki","kd"},"right":{...},"persist":0\|1,"closed_loop":0\|1}` | one `0x04` per message; result shows up in telemetry `pid.flags` (`LAST_APPLY_OK`, `LAST_SAVE_OK`). `persist=1` writes STM32 flash, do not spam it |
+| `/mower_base/wheel_override` | `{"left_permille":400,"right_permille":400,"ttl_ms":300}` | while the ttl (clamped to 1 s) has not expired, `write()` sends these permille instead of the controller's velocity command, so an open-loop / closed-loop step is a real step and not one shaped by `diff_drive_controller`'s acceleration limits. Keep re-publishing to hold it; it falls back to the controller on expiry |
 
 Two joints, left then right, in the order they appear in the URDF.
 
@@ -46,6 +64,8 @@ Two joints, left then right, in the order they appear in the URDF.
 | `counts_per_rev` | `8896` | FT-555 16 PPR × 4 × 139:1 |
 | `command_timeout_ms` | `300` | firmware stops if no `0x01` within this |
 | `feedback_timeout_s` | `0.5` | plugin zeroes velocity and warns if no `0x85` |
+| `telemetry_rate_hz` | `20.0` | `/mower_base/telemetry` rate, 0 disables |
+| `pid_topic` / `override_topic` | `/mower_base/pid_command` / `/mower_base/wheel_override` | empty disables the side channel |
 
 ## Bring-up
 

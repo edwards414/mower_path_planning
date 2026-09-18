@@ -185,6 +185,19 @@ std::vector<uint8_t> build_ws2812_command(
   return build_frame(kWs2812Command, seq, p, sizeof(p));
 }
 
+std::vector<uint8_t> build_pid_config_command(uint8_t seq, const PidConfig & cfg)
+{
+  // <ffffffBBH>: six little-endian floats, persist, closed_loop, reserved
+  uint8_t p[28] = {};
+  const float gains[6] = {cfg.left_kp, cfg.left_ki, cfg.left_kd,
+                          cfg.right_kp, cfg.right_ki, cfg.right_kd};
+  std::memcpy(p, gains, sizeof(gains));
+  p[24] = cfg.persist_to_flash ? 1 : 0;
+  p[25] = cfg.closed_loop_enabled ? 1 : 0;
+  put_u16(p + 26, 0);
+  return build_frame(kPidConfigCommand, seq, p, sizeof(p));
+}
+
 bool decode_firmware_info(const uint8_t * p, size_t len, FirmwareInfo & out)
 {
   if (len != 16) {
@@ -230,6 +243,37 @@ bool decode_power_status(const uint8_t * p, size_t len, PowerStatus & out)
   out.last_rx_seq = p[3];
   out.press_ms = get_u16(p + 4);
   out.shutdown_elapsed_ms = get_u16(p + 6);
+  return true;
+}
+
+bool decode_charger_status(const uint8_t * p, size_t len, ChargerStatus & out)
+{
+  if (len != 16) {
+    return false;
+  }
+  out.vin_cv = get_u16(p);
+  out.vout_cv = get_u16(p + 2);
+  out.iout_ca = get_u16(p + 4);
+  out.set_cc_ca = get_u16(p + 6);
+  out.set_cv_cv = get_u16(p + 8);
+  out.flags = p[10];
+  out.comm_error_count = p[11];
+  out.age_ms = get_u16(p + 12);
+  out.last_exception_code = p[14];
+  return true;
+}
+
+bool decode_analog_status(const uint8_t * p, size_t len, AnalogStatus & out)
+{
+  if (len != 12) {
+    return false;
+  }
+  out.main_battery_cv = get_u16(p);
+  out.aon_battery_cv = get_u16(p + 2);
+  out.board_temp_dc = get_i16(p + 4);
+  out.vdda_mv = get_u16(p + 6);
+  out.mg996_current_raw = get_u16(p + 8);
+  out.flags = p[10];
   return true;
 }
 
