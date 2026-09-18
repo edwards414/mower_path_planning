@@ -92,6 +92,8 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 | 0.5 | 不可行 | controller_manager 4.48（Jazzy）沒有任何參數能關掉 pal_statistics introspection（`ros2 param list` 無相關項；上游 `controller_manager.cpp` 無條件 `START_PUBLISH_THREAD`）。要關必須改上游或自建。保留。 |
 | 0.6 | 無需修改 | 真機量測 `/tf` = ekf_odom `odom→base_footprint` 30 Hz + ekf_map `map→odom` 30 Hz + robot_state_publisher 兩輪 16.7 Hz；`diff_controller.enable_odom_tf` 執行期已是 false，沒有重複發布。 |
 
+量測（映像 `ba2669e2`，commit 9827538，重啟 7 分鐘後，30 s，仍是 2 個 rosbridge 客戶端）：整機 **388% → 285%**（Python 298 → 197）。flutter_adapter 59.1 → 12.7、path_record 50.9 → 15.7、pid_autotune 11.4 → <0.7、nav_action_server 37.5 → 31.7；其餘不變（rosbridge 51、telemetry 22、guards 17.7+12.6、battery 9.0、ros2_control 23.7）。`/tf` 訂閱者從 7 個降到 5 個（都是 nav2 C++）。
+
 驗證：ROS-free 測試 75 passed（`test_qos_configuration.py` 改為檢查新的 frame gate 並禁止 `from tf2_ros import`）；本機 `mower-jazzy-test` 容器（加裝 nav2_simple_commander、robot_localization、topic_tools）跑 `test_pid_autotune_node.py` 7 passed、`test_nav_action_server_services.py` 33 passed / 6 failed（HEAD 上同樣 6 個失敗，與本次無關）、path_record 錄製情境 2/2 通過（`test_path_record_integration_launch.py` 的類別不是 `unittest.TestCase`，launch_testing 實際跑 0 個測試，已知問題）、flutter_adapter 15/15 轉發、5 種無效樣本全部拒絕。
 
 ## 5. Rust 技術選型
@@ -115,6 +117,21 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 3. Runtime stage 不變：bin 動態連結 /opt/ros/jazzy 的 librcl/rmw/typesupport，都已在映像裡。
 4. Launch：每個節點加 launch 參數 `rust_nodes:=true|false`（預設 false，逐節點切換），同一映像同時帶 Python 與 Rust 版，回滾只改參數。
 5. 開發環境：Mac 上 `cargo test` 跑純邏輯單元測試（不需 ROS）；需要 ROS 的整合測試在 devcontainer / CI arm64 runner。
+
+### 6.1 Phase 1 執行紀錄（2026-09-19）
+
+- `src/mower_rs/`：ament_cmake 套件（`project(mower_rs NONE)`），`CMakeLists.txt` 在建置時跑 `cargo build --release --locked`（target dir 跟著 `CARGO_TARGET_DIR` 進 colcon build tree / CI cache），bin 裝到 `lib/mower_rs/`；`ros2 run mower_rs robot_status`、`ros2 pkg executables mower_rs` 都正常。Cargo workspace：`crates/mower_rs_common`（參數、JSON 四捨五入、state dir 檔案、host.request）+ `crates/robot_status`。
+- r2r 0.9.7 在 Jazzy arm64 驗證通過：`IDL_PACKAGE_FILTER` 必須列出 `mower_interface` 的遞移相依（visualization_msgs 等，r2r 不自動解析）；冷建 41 s、暖建 16 s；bin 1.4 MB，只動態連結 /opt/ros/jazzy 與 `mower_interface` 的 typesupport。
+- Dockerfile builder 加 `libclang-dev`（bindgen）。
+- 切換：`mission.launch.py` / `robot.launch.py` 新增 `rust_nodes`（預設 false）；compose 讀 `.env` 的 `RUST_NODES`。`rust_nodes:=true` 時只有 `/robot_status` 起來，false 時是原本三個 Python 節點（本機容器實測）。
+
+### 7.1 `robot_status`（pilot）執行紀錄
+
+實際做法與計劃的差異：一個 process、**一個** node `robot_status`（不是三個保留原名的 node）：launch 的 params 檔以 node 名稱分組，三個節點的 `publish_rate_hz` 會互相打架，所以合成一個 node，會撞名的參數加前綴（`heartbeat_*`、`info_publish_rate_hz`、`telemetry_publish_rate_hz`）。battery_state_node 暫不納入（另一個 session 正在改 battery_estimator / battery_state_node）。
+
+影子比對（本機容器，合成輸入 5 Hz odom / imu / fix / battery / base telemetry，state dir 放 image.json、update_status.json、firmware_sync.json、link_status.json、identity.json）：`/robot/info` 0 個欄位差異；`/robot/telemetry` 70 vs 70 筆、唯一差異是 `robot_id`（Python 版用 hostname，Rust 版用 identity.json 的配對 ID，刻意）；`/robot/online` 相同；`/system/update` 寫出 host.request、`robot_status.json` 內容一致；SIGTERM 正常關閉。單元測試 10 個（`cargo test`）。
+
+待辦：真機影子比對（remap 到 `/shadow/...` 跑 30 分鐘）→ `.env` 設 `RUST_NODES=true` → 24 h 觀察 → 拿掉 Python 版。
 
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 

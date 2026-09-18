@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -66,6 +66,17 @@ def generate_launch_description():
         'heartbeat_source_topic',
         default_value='/odom_slow',
         description='Topic whose freshness drives the /robot/online heartbeat',
+    )
+
+    rust_nodes = LaunchConfiguration('rust_nodes')
+
+    declare_rust_nodes = DeclareLaunchArgument(
+        'rust_nodes',
+        default_value='false',
+        description='Run the mower_rs (Rust) robot_status process instead of '
+                    'the rclpy heartbeat_node + robot_info_node + '
+                    'telemetry_node. Same topics, services and files; see '
+                    'src/mower_rs/README.md.',
     )
 
     auto_coverage = LaunchConfiguration('auto_coverage')
@@ -242,6 +253,7 @@ def generate_launch_description():
         executable='heartbeat_node',
         name='robot_heartbeat',
         output='screen',
+        condition=UnlessCondition(rust_nodes),
         parameters=[{
             'use_sim_time': False,
             'source_topic': heartbeat_source_topic,
@@ -257,6 +269,7 @@ def generate_launch_description():
         executable='robot_info_node',
         name='robot_info',
         output='screen',
+        condition=UnlessCondition(rust_nodes),
         parameters=[{'use_sim_time': False, 'odom_topic': '/odom_slow'}],
     )
 
@@ -267,10 +280,29 @@ def generate_launch_description():
         executable='telemetry_node',
         name='telemetry',
         output='screen',
+        condition=UnlessCondition(rust_nodes),
         parameters=[{
             'use_sim_time': False,
             'gps_fix_topic': gps_fix_topic,
             'odom_topic': '/odom_slow',
+        }],
+    )
+
+    # rust_nodes:=true -- the three status nodes above as one r2r process
+    # (src/mower_rs/crates/robot_status). Same topics, services, state-dir
+    # files and LED behaviour; ~1 % of a core instead of ~30 %.
+    robot_status_rs = Node(
+        package='mower_rs',
+        executable='robot_status',
+        name='robot_status',
+        output='screen',
+        condition=IfCondition(rust_nodes),
+        parameters=[{
+            'heartbeat_source_topic': heartbeat_source_topic,
+            'heartbeat_stale_timeout_s': 2.0,
+            'heartbeat_publish_rate_hz': 2.0,
+            'odom_topic': '/odom_slow',
+            'gps_fix_topic': gps_fix_topic,
         }],
     )
 
@@ -313,6 +345,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
+        declare_rust_nodes,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,
@@ -331,6 +364,7 @@ def generate_launch_description():
         heartbeat_node,
         robot_info_node,
         telemetry_node,
+        robot_status_rs,
         battery_state_node,
         pid_autotune_node,
         temp_dock_pose_publisher,

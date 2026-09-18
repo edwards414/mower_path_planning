@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mower_rs</name>
+  <version>0.1.0</version>
+  <description>Rust (r2r) replacements for the data-shuffling rclpy nodes: robot_status (heartbeat + /robot/info + /robot/telemetry)</description>
+  <maintainer email="edwards940428@gmail.com">fxrbindi</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- r2r generates its bindings from the typesupport of every package named
+       in .cargo/config.toml IDL_PACKAGE_FILTER; they must be built (and on
+       AMENT_PREFIX_PATH) before cargo runs. -->
+  <depend>mower_interface</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>rcl</depend>
+  <depend>rmw</depend>
+  <depend>rosidl_typesupport_introspection_c</depend>
+
+  <exec_depend>ros2run</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

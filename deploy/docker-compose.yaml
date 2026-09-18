@@ -42,6 +42,9 @@ services:
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
       - record:=false
+      # Rust robot_status process instead of the three rclpy status nodes
+      # (src/mower_rs). Set RUST_NODES=true in .env after the shadow check.
+      - rust_nodes:=${RUST_NODES:-false}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the
       # domain id only separates it from anything else on the box.

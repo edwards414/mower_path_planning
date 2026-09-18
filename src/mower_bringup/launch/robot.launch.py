@@ -62,6 +62,7 @@ def generate_launch_description():
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
+    rust_nodes = LaunchConfiguration('rust_nodes')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -94,6 +95,7 @@ def generate_launch_description():
             'git_repo_dir': git_repo_dir,
             'gps_fix_topic': gps_fix_topic,
             'require_navigation_health': require_navigation_health,
+            'rust_nodes': rust_nodes,
         }.items(),
     )
 
@@ -167,6 +169,12 @@ def generate_launch_description():
             'require_navigation_health',
             default_value='true',
             description='Fail closed when pose or precise GPS becomes stale',
+        ),
+        DeclareLaunchArgument(
+            'rust_nodes',
+            default_value='false',
+            description='Run the mower_rs robot_status process instead of '
+                        'the rclpy heartbeat/robot_info/telemetry nodes',
         ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,

@@ -13,6 +13,7 @@ from mower_mission.version import ROBOT_API_VERSION, software_identity
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
 ROSBRIDGE_CONFIG = PACKAGE_DIR.parent / 'mower_bringup/config/rosbridge_params.yaml'
 API_DOC = PACKAGE_DIR.parents[1] / 'docs/ROBOT_API.md'
+RUST_ROBOT_STATUS = PACKAGE_DIR.parent / 'mower_rs/crates/robot_status/src/info.rs'
 
 
 def test_write_request_is_atomic_json(tmp_path):
@@ -82,3 +83,11 @@ def test_api_version_is_documented():
     assert ROBOT_API_VERSION in versions, (
         f'add a row for api_version {ROBOT_API_VERSION} to docs/ROBOT_API.md'
     )
+
+
+def test_rust_robot_status_reports_the_same_api_version():
+    """The r2r robot_status process publishes /robot/info too (rust_nodes:=true)."""
+    source = RUST_ROBOT_STATUS.read_text(encoding='utf-8')
+    match = re.search(r'pub const ROBOT_API_VERSION: i64 = (\d+);', source)
+    assert match, 'ROBOT_API_VERSION constant missing from mower_rs robot_status'
+    assert int(match.group(1)) == ROBOT_API_VERSION

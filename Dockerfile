@@ -26,6 +26,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ccache \
         curl \
         git \
+        libclang-dev \
         libcurl4-openssl-dev \
         libusb-1.0-0-dev \
         make \
@@ -56,9 +57,11 @@ FROM base AS builder
 ARG ROS_DISTRO
 ARG WORKSPACE
 
-# Rust toolchain + maturin, required to build the PyO3 package mower_coverage_core.
-# Builder-only: the compiled wheel is installed into the workspace, so the runtime
-# stage never needs cargo. Placed before COPY so source edits don't bust this layer.
+# Rust toolchain + maturin, required to build the PyO3 package mower_coverage_core
+# and the r2r nodes in src/mower_rs (bindgen needs libclang-dev, above).
+# Builder-only: the compiled wheel / binaries are installed into the workspace,
+# so the runtime stage never needs cargo. Placed before COPY so source edits
+# don't bust this layer.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH

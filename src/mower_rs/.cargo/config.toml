@@ -1,0 +1,9 @@
+# r2r generates Rust bindings for every message package it finds in the
+# sourced ROS environment; restricting it to what mower_rs uses keeps the
+# build at well under a minute on the arm64 CI runner. The list must be
+# closed under message dependencies (r2r resolves none itself):
+# mower_interface embeds visualization_msgs, which embeds geometry_msgs and
+# std_msgs; the action/service plumbing needs action_msgs,
+# unique_identifier_msgs and service_msgs.
+[env]
+IDL_PACKAGE_FILTER = "builtin_interfaces;std_msgs;std_srvs;geometry_msgs;nav_msgs;sensor_msgs;visualization_msgs;rcl_interfaces;action_msgs;unique_identifier_msgs;service_msgs;mower_interface"
