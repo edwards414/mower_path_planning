@@ -178,16 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .spawn(move || driver.run(&port_name))?
     };
 
-    let running = Arc::new(AtomicBool::new(true));
-    let spin = {
-        let running = running.clone();
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::Relaxed) {
-                node.spin_once(Duration::from_millis(100));
-            }
-            drop(node);
-        })
-    };
+    // No subscriptions, services or timers: publishing needs no spinning, and
+    // r2r's spin_once returns at once on an empty wait set (a busy loop), so
+    // the node is simply kept alive until shutdown.
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut exit_code = 0;
     loop {
@@ -216,8 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit_code = 1;
         }
     }
-    running.store(false, Ordering::Relaxed);
-    let _ = spin.await;
+    drop(node);
     if exit_code != 0 {
         std::process::exit(exit_code);
     }

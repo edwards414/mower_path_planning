@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let node = r2r::Node::create(ctx, "mower_ws_bridge", "")?;
     let logger = node.logger().to_string();
-    let hub = Hub::start(node);
+    let hub = Hub::start(node)?;
 
     let identity = Identity::load(&args.state_dir)?;
     match &identity {
@@ -243,5 +243,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for t in tasks {
         t.abort();
     }
+    shared.hub.shutdown();
     Ok(())
 }

@@ -29,6 +29,12 @@ pub enum Cmd {
 #[derive(Clone)]
 pub struct Hub {
     tx: mpsc::UnboundedSender<Cmd>,
+    /// Publishing on the node's private wake topic interrupts `spin_once`
+    /// so a queued command is handled at once instead of after the spin
+    /// timeout (r2r exposes no guard condition).
+    wake: Arc<Mutex<r2r::Publisher<r2r::std_msgs::msg::Empty>>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+    thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 /// Per-client subscription bookkeeping inside a topic entry.
@@ -94,47 +100,83 @@ struct NodeState {
 
 impl Hub {
     /// Start the node thread; returns the handle and the logger name.
-    pub fn start(node: r2r::Node) -> Hub {
+    pub fn start(mut node: r2r::Node) -> Result<Hub, String> {
         let (tx, mut rx) = mpsc::unbounded_channel::<Cmd>();
         let logger = node.logger().to_string();
         let runtime = tokio::runtime::Handle::current();
-        std::thread::Builder::new()
-            .name("ros-node".into())
-            .spawn(move || {
-                let mut st = NodeState { node, logger, topics: HashMap::new(), publishers: HashMap::new(), clients: HashMap::new() };
-                loop {
-                    st.node.spin_once(Duration::from_millis(5));
-                    loop {
-                        match rx.try_recv() {
-                            Ok(cmd) => st.handle(cmd, &runtime),
-                            Err(mpsc::error::TryRecvError::Empty) => break,
-                            Err(mpsc::error::TryRecvError::Disconnected) => return,
+        // The wake topic also keeps the wait set non-empty: r2r's spin_once
+        // returns immediately on an empty wait set (a busy loop).
+        let wake_topic = format!("{}/wake", node.fully_qualified_name().map_err(|e| format!("{e:?}"))?);
+        let wake = node
+            .create_publisher::<r2r::std_msgs::msg::Empty>(&wake_topic, QosProfile::default().keep_last(1))
+            .map_err(|e| format!("wake publisher: {e:?}"))?;
+        let mut wake_sub = node
+            .subscribe::<r2r::std_msgs::msg::Empty>(&wake_topic, QosProfile::default().keep_last(1))
+            .map_err(|e| format!("wake subscription: {e:?}"))?;
+        runtime.spawn(async move { while wake_sub.next().await.is_some() {} });
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let thread = {
+            let running = running.clone();
+            std::thread::Builder::new()
+                .name("ros-node".into())
+                .spawn(move || {
+                    let mut st = NodeState { node, logger, topics: HashMap::new(), publishers: HashMap::new(), clients: HashMap::new() };
+                    while running.load(std::sync::atomic::Ordering::Relaxed) {
+                        let t = Instant::now();
+                        st.node.spin_once(Duration::from_millis(100));
+                        if t.elapsed() < Duration::from_micros(200) {
+                            // defensive: never let an empty wait set spin hot
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        loop {
+                            match rx.try_recv() {
+                                Ok(cmd) => st.handle(cmd, &runtime),
+                                Err(mpsc::error::TryRecvError::Empty) => break,
+                                Err(mpsc::error::TryRecvError::Disconnected) => return,
+                            }
                         }
                     }
-                }
-            })
-            .expect("ros thread");
-        Hub { tx }
+                    // the node (and with it every subscription, publisher and
+                    // client) is dropped here, on the thread that used it
+                })
+                .expect("ros thread")
+        };
+        Ok(Hub { tx, wake: Arc::new(Mutex::new(wake)), running, thread: Arc::new(Mutex::new(Some(thread))) })
+    }
+
+    /// Stop the node thread and wait for it, so rcl is torn down before the
+    /// process exits (otherwise rmw's own destructors race the spinning
+    /// thread and glibc aborts on a locked mutex).
+    pub fn shutdown(&self) {
+        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.wake.lock().unwrap().publish(&r2r::std_msgs::msg::Empty {});
+        if let Some(t) = self.thread.lock().unwrap().take() {
+            let _ = t.join();
+        }
+    }
+
+    fn send(&self, cmd: Cmd) -> Result<(), String> {
+        self.tx.send(cmd).map_err(|_| "ros thread gone".to_string())?;
+        let _ = self.wake.lock().unwrap().publish(&r2r::std_msgs::msg::Empty {});
+        Ok(())
     }
 
     pub async fn subscribe(&self, topic: &str, type_hint: Option<String>) -> Result<Arc<TopicEntry>, String> {
         let (reply, rx) = oneshot::channel();
-        self.tx.send(Cmd::Subscribe { topic: topic.into(), type_hint, reply }).map_err(|_| "ros thread gone")?;
+        self.send(Cmd::Subscribe { topic: topic.into(), type_hint, reply })?;
         rx.await.map_err(|_| "ros thread gone".to_string())?
     }
 
     pub async fn publish(&self, topic: &str, type_hint: Option<String>, msg: Value) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
-        self.tx.send(Cmd::Publish { topic: topic.into(), type_hint, msg, reply }).map_err(|_| "ros thread gone")?;
+        self.send(Cmd::Publish { topic: topic.into(), type_hint, msg, reply })?;
         rx.await.map_err(|_| "ros thread gone".to_string())?
     }
 
     /// Call a service; the future resolves off the node thread.
     pub async fn call_service(&self, service: &str, service_type: &str, args: Value, timeout: Duration) -> Result<Value, String> {
         let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(Cmd::CallService { service: service.into(), service_type: service_type.into(), args, reply })
-            .map_err(|_| "ros thread gone")?;
+        self.send(Cmd::CallService { service: service.into(), service_type: service_type.into(), args, reply })?;
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err("ros thread gone".into()),
@@ -144,7 +186,7 @@ impl Hub {
 
     pub async fn topics_and_types(&self) -> HashMap<String, Vec<String>> {
         let (reply, rx) = oneshot::channel();
-        if self.tx.send(Cmd::TopicsAndTypes { reply }).is_err() {
+        if self.send(Cmd::TopicsAndTypes { reply }).is_err() {
             return HashMap::new();
         }
         rx.await.unwrap_or_default()

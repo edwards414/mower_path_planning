@@ -153,6 +153,12 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 `crates/mower_imu`：`wit.rs` 是 WIT 11-byte frame parser（0x51/0x52/0x53/0x54、checksum、與上游相同的比例係數、Python 版的四元數公式），3 個單元測試；`main.rs` 用 `serialport` crate（不帶 libudev）以 9600 8N1 讀 `/dev/imu_usb`（新增 `port` 參數），保留 fail-closed 規則（200 ms host gap 或 >88 bytes backlog 就清空、姿態 frame 只在 accel/gyro 都新鮮時發、serial 錯誤讓整個 process 以 exit 1 結束）。差分測試（socat pty 兩對、相同 frame 串流 30 週期 + 過期姿態 + 壞 checksum）：`/imu/data` 序列 31 vs 31 筆 **完全相同**，drop 與 checksum 處理一致，covariance 相同。開關 `rust_imu`（compose `RUST_IMU`）。
 
+### 7.5 真機切換紀錄與一個教訓
+
+- 2026-09-19：`RUST_STATUS=true`（映像 197bf89）→ `robot_status` 4.3–4.8%（取代 Python 三節點約 30%）。`RUST_ADAPTER=true`、`RUST_IMU=true`（映像 97d0256）：adapter 正常（robot_pose 4.6 Hz、zone_summaries 1.9 Hz、coverage_settings 1 Hz）、IMU 10.1 Hz、stamp 間隔 100 ± 7 ms。
+- **教訓：r2r 的 `spin_once` 在 wait set 為空時立刻返回。** `mower_imu` 沒有訂閱 / timer / service，spin 迴圈變成 busy loop，真機量到 84% CPU；`mower_ws_bridge` 在還沒有客戶端訂閱時也會如此。修法：IMU 不 spin（發布不需要 spin，主執行緒只等訊號）；bridge 用一個私有 `~/wake` topic 讓 wait set 永不為空、命令送達時發一筆喚醒 spin（idle 1.38% → 0.25%），並在關閉時先停掉 node 執行緒再離開（否則 rmw 的解構會跟還在 `rcl_wait` 的執行緒撞在一起，glibc mutex assertion abort）。已修（IMU 在容器裡 10 Hz 輸入下 0.9%），真機的 `RUST_IMU` 先關回 false，等修好的映像上線再開。
+- 每個 process 的 CPU 仍以真機 30 s 取樣為準（`/tmp/cpu_sample.sh`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
