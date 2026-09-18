@@ -21,6 +21,8 @@
 //! | PB7        |                 | BLD120A F/R, open-drain, low = run    |
 //! | PC13       |                 | BLD120A BRK, open-drain, low = brake  |
 //! | PB12–PB15  |                 | BTS7960 IS, advisory only             |
+//! | ADC1 IN9   | PB1             | analog mux output (`analog.rs`)       |
+//! | PB2, PA6   |                 | analog mux select S0, S1 (no PB11 on 48-pin) |
 //! | PC15       |                 | MAIN_POWER_EN, held high              |
 //! | PC14       |                 | LEBANCAT_WAKE, held low               |
 
@@ -233,6 +235,7 @@ pub struct Board {
     pub power: PowerPins,
     pub charger: ChargerPeripherals,
     pub servo: ServoPeripherals,
+    pub analog: crate::analog::AnalogPeripherals,
     pub usart1: embassy_stm32::Peri<'static, embassy_stm32::peripherals::USART1>,
     pub uart_tx_pin: embassy_stm32::Peri<'static, embassy_stm32::peripherals::PB6>,
     pub uart_rx_pin: embassy_stm32::Peri<'static, embassy_stm32::peripherals::PA10>,
@@ -311,11 +314,19 @@ pub fn init(p: Peripherals) -> Board {
 
     let servo = ServoPeripherals { pin: Output::new(p.PB10, Level::Low, Speed::Low), timer: Timer::new(p.TIM10) };
 
+    let analog = crate::analog::AnalogPeripherals {
+        adc: p.ADC1,
+        mux_out: p.PB1,
+        mux_s0: Output::new(p.PB2, Level::Low, Speed::Low),
+        mux_s1: Output::new(p.PA6, Level::Low, Speed::Low),
+    };
+
     Board {
         motor: MotorPeripherals { wheels, blade, encoders, alarms, settings_flash },
         power,
         charger,
         servo,
+        analog,
         usart1: p.USART1,
         uart_tx_pin: p.PB6,
         uart_rx_pin: p.PA10,
