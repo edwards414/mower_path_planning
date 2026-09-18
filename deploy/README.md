@@ -61,4 +61,5 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 
 ## 遠端存取
 
-`server/` 是公網 relay（cloudflared + WireGuard），與本頁獨立；`ROSBRIDGE_ADDRESS` 預設 `10.77.0.2` 是機器人的 WireGuard 位址，桌上測試改成 LAN IP。
+`server/` 是舊的公網 relay（cloudflared + WireGuard，只對一台機器人），影像目前仍走它；控制連線改由 `../backend/`
+（Cloudflare Worker，`MOWER_BACKEND_URL` / `MOWER_PROVISION_TOKEN` 在 `.env`）中繼，見 `docs/BACKEND_ARCHITECTURE.md`。`ROSBRIDGE_ADDRESS` 預設 `10.77.0.2` 是機器人的 WireGuard 位址，桌上測試改成 LAN IP。

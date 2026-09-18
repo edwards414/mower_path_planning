@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mower-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "durable_objects": {
+    "bindings": [{ "name": "ROBOT_HUB", "class_name": "RobotHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RobotHub"] }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mower",
+      "database_id": "41ea9065-7eb1-481b-965a-db9aaaeca3ee",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Production hostname (custom domain on the fxrbindi.com zone). Remove or
+  // change when deploying under another account.
+  "routes": [{ "pattern": "api.mower.fxrbindi.com", "custom_domain": true }],
+  "vars": {
+    // Seconds without a heartbeat before a robot is shown offline.
+    "OFFLINE_AFTER_S": "35"
+  }
+  // Secrets (wrangler secret put): PROVISION_TOKEN
+}

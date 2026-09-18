@@ -1,0 +1,2 @@
+# Copy to .dev.vars for `npm run dev`. In production: npx wrangler secret put PROVISION_TOKEN
+PROVISION_TOKEN=dev-provision-token

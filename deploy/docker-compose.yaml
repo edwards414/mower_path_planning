@@ -50,6 +50,10 @@ services:
       - MOWER_FIRMWARE_SYNC=${MOWER_FIRMWARE_SYNC:-1}
       - MOWER_STM_PORT=/dev/stmcom
       - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
+      # Fleet backend (docs/BACKEND_ARCHITECTURE.md); empty = agent idle.
+      - MOWER_BACKEND_URL=${MOWER_BACKEND_URL:-}
+      - MOWER_PROVISION_TOKEN=${MOWER_PROVISION_TOKEN:-}
+      - MOWER_MODEL=${MOWER_MODEL:-lubancat}
     network_mode: host
     ipc: host
     pid: host

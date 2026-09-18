@@ -44,6 +44,23 @@ def generate_launch_description():
         ],
     )
 
+    # Outbound link to the fleet backend (docs/BACKEND_ARCHITECTURE.md):
+    # registers the robot, sends heartbeats and relays phone sessions through
+    # the gate above. Idle unless MOWER_BACKEND_URL is set (docker-compose
+    # passes it from /opt/mower/.env).
+    agent = Node(
+        package='mower_mission',
+        executable='mower_agent',
+        name='mower_agent',
+        output='screen',
+        arguments=[
+            # The gate binds `address` (the WireGuard/LAN IP on a real robot,
+            # 127.0.0.1 in dev), so the agent must dial the same address.
+            '--gate', ['ws://', LaunchConfiguration('address'), ':', LaunchConfiguration('port')],
+            '--rosbridge', 'ws://127.0.0.1:9091',
+        ],
+    )
+
     rosbridge_websocket = Node(
         package='rosbridge_server',
         executable='rosbridge_websocket',
@@ -72,6 +89,7 @@ def generate_launch_description():
         port_arg,
         address_arg,
         auth_proxy,
+        agent,
         rosbridge_websocket,
         rosapi,
     ])

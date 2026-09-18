@@ -1,0 +1,20 @@
+{
+  "name": "mower-backend",
+  "private": true,
+  "type": "module",
+  "description": "Mower fleet backend: robot registry, presence, pairing and rosbridge relay (Cloudflare Workers + Durable Objects + D1)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.12",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.134.0"
+  }
+}

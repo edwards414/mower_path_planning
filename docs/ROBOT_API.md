@@ -42,6 +42,10 @@ https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=<secret>&n=<name>&h=<relay ws
 
 要貼在車身上的版本：在工作機 `ssh cat@<robot> mower-pair --json --no-qr > pair.json && python3 deploy/mower-pair-sheet.py pair.json --pdf mower_pair_qr.pdf`（A4 四張 80×100 mm 貼紙、EC level H；需 `pip install segno`，用 Chrome 轉 PDF）。換過 secret 要重印。
 
+`h` 是 relay 入口：接上後台時是 `wss://api.mower.fxrbindi.com/v1/relay/app`（App 自己補上 `/<robot_id>`），
+舊式固定 tunnel（`wss://control.fxrbindi.com`）也仍接受。後台、註冊、心跳與 relay 協定見 `docs/BACKEND_ARCHITECTURE.md`；
+機器人端由 `mower_agent`（`rosbridge.launch.py` 帶起，`MOWER_BACKEND_URL` 空白時閒置）負責。
+
 App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連線**在 HTTP upgrade 帶：
 
 | Header | 值 |
