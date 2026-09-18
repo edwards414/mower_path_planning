@@ -30,12 +30,15 @@ extern "C" {
 #define UART_FRAME_TYPE_WS2812_COMMAND 0x03U
 #define UART_FRAME_TYPE_PID_CONFIG_COMMAND 0x04U
 #define UART_FRAME_TYPE_POWER_COMMAND 0x05U
+#define UART_FRAME_TYPE_SERVO_COMMAND 0x06U
 #define UART_FRAME_TYPE_MOTOR_STATUS 0x81U
 #define UART_FRAME_TYPE_LAWER_MOTOR_STATUS 0x82U
 #define UART_FRAME_TYPE_WS2812_STATUS 0x83U
 #define UART_FRAME_TYPE_PID_CONFIG_STATUS 0x84U
 #define UART_FRAME_TYPE_WHEEL_FEEDBACK_STATUS 0x85U
 #define UART_FRAME_TYPE_POWER_STATUS 0x86U
+#define UART_FRAME_TYPE_CHARGER_STATUS 0x87U
+#define UART_FRAME_TYPE_SERVO_STATUS 0x88U
 #define UART_MAX_PAYLOAD_SIZE 32U
 #define UART_STATUS_PERIOD_MS 50U
 
@@ -59,6 +62,19 @@ extern "C" {
 #define UART_POWER_STATUS_FLAG_SHUTDOWN_REQUESTED 0x04U
 #define UART_POWER_STATUS_FLAG_HOST_ACK_RECEIVED 0x08U
 #define UART_POWER_STATUS_FLAG_WAKE_ASSERTED 0x10U
+
+/* 0x88 servo status flags (mirror MG996_SERVO_FLAG_*) */
+#define UART_SERVO_STATUS_FLAG_ENABLED 0x01U
+#define UART_SERVO_STATUS_FLAG_LIMIT_ACTIVE 0x02U
+#define UART_SERVO_STATUS_FLAG_OUTPUT_ACTIVE 0x04U
+#define UART_SERVO_STATUS_FLAG_TIMED_OUT 0x08U
+
+/* 0x87 charger status flags */
+#define UART_CHARGER_STATUS_FLAG_ONLINE 0x01U        /* RS485 replies OK */
+#define UART_CHARGER_STATUS_FLAG_CHARGING 0x02U      /* Iout above threshold */
+#define UART_CHARGER_STATUS_FLAG_CV_PHASE 0x04U      /* Vout at set CV */
+#define UART_CHARGER_STATUS_FLAG_INPUT_PRESENT 0x08U /* Vin present */
+#define UART_CHARGER_STATUS_FLAG_EVER_SEEN 0x10U     /* replied at least once */
 
 #define UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED 0x01U
 #define UART_PID_STATUS_FLAG_FLASH_VALID 0x02U
@@ -181,6 +197,34 @@ typedef struct __attribute__((packed)) {
   uint16_t shutdown_elapsed_ms;
 } power_status_payload_t;
 
+typedef struct __attribute__((packed)) {
+  uint16_t pulse_us;        /* 500-2500; 0 = stop pulses (servo goes limp) */
+  uint16_t hold_timeout_ms; /* 0 = hold until the next command */
+  uint16_t reserved0;
+  uint16_t reserved1;
+} servo_command_payload_t;
+
+typedef struct __attribute__((packed)) {
+  uint16_t pulse_us;        /* current target pulse */
+  uint16_t hold_timeout_ms;
+  uint16_t command_age_ms;  /* since the last 0x06, saturates */
+  uint8_t flags;            /* UART_SERVO_STATUS_FLAG_* */
+  uint8_t last_rx_seq;      /* seq of the last accepted 0x06 */
+} servo_status_payload_t;
+
+typedef struct __attribute__((packed)) {
+  uint16_t vin_cv;    /* input voltage, x0.01 V */
+  uint16_t vout_cv;   /* output / battery voltage, x0.01 V */
+  uint16_t iout_ca;   /* charge current, x0.01 A */
+  uint16_t set_cc_ca; /* configured CC limit, x0.01 A */
+  uint16_t set_cv_cv; /* configured CV limit, x0.01 V */
+  uint8_t flags;      /* UART_CHARGER_STATUS_FLAG_* */
+  uint8_t comm_error_count; /* wraps; timeouts + bad frames since boot */
+  uint16_t age_ms;    /* since the last valid reply, 0xFFFF = never */
+  uint8_t last_exception_code; /* Modbus exception from the last failed poll */
+  uint8_t reserved;
+} charger_status_payload_t;
+
 extern volatile uint16_t uart_last_pos;
 extern uint8_t uart_rx_dma[UART_RX_DMA_BUF_SIZE];
 extern osMessageQueueId_t uartRxQueue;
@@ -190,6 +234,10 @@ extern osThreadId_t uartTxTaskHandle;
 void uart_server(void);
 /* Push a 0x86 power status frame now (also sent every 50 ms). */
 void uart_send_power_status(void);
+/* Push a 0x87 charger status frame (also sent every 50 ms). */
+void uart_send_charger_status(void);
+/* Push a 0x88 servo status frame (also sent every 50 ms). */
+void uart_send_servo_status(void);
 
 void UartParserTask(void *arg);
 void MotorTask(void *arg);

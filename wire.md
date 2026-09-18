@@ -12,7 +12,7 @@
 | Project | `mower_robot_firmware` |
 | SYSCLK | 100 MHz |
 | HSE | 25 MHz external oscillator |
-| UART | `USART1`, async |
+| UART | `USART1` host, `USART6` RS485 charger, async |
 | RTOS | FreeRTOS CMSIS V2 |
 
 ## 模組分類
@@ -27,9 +27,9 @@
 | 電壓邏輯轉換器 | FT-555 A/B level shifter | `PA0`, `PA1`, `PA8`, `PA9` | 5 V to 3.3 V logic | 左右輪 encoder PP A/B 訊號降壓後進 STM32 |
 | WS2812 燈條 | Front/Back LED strip | `PB4`, `PB5` | `TIM3_CH1/CH2` PWM + DMA | 800 kHz data，GRB 順序；後燈 16 顆，前燈 4 條串聯共 32 顆；LED 0-2 保留給狀態燈號 |
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
-| SPI-CAN | MCP2515 SPI-CAN module | `PA5`, `PA6`, `PA7`, `PA11`, `PA12` | `SPI1`, GPIO CS, EXTI INT | `PA5-PA7` 由 motor EN 釋放後給 SPI-CAN 使用 |
+| RS485 充電模組 | 數控 30V5A 帶 OFF CC/CV 充電模組（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀 Vin / Vout / Iout / CC / CV。`PA6/PA7` 空著（原 SPI-CAN 已取消） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
-| MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO software servo pulse | 50 Hz servo control pulse；servo 需外部 5-6 V 供電 |
+| MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x06` 控制 |
 | 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PB11` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
 | 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
@@ -39,7 +39,7 @@
 | 無源蜂鳴器 | Passive buzzer | `PB9` | `TIM4_CH4` PWM | 實測為無源蜂鳴器，DC 只會輕微一聲；用 TIM4_CH4 送 2 kHz 50% 方波發聲，duty 0 靜音 |
 | 板載狀態 | Board status LED | `PC13` | 隨 BRK 動作 | `PC13` 已改給 BLD120A BRK；BlackPill 板載 LED 仍掛在 `PC13`，剎車時會亮，當作剎車指示；狀態燈改用 WS2812 LED 0-2 |
 | Debug / Clock | SWD / HSE | `PA13`, `PA14`, `PH0`, `PH1` | SWD, HSE | 燒錄除錯與 25 MHz 外部時鐘 |
-| 供電和共地 | BTS7960 / BLD120A / MG996 / current sensor / SPI-CAN / FT-555 / level shifter / WS2812 / Host | - | Power, GND | 外部模組供電需與 MCU 共地 |
+| 供電和共地 | BTS7960 / BLD120A / MG996 / current sensor / RS485 / FT-555 / level shifter / WS2812 / Host | - | Power, GND | 外部模組供電需與 MCU 共地 |
 
 ## 馬達配置總表
 
@@ -50,7 +50,7 @@
 | 左輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Left FT-555, `PA0/PA1` (`TIM5`) | `PA15/PB3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與右輪共用 |
 | 右輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Right FT-555, `PA8/PA9` (`TIM1`) | `PA2/PA3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與左輪共用 |
 | 專門割草馬達 | 待補 | BLD120A | - | `PB8/TIM4_CH3` PWM, `PB7` DIR, `PC13` BRK | PWM 使用獨立 TIM4；EN 硬體常開，BRK 為韌體唯一快速停刀手段；label/應用層待同步 |
-| 機構 servo | MG996 / MG996R | Servo PWM input | Current sensor, `PB1/ADC1_IN9` | `PB10` software servo pulse | 新增規劃；以電流門檻當限位 |
+| 機構 servo | MG996 / MG996R | Servo PWM input | Current sensor, `PB1/ADC1_IN9` | `PB10` GPIO, `TIM10` 中斷計時 | `0x06/0x88` 已接上；以電流門檻當限位 |
 
 ## 接線總覽
 
@@ -101,17 +101,18 @@ flowchart LR
   STM32 -->|PB6 USART1_TX| HOST_RX[Host RX]
   HOST_TX[Host TX] -->|PA10 USART1_RX| STM32
 
-  STM32 -->|PA5 SPI1_SCK| CAN_SCK[SPI-CAN SCK]
-  CAN_SO[SPI-CAN SO/MISO] -->|PA6 SPI1_MISO| STM32
-  STM32 -->|PA7 SPI1_MOSI| CAN_SI[SPI-CAN SI/MOSI]
-  STM32 -->|PA12 GPIO CS| CAN_CS[SPI-CAN CS]
-  CAN_INT[SPI-CAN INT] -->|PA11 EXTI| STM32
+  STM32 -->|PA11 USART6_TX| MAX485_DI[MAX485 DI]
+  MAX485_RO[MAX485 RO] -->|PA12 USART6_RX pull-up| STM32
+  STM32 -->|PA5 GPIO RS485_DE| MAX485_DE[MAX485 DE + RE]
+  MAX485_DI --- RS485_AB[A / B bus]
+  MAX485_RO --- RS485_AB
+  RS485_AB --- CHARGER[數控 30V5A charger, Modbus addr 0x01]
 
   STM32 -->|PB8 TIM4_CH3 PWM| BLD120A_PWM[BLD120A PWM]
   STM32 -->|PB7 GPIO OUT| BLD120A_DIR[BLD120A DIR]
   STM32 -->|PC13 GPIO OD| BLD120A_BRK[BLD120A BRK]
   BLD120A_EN[BLD120A EN] ---|hardwired| GND_BLD[GND / COM]
-  STM32 -->|PB10 GPIO 50Hz servo pulse| MG996_SIG[MG996 signal]
+  STM32 -->|PB10 GPIO, TIM10-timed 50Hz pulse| MG996_SIG[MG996 signal]
   STM32 -->|PB9 TIM4_CH4 2kHz PWM| BUZZER[Passive Buzzer]
 ```
 
@@ -127,14 +128,14 @@ flowchart LR
 | 右輪 BTS7960 | `PA2` | `TIM2_CH3` PWM | `RL_Motor_PWM` | output | Right wheel BTS7960 L_PWM |
 | 右輪 BTS7960 | `PA3` | `TIM2_CH4` PWM | `RR_Motor_PWM` | output | Right wheel BTS7960 R_PWM |
 | 左右輪 BTS7960 | `PA4` | GPIO output | `BTS7960_Motor_EN` | output | Shared EN, connects to left/right BTS7960 `L_EN` and `R_EN` |
-| SPI-CAN | `PA5` | `SPI1_SCK` | - | output | MCP2515 SCK |
-| SPI-CAN | `PA6` | `SPI1_MISO` | - | input | MCP2515 SO / MISO |
-| SPI-CAN | `PA7` | `SPI1_MOSI` | - | output | MCP2515 SI / MOSI |
+| RS485 充電模組 | `PA5` | GPIO output, initial low | `RS485_DE` | output | MAX485 `DE` + `RE`（短接），high = 發送、low = 接收；韌體在 TC 中斷放下 |
+| 空腳 | `PA6` | - | - | - | 未使用（原 SPI-CAN 取消） |
+| 空腳 | `PA7` | - | - | - | 未使用（原 SPI-CAN 取消） |
 | 右輪 FT-555 Encoder | `PA8` | `TIM1_CH1` encoder interface | - | input | Right FT-555 channel 1, 5 V through level shifter |
 | 右輪 FT-555 Encoder | `PA9` | `TIM1_CH2` encoder interface | - | input | Right FT-555 channel 2, 5 V through level shifter |
 | Host UART | `PA10` | `USART1_RX` | - | input | Host / controller TX |
-| SPI-CAN | `PA11` | `EXTI11` input, pull-up | `CAN_INT` | input | MCP2515 interrupt, active-low |
-| SPI-CAN | `PA12` | GPIO output, initial high | `CAN_CS` | output | MCP2515 chip select |
+| RS485 充電模組 | `PA11` | `USART6_TX` | - | output | RS485 module TXD（也是 BlackPill USB D-，用 RS485 時不能接 USB 資料線） |
+| RS485 充電模組 | `PA12` | `USART6_RX` | - | input | RS485 module RXD（也是 BlackPill USB D+） |
 | Debug / Clock | `PA13` | `SWDIO` | - | debug | SWD programming/debug |
 | Debug / Clock | `PA14` | `SWCLK` | - | debug | SWD programming/debug |
 | 左輪 BTS7960 | `PA15` | `TIM2_CH1` PWM | `LL_Motor_PWM` | output | Left wheel BTS7960 L_PWM |
@@ -145,7 +146,7 @@ flowchart LR
 | BLD120A 割草馬達 | `PB7` | GPIO output, open-drain | `Lawer_Mower_Mower` | output | BLD120A F/R；韌體固定拉低 = 割草方向，另一方向不可用 |
 | BLD120A 割草馬達 | `PB8` | `TIM4_CH3` PWM | `BLD120A_PWM` | output | BLD120A PWM / speed control |
 | 無源蜂鳴器 | `PB9` | `TIM4_CH4` PWM | `Buzzer_PWM` | output | Passive buzzer tone, 2 kHz 50% duty = on, 0% = off |
-| MG996 Servo | `PB10` | GPIO output | `MG996_PWM` | output | Servo control pulse, 50 Hz, about 1-2 ms high |
+| MG996 Servo | `PB10` | GPIO output | `MG996_PWM` | output | Servo control pulse, 50 Hz, 0.5–2.5 ms high, timed by `TIM10` update / CC1 interrupts |
 | 類比監控 / ADC MUX | `PB11` | GPIO output | `ADC_MUX_S1` | output | Analog mux select bit 1 |
 | 右輪 BTS7960 | `PB12` | `EXTI12` rising, pulldown | `RR_Motor_Alarm` | input | Right wheel BTS7960 R alarm/diagnostic |
 | 右輪 BTS7960 | `PB13` | `EXTI13` rising, pulldown | `RL_Motor_Alarm` | input | Right wheel BTS7960 L alarm/diagnostic |
@@ -303,27 +304,46 @@ Host 是野火 LubanCat 2（RK3568）。它的 40-pin 排針串口是 UART3，�
 
 兩邊都是 3.3 V 邏輯，直接接，不要接 pin 2/4 的 5 V。ROS2 launch / xacro 的 device 預設已改成 `/dev/ttyS3`。
 
-同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低。細節見 `BOOTLOADER.md`。
+同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低（`PA5-PA7` 現在沒接東西，無影響）。細節見 `BOOTLOADER.md`。
 
-## SPI-CAN 預留
+## RS485 充電模組（數控 30V5A 帶 OFF）
 
-STM32F411CEUx 本身沒有內建 CAN controller，若要接 CAN bus，使用外部 `MCP2515` SPI-CAN 模組。為了留出硬體 SPI，左右輪 BTS7960 的四個 EN 腳改成共用 `PA4`，釋放 `PA5/PA6/PA7` 給 `SPI1`。
+原本規劃的 MCP2515 SPI-CAN 已取消（韌體從未接上），`PA11/PA12` 改成 `USART6` 接 RS485 收發模組，讀取「數控 30V5A 帶 OFF」CC/CV 充電模組的狀態。協議是標準 Modbus RTU（9600 8N1、站號預設 `0x01`），廠商文件與 PC 工具在 `數控30V5A+2.0.zip`（不進 git）。
 
-| SPI-CAN 功能 | STM32 腳位 | 模式 | 接到模組 |
-| --- | --- | --- | --- |
-| SCK | `PA5` | `SPI1_SCK` | `SCK` |
-| MISO | `PA6` | `SPI1_MISO` | `SO` / `MISO` |
-| MOSI | `PA7` | `SPI1_MOSI` | `SI` / `MOSI` |
-| CS | `PA12` | GPIO output | `CS` |
-| INT | `PA11` | EXTI input | `INT` |
-| RESET | 不接或另接空 GPIO | optional | `RESET` |
+收發器用常見的 MAX485 TTL 轉 RS485 小板（DI / DE / RE / RO 一側，VCC / GND / A / B 一側）：
+
+| MAX485 模組腳 | 接到 | 說明 |
+| --- | --- | --- |
+| `VCC` | 5 V | MAX485 要 4.75 V 以上，不能接 3.3 V |
+| `GND` | GND | 與 STM32、充電模組共地 |
+| `DI` | `PA11` `USART6_TX` (AF8) | STM32 3.3 V 輸出，MAX485 TTL 門檻 2 V，直接接 |
+| `RO` | `PA12` `USART6_RX` (AF8, 內部 pull-up) | 5 V TTL 輸出；`PA12` 是 5 V-tolerant 腳，直接接 |
+| `DE` + `RE` 短接 | `PA5` `RS485_DE` GPIO | high = 發送、low = 接收；韌體送 request 前拉高，TC 中斷放下 |
+| `A` | 充電模組 `A` / `485+` | 長線兩端各 120 Ω（藍色小板通常已內建 R7 120 Ω） |
+| `B` | 充電模組 `B` / `485-` | |
+
+若之後換成自動收發模組，把 `hardware_pins.hpp` 的 `CHARGER_RS485_USE_DE_PIN` 改 `0` 即可，`PA5` 就空出來。
+
+Modbus holding registers（FC03 讀，FC16 寫）：
+
+| Reg | 內容 | 單位 |
+| --- | --- | --- |
+| 0 | Vin 輸入電壓 | x0.01 V |
+| 1 | Vout 輸出電壓 = 電池端電壓 | x0.01 V |
+| 2 | Iout 輸出（充電）電流 | x0.01 A |
+| 3 | 設定 CC 電流 | x0.01 A |
+| 4 | 設定 CV 電壓 | x0.01 V |
+
+範例：發 `01 03 00 00 00 05 85 C9`，回 `01 03 0A 04 EB 01 F1 00 00 00 FA 01 F4 DE B2` = Vin 12.59 V、Vout 4.97 V、Iout 0 A、CC 2.50 A、CV 5.00 V。CRC 是 Modbus CRC-16（低位元組先送）。改站號用 FC06、站號 `0x00`，總線上只能有一台。
+
+韌體：`Module/charger_rs485` 每 500 ms 輪詢一次 Reg0-4（`HAL_UARTEx_ReceiveToIdle_IT` 收回應，request 前先武裝 RX，所以 `RE` 接地讓 RO 回送 echo 也能用），`PA5` DE 在送 request 前拉高、`USART6` TC 中斷（最後一個 stop bit 送完）放下，結果經 `0x87` 每 50 ms 回給 host；主電源關閉時停止輪詢。純 codec 在 `Module/modbus_rtu`，可在 Mac 上跑單元測試。
 
 注意事項：
 
-- SPI-CAN 模組與 STM32 需共地。
-- 若模組邏輯是 5 V，需確認 SPI 腳位是否可接受 3.3 V high，且 `MISO` 回 STM32 不可超過 3.3 V。
-- 已選 `MCP2515`。若買的是只有 MCP2515 controller 的裸板，還需要 CAN transceiver；若是常見 MCP2515 CAN module，通常板上會另外帶 transceiver，但仍需看實物確認。
-- `PA5/PA6/PA7/PA11/PA12` 已加入 `.ioc` 的 SPI-CAN 配置；`CAN_INT` 為低有效，產生碼需確認為 falling-edge EXTI。
+- MAX485 用 5 V 供電、與 STM32 共地；`RO` 5 V 輸出接 `PA12`（5 V-tolerant）沒問題，其它非 FT 腳不要拿來接 RO。
+- `PA11/PA12` 同時是 BlackPill 板載 USB-C 的 D-/D+，用 RS485 期間不能插 USB 資料線。
+- 「帶 OFF」版的輸出開關暫存器文件沒寫（文件只到 Reg4），拿到實物後用 `01 03 00 00 00 08` 探 Reg5+。
+- 目前只讀不寫；之後若要由 STM32 設 CC/CV，`ModbusRtu_BuildWriteMultiple` 已備好，host 協議預留 `0x07`。
 
 ## BLD120A 割草馬達
 
@@ -507,7 +527,7 @@ VAON_BAT = Vadc * (100 + 300) / 300
 ## 電源按鍵 / 低功耗電源切換
 
 電源按鍵用 `PB0`，按鍵一端接 `PB0`，另一端接 GND，STM32 內部 pull-up。
-STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電源晶片降壓並透過防反灌二極體供電，STM32 進低功耗；LebanCat、馬達驅動、WS2812、MG996、SPI-CAN 等高耗電模組由 24 V 主電池轉出的主電源 rail 供電，透過 `MAIN_POWER_EN` 控制。
+STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電源晶片降壓並透過防反灌二極體供電，STM32 進低功耗；LebanCat、馬達驅動、WS2812、MG996、RS485 充電模組 等高耗電模組由 24 V 主電池轉出的主電源 rail 供電，透過 `MAIN_POWER_EN` 控制。
 
 | 功能 | STM32 腳位 | 模式 | Label | Active |
 | --- | --- | --- | --- | --- |
@@ -522,7 +542,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 主電源 3.3 V rail -> 防反灌二極體 ----------------------^
 
-24 V 主電池 -> DC/DC + load switch / PMIC -> main power rail -> LebanCat / WS2812 / MG996 / SPI-CAN / sensors
+24 V 主電池 -> DC/DC + load switch / PMIC -> main power rail -> LebanCat / WS2812 / MG996 / RS485 / sensors
                          ^
                          |
                    PC15 MAIN_POWER_EN
@@ -560,7 +580,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 - MCU GPIO 只接控制訊號，不直接供馬達電源。
 - BTS7960 馬達電源走大電流電源線，不經 MCU；`L_PWM`/`R_PWM`/shared `EN` 只接邏輯訊號。
-- BTS7960、BLD120A、FT-555、電壓邏輯轉換器、WS2812、Host UART、SPI-CAN、MG996、電流感測模組、ADC mux、NTC、電池分壓需與 MCU 共地。
+- BTS7960、BLD120A、FT-555、電壓邏輯轉換器、WS2812、Host UART、RS485、MG996、電流感測模組、ADC mux、NTC、電池分壓需與 MCU 共地。
 - BTS7960 模組 VCC 目前接 5 V（2026-09-10 實測）。5 V 時輸入緩衝 high 門檻規格 3.5 V，STM32 rail 實測只有約 2.9 V，馬達能轉但沒有餘裕；建議兩顆模組 VCC 改接 3.3 V，門檻降到約 2.3 V。
 - FT-555 供電範圍是 2.5-24 V，目前 A/B encoder 使用 5 V 供電；A/B 是 PP push-pull 輸出，必須經電壓邏輯轉換器降到 3.3 V 後再進 STM32。
 - BLD120A PWM 輸入需求是 5 V logic；STM32 `PB8/TIM4_CH3` 是 3.3 V 輸出，需加 3.3 V to 5 V 電壓邏輯轉換或確認 BLD120A 可接受 3.3 V high。
@@ -571,7 +591,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 - 24 V 主電池量測使用 ADC mux CH2，最高充電電壓 `25.2 V`，建議 `270k/33k` 分壓。
 - 3.7 V 小電池量測使用 ADC mux CH3，建議在 regulator 前用 `100k/300k` 分壓量 raw battery。
 - STM32 低功耗關機時由小電池降壓後供應 `AON_3V3`；主電源 rail 由 `PC15/MAIN_POWER_EN` 控制；主/小電源間用二極體防反灌。
-- SPI-CAN 模組若是 5 V 邏輯，`MISO` 回 STM32 前需確認不會超過 3.3 V。
+- RS485 模組若是 5 V 邏輯，`RXD` 回 STM32 前需確認不會超過 3.3 V。
 - 蜂鳴器實測為無源型，`PB9` 用 `TIM4_CH4` 2 kHz PWM 發聲；裸蜂鳴器直掛 GPIO 需確認電流在 20 mA 內。
 - WS2812 建議由外部 5 V 供電；資料線接 `PB4`/`PB5`，LED index `0-2` 保留作系統狀態燈。
 - BTS7960 alarm 為 high active，過流時拉高；目前 `.ioc` 設定 MCU 內部 pulldown 與 rising-edge EXTI。
@@ -582,9 +602,9 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 | 項目 | `.ioc` 目前規劃 | 目前產生碼狀態 |
 | --- | --- | --- |
-| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；CubeMX 產生碼仍需同步釋放 `PA5/PA6/PA7` |
-| SPI-CAN | `PA5/PA6/PA7` = `SPI1`, `PA12` CS, `PA11` INT | 已新增 MCP2515 C++ wrapper；`SPI1` HAL 產生碼仍需同步 |
-| MG996 servo control | `PB10` GPIO software servo pulse | 已新增 C++ wrapper；需排入 task 並實測 jitter |
+| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5/PA6/PA7` 已從 `.ioc` 釋放，目前空著 |
+| RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x87` 已接上，尚未有實物測試 |
+| MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x06` 命令 / `0x88` 狀態已接上，尚未接實物測 |
 | Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PB11` = mux select | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），實測四通道可讀；韌體換算仍假設 VDDA = 3.3 V，實際 rail 約 2.9 V 時讀值會偏高約 12%，建議改用 VREFINT 校正 |
 | MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
 | Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
@@ -603,12 +623,10 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 ## 待確認清單
 
 - BTS7960 的 `L_PWM`/`R_PWM` 對應車體正反轉方向需實測確認。
-- BTS7960 shared EN 需同步程式碼：保留 `PA4`，釋放 `PA5/PA6/PA7` 給 SPI1。
-- SPI-CAN 已選 `MCP2515`；需確認手上的 MCP2515 模組是否已含 CAN transceiver。
-- SPI-CAN 模組邏輯電壓需確認；`MISO` 回 STM32 不可超過 3.3 V。
+- RS485 充電模組尚未到貨：到貨後先用 USB-RS485 從電腦確認站號與 Reg5+（OFF 開關），再接 STM32。
+- MAX485 `DE`/`RE` 已由 `PA5` 控制；bootloader 期間 `PA5` 也是拉低（接收），不會佔住 bus。
 - MG996 的實際供電電壓、最大電流與控制脈波範圍需確認。
-- `PB10` software servo pulse 需實測 jitter；若不穩，需改用外部 servo driver 或重新分配硬體 timer。
-- `PA11/CAN_INT` 低有效，CubeMX 產生碼需確認為 `GPIO_MODE_IT_FALLING`；若產生為 rising，需在 GPIO init 手動改 falling。
+- `PB10` servo 脈波已改由 `TIM10` 中斷計時；接上 servo 後用示波器確認 20 ms / 脈寬，並實測 MG996R 的 500 / 2500 µs 端點。
 - 電流感測模組型式需確認：analog output 進 ADC mux CH0；digital comparator output 則需另找 GPIO/EXTI。
 - 電流感測輸出電壓範圍需確認；進 ADC mux / STM32 ADC 前不可超過 3.3 V。
 - 板溫 NTC 實際阻值、B value、放置位置需確認。
