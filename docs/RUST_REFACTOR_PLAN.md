@@ -149,6 +149,10 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 備註：ZoneMapList 每 0.5 s 回傳所有 zone 的完整 OccupancyGrid 只為了數 pose、看 data 是否為空，map_manage（Python）那一側每次都要序列化——這是 map_manage 閒置 3% 的來源之一，之後可改成 map_manage 發一個小的 summary topic。
 
+### 7.4 `mower_imu` 執行紀錄
+
+`crates/mower_imu`：`wit.rs` 是 WIT 11-byte frame parser（0x51/0x52/0x53/0x54、checksum、與上游相同的比例係數、Python 版的四元數公式），3 個單元測試；`main.rs` 用 `serialport` crate（不帶 libudev）以 9600 8N1 讀 `/dev/imu_usb`（新增 `port` 參數），保留 fail-closed 規則（200 ms host gap 或 >88 bytes backlog 就清空、姿態 frame 只在 accel/gyro 都新鮮時發、serial 錯誤讓整個 process 以 exit 1 結束）。差分測試（socat pty 兩對、相同 frame 串流 30 週期 + 過期姿態 + 壞 checksum）：`/imu/data` 序列 31 vs 31 筆 **完全相同**，drop 與 checksum 處理一致，covariance 相同。開關 `rust_imu`（compose `RUST_IMU`）。
+
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
 | 順序 | Rust bin | 取代 | Python 行數 | 現在 → 之後 | 驗證 |

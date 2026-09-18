@@ -10,10 +10,11 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `robot_status` | `heartbeat_node` + `robot_info_node` + `telemetry_node` (`/robot/online`, `/robot/info`, `/robot/telemetry`, `/system/update`, `/system/restart`, `robot_status.json`, update lights) | `mission.launch.py rust_status:=true` |
 | `mower_adapter` | `flutter_adapter_node` (`/adapter/map_layers/*`, `/adapter/marker_layers/*`, `/adapter/robot_pose`, `/adapter/coverage_settings`, `/adapter/zone_summaries`, `/adapter/map_datum`) | `mission.launch.py rust_adapter:=true` |
 | `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
+| `mower_imu` | `wit_ros2_imu` (WIT serial IMU on `/dev/imu_usb`, `/imu/data`) | `mower.launch.py rust_imu:=true` |
 
-`robot.launch.py` takes all three switches (compose: `RUST_STATUS` /
-`RUST_ADAPTER` / `RUST_GUARDS` in `/opt/mower/.env`) so the safety-critical
-guards can be enabled last, after a supervised drive.
+`robot.launch.py` takes all four switches (compose: `RUST_STATUS` /
+`RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` in `/opt/mower/.env`) so the
+safety-critical guards can be enabled last, after a supervised drive.
 
 ## Build
 
@@ -77,6 +78,17 @@ gate and the three service clients (get_parameters x2 at 1 Hz, zone map list
 at 2 Hz, toLL until the datum locks, 3 s timeout each). Shadow run against
 the Python node on identical inputs and fake services: every `/adapter/*`
 document identical, map layers byte for byte.
+
+## mower_imu
+
+`crates/mower_imu/src/wit.rs` is the WIT 11-byte frame parser (0x51 accel,
+0x52 gyro, 0x53 angle, 0x54 mag, checksum, upstream scale factors, the
+Python quaternion formula) with unit tests; `main.rs` keeps the driver's
+fail-closed rules: input discarded after a 200 ms host gap or when more
+than 88 bytes queue up, an orientation frame published only with fresh
+accel and gyro frames, serial errors end the process. Differential test
+through socat pty pairs: identical `/imu/data` sequences, drops and
+checksum handling to the Python driver.
 
 ## Verification
 

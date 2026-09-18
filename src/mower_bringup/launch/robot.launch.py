@@ -65,6 +65,7 @@ def generate_launch_description():
     rust_status = LaunchConfiguration('rust_status')
     rust_adapter = LaunchConfiguration('rust_adapter')
     rust_guards = LaunchConfiguration('rust_guards')
+    rust_imu = LaunchConfiguration('rust_imu')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -79,6 +80,7 @@ def generate_launch_description():
             'enable_keyboard_teleop': enable_keyboard_teleop,
             'gps_fix_topic': gps_fix_topic,
             'rust_guards': rust_guards,
+            'rust_imu': rust_imu,
         }.items(),
     )
 
@@ -193,6 +195,11 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs velocity_command_guard for both guard '
                         'instances instead of the rclpy guard',
+        ),
+        DeclareLaunchArgument(
+            'rust_imu',
+            default_value='false',
+            description='mower_rs mower_imu instead of the wit_ros2_imu driver',
         ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,

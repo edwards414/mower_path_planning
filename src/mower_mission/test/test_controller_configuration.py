@@ -30,6 +30,7 @@ MAKEFILE = SRC_DIR.parent / 'Makefile'
 MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
+IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/main.rs'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -239,7 +240,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_guards'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_guards', 'rust_imu'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -412,6 +413,14 @@ def test_imu_driver_discards_backlog_and_requires_fresh_complete_samples():
     assert 'if buff_count > 88:' in source
     assert 'components_are_fresh = all(' in source
     assert "f'IMU serial read/parser failed: {exc}'" in source
+    # the mower_rs driver (rust_imu:=true) keeps the same fail-closed rules
+    rust = IMU_DRIVER_RS.read_text(encoding='utf-8')
+    assert 'const MAX_BACKLOG_BYTES: u32 = 88;' in rust
+    assert 'Duration::from_millis(200)' in rust
+    assert 'Discarded oversized IMU serial backlog' in rust
+    assert 'Discarded IMU serial backlog after a host timing gap' in rust
+    assert 'acceleration/gyro components are stale' in rust
+    assert 'std::process::exit(exit_code)' in rust
 
 
 def test_mower_camera_exposes_only_required_protocols():

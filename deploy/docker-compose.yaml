@@ -48,6 +48,7 @@ services:
       - rust_status:=${RUST_STATUS:-false}
       - rust_adapter:=${RUST_ADAPTER:-false}
       - rust_guards:=${RUST_GUARDS:-false}
+      - rust_imu:=${RUST_IMU:-false}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the
       # domain id only separates it from anything else on the box.

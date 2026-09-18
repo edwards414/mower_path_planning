@@ -1,0 +1,16 @@
+[package]
+name = "mower_imu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WIT (JY901-style) serial IMU driver publishing sensor_msgs/Imu (port of wit_ros2_imu)"
+
+[[bin]]
+name = "mower_imu"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+tokio.workspace = true
+serialport = { version = "4", default-features = false }

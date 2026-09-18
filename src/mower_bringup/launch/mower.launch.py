@@ -5,7 +5,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     OpaqueFunction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -49,6 +49,12 @@ def generate_launch_description():
         'rust_guards',
         default_value='false',
         description='Run the mower_rs velocity guards instead of the rclpy ones',
+    )
+
+    declare_rust_imu = DeclareLaunchArgument(
+        'rust_imu',
+        default_value='false',
+        description='Run the mower_rs WIT IMU driver instead of wit_ros2_imu',
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -217,11 +223,23 @@ def generate_launch_description():
         parameters=[robot_description, {'use_sim_time': use_sim_time}],
     )
 
+    rust_imu = LaunchConfiguration('rust_imu')
     wit_ros2_imu_node = Node(
         package='wit_ros2_imu',
         executable='wit_ros2_imu',
         name='imu',
         output='screen',
+        condition=UnlessCondition(rust_imu),
+        remappings=[('imu/data_raw', 'imu/data')],
+    )
+    # rust_imu:=true -- the same WIT serial driver as an r2r process
+    # (src/mower_rs/crates/mower_imu), same backlog / freshness rules.
+    mower_imu_node = Node(
+        package='mower_rs',
+        executable='mower_imu',
+        name='imu',
+        output='screen',
+        condition=IfCondition(rust_imu),
         remappings=[('imu/data_raw', 'imu/data')],
     )
 
@@ -264,6 +282,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_rust_guards,
+        declare_rust_imu,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
         declare_enable_navigation,
@@ -276,6 +295,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         robot_state_publisher,
         wit_ros2_imu_node,
+        mower_imu_node,
         mower_controller_launch,
         twist_mux_launch,
         robot_localization_launch,
