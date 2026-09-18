@@ -254,6 +254,27 @@ def generate_launch_description():
         }],
     )
 
+    # Real-pack /battery_state from the STM32 0x8A/0x89 readings (OCV lookup
+    # + charger flags). The battery simulator stays off on the real robot.
+    battery_state_node = Node(
+        package='mower_mission',
+        executable='battery_state_node',
+        name='battery_state',
+        output='screen',
+        parameters=[{'use_sim_time': False}],
+    )
+
+    # Wheel PID auto-tune (dashboard button -> /pid_autotune service). Drives
+    # the wheels through open-loop steps via the mower_hardware side channels,
+    # so it only makes sense on the real base.
+    pid_autotune_node = Node(
+        package='mower_mission',
+        executable='pid_autotune_node',
+        name='pid_autotune',
+        output='screen',
+        parameters=[{'use_sim_time': False}],
+    )
+
     temp_dock_pose_publisher = Node(
         package='mower_mission',
         executable='temp_dock_pose_publisher',
@@ -289,6 +310,8 @@ def generate_launch_description():
         heartbeat_node,
         robot_info_node,
         telemetry_node,
+        battery_state_node,
+        pid_autotune_node,
         temp_dock_pose_publisher,
         auto_coverage_node,
     ])

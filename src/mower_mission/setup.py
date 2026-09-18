@@ -39,6 +39,8 @@ setup(
             'robot_info_node = mower_mission.robot_info_node:main',
             'rosbridge_auth_proxy = mower_mission.rosbridge_auth_proxy:main',
             'telemetry_node = mower_mission.telemetry_node:main',
+            'pid_autotune_node = mower_mission.pid_autotune_node:main',
+            'battery_state_node = mower_mission.battery_state_node:main',
             'auto_coverage_node = mower_mission.auto_coverage_node:main',
             'path_record_node = mower_mission.path_record_node:main',
             'temp_dock_pose_publisher = '

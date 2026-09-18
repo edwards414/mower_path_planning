@@ -223,3 +223,80 @@ TEST(Pid, DecodeConfigStatus)
   EXPECT_EQ(st.last_rx_seq, 3);
   EXPECT_FALSE(decode_pid_config_status(p, 27, st));
 }
+
+TEST(Pid, ConfigCommandMatchesReference)
+{
+  // Reference frame from the Python bench tool (tools/mower_uart.py build()):
+  // seq=9, left 2.5/0.75/0, right 3/1/0.125, persist=1, closed_loop=1
+  PidConfig cfg;
+  cfg.left_kp = 2.5f;
+  cfg.left_ki = 0.75f;
+  cfg.left_kd = 0.0f;
+  cfg.right_kp = 3.0f;
+  cfg.right_ki = 1.0f;
+  cfg.right_kd = 0.125f;
+  cfg.persist_to_flash = true;
+  cfg.closed_loop_enabled = true;
+  auto f = build_pid_config_command(9, cfg);
+  const uint8_t expect[] = {0xa5, 0x5a, 0x01, 0x04, 0x09, 0x1c,
+                            0x00, 0x00, 0x20, 0x40, 0x00, 0x00, 0x40, 0x3f, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x3e,
+                            0x01, 0x01, 0x00, 0x00, 0x19, 0x40};
+  ASSERT_EQ(f.size(), sizeof(expect));
+  EXPECT_EQ(std::memcmp(f.data(), expect, sizeof(expect)), 0);
+
+  // the status decoder must read back what the command encoded
+  PidConfigStatus st;
+  ASSERT_TRUE(decode_pid_config_status(f.data() + 6, 28, st));
+  EXPECT_FLOAT_EQ(st.left_kp, 2.5f);
+  EXPECT_FLOAT_EQ(st.right_kd, 0.125f);
+}
+
+TEST(Charger, DecodeStatus)
+{
+  // vin=24.50 V, vout=25.10 V, iout=1.25 A, cc=3.00 A, cv=25.20 V,
+  // flags=online|charging|cv|input|seen, err=2, age=120 ms, exc=0
+  const uint8_t p[16] = {0x92, 0x09, 0xCE, 0x09, 0x7D, 0x00, 0x2C, 0x01,
+                         0xD8, 0x09, 0x1F, 0x02, 0x78, 0x00, 0x00, 0x00};
+  ChargerStatus ch;
+  ASSERT_TRUE(decode_charger_status(p, sizeof(p), ch));
+  EXPECT_EQ(ch.vin_cv, 2450);
+  EXPECT_EQ(ch.vout_cv, 2510);
+  EXPECT_EQ(ch.iout_ca, 125);
+  EXPECT_EQ(ch.set_cc_ca, 300);
+  EXPECT_EQ(ch.set_cv_cv, 2520);
+  EXPECT_TRUE(ch.online());
+  EXPECT_TRUE(ch.charging());
+  EXPECT_TRUE(ch.cv_phase());
+  EXPECT_TRUE(ch.input_present());
+  EXPECT_EQ(ch.comm_error_count, 2);
+  EXPECT_EQ(ch.age_ms, 120);
+  EXPECT_EQ(ch.last_exception_code, 0);
+  EXPECT_FALSE(decode_charger_status(p, 15, ch));
+}
+
+TEST(Analog, DecodeStatus)
+{
+  // main=24.12 V, aon=3.85 V, temp=31.2 C, vdda=2910 mV, mg996 raw=123,
+  // flags=main|aon|temp|curr|vdda_cal
+  const uint8_t p[12] = {0x6C, 0x09, 0x81, 0x01, 0x38, 0x01,
+                         0x5E, 0x0B, 0x7B, 0x00, 0x1F, 0x00};
+  AnalogStatus an;
+  ASSERT_TRUE(decode_analog_status(p, sizeof(p), an));
+  EXPECT_EQ(an.main_battery_cv, 2412);
+  EXPECT_EQ(an.aon_battery_cv, 385);
+  EXPECT_EQ(an.board_temp_dc, 312);
+  EXPECT_EQ(an.vdda_mv, 2910);
+  EXPECT_EQ(an.mg996_current_raw, 123);
+  EXPECT_TRUE(an.main_battery_valid());
+  EXPECT_TRUE(an.aon_battery_valid());
+  EXPECT_TRUE(an.board_temp_valid());
+  EXPECT_FALSE(decode_analog_status(p, 11, an));
+
+  // invalid temperature sentinel survives the signed decode
+  const uint8_t q[12] = {0, 0, 0, 0, 0x00, 0x80, 0xE4, 0x0C, 0, 0, 0x00, 0};
+  ASSERT_TRUE(decode_analog_status(q, sizeof(q), an));
+  EXPECT_EQ(an.board_temp_dc, INT16_MIN);
+  EXPECT_FALSE(an.board_temp_valid());
+  EXPECT_FALSE(an.main_battery_valid());
+}

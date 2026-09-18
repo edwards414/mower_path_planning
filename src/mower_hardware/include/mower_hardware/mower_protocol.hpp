@@ -29,6 +29,9 @@ enum FrameType : uint8_t {
   kWheelFeedbackStatus = 0x85,
   kPowerStatus = 0x86,
   kFirmwareInfo = 0x87,
+  kServoStatus = 0x88,
+  kChargerStatus = 0x89,
+  kAnalogStatus = 0x8A,
 };
 
 // 0x03 payload mode (firmware/LED_COMMAND_MODES.md)
@@ -45,6 +48,21 @@ enum Ws2812Mode : uint8_t {
 // 0x87 payload build_flags
 constexpr uint8_t kFwBuildFlagDirty = 0x01;
 constexpr uint8_t kFwBuildFlagUnversioned = 0x02;
+
+// 0x89 charger status flags
+constexpr uint8_t kChargerFlagOnline = 0x01;        // RS485 replies OK
+constexpr uint8_t kChargerFlagCharging = 0x02;      // Iout above threshold
+constexpr uint8_t kChargerFlagCvPhase = 0x04;       // Vout at the set CV
+constexpr uint8_t kChargerFlagInputPresent = 0x08;  // Vin present
+constexpr uint8_t kChargerFlagEverSeen = 0x10;      // replied at least once
+
+// 0x8A analog status flags
+constexpr uint8_t kAnalogFlagMainBatteryValid = 0x01;
+constexpr uint8_t kAnalogFlagAonBatteryValid = 0x02;
+constexpr uint8_t kAnalogFlagBoardTempValid = 0x04;
+constexpr uint8_t kAnalogFlagMg996CurrentValid = 0x08;
+constexpr uint8_t kAnalogFlagVddaCalibrated = 0x10;  // VREFINT read OK
+constexpr uint8_t kAnalogFlagMg996LimitActive = 0x20;
 
 // 0x05 payload action
 enum PowerAction : uint8_t {
@@ -132,6 +150,19 @@ struct PidConfigStatus {
   uint8_t last_rx_seq = 0;
 };
 
+// 0x04: gains to run with (and optionally persist). Same float layout as
+// PidConfigStatus; the STM32 sanitises out-of-range values itself.
+struct PidConfig {
+  float left_kp = 0.0f;
+  float left_ki = 0.0f;
+  float left_kd = 0.0f;
+  float right_kp = 0.0f;
+  float right_ki = 0.0f;
+  float right_kd = 0.0f;
+  bool persist_to_flash = false;   // write sector 7 (do not do this at high rate)
+  bool closed_loop_enabled = true; // false: 0x01 permille drives PWM duty directly
+};
+
 struct PowerStatus {
   uint8_t state = 0;
   uint8_t flags = 0;
@@ -166,6 +197,38 @@ struct FirmwareInfo {
   std::string to_json() const;
 };
 
+// 0x89: RS485 CC/CV charger module, polled by the STM32 every 500 ms.
+// Values are the last valid reply (or 0); trust them only when online().
+struct ChargerStatus {
+  uint16_t vin_cv = 0;      // input voltage, x0.01 V
+  uint16_t vout_cv = 0;     // output = battery-side voltage, x0.01 V
+  uint16_t iout_ca = 0;     // charge current, x0.01 A
+  uint16_t set_cc_ca = 0;   // configured CC limit, x0.01 A
+  uint16_t set_cv_cv = 0;   // configured CV limit, x0.01 V
+  uint8_t flags = 0;        // kChargerFlag*
+  uint8_t comm_error_count = 0;
+  uint16_t age_ms = 0xFFFF;  // since the last valid reply, 0xFFFF = never
+  uint8_t last_exception_code = 0;
+  bool online() const { return flags & kChargerFlagOnline; }
+  bool charging() const { return flags & kChargerFlagCharging; }
+  bool cv_phase() const { return flags & kChargerFlagCvPhase; }
+  bool input_present() const { return flags & kChargerFlagInputPresent; }
+};
+
+// 0x8A: slow analog channels behind the ADC mux, refreshed every 200 ms.
+// A field is meaningful only when its kAnalogFlag*Valid bit is set.
+struct AnalogStatus {
+  uint16_t main_battery_cv = 0;    // 24 V main battery, x0.01 V
+  uint16_t aon_battery_cv = 0;     // 3.7 V always-on battery, x0.01 V
+  int16_t board_temp_dc = INT16_MIN;  // x0.1 C, INT16_MIN = invalid
+  uint16_t vdda_mv = 0;            // ADC reference the STM32 used
+  uint16_t mg996_current_raw = 0;  // 12-bit ADC counts
+  uint8_t flags = 0;               // kAnalogFlag*
+  bool main_battery_valid() const { return flags & kAnalogFlagMainBatteryValid; }
+  bool aon_battery_valid() const { return flags & kAnalogFlagAonBatteryValid; }
+  bool board_temp_valid() const { return flags & kAnalogFlagBoardTempValid; }
+};
+
 uint16_t crc16_ccitt_false(const uint8_t * data, size_t len);
 
 // Build a complete frame (SOF + header + payload + CRC).
@@ -183,6 +246,8 @@ std::vector<uint8_t> build_info_request(uint8_t seq);
 
 std::vector<uint8_t> build_ws2812_command(
   uint8_t seq, uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t effect_period_ms);
+
+std::vector<uint8_t> build_pid_config_command(uint8_t seq, const PidConfig & cfg);
 
 // Incremental parser: feed bytes, get callbacks for every CRC-valid frame.
 class FrameParser {
@@ -204,5 +269,7 @@ bool decode_power_status(const uint8_t * payload, size_t len, PowerStatus & out)
 bool decode_ws2812_status(const uint8_t * payload, size_t len, Ws2812Status & out);
 bool decode_pid_config_status(const uint8_t * payload, size_t len, PidConfigStatus & out);
 bool decode_firmware_info(const uint8_t * payload, size_t len, FirmwareInfo & out);
+bool decode_charger_status(const uint8_t * payload, size_t len, ChargerStatus & out);
+bool decode_analog_status(const uint8_t * payload, size_t len, AnalogStatus & out);
 
 }  // namespace mower_hardware
