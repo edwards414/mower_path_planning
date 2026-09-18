@@ -1,0 +1,4 @@
+# `*.nosync` keeps the build directory out of iCloud Drive's Desktop sync;
+# with the default `target/` cargo's file clones stall while iCloud walks it.
+[build]
+target-dir = "target.nosync"

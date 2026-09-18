@@ -28,3 +28,6 @@ __pycache__/
 # Rust workspace (rust/): build output lives in target.nosync/ to stay out of iCloud sync
 rust/target/
 rust/target.nosync/
+
+# Rust port build output (kept out of iCloud sync by the .nosync suffix)
+/rust/target.nosync/
