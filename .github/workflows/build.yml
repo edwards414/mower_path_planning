@@ -143,9 +143,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: [python-tests, firmware, driver-tests]
 
-    # Only the images something actually pulls from GHCR:
-    #   runtime  deploy/docker-compose.yaml  (robot, arm64)
-    #   gps      deploy/docker-compose.yaml --profile gps  (robot, arm64)
+    # Only the image something actually pulls from GHCR:
+    #   runtime  deploy/docker-compose.yaml  (robot, arm64); it also carries
+    #            the u-blox GPS driver, which used to be a second `-gps` image
     # The devcontainer and gazebo images are built locally by
     # .devcontainer/docker-compose.dev.yaml and were never pulled from GHCR.
     strategy:
@@ -157,14 +157,6 @@ jobs:
             context: .
             target: runtime
             image_suffix: ""
-            build_args: ""
-            push_platforms: linux/arm64
-
-          - name: gps
-            dockerfile: Dockerfile
-            context: .
-            target: gps_runtime
-            image_suffix: -gps
             build_args: ""
             push_platforms: linux/arm64
 
@@ -321,6 +313,9 @@ jobs:
             set -u
             ros2 pkg prefix mower_bringup >/dev/null
             ros2 pkg prefix mower_hardware >/dev/null
+            # GPS receiver driver lives in this image (mower.launch.py enable_gps)
+            test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_gps"
+            test -s "$(ros2 pkg prefix mower_bringup)/share/mower_bringup/config/gps.yaml"
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
             ros2 launch mower_bringup robot.launch.py --show-args >/tmp/robot_launch_args.txt
             # bundled STM32 firmware + sync tooling

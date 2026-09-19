@@ -207,10 +207,14 @@ prediction. The largest horizontal uncertainty axis must be at most 0.015 m;
 loss of any input during a mission requests cancellation. Production fixes the
 external contract to `/fix`; if a receiver publishes `/gps/fix`, remap that
 receiver output to `/fix` at its own launch boundary.
-The repository builds a `gps_runtime` image but does not guess a receiver
-device, baud rate, antenna offset, or correction source; the deployment must
-configure a real GPS/RTK publisher before navigation can start. Do not disable
-`require_navigation_health` on a physical mower.
+The u-blox receiver driver is `mower_rs`'s `mower_gps` (see
+`src/mower_rs/README.md`), run inside the runtime image when
+`mower.launch.py` is given `enable_gps:=true` (`GPS=true` in the robot's
+`.env`): it reads `/dev/gps_rtk` with `src/mower_bringup/config/gps.yaml`,
+publishes the canonical `/fix` (NAV-PVT status/covariance, NAV-HPPOSLLH
+position) and exits on a dead port so launch respawns it. It configures no
+correction source; check the fix quality before trusting a mission. Do not
+disable `require_navigation_health` on a physical mower.
 
 `mower.launch.py` is a real-hardware entry point and rejects
 `use_sim_time:=true`; actuator watchdogs must not freeze when `/clock` stops.

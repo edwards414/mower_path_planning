@@ -24,6 +24,13 @@ LOCAL_COMPOSE = SRC_DIR.parent / 'docker-compose.yaml'
 DEPLOY_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.yaml'
 ROBOT_LAUNCH = SRC_DIR / 'mower_bringup/launch/robot.launch.py'
 DOCKERFILE = SRC_DIR.parent / 'Dockerfile'
+BUILD_WORKFLOW = SRC_DIR.parent / '.github/workflows/build.yml'
+GPS_PARAMS = SRC_DIR / 'mower_bringup/config/gps.yaml'
+BRINGUP_PACKAGE = SRC_DIR / 'mower_bringup/package.xml'
+MOWER_RS_CMAKE = SRC_DIR / 'mower_rs/CMakeLists.txt'
+MOWER_RS_CARGO = SRC_DIR / 'mower_rs/Cargo.toml'
+GPS_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_gps/src/main.rs'
+UBX_RS = SRC_DIR / 'mower_rs/crates/mower_ubx/src/lib.rs'
 NAV2_CONFIG = SRC_DIR / 'mower_nav2/config/nav2_no_map_params.yaml'
 NAV2_LAUNCH = SRC_DIR / 'mower_nav2/launch/navigation.launch.py'
 MAKEFILE = SRC_DIR.parent / 'Makefile'
@@ -780,8 +787,82 @@ def test_nav2_clock_is_controlled_only_by_the_launch_argument():
 def test_runtime_container_sets_non_root_home():
     source = DOCKERFILE.read_text(encoding='utf-8')
     runtime = source.split('FROM ros:${ROS_DISTRO}-ros-core AS runtime', 1)[1]
-    runtime = runtime.split('FROM ros:${ROS_DISTRO}-ros-base AS gps_runtime', 1)[0]
+    # runtime is the last stage: the GPS driver ships inside it
+    assert '\nFROM ' not in runtime
     assert 'ENV HOME=/home/${USER_NAME}' in runtime
+
+
+def test_gps_driver_runs_inside_the_runtime_container():
+    """The receiver driver is a node of mower.launch.py in the one robot
+    image, not a second compose service with its own image: same DDS graph
+    (network_mode/ipc host), one image tag to update, and the receiver
+    parameters are versioned with the launch that consumes them. It is
+    mower_rs/mower_gps, not the ROS ublox_gps node, because that one spins
+    forever on a dead port instead of exiting for launch's respawn."""
+    mower = MOWER_LAUNCH.read_text(encoding='utf-8')
+    head, block = mower.split("executable='mower_gps'", 1)
+    assert head.rstrip().endswith("package='mower_rs',")
+    block = block.split('\n    )\n', 1)[0]
+    assert "name='gps'" in block
+    assert 'condition=IfCondition(enable_gps)' in block
+    assert 'respawn=True' in block
+    assert 'respawn_delay=2.0' in block
+    # the canonical topic goes in as a parameter, no remapping
+    assert "parameters=[gps_params_file, {'fix_topic': gps_fix_topic}]" in block
+    assert "package='ublox_gps'" not in mower
+
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    assert "'enable_gps': enable_gps," in robot
+    assert "'gps_params_file': gps_params_file," in robot
+
+    params = GPS_PARAMS.read_text(encoding='utf-8')
+    assert params.startswith('#') and '\ngps:\n' in params
+    assert 'device: /dev/gps_rtk' in params
+    # antenna link of real_robot.xacro so navsat_transform applies the offset
+    assert 'frame_id: gps_link' in params
+    assert 'rate_hz: 4.0' in params
+    assert 'stale_timeout_s: 5.0' in params
+
+    manifest = BRINGUP_PACKAGE.read_text(encoding='utf-8')
+    assert '<exec_depend>mower_rs</exec_depend>' in manifest
+    assert 'ublox' not in manifest
+    cmake = MOWER_RS_CMAKE.read_text(encoding='utf-8')
+    assert re.search(r'^set\(MOWER_RS_BINARIES .* mower_gps\)$', cmake, re.M)
+    cargo = MOWER_RS_CARGO.read_text(encoding='utf-8')
+    assert '"crates/mower_ubx"' in cargo and '"crates/mower_gps"' in cargo
+
+    deploy = DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    lawan = deploy.split('  mediamtx:', 1)[0]
+    assert 'enable_gps:=${GPS:-true}' in lawan
+    assert '- /dev/gps_rtk:/dev/gps_rtk' in lawan
+    assert 'profiles:' not in deploy
+    assert 'mower_path_planning-gps' not in deploy
+    assert 'ublox' not in deploy
+
+    dockerfile = DOCKERFILE.read_text(encoding='utf-8')
+    assert 'gps_runtime' not in dockerfile
+    workflow = BUILD_WORKFLOW.read_text(encoding='utf-8')
+    assert 'gps_runtime' not in workflow
+    assert 'image_suffix: -gps' not in workflow
+    assert 'install/mower_rs/lib/mower_rs/mower_gps' in workflow
+
+
+def test_gps_driver_fails_closed_and_keeps_the_ublox_gps_fix_contract():
+    """Rules the navigation gate and navsat_transform rely on, checked at
+    the source so a refactor cannot quietly relax them: exit on serial
+    error / EOF / missing NAV-PVT, NO_FIX -> NaN, GBAS only for RTK fixed."""
+    main = GPS_RS_MAIN.read_text(encoding='utf-8')
+    assert 'returned EOF' in main
+    assert 'no NAV-PVT from the receiver for' in main
+    assert 'no NAV-PVT from the receiver within' in main
+    assert 'std::process::exit(exit_code)' in main
+    assert 'serial_thread.is_finished()' in main
+    assert 'COVARIANCE_TYPE_DIAGONAL_KNOWN' in main
+    ubx = UBX_RS.read_text(encoding='utf-8')
+    assert 'matches!(self.fix_type, 2 | 3 | 4)' in ubx
+    assert ('if self.carrier_solution() == CarrierSolution::Fixed {\n'
+            '            2\n') in ubx
+    assert 'if status < 0 { (f64::NAN, f64::NAN, f64::NAN) }' in ubx
 
 
 def test_nav2_local_and_global_costmaps_use_full_robot_radius():

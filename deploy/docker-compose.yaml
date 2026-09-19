@@ -17,6 +17,8 @@
 #                      by uid 1000 (the container user)
 #   ROSBRIDGE_ADDRESS  rosbridge listen address (WireGuard/relay IP or LAN IP)
 #   MOWER_FIRMWARE_SYNC=0  keep whatever firmware is on the STM32
+#   GPS=false          do not run the u-blox driver (no /fix; navigation
+#                      stays blocked by its health gate)
 #
 # The image is the `runtime` target (linux/arm64) published to GHCR by
 # .github/workflows/build.yml; it bundles the STM32 firmware from the same
@@ -42,6 +44,9 @@ services:
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
       - record:=false
+      # u-blox ZED-F9P driver (mower_rs mower_gps) in this container ->
+      # /fix + /gps/status; parameters in src/mower_bringup/config/gps.yaml.
+      - enable_gps:=${GPS:-true}
       # mower_rs (Rust) processes instead of their rclpy versions, one switch
       # each (src/mower_rs/README.md). Set in .env after the shadow check;
       # RUST_GUARDS and RUST_NAV only after a supervised drive.
@@ -74,40 +79,18 @@ services:
     pid: host
     stdin_open: true
     tty: true
-    # udev names from usb.rules (deploy/install.sh installs it):
+    # udev names from udev/99-mower.rules (deploy/install.sh installs it).
+    # All three must exist or the container does not start (docker resolves
+    # `devices` at create time):
     #   /dev/stmcom   STM32 host UART (LubanCat ttyS3 or a USB-serial adapter)
     #   /dev/imu_usb  WIT IMU (CH340)
+    #   /dev/gps_rtk  u-blox ZED-F9P (CDC-ACM)
     devices:
       - /dev/stmcom:/dev/stmcom
       - /dev/imu_usb:/dev/imu_usb
-    volumes:
-      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
-
-  # u-blox RTK receiver -> /fix. Opt-in until the receiver config in gps/ is
-  # validated on the robot:  docker compose --profile gps up -d
-  gps:
-    image: ghcr.io/edwards414/mower_path_planning-gps:${IMAGE_TAG:-stable}
-    pull_policy: missing
-    restart: unless-stopped
-    profiles: [gps]
-    command:
-      - bash
-      - -lc
-      - >-
-        source /opt/ros/$${ROS_DISTRO}/setup.bash &&
-        ros2 run ublox_gps ublox_gps_node
-        --ros-args --params-file /config/ublox.yaml
-        -r /ublox_gps_node/fix:=/fix
-    environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    network_mode: host
-    ipc: host
-    pid: host
-    devices:
       - /dev/gps_rtk:/dev/gps_rtk
     volumes:
-      - ./gps/ublox.yaml:/config/ublox.yaml:ro
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
 
   # Camera server (mediamtx.yml): WHEP on :8889 for the app on the same LAN;
   # from elsewhere the app's WHEP signaling arrives through the fleet backend

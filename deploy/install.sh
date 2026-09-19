@@ -25,9 +25,11 @@ fi
 state_dir="$home/.mower"
 
 echo "== /opt/mower (user=$user state=$state_dir)"
-mkdir -p /opt/mower/host /opt/mower/gps
+mkdir -p /opt/mower/host
 install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" /opt/mower/
-install -m 644 "$here/gps/ublox.yaml" /opt/mower/gps/
+# The u-blox driver runs inside the main image now (config in
+# mower_bringup); the old `--profile gps` service kept its yaml here.
+rm -rf /opt/mower/gps
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" /opt/mower/host/
 install -m 755 "$here/host/mower-pair" /opt/mower/host/
 ln -sf /opt/mower/host/mower-pair /usr/local/bin/mower-pair

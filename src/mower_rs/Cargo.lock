@@ -710,6 +710,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_gps"
+version = "0.1.0"
+dependencies = [
+ "mower_rs_common",
+ "mower_ubx",
+ "r2r",
+ "serde_json",
+ "serialport",
+ "tokio",
+]
+
+[[package]]
 name = "mower_imu"
 version = "0.1.0"
 dependencies = [
@@ -774,6 +786,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "mower_ubx"
+version = "0.1.0"
 
 [[package]]
 name = "mower_ws_bridge"

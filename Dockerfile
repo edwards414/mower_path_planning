@@ -295,28 +295,3 @@ USER ${USER_NAME}
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["ros2", "launch", "mower_bringup", "robot.launch.py", "use_sim_time:=false"]
-
-##############################################
-# Stage: gps_runtime (輕量 ublox GPS driver)
-# 機器人上跑的 GPS 驅動容器。直接 FROM ros-base、不繼承 builder,
-# 不含整包 workspace,只裝 ublox-gps + cyclonedds RMW,image 保持精簡。
-# BuildKit 只在指定此 target 時才會 build 這個 stage。
-##############################################
-FROM ros:${ROS_DISTRO}-ros-base AS gps_runtime
-
-ARG ROS_DISTRO
-ENV DEBIAN_FRONTEND=noninteractive
-ENV ROS_DISTRO=${ROS_DISTRO}
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
-        ros-${ROS_DISTRO}-ublox-gps
-
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
-
-CMD ["bash"]

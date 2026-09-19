@@ -44,6 +44,8 @@ def generate_launch_description():
     )
     enable_keyboard_teleop = LaunchConfiguration('enable_keyboard_teleop')
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
+    enable_gps = LaunchConfiguration('enable_gps')
+    gps_params_file = LaunchConfiguration('gps_params_file')
 
     declare_rust_guards = DeclareLaunchArgument(
         'rust_guards',
@@ -112,6 +114,20 @@ def generate_launch_description():
         'gps_fix_topic',
         default_value='/fix',
         description='Canonical GPS fix topic used by navsat and health gates',
+    )
+    declare_enable_gps = DeclareLaunchArgument(
+        'enable_gps',
+        default_value='false',
+        description=(
+            'Run the u-blox receiver driver (mower_rs mower_gps) here and '
+            'publish gps_fix_topic; needs /dev/gps_rtk'
+        ),
+    )
+    declare_gps_params_file = DeclareLaunchArgument(
+        'gps_params_file',
+        default_value=os.path.join(mower_bringup_dir, 'config', 'gps.yaml'),
+        description='mower_gps parameter file (device, rate_hz, frame_id, '
+                    'timeouts)',
     )
 
     robot_description_path = os.path.join(
@@ -252,6 +268,28 @@ def generate_launch_description():
         remappings=[('imu/data_raw', 'imu/data')],
     )
 
+    # u-blox ZED-F9P over USB, the only publisher of the canonical fix
+    # topic, in this container like everything else (it used to be a
+    # separate `gps` compose service with its own image; nothing isolated
+    # it, the DDS graph is shared through network_mode/ipc host anyway).
+    # mower_rs/mower_gps rather than the ROS ublox_gps node: that one never
+    # exits on a dead port (it reposts the failed read forever and keeps the
+    # hung-up tty open, so the re-enumerated receiver comes back on a minor
+    # the container's static /dev/gps_rtk no longer points at). mower_gps
+    # ends on any serial failure or when NAV-PVT stops, launch respawns it
+    # like the IMU drivers, and the navigation health gate closes on the
+    # stale fix in between.
+    mower_gps_node = Node(
+        package='mower_rs',
+        executable='mower_gps',
+        name='gps',
+        output='screen',
+        condition=IfCondition(enable_gps),
+        respawn=True,
+        respawn_delay=2.0,
+        parameters=[gps_params_file, {'fix_topic': gps_fix_topic}],
+    )
+
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -302,9 +340,12 @@ def generate_launch_description():
         declare_physical_joystick_enable_button,
         declare_enable_keyboard_teleop,
         declare_gps_fix_topic,
+        declare_enable_gps,
+        declare_gps_params_file,
         robot_state_publisher,
         wit_ros2_imu_node,
         mower_imu_node,
+        mower_gps_node,
         mower_controller_launch,
         twist_mux_launch,
         robot_localization_launch,

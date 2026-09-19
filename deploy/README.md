@@ -57,7 +57,27 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 |---|---|
 | `/dev/stmcom` | STM32 host UART：LubanCat `ttyS3`（UART3 overlay）或 CP2102 |
 | `/dev/imu_usb` | WIT IMU（CH340） |
-| `/dev/gps_rtk` | u-blox ZED-F9P（`--profile gps` 服務，設定在 `gps/ublox.yaml`，尚未在機器上驗證） |
+| `/dev/gps_rtk` | u-blox ZED-F9P（CDC-ACM） |
+
+三個裝置都寫在 compose 的 `devices:`，少一個容器就起不來（`install.sh` 最後會列出哪個不在）。
+
+## GPS
+
+u-blox 驅動是 `mower_rs` 的 `mower_gps`（Rust），跟其他節點一樣跑在主容器裡（`mower.launch.py enable_gps:=true`），發布 `/fix` 與 1 Hz 的 `/gps/status`（JSON：`fix_type`、`carrier_solution` none/float/fixed、`num_sv`、`h_acc_m`、`pdop`、`utc`）。
+以前是獨立的 `--profile gps` 服務 + `-gps` image 跑 ROS 的 `ublox_gps`，已移除：那個驅動在 USB 斷線後不會退出（無限重讀、吃滿一核、佔著死掉的 tty，重新枚舉的接收器變成別的 minor，容器內靜態的 `/dev/gps_rtk` 就指不到），而這塊板子的 USB hub 每小時會 reset 幾次。
+`mower_gps` 遇到序列埠錯誤或 NAV-PVT 停 5 s 就結束、launch 2 s 後 respawn（跟 IMU 驅動一樣），中間導航健康檢查會擋住。`.env` 設 `GPS=false` 可關掉（沒有 `/fix`，導航被健康檢查擋住）。
+
+參數在 image 內的 `src/mower_bringup/config/gps.yaml`（4 Hz、`frame_id: gps_link`、逾時）。驅動每次啟動只在接收器 RAM 開 USB 口的 NAV-PVT + NAV-HPPOSLLH + NAV-EOE，不存 flash、不動其他設定（含 UART1 的 RTCM 改正輸入 / NTRIP，那要另外設）。
+要試別的參數不用重建 image：把 yaml 放進 `~/.mower/`，compose 的 command 加 `gps_params_file:=/home/mower/.mower/<檔名>`。
+
+2026-09-19 在機器上驗過：4.00 Hz、室內無星 → `status: -1` / 位置 NaN；模擬拔線（`echo 0 > /sys/bus/usb/devices/1-1.3/authorized`）0.5 s 內退出，重插後回到 `ttyACM0` 重啟正常。RTK 精度（協方差對角線開根號 < 0.015 m 才會開導航閘門）要到戶外接上改正源才驗得到。
+
+驗證：
+
+```bash
+sudo docker compose -f /opt/mower/docker-compose.yaml exec lawan_node bash -lc \
+  'source /opt/ros/jazzy/setup.bash; ros2 topic hz /fix; ros2 topic echo --once /gps/status'
+```
 
 ## 遠端存取
 

@@ -59,6 +59,8 @@ def generate_launch_description():
     r2_env_file = LaunchConfiguration('r2_env_file')
     git_repo_dir = LaunchConfiguration('git_repo_dir')
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
+    enable_gps = LaunchConfiguration('enable_gps')
+    gps_params_file = LaunchConfiguration('gps_params_file')
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
@@ -87,6 +89,8 @@ def generate_launch_description():
             ),
             'enable_keyboard_teleop': enable_keyboard_teleop,
             'gps_fix_topic': gps_fix_topic,
+            'enable_gps': enable_gps,
+            'gps_params_file': gps_params_file,
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
         }.items(),
@@ -186,6 +190,20 @@ def generate_launch_description():
             'gps_fix_topic',
             default_value='/fix',
             description='Canonical GPS fix shared by localization and health',
+        ),
+        DeclareLaunchArgument(
+            'enable_gps',
+            default_value='false',
+            description='Run the u-blox receiver driver in this container '
+                        '(publishes gps_fix_topic; needs /dev/gps_rtk)',
+        ),
+        DeclareLaunchArgument(
+            'gps_params_file',
+            default_value=os.path.join(
+                mower_bringup_dir, 'config', 'gps.yaml'
+            ),
+            description='mower_gps parameter file; point at a copy under '
+                        '~/.mower to try receiver settings without a new image',
         ),
         DeclareLaunchArgument(
             'require_navigation_health',
