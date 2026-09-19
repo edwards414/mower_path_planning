@@ -117,9 +117,15 @@ class PathRecorder(Node, NavigationActivityGuard):
         self.channel_path_array_pub = self.create_publisher(
             MarkerArray, '/channel_path_array', polygon_qos)
 
+        # The 10 Hz trace-path sampler only runs while a zone / risk zone /
+        # channel recording is active: the start services re-arm it and the
+        # callback cancels it again when nothing is being recorded. Idle, an
+        # rclpy timer wake-up costs ~6 ms on the LubanCat, i.e. ~6 % of a
+        # core for a callback that did nothing.
         self.timer_period = 0.1
         self.timer = self.create_timer(
             self.timer_period, self.publish_path_timer)
+        self.timer.cancel()
 
         self.create_service(
             Trigger, '/risk_zone_start', self.risk_zone_start_srv)
@@ -407,8 +413,16 @@ class PathRecorder(Node, NavigationActivityGuard):
 
         return marker
 
+    def _arm_record_timer(self):
+        """Start sampling the robot pose (called when a recording starts)."""
+        self.timer.reset()
+
     def publish_path_timer(self):
         """定時發布trace path."""
+        if not (self.record_zone_status or self.risk_zone_status
+                or self.chennal_record_status):
+            self.timer.cancel()
+            return
         if self.record_zone_status:
             if not self.initialized:
                 return
@@ -569,6 +583,7 @@ class PathRecorder(Node, NavigationActivityGuard):
 
         self.get_logger().info('記錄區域起始點')
         self.record_zone_status = True
+        self._arm_record_timer()
         self.record_zone_id += 1
         self.record_zone_name = 'zone_' + str(self.record_zone_id)
 
@@ -1539,6 +1554,7 @@ class PathRecorder(Node, NavigationActivityGuard):
 
         self.get_logger().info('開始記錄風險區域')
         self.risk_zone_status = True
+        self._arm_record_timer()
         self.risk_zone_id += 1
         self.risk_zone_name = 'risk_zone_' + str(self.risk_zone_id)
 
@@ -1791,6 +1807,7 @@ class PathRecorder(Node, NavigationActivityGuard):
 
         self.chennal_record_status = True
         self.chennal_record_id += 1
+        self._arm_record_timer()
         self.chennal_record_name = 'chennal_record_' + \
             str(self.chennal_record_id)
 

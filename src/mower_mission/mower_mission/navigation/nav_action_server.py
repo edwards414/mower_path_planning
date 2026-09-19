@@ -700,17 +700,23 @@ class NavActionServer(Node):
             self._monitor_uncertain_nav2_task,
             callback_group=self._control_callback_group,
         )
-        # One 20 Hz tick runs the health monitor and then the fail-safe lock
-        # heartbeat. Both used to be separate 0.05 s timers in this same
-        # mutually-exclusive group, so they already ran back to back; a
-        # single timer halves the rclpy executor wake-ups (~6 ms of CPU each
-        # on the LubanCat) without changing the twist_mux heartbeat cadence
-        # (/navigation_safety_stop timeout 0.2 s, coordinator lock 0.3 s).
-        self.create_timer(
-            0.05,
-            self._health_tick,
-            callback_group=self._health_callback_group,
+        # The 20 Hz tick (health monitor, then the fail-safe lock heartbeat)
+        # runs on its own thread instead of an executor timer: every rclpy
+        # timer wake-up through the MultiThreadedExecutor costs ~12 ms of
+        # CPU on the LubanCat (the executor rebuilds its wait set in Python
+        # for each event), i.e. a quarter of a core for a callback that
+        # mostly publishes two small messages. The thread keeps the same
+        # cadence (/navigation_safety_stop timeout 0.2 s, coordinator lock
+        # 0.3 s) and the same linearisation: the decision and its publish
+        # happen under _state_lock, as they did in the timer callback.
+        self._health_tick_period_s = 0.05
+        self._health_thread_stop = threading.Event()
+        self._health_thread = threading.Thread(
+            target=self._health_loop,
+            name='nav-health-tick',
+            daemon=True,
         )
+        self._health_thread.start()
 
     def _navigation_admission_block_reason_locked(self) -> str | None:
         """Return the exact reason a new autonomous goal is currently unsafe."""
@@ -1130,6 +1136,22 @@ class NavActionServer(Node):
         """20 Hz: cancel on stale health, then heartbeat the fail-safe lock."""
         self._monitor_navigation_health()
         self._publish_safety_stop_if_needed()
+
+    def _health_loop(self) -> None:
+        """Drive _health_tick at a fixed cadence until the node is destroyed."""
+        period = self._health_tick_period_s
+        next_at = monotonic() + period
+        while not self._health_thread_stop.wait(max(0.0, next_at - monotonic())):
+            next_at += period
+            if next_at < monotonic():
+                # Fell behind (GIL contention): resynchronise instead of
+                # bursting to catch up; a late tick is what twist_mux's
+                # timeouts are for.
+                next_at = monotonic() + period
+            try:
+                self._health_tick()
+            except Exception as exc:  # noqa: BLE001 - the heartbeat must outlive one bad tick
+                self.get_logger().error(f'navigation health tick failed: {exc!r}')
 
     def _monitor_navigation_health(self) -> None:
         """Cancel an accepted mission if pose or GPS health becomes stale."""
@@ -2654,6 +2676,12 @@ class NavActionServer(Node):
         return self.single_path_execute_callback(goal_handle)
 
     def destroy_node(self):
+        self._health_thread_stop.set()
+        if (
+            self._health_thread.is_alive()
+            and threading.current_thread() is not self._health_thread
+        ):
+            self._health_thread.join(timeout=1.0)
         self.action_server.destroy()
         self.action_server_follow_path.destroy()
         self.navigator.destroy_node()

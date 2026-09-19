@@ -159,6 +159,11 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 - **教訓：r2r 的 `spin_once` 在 wait set 為空時立刻返回。** `mower_imu` 沒有訂閱 / timer / service，spin 迴圈變成 busy loop，真機量到 84% CPU；`mower_ws_bridge` 在還沒有客戶端訂閱時也會如此。修法：IMU 不 spin（發布不需要 spin，主執行緒只等訊號）；bridge 用一個私有 `~/wake` topic 讓 wait set 永不為空、命令送達時發一筆喚醒 spin（idle 1.38% → 0.25%），並在關閉時先停掉 node 執行緒再離開（否則 rmw 的解構會跟還在 `rcl_wait` 的執行緒撞在一起，glibc mutex assertion abort）。已修（IMU 在容器裡 10 Hz 輸入下 0.9%），真機的 `RUST_IMU` 先關回 false，等修好的映像上線再開。
 - 每個 process 的 CPU 仍以真機 30 s 取樣為準（`/tmp/cpu_sample.sh`）。
 
+### 7.6 Python 端再兩刀（2026-09-19）
+
+- `path_record_node`：10 Hz `publish_path_timer` 改成只在錄製期間存在（三個 start service 重新 arm，callback 發現沒有任何錄製就 cancel）。閒置時每秒省 10 次 rclpy timer 喚醒（MTE 下每次約 8–12 ms）。錄製情境測試 2/2 通過。
+- `nav_action_server`：py-spy 顯示 44% 裡 65% 是 `_wait_for_ready_callbacks`（MTE 每個事件都用 Python 重建 wait set），callback 本身 4%。rclpy 7.1.12 有 `rclpy.experimental.EventsExecutor`（C++ 事件迴圈、便宜很多），但它是單執行緒、不理 callback group，而 action execute callback 會阻塞等 nav2，所以不能換。改法：20 Hz health tick 從 executor timer 改成自己的執行緒（決策與發布仍在 `_state_lock` 下、節奏不變、掉拍時重新對齊而不補發），executor 的事件數從 ~35/s 降到 ~15/s。測試集合與 HEAD 相同（33 passed / 同樣的 6 個既有失敗），容器實測 heartbeat 20 Hz、p99 55 ms、鎖定時輸出零速度。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
