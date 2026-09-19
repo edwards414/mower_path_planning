@@ -33,7 +33,8 @@
 理由：rosbridge 是純 JSON WebSocket，「一台機器人一個 Durable Object」剛好對應；兩邊都撥入，
 不開任何入站埠，沒有伺服器要維護；`mower.fxrbindi.com` 已在 Cloudflare 上。
 
-影像先不動（仍走 WireGuard 到家裡主機的 MediaMTX），階段 3 再改 WHEP 加 TURN，見 §8。
+影像：同一個 Wi-Fi 直連機器人上的 MediaMTX；跨網路時 WHEP 訊令經後台轉到機器人、媒體走
+Cloudflare TURN，見 §8。WireGuard 與家裡主機不再參與。
 
 ## 3. 身分與金鑰
 
@@ -105,6 +106,8 @@ byte 9…    payload
 | 兩邊 | `{"t":"close","sid","code":1000,"reason":""}` | 任一端關閉 session |
 | Hub→機器人 | `{"t":"clients","clients":[{"client_id","key","label"}]}` | 階段 2：同步每支手機的金鑰到 `clients.json` |
 | Hub→機器人 | `{"t":"pair_confirm","req":"…","label":"…","ttl":60}` → `{"t":"pair_result","req","ok":true}` | 階段 2：實體按鍵確認 |
+| Hub→機器人 | `{"t":"http","rid","method","path":"/front/whep","headers":{…},"body_b64":"…"}` | §8：手機的 WHEP 請求；agent 只轉 `/<path>/whep[/<session>]` 到 `127.0.0.1:8889` |
+| 機器人→Hub | `{"t":"http_res","rid","status":201,"headers":{"Content-Type","Location","ETag"},"body_b64":"…"}` | 上一則的回應；Hub 把以 `/` 開頭的 `Location` 改寫到 `/v1/robots/{id}/http` 之下 |
 | Hub→機器人 | `{"t":"http","rid","method","path","headers","body_b64"}` → `{"t":"http_res","rid","status","headers","body_b64"}` | 階段 3：WHEP 信令轉發 |
 
 Hub 送 `open` 後不等 `opened` 就開始轉送手機的訊框；agent 把該 sid 的訊框先排隊，等本機連線建立再送。
@@ -132,17 +135,31 @@ Hub 送 `open` 後不等 `opened` 就開始轉送手機的訊框；agent 把該 
 | `GET /v1/relay/app/{id}` | X-Mower-* | WebSocket 升級，§5.1 |
 | `GET /v1/relay/robot/{id}` | X-Mower-*（`@robot`） | WebSocket 升級，§5.2 |
 | 階段 2：`POST /v1/auth/…`、`GET /v1/me/robots`、`POST /v1/robots/{id}/pair`、`…/clients/{cid}/revoke` | JWT | 帳號、清單、配對、撤銷 |
-| 階段 3：`ANY /v1/robots/{id}/http/*` | X-Mower-* | 轉到機器人本機（WHEP 用） |
+| `ANY /v1/robots/{id}/http/*` | X-Mower-* | 轉到機器人本機的 MediaMTX（WHEP 訊令，§8）；機器人離線 503、15 s 沒回 504 |
+| `GET /v1/robots/{id}/turn` | X-Mower-*（手機或 `@robot`） | `{"iceServers":[…],"expires_at":…}`：Cloudflare TURN 短效帳密；沒設 TURN key 時只有 STUN、`expires_at` 為 null |
 
 D1 資料表（`backend/migrations/0001_init.sql`）：`robots`、`robot_clients`、`users`、`pairing_requests`、`events`。
 
-## 8. 影像（階段 3）
+## 8. 影像（階段 3，已實作）
 
-改成手機直接與機器人上的 MediaMTX 建 WebRTC：WHEP 的 SDP 交換走 §5.2 的 `http` 轉發；
-媒體由 ICE 決定，同一個 Wi-Fi 直連，跨網路走 TURN。TURN 用 Cloudflare Realtime TURN
-（每月 1,000 GB 免費，之後每 GB 0.05 美元，只算 TURN 送到客戶端的方向；720p 約 0.7 GB/小時）。
-需要：後台向 TURN 取短效帳密並交給兩端、agent 更新 MediaMTX 的 ICE 設定並經 API 重載、
-`mediamtx.yml` 與 `mediamtx.lan.yml` 合併成一份。完成後 WireGuard 與家裡主機可退役。
+手機永遠與機器人上的 MediaMTX 建 WebRTC，只是訊令與媒體的路徑依連線方式不同：
+
+| | 同一個 Wi-Fi（route=lan） | 跨網路（route=relay） |
+|---|---|---|
+| WHEP 訊令 | `http://<lan ip>:8889/front/whep` | `POST /v1/robots/{id}/http/front/whep`（X-Mower-*）→ Hub `{"t":"http"}` → agent → `127.0.0.1:8889` |
+| ICE servers | 無（host candidate） | 手機 `GET /v1/robots/{id}/turn`；機器人 agent 每小時同一端點 → `PATCH 127.0.0.1:9997/v3/config/global/patch` `webrtcICEServers2` |
+| 媒體 | 直連 UDP 8189 | ICE 選：直連可通就直連，否則 Cloudflare TURN |
+
+TURN 用 Cloudflare Realtime TURN（每月 1,000 GB 免費，之後每 GB 0.05 美元，只算 TURN 送到客戶端
+的方向；2 Mbit/s 約 0.9 GB/小時）。後台以 `TURN_KEY_ID` / `TURN_KEY_API_TOKEN`（wrangler secret）
+向 `rtc.live.cloudflare.com` 取 `TURN_TTL_S`（預設 86400）秒的帳密，每台機器人的 Hub 快取一份、
+過半壽命才換新，所以 MediaMTX（改 ICE 設定會重啟 WebRTC listener）一天只重載約兩次。
+agent 只把 `turn:…3478?transport=udp|tcp` 兩條寫進 MediaMTX；手機拿完整清單（含 `turns:443`）。
+`deploy/mediamtx.yml` 現在只有一份（WHEP :8889、API 只綁 127.0.0.1:9997），`mediamtx.lan.yml` 已移除。
+
+安全邊界：agent 只轉發 `^/[a-z0-9_-]+/whep(/<session>)?$` 的 GET/POST/PATCH/DELETE/OPTIONS，
+其他（WHIP 發布、API）一律 403——MediaMTX 信任 loopback 發布者，而 agent 就是 loopback。
+Hub 只帶 `Content-Type / Accept / If-Match` 過去、只帶 `Content-Type / Location / ETag / Accept-Patch / Link` 回來，body 上限 64 KiB。
 
 ## 9. 階段
 
@@ -151,7 +168,7 @@ D1 資料表（`backend/migrations/0001_init.sql`）：`robots`、`robot_clients
 | 0 | D1 註冊表、agent 註冊與心跳、`status` API | App 能看多台在線狀態，遠端連線仍走舊路 |
 | 1 | RobotHub 中繼、agent 對接本機 auth proxy、App 走 relay 與 `mrelay1` 分片 | 拿掉 `control.fxrbindi.com → 10.77.0.2`，多台皆可遠端 |
 | 2 | 帳號、實體確認配對、每支手機獨立金鑰、撤銷、一次性 provision token | 貼紙不再帶 secret，api_version 升 3 |
-| 3 | WHEP 加 TURN、後台管 OTA 通道 | WireGuard 與家裡主機退役 |
+| 3 | WHEP 加 TURN（已實作，§8）、後台管 OTA 通道 | WireGuard 與家裡主機退役 |
 
 階段 0 與 1 的程式碼一起做（同一個 Worker、同一個 agent），部署時先只開心跳也可以。
 

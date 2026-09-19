@@ -102,11 +102,9 @@ services:
     volumes:
       - ./gps/ublox.yaml:/config/ublox.yaml:ro
 
-  # Camera server. Two configs (MEDIAMTX_CONFIG in .env):
-  #   mediamtx.yml      production: RTSP bound to the WireGuard address only,
-  #                     the public relay serves WHEP to the app
-  #   mediamtx.lan.yml  bench / LAN: WHEP on :8889 and RTSP on all interfaces,
-  #                     the app pulls http://<robot-ip>:8889/<feed>/whep directly
+  # Camera server (mediamtx.yml): WHEP on :8889 for the app on the same LAN;
+  # from elsewhere the app's WHEP signaling arrives through the fleet backend
+  # and mower_agent, media via Cloudflare TURN (docs/BACKEND_ARCHITECTURE.md §8).
   # The front feed is published into it by the host service
   # mower-camera.service (USB camera -> Rockchip MPP H.264), so the container
   # itself needs no camera device. The -ffmpeg variant stays for test patterns.
@@ -116,7 +114,7 @@ services:
     restart: unless-stopped
     environment:
       # Interface(s) whose addresses are offered as WebRTC ICE candidates
-      # (see mediamtx.lan.yml); comma-separated, default the wired LAN port.
+      # (see mediamtx.yml); comma-separated, default the wired LAN port.
       - MTX_WEBRTCIPSFROMINTERFACESLIST=${WEBRTC_INTERFACES:-eth1}
     volumes:
-      - ./${MEDIAMTX_CONFIG:-mediamtx.yml}:/mediamtx.yml:ro
+      - ./mediamtx.yml:/mediamtx.yml:ro

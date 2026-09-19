@@ -33,12 +33,18 @@ async function route(request: Request, env: Env): Promise<Response> {
     return register(request, env);
   }
 
-  // /v1/robots/{id}/status
-  if (parts[1] === "robots" && parts.length === 4 && parts[3] === "status") {
-    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+  // /v1/robots/{id}/status | /turn | /http/*
+  if (parts[1] === "robots" && parts.length >= 4) {
     const robotId = parts[2];
     if (!ROBOT_ID_RE.test(robotId)) return json({ error: "bad robot id" }, 400);
-    return forwardToHub(request, env, robotId, "/status");
+    if (parts.length === 4 && (parts[3] === "status" || parts[3] === "turn")) {
+      if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+      return forwardToHub(request, env, robotId, `/${parts[3]}`);
+    }
+    // Phase 3: any method, forwarded to the robot's local HTTP (WHEP signaling).
+    if (parts[3] === "http" && parts.length >= 5) {
+      return forwardToHub(request, env, robotId, `/http/${parts.slice(4).join("/")}`, url.search);
+    }
   }
 
   // /v1/relay/{app|robot}/{id}
@@ -54,14 +60,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   return json({ error: "not found" }, 404);
 }
 
-function forwardToHub(request: Request, env: Env, robotId: string, path: string): Promise<Response> {
+function forwardToHub(request: Request, env: Env, robotId: string, path: string, search = ""): Promise<Response> {
   const stub = env.ROBOT_HUB.getByName(robotId);
   const headers = new Headers(request.headers);
   headers.set("X-Hub-Robot-Id", robotId);
   const url = new URL(request.url);
   url.pathname = path;
-  url.search = "";
-  return stub.fetch(new Request(url, { method: request.method, headers }));
+  url.search = search;
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  return stub.fetch(new Request(url, { method: request.method, headers, body: hasBody ? request.body : null }));
 }
 
 interface RegisterBody {

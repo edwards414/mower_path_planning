@@ -10,12 +10,19 @@ import { DurableObject } from "cloudflare:workers";
 import { getClientKey, getRobot, logEvent, writeRobotSeen } from "./db";
 import { appToRobot, robotToApp, SUBPROTOCOL } from "./frames";
 import { MAC_MAX_SKEW_S, randomHex, readMowerHeaders, ROBOT_CLIENT, verifyMac, type MowerHeaders } from "./hmac";
+import { generateIceServers, STUN_ONLY, turnConfigured, turnTtlS, type IceServersResult } from "./turn";
 
 const D1_WRITEBACK_S = 60;
 const NONCE_TTL_S = 2 * MAC_MAX_SKEW_S;
 const CLOSE_REPLACED = 4000; // a newer robot socket took over
 const CLOSE_ROBOT_GONE = 1012; // "service restart": robot dropped, app should retry
 const CLOSE_UNAUTHORIZED = 4401; // the robot's own auth proxy refused the session
+const HTTP_MAX_BODY = 64 * 1024; // a WHEP SDP is a few KB
+const HTTP_TIMEOUT_MS = 15_000;
+// Request headers worth carrying to the robot and response headers worth
+// carrying back; everything else (Host, cookies, CF-*) stays on its side.
+const HTTP_REQ_HEADERS = ["content-type", "accept", "if-match"];
+const HTTP_RES_HEADERS = ["content-type", "location", "etag", "accept-patch", "link"];
 
 type Attachment =
   | { kind: "robot"; connectedAt: number }
@@ -46,8 +53,16 @@ type RobotControl =
   | { t: "pair_result"; req: string; ok: boolean }
   | { t: "http_res"; rid: string; status: number; headers?: Record<string, string>; body_b64?: string };
 
+interface HttpRes {
+  status: number;
+  headers: Record<string, string>;
+  body_b64: string;
+}
+
 export class RobotHub extends DurableObject<Env> {
   private robotId: string | null = null;
+  /** Relayed HTTP requests waiting for the robot's http_res (phase 3). */
+  private pendingHttp = new Map<string, { resolve: (r: HttpRes) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -85,8 +100,107 @@ export class RobotHub extends DurableObject<Env> {
         if (!auth.ok) return json({ error: auth.reason }, 401);
         return json(await this.status());
       }
+      case "/turn": {
+        // Both ends need the same TURN credentials: the phone for its own
+        // relay candidates, the robot's agent to configure MediaMTX.
+        const auth = parsed.client === ROBOT_CLIENT ? await this.verifyRobot(parsed) : await this.verifyApp(parsed);
+        if (!auth.ok) return json({ error: auth.reason }, 401);
+        return json(await this.iceServers());
+      }
       default:
+        if (url.pathname === "/http" || url.pathname.startsWith("/http/")) {
+          const auth = await this.verifyApp(parsed);
+          if (!auth.ok) return json({ error: auth.reason }, 401);
+          return this.relayHttp(request, url.pathname.slice("/http".length) + url.search);
+        }
         return json({ error: "not found" }, 404);
+    }
+  }
+
+  // ---- phase 3: HTTP relayed to the robot's loopback (WHEP signaling) ----
+
+  private async relayHttp(request: Request, path: string): Promise<Response> {
+    const robotWs = this.robotSocket();
+    if (!robotWs) return json({ error: "robot offline" }, 503);
+    const declared = Number(request.headers.get("Content-Length") ?? "0");
+    if (declared > HTTP_MAX_BODY) return json({ error: "body too large" }, 413);
+    const body = new Uint8Array(await request.arrayBuffer());
+    if (body.byteLength > HTTP_MAX_BODY) return json({ error: "body too large" }, 413);
+
+    const headers: Record<string, string> = {};
+    for (const name of HTTP_REQ_HEADERS) {
+      const v = request.headers.get(name);
+      if (v) headers[name] = v;
+    }
+    const rid = randomHex(8);
+    const answer = new Promise<HttpRes>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingHttp.delete(rid);
+        resolve({ status: 504, headers: { "content-type": "application/json" }, body_b64: b64encode(new TextEncoder().encode(JSON.stringify({ error: "robot did not answer" }))) });
+      }, HTTP_TIMEOUT_MS);
+      this.pendingHttp.set(rid, { resolve, timer });
+    });
+    const sent = safeSend(
+      robotWs,
+      JSON.stringify({ t: "http", rid, method: request.method, path, headers, body_b64: body.byteLength ? b64encode(body) : "" }),
+    );
+    if (!sent) {
+      const p = this.pendingHttp.get(rid);
+      if (p) clearTimeout(p.timer);
+      this.pendingHttp.delete(rid);
+      return json({ error: "robot offline" }, 503);
+    }
+    const res = await answer;
+    const out = new Headers();
+    for (const [name, value] of Object.entries(res.headers)) {
+      const lower = name.toLowerCase();
+      if (!HTTP_RES_HEADERS.includes(lower)) continue;
+      // MediaMTX answers WHEP with an absolute-path Location; keep it under
+      // this robot's /http prefix so the app's DELETE comes back through here.
+      out.set(lower, lower === "location" && value.startsWith("/") ? `/v1/robots/${this.robotId}/http${value}` : value);
+    }
+    return new Response(res.body_b64 ? b64decode(res.body_b64) : null, { status: res.status, headers: out });
+  }
+
+  private onHttpRes(msg: Extract<RobotControl, { t: "http_res" }>): void {
+    const p = this.pendingHttp.get(msg.rid);
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pendingHttp.delete(msg.rid);
+    const status = Number.isInteger(msg.status) && msg.status >= 100 && msg.status <= 599 ? msg.status : 502;
+    const headers: Record<string, string> = {};
+    if (msg.headers && typeof msg.headers === "object") {
+      for (const [k, v] of Object.entries(msg.headers)) if (typeof v === "string") headers[k] = v;
+    }
+    p.resolve({ status, headers, body_b64: typeof msg.body_b64 === "string" ? msg.body_b64 : "" });
+  }
+
+  private failPendingHttp(): void {
+    for (const [rid, p] of this.pendingHttp) {
+      clearTimeout(p.timer);
+      p.resolve({ status: 503, headers: { "content-type": "application/json" }, body_b64: b64encode(new TextEncoder().encode(JSON.stringify({ error: "robot disconnected" }))) });
+      this.pendingHttp.delete(rid);
+    }
+  }
+
+  // ---- phase 3: TURN credentials, cached per robot ----
+
+  private async iceServers(): Promise<IceServersResult> {
+    if (!turnConfigured(this.env)) return { iceServers: STUN_ONLY, expires_at: null };
+    const now = Math.trunc(Date.now() / 1000);
+    const cached = await this.ctx.storage.get<IceServersResult>("turn");
+    // Serve the same credentials to everyone until half their life is over, so
+    // the robot's MediaMTX (which reloads its WebRTC server on a change) sees
+    // a new set only about twice per TTL.
+    if (cached && cached.expires_at !== null && cached.expires_at - now > turnTtlS(this.env) / 2) return cached;
+    try {
+      const fresh = await generateIceServers(this.env);
+      await this.ctx.storage.put("turn", fresh);
+      return fresh;
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", robot: this.robotId, err: String(err) }));
+      if (cached && cached.expires_at !== null && cached.expires_at > now) return cached;
+      return { iceServers: STUN_ONLY, expires_at: null };
     }
   }
 
@@ -162,6 +276,15 @@ export class RobotHub extends DurableObject<Env> {
     return upgradeResponse(client, request);
   }
 
+  private async verifyRobot(h: MowerHeaders): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const robot = await getRobot(this.env.DB, this.robotId!);
+    if (!robot) return { ok: false, reason: "unknown robot" };
+    const v = await verifyMac(robot.device_key, this.robotId!, h);
+    if (!v.ok) return { ok: false, reason: v.reason };
+    if (!this.nonceFresh(h.nonce)) return { ok: false, reason: "replayed nonce" };
+    return { ok: true };
+  }
+
   private async verifyApp(h: MowerHeaders): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (h.client === ROBOT_CLIENT) return { ok: false, reason: "reserved client id" };
     const row = await getClientKey(this.env.DB, this.robotId!, h.client);
@@ -214,6 +337,7 @@ export class RobotHub extends DurableObject<Env> {
       for (const app of this.ctx.getWebSockets("app")) {
         safeClose(app, CLOSE_ROBOT_GONE, "robot disconnected");
       }
+      this.failPendingHttp();
       this.ctx.waitUntil(logEvent(this.env.DB, this.robotId, null, "robot.disconnected", `${code} ${reason}`));
       return;
     }
@@ -249,8 +373,11 @@ export class RobotHub extends DurableObject<Env> {
         if (app) safeClose(app, validCloseCode(msg.code ?? 1000), msg.reason ?? "");
         return;
       }
+      case "http_res":
+        this.onHttpRes(msg);
+        return;
       default:
-        return; // pair_result / http_res: phase 2 and 3
+        return; // pair_result: phase 2
     }
   }
 
@@ -342,6 +469,19 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function b64encode(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function b64decode(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function safeSend(ws: WebSocket, data: string | Uint8Array): boolean {

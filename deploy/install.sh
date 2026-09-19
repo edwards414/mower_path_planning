@@ -26,7 +26,7 @@ state_dir="$home/.mower"
 
 echo "== /opt/mower (user=$user state=$state_dir)"
 mkdir -p /opt/mower/host /opt/mower/gps
-install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" "$here/mediamtx.lan.yml" /opt/mower/
+install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" /opt/mower/
 install -m 644 "$here/gps/ublox.yaml" /opt/mower/gps/
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" /opt/mower/host/
 install -m 755 "$here/host/mower-pair" /opt/mower/host/

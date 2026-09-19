@@ -24,7 +24,13 @@ carrier NAT). Instead this agent:
 3. when the hub says ``{"t":"open"}`` (a phone connected), opens a session to
    the local pairing gate (rosbridge_auth_proxy, ``ws://127.0.0.1:9090``)
    with the phone's X-Mower-* headers, so the robot still verifies every
-   phone itself, and pipes mrelay1 frames (relay_protocol.py) both ways.
+   phone itself, and pipes mrelay1 frames (relay_protocol.py) both ways;
+4. answers ``{"t":"http"}`` (phase 3, §8): the phone's WHEP signaling
+   (POST offer / DELETE session) is carried to MediaMTX on loopback and the
+   answer sent back as ``http_res``, so the camera works across networks;
+5. fetches TURN credentials from ``GET /v1/robots/<id>/turn`` and writes
+   them into MediaMTX through its API, so MediaMTX can offer relay
+   candidates when the phone is not on the same LAN.
 
 No ``MOWER_BACKEND_URL`` -> the agent exits quietly (simulation, bench).
 Plain asyncio + websockets legacy API (works with the noble apt package and
@@ -34,9 +40,11 @@ rosbridge on loopback like any other client.
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import socket
@@ -61,6 +69,19 @@ REGISTER_RETRY_S = 30
 RECONNECT_MAX_S = 60
 LOCAL_GATE = 'ws://127.0.0.1:9090'
 LOCAL_ROSBRIDGE = 'ws://127.0.0.1:9091'
+LOCAL_MEDIAMTX = 'http://127.0.0.1:8889'
+LOCAL_MEDIAMTX_API = 'http://127.0.0.1:9997'
+HTTP_RELAY_TIMEOUT_S = 10
+HTTP_RELAY_MAX_BODY = 64 * 1024
+# Only WHEP (read) is reachable through the relay: MediaMTX trusts loopback
+# publishers, and this agent *is* loopback, so WHIP must not be forwarded.
+WHEP_PATH_RE = re.compile(r'^/[A-Za-z0-9_-]+/whep(/[A-Za-z0-9_.-]+)?$')
+HTTP_RELAY_METHODS = ('GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS')
+TURN_REFRESH_S = 3600
+TURN_RETRY_S = 60
+# TURN transports MediaMTX gathers relay candidates on (the phone gets the
+# full list from the backend). Fewer servers = faster ICE gathering.
+TURN_ROBOT_TRANSPORTS = ('transport=udp', 'transport=tcp')
 
 
 # ---------------------------------------------------------------- identity
@@ -158,6 +179,69 @@ def register_once(base_url: str, token: str, identity: dict, model: str, timeout
         return exc.code, body
 
 
+def signed_get(url: str, identity: dict, timeout: float = 15.0):
+    """GET a backend URL with the robot's X-Mower-* headers. Returns
+    (status, body dict)."""
+    headers = signed_headers(identity)
+    headers['User-Agent'] = user_agent(identity)
+    req = urllib.request.Request(url, headers=headers, method='GET')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read() or b'{}')
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read() or b'{}')
+        except ValueError:
+            body = {}
+        return exc.code, body
+
+
+# ---------------------------------------------------------------- phase 3: camera
+
+
+def relay_http_once(base_url: str, method: str, path: str, headers: dict, body: bytes,
+                    timeout: float = HTTP_RELAY_TIMEOUT_S):
+    """Perform one relayed request against MediaMTX. Returns
+    (status, headers dict, body bytes); network errors raise."""
+    req = urllib.request.Request(base_url.rstrip('/') + path, data=body or None,
+                                 headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers.items()), resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers.items()), exc.read()
+
+
+def mediamtx_ice_servers(ice_servers: list) -> list:
+    """Backend ``iceServers`` (WebRTC shape) -> MediaMTX ``webrtcICEServers2``
+    entries: the first plain ``turn:`` URL of each transport in
+    TURN_ROBOT_TRANSPORTS (the phone gets the full list from the backend)."""
+    out = []
+    for server in ice_servers or []:
+        urls = server.get('urls') if isinstance(server, dict) else None
+        if isinstance(urls, str):
+            urls = [urls]
+        for transport in TURN_ROBOT_TRANSPORTS:
+            for url in urls or []:
+                if isinstance(url, str) and url.startswith('turn:') and url.endswith('?' + transport):
+                    out.append({'url': url, 'username': server.get('username', ''),
+                                'password': server.get('credential', ''), 'clientOnly': False})
+                    break
+    return out
+
+
+def patch_mediamtx_config(api_url: str, patch: dict, timeout: float = 10.0) -> int:
+    """PATCH /v3/config/global/patch; returns the HTTP status."""
+    req = urllib.request.Request(api_url.rstrip('/') + '/v3/config/global/patch',
+                                 data=json.dumps(patch).encode(),
+                                 headers={'Content-Type': 'application/json'}, method='PATCH')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
 def http_to_ws(base_url: str) -> str:
     if base_url.startswith('https://'):
         return 'wss://' + base_url[len('https://'):]
@@ -250,13 +334,17 @@ class Session:
 
 class Agent:
     def __init__(self, identity: dict, backend_url: str, gate_url: str = LOCAL_GATE,
-                 rosbridge_url: str = LOCAL_ROSBRIDGE, model: str = ''):
+                 rosbridge_url: str = LOCAL_ROSBRIDGE, model: str = '',
+                 mediamtx_url: str = LOCAL_MEDIAMTX, mediamtx_api_url: str = LOCAL_MEDIAMTX_API):
         self.identity = identity
         self.backend_url = backend_url.rstrip('/')
         # A gate bound to 0.0.0.0 is dialled on loopback.
         self.gate_url = gate_url.replace('://0.0.0.0:', '://127.0.0.1:')
         self.rosbridge_url = rosbridge_url
         self.model = model
+        self.mediamtx_url = mediamtx_url
+        self.mediamtx_api_url = mediamtx_api_url
+        self.ice_applied = None  # last webrtcICEServers2 written to MediaMTX
         self.sessions = {}
         self.relay = None
         self.info = None
@@ -351,8 +439,102 @@ class Agent:
             session = self.sessions.get(msg.get('sid'))
             if session is not None:
                 await session.close(notify=False)
-        elif t in ('clients', 'pair_confirm', 'http'):
+        elif t == 'http':
+            asyncio.ensure_future(self._relay_http(msg))
+        elif t in ('clients', 'pair_confirm'):
             log.info('control %s not implemented yet', t)
+
+    # -- phase 3: WHEP signaling relayed to MediaMTX --
+
+    async def _relay_http(self, msg: dict):
+        rid = msg.get('rid')
+        if not isinstance(rid, str):
+            return
+        method = str(msg.get('method', '')).upper()
+        path = str(msg.get('path', ''))
+        headers = msg.get('headers') or {}
+        query = ''
+        if '?' in path:
+            path, query = path.split('?', 1)
+        if method not in HTTP_RELAY_METHODS or not WHEP_PATH_RE.match(path) or not isinstance(headers, dict):
+            await self._http_res(rid, 403, {'Content-Type': 'application/json'},
+                                 json.dumps({'error': 'not relayed'}).encode())
+            return
+        try:
+            body = base64.b64decode(msg.get('body_b64') or '')
+        except (ValueError, TypeError):
+            body = b''
+        if len(body) > HTTP_RELAY_MAX_BODY:
+            await self._http_res(rid, 413, {}, b'')
+            return
+        target = path + ('?' + query if query else '')
+        try:
+            status, res_headers, res_body = await asyncio.get_running_loop().run_in_executor(
+                None, relay_http_once, self.mediamtx_url, method, target,
+                {str(k): str(v) for k, v in headers.items()}, body)
+        except (OSError, urllib.error.URLError) as exc:
+            log.warning('http %s %s: mediamtx unreachable: %s', method, target, exc)
+            await self._http_res(rid, 502, {'Content-Type': 'application/json'},
+                                 json.dumps({'error': 'camera server unreachable'}).encode())
+            return
+        log.info('http %s %s -> %s', method, target, status)
+        await self._http_res(rid, status, res_headers, res_body)
+
+    async def _http_res(self, rid: str, status: int, headers: dict, body: bytes):
+        await self.send_control({'t': 'http_res', 'rid': rid, 'status': status,
+                                 'headers': {k: v for k, v in headers.items()
+                                             if k.lower() in ('content-type', 'location', 'etag', 'accept-patch', 'link')},
+                                 'body_b64': base64.b64encode(body).decode() if body else ''})
+
+    # -- phase 3: TURN credentials into MediaMTX --
+
+    async def refresh_turn_forever(self):
+        """Keep MediaMTX's ICE servers equal to what the backend hands out.
+        The backend serves the same credentials for about half their TTL, so
+        the PATCH (which restarts MediaMTX's WebRTC listener) is rare."""
+        loop = asyncio.get_running_loop()
+        failures = 0
+        while True:
+            delay = TURN_REFRESH_S
+            failed = False
+            try:
+                status, body = await loop.run_in_executor(
+                    None, signed_get, self.backend_url + '/v1/robots/' + self.identity['robot_id'] + '/turn',
+                    self.identity)
+            except (OSError, urllib.error.URLError) as exc:
+                log.debug('turn: %s', exc)
+                status, body = 0, {}
+            if status == 200:
+                servers = mediamtx_ice_servers(body.get('iceServers') or [])
+                expires = body.get('expires_at')
+                if isinstance(expires, (int, float)):
+                    # Re-fetch well before expiry so the next set is in place.
+                    delay = max(TURN_RETRY_S, min(TURN_REFRESH_S, int(expires - time.time()) // 2))
+                if servers != self.ice_applied:
+                    try:
+                        code = await loop.run_in_executor(None, patch_mediamtx_config, self.mediamtx_api_url,
+                                                          {'webrtcICEServers2': servers})
+                    except (OSError, urllib.error.URLError) as exc:
+                        log.warning('turn: mediamtx api unreachable: %s', exc)
+                        code = 0
+                    if code == 200:
+                        self.ice_applied = servers
+                        log.info('turn: %d ICE server(s) applied to mediamtx', len(servers))
+                    else:
+                        log.warning('turn: mediamtx config patch failed: HTTP %s', code)
+                        failed = True
+            else:
+                if status:
+                    log.warning('turn: HTTP %s %s', status, body.get('error') or body)
+                failed = True
+            if failed:
+                # 1, 2, 4 ... minutes up to the normal refresh period, so a
+                # robot without the MediaMTX API does not log every minute.
+                delay = min(TURN_RETRY_S << failures, TURN_REFRESH_S)
+                failures += 1
+            else:
+                failures = 0
+            await asyncio.sleep(delay)
 
     def _on_frame(self, frame: bytes):
         decoded = rp.decode_frame(frame)
@@ -436,7 +618,8 @@ async def run(args) -> int:
     if identity is None:
         log.warning('no identity.json in %s: agent idle', args.state_dir or ident.state_dir())
         return 0
-    agent = Agent(identity, backend, args.gate, args.rosbridge, args.model)
+    agent = Agent(identity, backend, args.gate, args.rosbridge, args.model,
+                  args.mediamtx, args.mediamtx_api)
 
     loop = asyncio.get_running_loop()
     stop = loop.create_future()
@@ -445,7 +628,8 @@ async def run(args) -> int:
 
     await agent.register()
     tasks = [asyncio.ensure_future(agent.run_relay_forever()),
-             asyncio.ensure_future(agent.watch_topics_forever())]
+             asyncio.ensure_future(agent.watch_topics_forever()),
+             asyncio.ensure_future(agent.refresh_turn_forever())]
     await stop
     for t in tasks:
         t.cancel()
@@ -460,6 +644,10 @@ def main(argv=None) -> None:
     ap.add_argument('--gate', default=LOCAL_GATE, help='rosbridge_auth_proxy URL')
     ap.add_argument('--rosbridge', default=LOCAL_ROSBRIDGE, help='rosbridge_websocket URL (loopback)')
     ap.add_argument('--model', default=os.environ.get('MOWER_MODEL', 'lubancat'))
+    ap.add_argument('--mediamtx', default=os.environ.get('MEDIAMTX_URL', LOCAL_MEDIAMTX),
+                    help='MediaMTX WHEP base URL the relayed camera signaling goes to')
+    ap.add_argument('--mediamtx-api', default=os.environ.get('MEDIAMTX_API_URL', LOCAL_MEDIAMTX_API),
+                    help='MediaMTX API URL (TURN credentials are written there)')
     ap.add_argument('--log-level', default='INFO')
     args, _ = ap.parse_known_args(argv)  # ros2 launch appends --ros-args
     logging.basicConfig(level=args.log_level, format='[%(name)s] %(levelname)s %(message)s', stream=sys.stdout)

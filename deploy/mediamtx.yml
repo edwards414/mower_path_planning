@@ -1,45 +1,57 @@
-# MediaMTX on the mower — RTSP source restricted to the WireGuard relay.
+# MediaMTX — WebRTC (WHEP) camera server for the mower app. One config for
+# every robot (docs/BACKEND_ARCHITECTURE.md §8):
 #
-# Production Flutter clients use the authenticated relay WHEP endpoint; this
-# mower process does not expose WHEP directly.
+#   same Wi-Fi     app -> http://<robot-ip>:8889/front/whep, media direct
+#   elsewhere      app -> backend /v1/robots/<id>/http/front/whep -> mower_agent
+#                  -> 127.0.0.1:8889 here; media via Cloudflare TURN, whose
+#                  credentials mower_agent writes into webrtcICEServers2
+#                  through the API below.
 #
-# NO USB CAMERA YET: the front feed uses an ffmpeg synthetic test pattern so
-# the complete WebRTC path can be verified end-to-end.
-#
-# When a real camera is attached, replace the lavfi input of the matching path,
-# e.g. a USB/v4l2 camera on /dev/video0:
-#   ffmpeg -f v4l2 -framerate 30 -video_size 1280x720 -i /dev/video0 \
-#     -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p \
-#     -profile:v baseline -level 3.1 -bf 0 -g 50 \
-#     -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
-# and add `devices: [/dev/video0:/dev/video0]` to the mediamtx service in
-# docker-compose.yaml.
+# The front feed is published by the host service mower-camera.service (USB
+# camera -> Rockchip MPP hardware H.264), see host/mower-camera.sh.
 
 logLevel: info
 
-webrtc: false
+# Only the RTSP source, the WebRTC/WHEP reader and the loopback API.
 rtmp: false
 hls: false
 srt: false
 moq: false
 
-# The relay has 10.77.0.1 and the mower has 10.77.0.2 on WireGuard.
-rtspAddress: 10.77.0.2:8554
+# Control API, loopback only: mower_agent PATCHes /v3/config/global/patch
+# with the current TURN credentials.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# WebRTC / WHEP endpoint (HTTP signaling + media).
+webrtcAddress: :8889
+# UDP mux for WebRTC media (ICE host candidates). Open on the LAN via host net.
+webrtcLocalUDPAddress: :8189
+# ICE host candidates only from the LAN interface. By default MediaMTX offers
+# every interface (127.0.0.1, docker0 172.17.0.1, tailscale0, ...), so the
+# phone spends its connectivity checks on unreachable pairs or lands on the
+# wrong one. Per-robot override: WEBRTC_INTERFACES in .env (docker-compose
+# passes it as MTX_WEBRTCIPSFROMINTERFACESLIST, comma-separated).
+webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfacesList: [eth1]
+# TURN/STUN servers: empty here, filled at runtime by mower_agent from
+# GET /v1/robots/<id>/turn (Cloudflare Realtime TURN, short-lived credentials).
+webrtcICEServers2: []
+
+# Internal RTSP that the camera publisher pushes to; re-served over WebRTC.
+rtspAddress: :8554
 
 authMethod: internal
 authInternalUsers:
-  # runOnDemand ffmpeg publishes through the mower's WireGuard address because
-  # the RTSP listener is intentionally not bound to loopback/all interfaces.
   - user: any
     pass:
-    ips: ["10.77.0.2"]
+    ips: ["127.0.0.1", "::1"]
     permissions:
       - action: publish
         path: front
-  # The public relay may read, but cannot publish or access another path.
+      - action: api
   - user: any
     pass:
-    ips: ["10.77.0.1"]
     permissions:
       - action: read
         path: front
@@ -50,6 +62,6 @@ paths:
   # VPU and publishes here over RTSP; mediamtx re-serves it over WebRTC/WHEP.
   # Without a camera, publish a test pattern from the host instead:
   #   ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=25 -c:v libx264 \
-  #     -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp rtsp://10.77.0.2:8554/front
+  #     -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/front
   front:
     source: publisher

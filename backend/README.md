@@ -43,6 +43,11 @@ npx wrangler login
 npx wrangler d1 create mower            # copy database_id into wrangler.jsonc
 npx wrangler d1 migrations apply mower --remote
 npx wrangler secret put PROVISION_TOKEN # the value robots put in /opt/mower/.env
+# Camera across networks (docs/BACKEND_ARCHITECTURE.md §8): a Cloudflare
+# Realtime TURN key (dashboard -> Realtime -> TURN -> Create). Without these
+# the /turn endpoint answers STUN only and video works on the LAN only.
+npx wrangler secret put TURN_KEY_ID
+npx wrangler secret put TURN_KEY_API_TOKEN
 npx wrangler deploy                     # route api.mower.fxrbindi.com (custom_domain)
 ```
 

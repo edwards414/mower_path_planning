@@ -12,8 +12,8 @@
 #   CAMERA_FPS       25
 #   CAMERA_BPS       2000000           H.264 bit rate, bit/s (CBR)
 #   CAMERA_GOP       10                frames between key frames
-#   CAMERA_RTSP_URL  where mediamtx accepts the publish; derived from
-#                    MEDIAMTX_CONFIG when empty (lan: 127.0.0.1, prod: 10.77.0.2)
+#   CAMERA_RTSP_URL  where mediamtx accepts the publish (default the local
+#                    mediamtx, rtsp://127.0.0.1:8554/front)
 #
 # The camera's auto exposure lowers the frame rate in dim light (about 5 fps
 # indoors at close range, 20+ fps in daylight); that is the camera, not the
@@ -32,13 +32,7 @@ size=$(env_get CAMERA_SIZE 1280x720)
 w=${size%x*}; h=${size#*x}
 fps=$(env_get CAMERA_FPS 25)
 bps=$(env_get CAMERA_BPS 2000000)
-url=$(env_get CAMERA_RTSP_URL "")
-if [ -z "$url" ]; then
-  case "$(env_get MEDIAMTX_CONFIG mediamtx.yml)" in
-    mediamtx.lan.yml) url=rtsp://127.0.0.1:8554/front ;;
-    *) url=rtsp://10.77.0.2:8554/front ;;
-  esac
-fi
+url=$(env_get CAMERA_RTSP_URL rtsp://127.0.0.1:8554/front)
 
 echo "mower-camera: $dev ${w}x${h}@${fps} MJPG -> mpph264enc ${bps} bit/s -> $url"
 # gop = 10 frames: a key frame every 0.4 s at 25 fps and still every 2 s
