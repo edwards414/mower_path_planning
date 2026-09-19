@@ -90,6 +90,16 @@ def generate_launch_description():
                     'files).',
     )
 
+    rust_nav = LaunchConfiguration('rust_nav')
+
+    declare_rust_nav = DeclareLaunchArgument(
+        'rust_nav',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_nav process instead of '
+                    'the rclpy nav_action_server (same actions, services, '
+                    'safety heartbeat and admission rules).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -243,8 +253,25 @@ def generate_launch_description():
         package='mower_mission',
         executable='nav_action_server',
         output='screen',
+        condition=UnlessCondition(rust_nav),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'require_navigation_health': require_navigation_health,
+            'gps_fix_topic': gps_fix_topic,
+        }],
+    )
+
+    # rust_nav:=true -- the same navigation coordinator as an r2r process
+    # (src/mower_rs/crates/mower_nav): node name, actions, services, the
+    # 20 Hz /navigation_coordinator_lock heartbeat and every admission /
+    # health rule are unchanged; differential-tested against the rclpy node.
+    mower_nav_rs = Node(
+        package='mower_rs',
+        executable='mower_nav',
+        name='nav_action_server',
+        output='screen',
+        condition=IfCondition(rust_nav),
+        parameters=[{
             'require_navigation_health': require_navigation_health,
             'gps_fix_topic': gps_fix_topic,
         }],
@@ -414,6 +441,7 @@ def generate_launch_description():
         declare_rust_status,
         declare_rust_adapter,
         declare_rust_record,
+        declare_rust_nav,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -430,6 +458,7 @@ def generate_launch_description():
         map_manage_node,
         coverage_node,
         nav_action_server,
+        mower_nav_rs,
         flutter_adapter_node,
         mower_adapter_rs,
         heartbeat_node,

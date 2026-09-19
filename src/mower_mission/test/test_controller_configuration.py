@@ -46,6 +46,11 @@ VELOCITY_GUARD_RS = (
 VELOCITY_GUARD_RS_MAIN = (
     SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/main.rs'
 )
+NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/main.rs'
+NAV_SERVER_RS_STATE = SRC_DIR / 'mower_rs/crates/mower_nav/src/state.rs'
+NAV_SERVER_RS_GEOMETRY = (
+    SRC_DIR / 'mower_rs/crates/mower_nav/src/geometry.rs'
+)
 VELOCITY_GUARD = (
     SRC_DIR / 'mower_bringup/mower_bringup/velocity_command_guard.py'
 )
@@ -240,7 +245,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -268,6 +273,78 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert 'msg.header.stamp = stamp_now()' in main
     assert 'publisher.publish(&twist(0.0, 0.0))' in main
     assert 'make_parameter_handler' not in main  # limits are immutable
+
+
+def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
+    """rust_nav:=true swaps in mower_rs mower_nav for nav_action_server: the
+    same node name, actions, services, admission/health rules, immutable
+    safety defaults, bounded Nav2 waits and the 20 Hz fail-safe heartbeat."""
+    main = NAV_SERVER_RS_MAIN.read_text(encoding='utf-8')
+    state = NAV_SERVER_RS_STATE.read_text(encoding='utf-8')
+    geometry = NAV_SERVER_RS_GEOMETRY.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_nav'" in mission_launch
+    assert "condition=IfCondition(rust_nav)" in mission_launch
+    assert "condition=UnlessCondition(rust_nav)" in mission_launch
+    assert mission_launch.count("name='nav_action_server'") == 1
+    assert 'r2r::Node::create(rctx, "nav_action_server", "")' in main
+    for name in ('nav_action', 'nav_action_follow_path'):
+        assert f'"{name}"' in main, name
+    for service in (
+        '/cancel_nav2', '/cencel_nav2', '/check_nav_status',
+        '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
+        '/mission_operation_lock',
+    ):
+        assert f'"{service}"' in main, service
+    for topic in (
+        '/navigation_coordinator_lock', '/navigation_safety_stop',
+        '/nav_operation_active', '/joy_cmd', '/physical_joy_cmd',
+        '/keyboard_cmd_vel', '/adapter/robot_pose', '/rosout',
+    ):
+        assert f'"{topic}"' in main, topic
+    # immutable production safety defaults (no parameter service at all)
+    assert 'make_parameter_handler' not in main
+    assert '"require_navigation_health", true' in main
+    assert '"navigation_health_timeout_s", 0.30' in main
+    assert '"max_gps_horizontal_sigma_m", 0.015' in main
+    assert '"manual_command_hold_s", 0.75' in main
+    assert '"gps_fix_topic", "/fix"' in main
+    assert '"imu_topic", "/imu/data"' in main
+    # bounded Nav2 waits and generation-correlated terminal evidence
+    for name in (
+        'nav2_action_server_timeout_s', 'nav2_goal_response_timeout_s',
+        'nav2_cancel_timeout_s', 'dispatch_confirmation_timeout_s',
+    ):
+        assert f'"{name}"' in main, name
+    assert 'mark_nav2_dispatch_terminal(terminal_generation)' in main
+    assert 'mark_nav2_task_uncertain(' in main
+    assert 'Duration::from_millis(50)' in main  # 20 Hz heartbeat
+    # the admission order and every block reason of the rclpy server
+    for rule in (
+        'previous Nav2 task termination is unconfirmed',
+        'another navigation goal is active',
+        'mission mutation is active: ',
+        'manual velocity command is active',
+        'robot pose/TF is unavailable or stale',
+        'GPS fix is unavailable',
+        'GPS fix is stale',
+        'GPS odometry from navsat_transform is unavailable or stale',
+        'IMU is unavailable or stale',
+        'source timestamp is in the future',
+        'source timestamp is stale',
+        'robot pose frame must be map',
+        'GPS has no valid fix',
+        'GPS covariance is unknown',
+        'horizontal covariance is degenerate',
+        'IMU frame_id must be imu_link',
+        'GPS odometry frame_id must be map',
+    ):
+        assert rule in state, rule
+    assert '(-90.0..=90.0).contains(&lat)' in state
+    assert '(-180.0..=180.0).contains(&lon)' in state
+    assert 'Navigation/manual motion is active or termination is uncertain' in main
+    assert 'navigation path requires at least two poses' in geometry
+    assert 'canonical_dispatch_id' in geometry
 
 
 def test_local_compose_builds_full_runtime_stage():

@@ -1407,6 +1407,20 @@ class NavActionServer(Node):
             self.single_path_execute_callback,
         )
 
+    def _finish_goal_canceled(self, goal_handle):
+        """Terminate the reserved action goal after a cancel.
+
+        rcl only allows the CANCELED transition from CANCELING, i.e. after an
+        accepted action-level cancel request. A cancel that arrived through
+        ``/cancel_nav2`` or a manual command leaves the goal EXECUTING, where
+        ABORTED is the only terminal transition; the navigation state still
+        reports ``canceled`` so callers do not see a spurious failure.
+        """
+        try:
+            goal_handle.canceled()
+        except Exception:  # noqa: BLE001 - rclpy raises a pybind RCLError
+            goal_handle.abort()
+
     def _cancel_before_nav_task(self, goal_handle):
         """Finish an accepted action canceled before a Nav2 task starts."""
         with self._state_lock:
@@ -1414,7 +1428,7 @@ class NavActionServer(Node):
         if not goal_handle.is_cancel_requested and not cancel_requested:
             return None
 
-        goal_handle.canceled()
+        self._finish_goal_canceled(goal_handle)
         self._set_nav_state('canceled', 'Navigation canceled before task start')
         result = Waypoint.Result()
         result.success = False
@@ -2398,7 +2412,7 @@ class NavActionServer(Node):
                         self._active_task_name = None
                     self._mark_nav2_task_uncertain(message)
                     return False
-                goal_handle.canceled()
+                self._finish_goal_canceled(goal_handle)
                 with self._state_lock:
                     self._external_cancel_requested = False
                     self._active_goal_handle = None
@@ -2436,7 +2450,7 @@ class NavActionServer(Node):
             self._mark_nav2_task_uncertain(message)
             return False
         if goal_handle.is_cancel_requested or cancel_after_completion:
-            goal_handle.canceled()
+            self._finish_goal_canceled(goal_handle)
             with self._state_lock:
                 self._external_cancel_requested = False
                 self._active_goal_handle = None
@@ -2457,7 +2471,7 @@ class NavActionServer(Node):
             return True
 
         if result == TaskResult.CANCELED:
-            goal_handle.canceled()
+            self._finish_goal_canceled(goal_handle)
             with self._state_lock:
                 self._external_cancel_requested = False
                 self._active_goal_handle = None

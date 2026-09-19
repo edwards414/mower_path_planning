@@ -44,10 +44,11 @@ services:
       - record:=false
       # mower_rs (Rust) processes instead of their rclpy versions, one switch
       # each (src/mower_rs/README.md). Set in .env after the shadow check;
-      # RUST_GUARDS only after a supervised drive.
+      # RUST_GUARDS and RUST_NAV only after a supervised drive.
       - rust_status:=${RUST_STATUS:-false}
       - rust_adapter:=${RUST_ADAPTER:-false}
       - rust_record:=${RUST_RECORD:-false}
+      - rust_nav:=${RUST_NAV:-false}
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}

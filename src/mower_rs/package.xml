@@ -23,6 +23,8 @@
   <depend>visualization_msgs</depend>
   <depend>geographic_msgs</depend>
   <depend>robot_localization</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>rcl</depend>
   <depend>rmw</depend>
   <depend>rosidl_typesupport_introspection_c</depend>

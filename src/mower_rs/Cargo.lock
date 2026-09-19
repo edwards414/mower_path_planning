@@ -508,6 +508,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_nav"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "mower_record"
 version = "0.1.0"
 dependencies = [

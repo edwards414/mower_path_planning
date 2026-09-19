@@ -170,6 +170,14 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 驗證：10 個單元測試；與 Python 節點在同一張圖上跑同一個 32 步情境（錄製 zone/risk/channel、取消、edit_zone 新增/更新/刪除、通道路由正反向、場地 save（無 datum / fallback / navsat）、編輯自動同步場地檔、旋轉 datum 下 load 重投影、rename、delete、load_zone_list、save_zone_list、導航中拒絕錄製）：**所有回覆（含訊息與 id）、三份工作檔、五個發布清單、34 次 lock 呼叫順序完全相同**。開關 `rust_record`（compose `RUST_RECORD`）。
 
+### 7.8 `mower_nav` 執行紀錄（nav_action_server 移植，使用者要求）
+
+`crates/mower_nav`：`geometry.rs`（路徑准入規則、dispatch_id 正規化、依覆蓋分割點 / 轉角 / 最大距離切段）、`state.rs`（整個協調器狀態放在一把 mutex 後：准入順序、感測器健康判定（同樣的協方差特徵值門檻）、手動 hold、mutation lock、`/check_nav_status` JSON、`/rosout` 的 Nav2 log ring）、`nav2.rs`（generation 相關聯的 Nav2 終態證據）、`main.rs`（node 名 `nav_action_server`、兩個 action 名、六個 service、健康與手動訂閱、20 Hz heartbeat task（掉拍時跳過不補發，等同 Python 執行緒的重新對齊）、2 Hz uncertain monitor、執行流程：dispatch 確認 → 有界等 bt_navigator active → NavigateToPose 到覆蓋起點 → 逐段 FollowPath → 取消確認逾時就鎖 `uncertain`）。安全參數只在啟動時讀、沒有 parameter service，執行期無法被削弱。
+
+r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 的執行在 tokio 上；(2) 接受 action 層取消後 r2r 只剩 `cancel()` 能送出結果、而 rcl 只允許從 CANCELING 進 CANCELED，所以 `Execution::terminate` 依情況選轉移。這同時揭露 Python 版的一個 bug：透過 `/cancel_nav2` 或手動指令取消時 `goal_handle.canceled()` 會丟 rcl 例外（goal 不在 CANCELING），被外層接住變成 `failed` + 一串 rcl 錯誤字串，app 上看到「導航失敗」。已修（`_finish_goal_canceled`：轉移失敗就 abort，狀態仍是 `canceled`），Rust 版同樣行為。
+
+驗證：7 個單元測試；與 Python 節點在同一張圖上對 mock Nav2（假的 `bt_navigator/get_state`、`navigate_to_pose`、`follow_path`：成功 / abort / 聽取消 / 不理取消）跑同一個情境：35 步（壞 dispatch_id、短路徑、未確認逾時、cancel_navigation_dispatch token、確認後完整跑完含切段、`/cancel_nav2` 中途取消、action 層取消、Nav2 失敗、mutation lock 四種情況、手動指令取消、取消逾時鎖 `uncertain` 與相關聯的自動恢復、`/nav_operation_active` 序列）+ 13 步健康閘（四個來源逐一補齊、執行中 GPS 過期取消、待確認時 IMU 過期取消、pose 消失的時序）**全部相同**；唯一保留的差異是 Nav2 錯誤字串：這版 BasicNavigator 沒有 `getTaskError()`，Rust 版回真正的 error code。Heartbeat 容器實測 20 Hz、中位 49.8 ms、p99 55 ms（Python 49.9 / 59）。Python 節點在 0.30 s 的健康期限下在本機容器裡跟不上（rclpy 每個 callback 5–12 ms，40 msg/s），健康情境要放寬到 1.0 s 才能比對；Rust 版 0.30 s 下正常（最後一筆後 0.21 s 判定過期）。開關 `rust_nav`（compose `RUST_NAV`），**真機尚未切換：安全關鍵，先做一次監督下的導航**。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
@@ -206,8 +214,8 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 
 | 節點 | 理由 |
 |---|---|
-| nav_action_server（2715 行） | 任務執行邏輯、BasicNavigator/nav2 action client；Phase 0 後 ≈ 10%。邏輯還在變，移植風險大於收益 |
-| path_record_node（2124 行）、map_manage（1470）、coverage_node（1898）、auto_coverage、docking | 幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
+| ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
+| ~~path_record_node（2124 行）~~、map_manage（1470）、coverage_node（1898）、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
 | mower_agent | 0.2% |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 

@@ -1,0 +1,18 @@
+[package]
+name = "mower_nav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Navigation action server: coverage execution through Nav2 with the dispatch / cancel / health / mutation-lock protocol (port of mower_mission/navigation/nav_action_server.py)"
+
+[[bin]]
+name = "mower_nav"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+uuid = { version = "1", features = ["v4"] }

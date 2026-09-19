@@ -13,6 +13,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_imu` | `wit_ros2_imu` (WIT serial IMU on `/dev/imu_usb`, `/imu/data`) | `mower.launch.py rust_imu:=true` |
 | `mower_ws_bridge` | `rosbridge_auth_proxy` + `rosbridge_websocket` + `rosapi` (pairing gate on `address:9090`, loopback 9091 for the agent, rosbridge v2 subset, `/rosapi/topics`) | `rosbridge.launch.py rust_bridge:=true` |
 | `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
+| `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -131,6 +132,38 @@ the Python node (32 steps: recordings, cancel, edit_zone, channel routing,
 site save / edit sync / load under a rotated datum / rename / delete,
 load_zone_list, navigation-active rejection): every reply, every work file,
 every published list and the 34 lock calls identical.
+
+## mower_nav
+
+`crates/mower_nav`: `geometry.rs` (path admission rules, canonical
+dispatch ids, the coverage-point / turn-angle / max-distance splitters),
+`state.rs` (the whole coordinator state behind one mutex: admission order,
+sensor health decisions with the same covariance eigenvalue gate, manual
+hold, mutation lock, `/check_nav_status` JSON, the `/rosout` Nav2 log
+ring), `nav2.rs` (generation-correlated terminal evidence for a Nav2 goal)
+and `main.rs` (node `nav_action_server`, both action names, the six
+services, the health and manual subscriptions, the 20 Hz heartbeat task
+with skip-on-miss timing, the 2 Hz uncertain monitor, and the execution
+flow: dispatch confirmation, bounded bt_navigator readiness, NavigateToPose
+to the coverage start, FollowPath per segment, cancel confirmation with the
+`uncertain` latch when Nav2 does not answer). The safety parameters are
+plain launch-time values with no parameter service, so nothing can weaken
+them at runtime. r2r detail: after an accepted action cancel only
+`cancel()` can still deliver a result and rcl only reaches CANCELED from
+CANCELING, so `Execution::terminate` picks the transition the way the
+rclpy server ends up doing (`_finish_goal_canceled`).
+
+Differential test against the Python node with a mock Nav2 (fake
+`bt_navigator/get_state`, `navigate_to_pose` and `follow_path` action
+servers that succeed, abort, honour or ignore cancels): 35 steps
+(admission rejections, dispatch confirmation timeout and tokens, a full
+run with segment splitting, `/cancel_nav2`, action-level cancel, Nav2
+failure, mutation lock, manual-command cancel, cancel-timeout `uncertain`
+latch and its correlated recovery, `/nav_operation_active` sequence) plus
+13 health-gate steps (each sensor source missing in turn, stale-sensor
+cancel while running and while pending) identical, apart from the Nav2
+error text which the Rust port reports with the real error code where
+BasicNavigator lacks `getTaskError()`.
 
 ## Verification
 
