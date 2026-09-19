@@ -508,6 +508,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_record"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_rs_common"
 version = "0.1.0"
 dependencies = [

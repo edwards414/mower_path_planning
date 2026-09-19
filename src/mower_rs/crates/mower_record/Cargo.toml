@@ -1,0 +1,17 @@
+[package]
+name = "mower_record"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zone / risk-zone / channel recorder with the named-site library (port of mower_mission/path_record_node.py)"
+
+[[bin]]
+name = "mower_record"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde_json.workspace = true

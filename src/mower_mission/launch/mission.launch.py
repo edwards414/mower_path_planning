@@ -80,6 +80,15 @@ def generate_launch_description():
     )
 
     rust_adapter = LaunchConfiguration('rust_adapter')
+    rust_record = LaunchConfiguration('rust_record')
+
+    declare_rust_record = DeclareLaunchArgument(
+        'rust_record',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_record process instead of '
+                    'the rclpy path_record_node (same services, topics and '
+                    'files).',
+    )
 
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
@@ -185,8 +194,24 @@ def generate_launch_description():
         executable='path_record_node',
         name='path_record_node',
         output='screen',
+        condition=UnlessCondition(rust_record),
         parameters=[{
             'use_sim_time': use_sim_time,
+            'save_dir': zone_record_dir,
+            'sites_dir': sites_dir,
+            'robot_pose_source_topic': '/odometry/global_slow',
+        }],
+    )
+
+    # rust_record:=true -- the same recorder as an r2r process
+    # (src/mower_rs/crates/mower_record): identical replies, files and lists.
+    mower_record_rs = Node(
+        package='mower_rs',
+        executable='mower_record',
+        name='path_record_node',
+        output='screen',
+        condition=IfCondition(rust_record),
+        parameters=[{
             'save_dir': zone_record_dir,
             'sites_dir': sites_dir,
             'robot_pose_source_topic': '/odometry/global_slow',
@@ -379,6 +404,7 @@ def generate_launch_description():
         declare_heartbeat_source_topic,
         declare_rust_status,
         declare_rust_adapter,
+        declare_rust_record,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -391,6 +417,7 @@ def generate_launch_description():
         global_odom_throttle,
         *recorder_entries,
         path_record_node,
+        mower_record_rs,
         map_manage_node,
         coverage_node,
         nav_action_server,

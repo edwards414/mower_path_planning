@@ -64,6 +64,7 @@ def generate_launch_description():
     )
     rust_status = LaunchConfiguration('rust_status')
     rust_adapter = LaunchConfiguration('rust_adapter')
+    rust_record = LaunchConfiguration('rust_record')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_bridge = LaunchConfiguration('rust_bridge')
@@ -103,6 +104,7 @@ def generate_launch_description():
             'require_navigation_health': require_navigation_health,
             'rust_status': rust_status,
             'rust_adapter': rust_adapter,
+            'rust_record': rust_record,
             'rust_bridge': rust_bridge,
         }.items(),
     )
@@ -191,6 +193,12 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs mower_adapter instead of the rclpy '
                         'flutter_adapter_node',
+        ),
+        DeclareLaunchArgument(
+            'rust_record',
+            default_value='false',
+            description='mower_rs mower_record instead of the rclpy '
+                        'path_record_node',
         ),
         DeclareLaunchArgument(
             'rust_guards',

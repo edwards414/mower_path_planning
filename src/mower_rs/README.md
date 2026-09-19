@@ -12,6 +12,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
 | `mower_imu` | `wit_ros2_imu` (WIT serial IMU on `/dev/imu_usb`, `/imu/data`) | `mower.launch.py rust_imu:=true` |
 | `mower_ws_bridge` | `rosbridge_auth_proxy` + `rosbridge_websocket` + `rosapi` (pairing gate on `address:9090`, loopback 9091 for the agent, rosbridge v2 subset, `/rosapi/topics`) | `rosbridge.launch.py rust_bridge:=true` |
+| `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -114,6 +115,22 @@ PoseStamped, identical service responses including a 1.5 s call, publish
 reaching the ROS subscriber, allow-list denials, `/rosapi/topics`, and the
 gate (401 without headers / replayed nonce / bad MAC, accepted with a valid
 hand-shake and the latched `/robot/online` delivered immediately).
+
+## mower_record
+
+`crates/mower_record`: `geometry.rs` (Douglas-Peucker, point-in-polygon,
+edge distance, shoelace area), `site_store.rs` (the WGS84 site files, the
+`.active_site` manifest, atomic fsync'd writes, the same local
+equirectangular projection as the app), `guard.rs` (the fail-closed
+mission-mutation lease against nav_action_server), `recorder.rs` (every
+service body, ROS-free behind the `Outputs` trait, all app-facing messages
+verbatim) and `main.rs` (node `path_recorder`, 19 services, latched
+lists, the 10 Hz pose sampler only while recording, handlers serialised by
+one async mutex like the rclpy callback group). Scenario comparison against
+the Python node (32 steps: recordings, cancel, edit_zone, channel routing,
+site save / edit sync / load under a rotated datum / rename / delete,
+load_zone_list, navigation-active rejection): every reply, every work file,
+every published list and the 34 lock calls identical.
 
 ## Verification
 

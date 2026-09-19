@@ -164,6 +164,12 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 - `path_record_node`：10 Hz `publish_path_timer` 改成只在錄製期間存在（三個 start service 重新 arm，callback 發現沒有任何錄製就 cancel）。閒置時每秒省 10 次 rclpy timer 喚醒（MTE 下每次約 8–12 ms）。錄製情境測試 2/2 通過。
 - `nav_action_server`：py-spy 顯示 44% 裡 65% 是 `_wait_for_ready_callbacks`（MTE 每個事件都用 Python 重建 wait set），callback 本身 4%。rclpy 7.1.12 有 `rclpy.experimental.EventsExecutor`（C++ 事件迴圈、便宜很多），但它是單執行緒、不理 callback group，而 action execute callback 會阻塞等 nav2，所以不能換。改法：20 Hz health tick 從 executor timer 改成自己的執行緒（決策與發布仍在 `_state_lock` 下、節奏不變、掉拍時重新對齊而不補發），executor 的事件數從 ~35/s 降到 ~15/s。測試集合與 HEAD 相同（33 passed / 同樣的 6 個既有失敗），容器實測 heartbeat 20 Hz、p99 55 ms、鎖定時輸出零速度。
 
+### 7.7 `mower_record` 執行紀錄（path_record_node 移植，使用者要求）
+
+`crates/mower_record`：`geometry.rs`（DP 簡化、點在多邊形、邊距離、shoelace 面積）、`site_store.rs`（場地檔與 `.active_site` manifest，同樣的 tmp+rename+fsync 寫法、同樣的 JSON 版面、同樣的等距投影；`round_ties_even` 對齊 Python `round`）、`guard.rs`（mission mutation lease：unknown 視為 active、本地鎖、1 s 服務等待、3 s 回應等待、逾時 fail-closed 鎖死）、`recorder.rs`（所有 service 本體，ROS-free，透過 `Outputs` trait 發布；app 看得到的中文訊息逐字保留）、`main.rs`（node 名 `path_recorder`、19 個 service、latched 清單、10 Hz 取樣只在錄製時、所有 handler 共用一把 async mutex 等同 rclpy 的 callback group 序列化；Python 版需要 MTE 的原因（service 裡阻塞等 lock）在 async 下自然消失）。
+
+驗證：10 個單元測試；與 Python 節點在同一張圖上跑同一個 32 步情境（錄製 zone/risk/channel、取消、edit_zone 新增/更新/刪除、通道路由正反向、場地 save（無 datum / fallback / navsat）、編輯自動同步場地檔、旋轉 datum 下 load 重投影、rename、delete、load_zone_list、save_zone_list、導航中拒絕錄製）：**所有回覆（含訊息與 id）、三份工作檔、五個發布清單、34 次 lock 呼叫順序完全相同**。開關 `rust_record`（compose `RUST_RECORD`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mower_rs_common", "crates/robot_status", "crates/velocity_command_guard", "crates/mower_adapter", "crates/mower_imu", "crates/mower_ws_bridge"]
+members = ["crates/mower_rs_common", "crates/robot_status", "crates/velocity_command_guard", "crates/mower_adapter", "crates/mower_imu", "crates/mower_ws_bridge", "crates/mower_record"]
 
 [workspace.package]
 version = "0.1.0"
