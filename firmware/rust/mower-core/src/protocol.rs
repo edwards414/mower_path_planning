@@ -78,7 +78,8 @@ pub mod servo_status_flag {
 
 pub mod charger_status_flag {
     pub const ONLINE: u8 = 0x01;
-    pub const CHARGING: u8 = 0x02;
+    /// |current| above threshold: flow, not direction (meter in the pack lead)
+    pub const CURRENT_PRESENT: u8 = 0x02;
     /// Was CV_PHASE for the CC/CV module; the V/A/temp meter never sets it.
     pub const RESERVED_CV_PHASE: u8 = 0x04;
     pub const INPUT_PRESENT: u8 = 0x08;

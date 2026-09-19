@@ -27,6 +27,17 @@
 #define ADC_MUX_S1_GPIO_Port GPIOA
 #endif
 
+/* Which analog mux channels are actually populated, as a bit mask of
+ * (1 << ANALOG_MONITOR_CHANNEL_*). A channel that is not populated is never
+ * sampled and its 0x8A *_VALID flag stays clear, so a floating PB1 cannot
+ * masquerade as a battery voltage or trip the MG996 current limit.
+ * 2026-09-19: no mux, no dividers and no MG996 current sensor are fitted;
+ * the pack voltage (and, once its shunt is wired, current) comes from the
+ * RS485 meter (0x89). Set to 0x0F once the mux and dividers exist. */
+#ifndef ANALOG_MONITOR_CHANNEL_MASK
+#define ANALOG_MONITOR_CHANNEL_MASK 0x00U
+#endif
+
 #ifndef POWER_BUTTON_N_Pin
 #define POWER_BUTTON_N_Pin GPIO_PIN_0
 #define POWER_BUTTON_N_GPIO_Port GPIOB

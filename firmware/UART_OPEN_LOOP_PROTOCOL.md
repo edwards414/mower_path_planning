@@ -398,7 +398,7 @@ Payload 長度固定 `16` bytes（`firmware_info_payload_t`，值由 `Module/Inc
 
 ## `0x89` Charger Status
 
-STM32 每 `50ms` 送一次，資料來源是 `USART6`（PA11/PA12）接的 RS485 **電壓 / 電流 / 溫度電表**（串在充電器與電池之間，只量測、沒有 CC/CV 設定），STM32 每 `500ms` 用 Modbus RTU（站號 `0x01`、9600 8N1、FC03 讀 Reg0-4）輪詢一次，所以數值每 500 ms 才會更新。Frame header 的 `seq` 固定 `0`。主電源關閉（`0x86 MAIN_POWER_ENABLED=0`）時暫停輪詢。
+STM32 每 `50ms` 送一次，資料來源是 `USART6`（PA11/PA12）接的 RS485 **電壓 / 電流 / 溫度電表**（裝在電池組主線上：電壓永遠是電池端電壓，電流是電池組電流——分流器接進主線之前讀 0；只量測、沒有 CC/CV 設定），STM32 每 `500ms` 用 Modbus RTU（站號 `0x01`、9600 8N1、FC03 讀 Reg0-4）輪詢一次，所以數值每 500 ms 才會更新。Frame header 的 `seq` 固定 `0`。主電源關閉（`0x86 MAIN_POWER_ENABLED=0`）時暫停輪詢。
 
 > 早期規劃是「數控 30V5A 帶 OFF」CC/CV 充電模組，暫存器 0-4 = Vin / Vout / Iout / CC / CV；實際裝上的模組面板只有電壓、電流、溫度，實測 Reg0-2 對應面板三個數字，Reg3/Reg4 是常數（意義不明）。Frame 長度與位置不變，只是欄位意義改了；`0x04` 旗標（原 `CV_PHASE`）固定為 0。
 
@@ -406,8 +406,8 @@ Payload 長度固定 `16` bytes。
 
 | Offset | Type | Field | Description |
 |---|---|---|---|
-| 0 | `uint16_t` | `voltage_cv` | Reg0：充電線電壓 = 電池端電壓（充電器接上時為充電器輸出），x0.01 V |
-| 2 | `uint16_t` | `current_ca` | Reg1：充電電流，x0.01 A |
+| 0 | `uint16_t` | `voltage_cv` | Reg0：電池端電壓（充電器接上時被頂到充電器 CV），x0.01 V |
+| 2 | `uint16_t` | `current_ca` | Reg1：電池組電流大小，x0.01 A；電表分流器還沒接進主線前固定 0 |
 | 4 | `uint16_t` | `temp_c` | Reg2：電表本身溫度，°C |
 | 6 | `uint16_t` | `reg3` | Reg3 原始值，實測固定 `11`，意義不明 |
 | 8 | `uint16_t` | `reg4` | Reg4 原始值，實測固定 `48961`，意義不明 |
@@ -422,19 +422,19 @@ Payload 長度固定 `16` bytes。
 | Bit | Mask | Meaning |
 |---|---|---|
 | 0 | `0x01` | `ONLINE`，最近的輪詢有正確回應（連續 3 次失敗後清除） |
-| 1 | `0x02` | `CHARGING`，`current >= 0.05 A` |
+| 1 | `0x02` | `CURRENT_PRESENT`，`current >= 0.05 A`。電表在電池主線上，這只代表有電流，不代表方向（充電 / 放電都會設） |
 | 2 | `0x04` | 保留（原 `CV_PHASE`），固定 `0` |
-| 3 | `0x08` | `INPUT_PRESENT`，`voltage >= 5.00 V`（電表有量到電壓；電池接著時不代表充電器有插） |
+| 3 | `0x08` | `INPUT_PRESENT`，`voltage >= 5.00 V`（電表有量到電池電壓；不代表充電器有插） |
 | 4 | `0x10` | `EVER_SEEN`，開機後至少收到過一次有效回應 |
 
 `ONLINE=0` 時 `voltage/current/temp` 是最後一次有效值（或全 `0`），Host 應以 `flags` 為準。
-`CHARGING / INPUT_PRESENT` 只在 `ONLINE=1` 時才會被設定。充飽沒有旗標可用，Host 端用「充電電流掉到 tail current 以下持續一段時間」判斷（`docs/BATTERY.md`）。
+`CURRENT_PRESENT / INPUT_PRESENT` 只在 `ONLINE=1` 時才會被設定。電表看不到充電器本身，「充電中」由 Host 用電池端電壓判（≥ 25.0 V = 充電器頂著），充飽用 tail current（`docs/BATTERY.md`）。
 
 ---
 
 ## `0x8A` Analog Status
 
-STM32 每 `50ms` 送一次，資料來源是 `PB1/ADC1_IN9` 經 4 通道 analog mux 讀到的四個慢速類比訊號（見 `wire.md`），STM32 每 `200ms` 掃一輪，所以數值每 200 ms 才會更新。每輪掃描前會先讀 `VREFINT` 算出實際 VDDA，所有換算都用這個值而不是假設 3.3 V。Frame header 的 `seq` 固定 `0`。
+STM32 每 `50ms` 送一次，資料來源是 `PB1/ADC1_IN9` 經 4 通道 analog mux 讀到的四個慢速類比訊號（見 `wire.md`），STM32 每 `200ms` 掃一輪，所以數值每 200 ms 才會更新。哪些通道有裝由 `hardware_pins.hpp` 的 `ANALOG_MONITOR_CHANNEL_MASK` 決定：沒裝的通道不採樣、`*_VALID` 永遠 0、值為 0——**目前是 `0x00`（沒有 mux、沒有分壓、沒有電流感測），四個 `*_VALID` 全是 0**，電池電壓請看 `0x89`。每輪掃描前會先讀 `VREFINT` 算出實際 VDDA，所有換算都用這個值而不是假設 3.3 V。Frame header 的 `seq` 固定 `0`。
 
 Payload 長度固定 `12` bytes。
 

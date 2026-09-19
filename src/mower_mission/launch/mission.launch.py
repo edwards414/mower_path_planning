@@ -363,14 +363,23 @@ def generate_launch_description():
         }],
     )
 
-    # Real-pack /battery_state from the STM32 0x8A/0x89 readings (OCV lookup
-    # + charger flags). The battery simulator stays off on the real robot.
+    # Real-pack /battery_state from the RS485 pack meter (0x89) with the STM32
+    # ADC (0x8A) as fallback. The battery simulator stays off on the real robot.
     battery_state_node = Node(
         package='mower_mission',
         executable='battery_state_node',
         name='battery_state',
         output='screen',
-        parameters=[{'use_sim_time': False}],
+        parameters=[{
+            'use_sim_time': False,
+            # Pack voltage from the RS485 meter in the pack lead; the
+            # charger is "present" while the pack sits at its CV.
+            'charger_present_min_v': 25.0,
+            # Flip to True (and set capacity_ah) once the meter's shunt
+            # carries the pack current -> coulomb counting (docs/BATTERY.md).
+            'meter_current_wired': False,
+            'capacity_ah': 0.0,
+        }],
     )
 
     # Wheel PID auto-tune (dashboard button -> /pid_autotune service). Drives

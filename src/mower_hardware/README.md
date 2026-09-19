@@ -39,9 +39,10 @@ a persist failed). `mower_mission` `telemetry_node` folds it into `/robot/teleme
 for the parameter dashboard; `battery_state_node` turns the `analog` +
 `charger` objects into `/battery_state` (see `docs/BATTERY.md`).
 
-`charger` = `{valid, online, charging, input_present, voltage_v, current_a,
-temp_c, reg3, reg4, flags, comm_errors, age_ms}` — the RS485 V/A/temp meter
-in the charge line (it only measures, no CC/CV settings); values are the
+`charger` = `{valid, online, current_present, input_present, voltage_v,
+current_a, temp_c, reg3, reg4, flags, comm_errors, age_ms}` — the RS485
+V/A/temp meter in the battery pack lead (it only measures, no CC/CV
+settings; `current_a` is 0 until its shunt is wired in); values are the
 last Modbus reply, meaningful only while `online`.
 `analog` = `{valid, main_battery_v, main_battery_valid, aon_battery_v,
 aon_battery_valid, board_temp_c, board_temp_valid, vdda_mv, vdda_calibrated,

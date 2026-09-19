@@ -1090,8 +1090,8 @@ void uart_send_charger_status(void) {
   if (ch.online) {
     payload.flags |= UART_CHARGER_STATUS_FLAG_ONLINE;
   }
-  if (ChargerRs485_IsCharging(&ch)) {
-    payload.flags |= UART_CHARGER_STATUS_FLAG_CHARGING;
+  if (ChargerRs485_IsCurrentPresent(&ch)) {
+    payload.flags |= UART_CHARGER_STATUS_FLAG_CURRENT_PRESENT;
   }
   if (ChargerRs485_IsInputPresent(&ch)) {
     payload.flags |= UART_CHARGER_STATUS_FLAG_INPUT_PRESENT;

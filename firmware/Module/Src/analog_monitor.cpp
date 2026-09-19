@@ -168,7 +168,9 @@ void AnalogMonitor_Update(void) {
 
   for (uint8_t i = 0U; i < ANALOG_MONITOR_CHANNEL_COUNT; ++i) {
     uint16_t raw = 0U;
-    bool ok = AnalogMonitor_ReadChannel((analog_monitor_channel_t)i, &raw);
+    bool populated = (ANALOG_MONITOR_CHANNEL_MASK & (1U << i)) != 0U;
+    bool ok = populated &&
+              AnalogMonitor_ReadChannel((analog_monitor_channel_t)i, &raw);
     g_snapshot.valid[i] = ok;
     if (ok) {
       any_valid = true;

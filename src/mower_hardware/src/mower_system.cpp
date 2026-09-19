@@ -609,7 +609,7 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     "\"led\":{\"valid\":%s,\"mode\":%u,\"r\":%u,\"g\":%u,\"b\":%u,\"period_ms\":%u,\"flags\":%u},"
     "\"power\":{\"valid\":%s,\"state\":%u,\"flags\":%u,\"shutdown_reason\":%u,"
     "\"press_ms\":%u,\"shutdown_elapsed_ms\":%u},"
-    "\"charger\":{\"valid\":%s,\"online\":%s,\"charging\":%s,\"input_present\":%s,"
+    "\"charger\":{\"valid\":%s,\"online\":%s,\"current_present\":%s,\"input_present\":%s,"
     "\"voltage_v\":%.2f,\"current_a\":%.2f,\"temp_c\":%u,\"reg3\":%u,\"reg4\":%u,"
     "\"flags\":%u,\"comm_errors\":%u,\"age_ms\":%u},"
     "\"analog\":{\"valid\":%s,\"main_battery_v\":%.2f,\"main_battery_valid\":%s,"
@@ -627,7 +627,7 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     have_power_status_ ? "true" : "false", ps.state, ps.flags, ps.shutdown_reason,
     ps.press_ms, ps.shutdown_elapsed_ms,
     have_charger_status_ ? "true" : "false", ch.online() ? "true" : "false",
-    ch.charging() ? "true" : "false", ch.input_present() ? "true" : "false",
+    ch.current_present() ? "true" : "false", ch.input_present() ? "true" : "false",
     ch.voltage_cv / 100.0, ch.current_ca / 100.0, ch.temp_c, ch.reg3, ch.reg4,
     ch.flags, ch.comm_error_count, ch.age_ms,
     have_analog_status_ ? "true" : "false",

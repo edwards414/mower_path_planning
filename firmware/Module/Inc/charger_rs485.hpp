@@ -1,12 +1,13 @@
 #ifndef MODULE_INC_CHARGER_RS485_HPP_
 #define MODULE_INC_CHARGER_RS485_HPP_
 
-/* RS485 (Modbus RTU) poller for the charge-line voltage / current /
- * temperature meter on USART6 (PA11 TX / PA12 RX, 9600 8N1). The meter sits
- * in the charger-to-battery line and only measures; it has no CC/CV
- * settings. Holding registers 0-4 (mapped against the meter's own display):
- *   0 voltage  x0.01 V   charge line = battery terminal voltage
- *   1 current  x0.01 A   charge current
+/* RS485 (Modbus RTU) poller for the battery voltage / current / temperature
+ * meter on USART6 (PA11 TX / PA12 RX, 9600 8N1). The meter sits in the
+ * battery pack lead (voltage always, current once its shunt is wired in)
+ * and only measures; it has no CC/CV settings. Holding registers 0-4
+ * (mapped against the meter's own display):
+ *   0 voltage  x0.01 V   battery terminal voltage
+ *   1 current  x0.01 A   pack current (0 until the shunt is in the lead)
  *   2 temp     x1 degC   meter board temperature
  *   3, 4       constant, meaning unknown (config / status), passed raw
  * Non-blocking: one FC03 request every CHARGER_RS485_POLL_PERIOD_MS, the
@@ -28,8 +29,9 @@ extern "C" {
 #define CHARGER_RS485_REPLY_TIMEOUT_MS 200U
 /* Consecutive failed polls before `online` drops. */
 #define CHARGER_RS485_OFFLINE_AFTER_FAILS 3U
-/* Charge current at or above this counts as charging (x0.01 A). */
-#define CHARGER_RS485_CHARGING_MIN_CA 5U
+/* Current at or above this counts as "current present" (x0.01 A). The
+ * meter sits in the pack lead, so this is charge or discharge. */
+#define CHARGER_RS485_CURRENT_MIN_CA 5U
 /* Line voltage at or above this counts as "input present" (x0.01 V). */
 #define CHARGER_RS485_INPUT_PRESENT_MIN_CV 500U
 
@@ -59,7 +61,7 @@ void ChargerRs485_GetSnapshot(charger_rs485_snapshot_t *snapshot);
 void ChargerRs485_OnTxComplete(void);
 
 /* Derived state helpers used by the 0x89 status frame. */
-bool ChargerRs485_IsCharging(const charger_rs485_snapshot_t *s);
+bool ChargerRs485_IsCurrentPresent(const charger_rs485_snapshot_t *s);
 bool ChargerRs485_IsInputPresent(const charger_rs485_snapshot_t *s);
 
 #ifdef __cplusplus
