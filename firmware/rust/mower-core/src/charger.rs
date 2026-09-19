@@ -17,8 +17,9 @@ pub const POLL_PERIOD_MS: u64 = 500;
 pub const REPLY_TIMEOUT_MS: u64 = 200;
 /// Consecutive failed polls before `online` drops.
 pub const OFFLINE_AFTER_FAILS: u8 = 3;
-/// Charge current at or above this counts as charging (x0.01 A).
-pub const CHARGING_MIN_CA: u16 = 5;
+/// Current at or above this counts as "current present" (x0.01 A); the meter
+/// sits in the pack lead so this is charge or discharge.
+pub const CURRENT_MIN_CA: u16 = 5;
 /// Line voltage at or above this counts as "input present" (x0.01 V).
 pub const INPUT_PRESENT_MIN_CV: u16 = 500;
 
@@ -100,8 +101,8 @@ impl Snapshot {
         self.last_ok_ms.is_some()
     }
 
-    pub fn is_charging(&self) -> bool {
-        self.online && self.current_ca >= CHARGING_MIN_CA
+    pub fn is_current_present(&self) -> bool {
+        self.online && self.current_ca >= CURRENT_MIN_CA
     }
 
     pub fn is_input_present(&self) -> bool {
@@ -110,7 +111,7 @@ impl Snapshot {
 
     pub fn flags(&self) -> u8 {
         (if self.online { charger_status_flag::ONLINE } else { 0 })
-            | (if self.is_charging() { charger_status_flag::CHARGING } else { 0 })
+            | (if self.is_current_present() { charger_status_flag::CURRENT_PRESENT } else { 0 })
             | (if self.is_input_present() { charger_status_flag::INPUT_PRESENT } else { 0 })
             | (if self.ever_seen() { charger_status_flag::EVER_SEEN } else { 0 })
     }
@@ -164,7 +165,7 @@ mod tests {
         assert_eq!((st.voltage_cv, st.current_ca, st.temp_c, st.reg3, st.reg4), (2563, 0, 35, 11, 48961));
         let (age, flags) = (st.age_ms, st.flags);
         assert_eq!(age, 120);
-        // online, input present, not charging (0 A); the CV_PHASE bit is never set
+        // online, input present, no current (0 A); the CV_PHASE bit is never set
         assert_eq!(
             flags,
             charger_status_flag::ONLINE | charger_status_flag::INPUT_PRESENT | charger_status_flag::EVER_SEEN
@@ -172,15 +173,15 @@ mod tests {
     }
 
     #[test]
-    fn charging_needs_current_and_online() {
+    fn current_present_needs_current_and_online() {
         let mut s = Snapshot::ZERO;
         s.record_success(&[2450, 150, 36, 11, 48961], 0);
-        assert!(s.is_charging());
+        assert!(s.is_current_present());
         for _ in 0..OFFLINE_AFTER_FAILS {
             s.record_failure(None);
         }
         assert!(!s.online);
-        assert!(!s.is_charging());
+        assert!(!s.is_current_present());
         // values are kept for the host to see
         assert_eq!(s.current_ca, 150);
         let flags = s.status(0).flags;

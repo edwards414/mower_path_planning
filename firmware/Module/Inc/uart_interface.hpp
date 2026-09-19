@@ -85,7 +85,7 @@ extern "C" {
 
 /* 0x89 charger (charge-line meter) status flags */
 #define UART_CHARGER_STATUS_FLAG_ONLINE 0x01U        /* RS485 replies OK */
-#define UART_CHARGER_STATUS_FLAG_CHARGING 0x02U      /* current above threshold */
+#define UART_CHARGER_STATUS_FLAG_CURRENT_PRESENT 0x02U /* |current| above threshold; the meter sits in the pack lead, so this is flow, not direction */
 /* 0x04 was CV_PHASE for the CC/CV module; the meter has no CV setting, always 0 */
 #define UART_CHARGER_STATUS_FLAG_INPUT_PRESENT 0x08U /* line voltage present */
 #define UART_CHARGER_STATUS_FLAG_EVER_SEEN 0x10U     /* replied at least once */

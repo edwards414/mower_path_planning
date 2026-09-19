@@ -27,10 +27,10 @@
 | 電壓邏輯轉換器 | FT-555 A/B level shifter | `PA0`, `PA1`, `PA8`, `PA9` | 5 V to 3.3 V logic | 左右輪 encoder PP A/B 訊號降壓後進 STM32 |
 | WS2812 燈條 | Front/Back LED strip | `PB4`, `PB5` | `TIM3_CH1/CH2` PWM + DMA | 800 kHz data，GRB 順序；後燈 16 顆，前燈 4 條串聯共 32 顆；LED 0-2 保留給狀態燈號 |
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
-| RS485 充電線電表 | 電壓 / 電流 / 溫度 RS485 電表（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀電壓 / 電流 / 溫度。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
+| RS485 電池電表 | 電壓 / 電流 / 溫度 RS485 電表（Modbus RTU），裝在電池主線上 | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀電壓 / 電流 / 溫度。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
 | MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x07` 控制 |
-| 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PA6` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
+| 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PA6` | `ADC1_IN9`, GPIO select | 規劃：共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池。**2026-09-19：mux、分壓、電流感測都沒裝**，`ANALOG_MONITOR_CHANNEL_MASK=0x00`，電池由 RS485 電表負責 |
 | 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
 | 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
 | 電池電壓量測 | 24 V main / 3.7 V AON battery divider | ADC MUX CH2/CH3 | `ADC1_IN9` through mux | 電阻分壓後進 ADC，輸入不可超過 3.3 V |
@@ -305,11 +305,13 @@ Host 是野火 LubanCat 2（RK3568）。它的 40-pin 排針串口是 UART3，�
 
 同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低（`PA5-PA7` 現在沒接東西，無影響）。細節見 `BOOTLOADER.md`。
 
-## RS485 充電線電表
+## RS485 電池電表
 
-原本規劃的 MCP2515 SPI-CAN 已取消（韌體從未接上），`PA11/PA12` 改成 `USART6` 接 RS485 收發模組，讀取串在充電器與電池之間的 **RS485 電壓 / 電流 / 溫度電表**。協議是標準 Modbus RTU（9600 8N1、站號預設 `0x01`）。
+原本規劃的 MCP2515 SPI-CAN 已取消（韌體從未接上），`PA11/PA12` 改成 `USART6` 接 RS485 收發模組，讀取裝在電池組主線上的 **RS485 電壓 / 電流 / 溫度電表**。協議是標準 Modbus RTU（9600 8N1、站號預設 `0x01`）。
 
 > 原本文件寫的是「數控 30V5A 帶 OFF」CC/CV 充電模組（廠商文件與 PC 工具在 `數控30V5A+2.0.zip`，不進 git），實際裝上的模組面板只有電壓、電流、溫度，沒有 CC/CV 可設。2026-09-19 實測對照面板（25.6 V / 0 A / 35 °C）確認 Reg0-2 的對應，Reg3/Reg4 是常數。充電本身由外接的 CC/CV 變壓器負責，電表只量。
+>
+> 電表位置：電池側（不是充電器側）。拔掉充電器電壓從 25.64 V 掉到 24.04 V（電池 OCV），所以電壓永遠是電池端電壓；充電器插著時被頂到充電器的 CV，Host 就用「≥ 25.0 V」判充電器在不在。**電流端子還沒接**：整車由電池供電時電表仍讀 0.00 A，代表電池負極主線沒有經過電表的分流器——接上之後放電 / 充電電流都看得到，SOC 可改用庫侖計數（`docs/BATTERY.md`）。
 
 收發器用常見的 MAX485 TTL 轉 RS485 小板（DI / DE / RE / RO 一側，VCC / GND / A / B 一側）：
 
@@ -329,8 +331,8 @@ Modbus holding registers（FC03 讀）：
 
 | Reg | 內容 | 單位 | 實測 |
 | --- | --- | --- | --- |
-| 0 | 電壓（充電線 = 電池端） | x0.01 V | `2563` = 25.63 V，面板 25.6 V |
-| 1 | 電流（充電電流） | x0.01 A | `0`，面板 0 A |
+| 0 | 電壓（電池端） | x0.01 V | `2563` = 25.63 V，面板 25.6 V；拔掉充電器 24.04 V |
+| 1 | 電流（電池組電流） | x0.01 A | `0`，面板 0 A（分流器未接進主線） |
 | 2 | 溫度（電表本身） | °C | `35`（34↔35 跳動），面板 35 °C |
 | 3 | 不明，常數 | - | `11` |
 | 4 | 不明，常數 | - | `48961` (`0xBF41`) |

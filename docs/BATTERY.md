@@ -1,85 +1,78 @@
 # 電池電量估計（SOC）
 
 主電池：6S 鋰電，滿電 `25.2 V`（4.2 V/cell），截止 `18.0 V`（3.0 V/cell），沒有會回報的 BMS。
-小電池：3.7 V 1S，維持 STM32 常開，自帶充電 IC，STM32 只量得到電壓。
+小電池：3.7 V 1S，維持 STM32 常開，自帶充電 IC；目前沒有量測（STM32 ADC 分壓未裝）。
 
 ## 資料鏈
 
 ```
-STM32 ADC mux CH2/CH3 ──0x8A ANALOG_STATUS (50 ms, 200 ms 更新)──┐
-RS485 充電線電表 電壓/電流/溫度 ──0x89 CHARGER_STATUS (500 ms 輪詢)─┤
-                                                                 ▼
-                       mower_hardware  →  /mower_base/telemetry {analog, charger}
-                                                                 ▼
-                 mower_mission battery_state_node  →  /battery_state, /aon_battery_state
-                                                                 ▼
-                                         rosbridge → App / mower_recorder bag
+RS485 電池電表（電池主線上）電壓 / 電流 / 溫度 ──0x89 CHARGER_STATUS (500 ms 輪詢)──┐
+STM32 ADC mux（目前未裝，ANALOG_MONITOR_CHANNEL_MASK=0）──0x8A ANALOG_STATUS──────┤
+                                                                                   ▼
+                                    mower_hardware  →  /mower_base/telemetry {charger, analog}
+                                                                                   ▼
+                              mower_mission battery_state_node  →  /battery_state, /aon_battery_state
+                                                                                   ▼
+                                                      rosbridge → App / mower_recorder bag
 ```
 
-- 韌體：`firmware/Module/Src/analog_monitor.cpp`（每輪先讀 VREFINT 校正 VDDA）、`firmware/UART_OPEN_LOOP_PROTOCOL.md` `0x8A` / `0x89`
-- Host 解碼：`src/mower_hardware/src/mower_protocol.cpp` `decode_analog_status` / `decode_charger_status`
+- 電表：`firmware/wire.md`「RS485 電池電表」——裝在電池側，電壓永遠是電池端電壓，電流端子 **還沒接進主線**（讀 0）
+- 韌體：`firmware/Module/charger_rs485`（0x89）、`firmware/Module/analog_monitor`（0x8A，通道由 `hardware_pins.hpp` `ANALOG_MONITOR_CHANNEL_MASK` 決定）
+- Host 解碼：`src/mower_hardware/src/mower_protocol.cpp` `decode_charger_status` / `decode_analog_status`
 - 估計：`src/mower_mission/mower_mission/battery_estimator.py`（純 Python，`test/test_battery_estimator.py`）
-- 節點：`src/mower_mission/mower_mission/battery_state_node.py`，參數見檔頭
+- 節點：`src/mower_mission/mower_mission/battery_state_node.py`，參數見檔頭與 `launch/mission.launch.py`
 
-## 第一步（已實作）：電壓 OCV 查表
+## 現況（2026-09-19）：電表只有電壓
 
-沒有放電電流感測，所以只能用電壓：
+`battery_state_node` 的輸入：
+
+| 量 | 來源 | 現在 |
+|---|---|---|
+| 電池電壓 | `charger.voltage_v`（電表在線）→ 否則 `analog.main_battery_v`（ADC 有裝時） | 電表，25.64 V 插充電器 / 24.04 V 靜置 |
+| 充電器在不在 | 電池端電壓 `>= charger_present_min_v`（25.0 V）。電表看不到充電器，但充電器插著會把端電壓頂到它的 CV，比任何靜置 OCV（≤ 25.2 V 滿電）都高 | 用電壓判 |
+| 電池電流 | `charger.current_a`，`meter_current_wired=true` 才吃 | 未接，NaN |
+
+估算邏輯（`BatteryEstimator`）：
 
 1. 電池組電壓過一階低通（`filter_tau_s`，預設 20 s），吃掉馬達啟動的瞬間壓降
-2. 每 cell 電壓查 NMC 18650 典型 OCV 表（`DEFAULT_OCV_TABLE`，3.0 → 0 %、3.78 → 50 %、4.2 → 100 %）
-3. 放電中：估計值可以自由往下，往上最多 `recovery_rate_pct_per_min`（預設 1 %/min）——長時間割草壓降後電壓回彈，不會一秒跳回去，但也不會永遠卡在低點
-4. 充電中（`0x89 CHARGING`，電表電流 ≥ 0.05 A）：估計值只准往上，且上限 99 %，因為充電端電壓高於 OCV 會高估
-5. 充飽：充電開始後，電表電流 `<= full_tail_current_a`（0.2 A）、電表仍有電壓（`INPUT_PRESENT`）、且 cell 電壓 `>= full_min_cell_v`（4.10 V，代表真的在 CV 段）持續 `full_hold_s`（60 s）→ 100 %，`FULL`，同時把估計重新對齊。電流掉到 0.05 A 以下 `CHARGING` 旗標會先消失，估算器會自己接著追完 tail
-6. 充電器在線但沒電流、也不在 tail 條件 → `NOT_CHARGING`；≥ 99.5 % 時報 `FULL`
-
-> RS485 上的模組實際是一顆「電壓 / 電流 / 溫度」電表（`firmware/wire.md`「RS485 充電線電表」），不是原本規劃的 CC/CV 充電模組，所以沒有 `CV_PHASE`、也沒有 CC/CV 設定可讀；充電本身由外接變壓器負責。cell 電壓門檻是為了擋「充到一半把變壓器拔掉、電表還讀得到電池電壓、電流 0」被誤判成充飽。
+2. **放電中**（沒充電器）：每 cell 電壓查 NMC 18650 典型 OCV 表（`DEFAULT_OCV_TABLE`，3.0 → 0 %、3.78 → 50 %、4.2 → 100 %）。估計值可以自由往下，往上最多 `recovery_rate_pct_per_min`（1 %/min）——壓降回彈不會一秒跳回去
+3. **充電中**（電壓 ≥ 25.0 V）：端電壓是充電器的 CV，跟電量無關，**不查 OCV**（查了會瞬間跳 99 %）。估計值從拔線前的值以 `charge_rate_pct_per_min`（預設 0.5 %/min ≈ 3.3 h 充滿）往上爬，上限 99 %。沒電流就沒辦法判充飽，`FULL` 不會出現
+4. **拔掉充電器**：端電壓要幾分鐘才鬆下來，先維持原估計 `post_charge_settle_s`（300 s），然後用 OCV 對齊一次
+5. `charge_rate_pct_per_min` 請照實際充電器算：`100 / (電池 Ah ÷ 充電器 A) / 60`，例如 20 Ah 電池、2 A 充電器 = 0.17 %/min
 
 限制：
 - 負載下誤差約 ±10 %，靜置後較準；OCV 表是通用值，沒對這顆電池實測
-- 分壓比 `270k/33k` 是圖面值，`main_battery_v` 需拿三用電表校正（差 1 % 電壓在平坦段會差 ~5 % SOC）
-- 沒有溫度補償（板溫 NTC 有量但沒用）
-- 沒有電量（Ah）、沒有剩餘時間估計
+- 充電中的百分比是「估計爬升」，不是量到的；充飽判不出來
+- 沒有溫度補償、沒有剩餘時間估計
 
-## 第二步（TODO）：庫侖計數 + OCV 校正
+## 下一步：把電表的分流器接進主線 → 庫侖計數
 
-要準確就得量主電池電流，然後用電流積分算電量，OCV 只在靜置時用來校正漂移。
+電表本身有電流量測，只是電池負極主線沒有經過它的分流器。接上後 `charger.current_a` 就是電池組電流（充放電都看得到），估算器自動切到庫侖計數，**不用再買 INA226**：
 
-### 硬體
+1. 硬體：電池負極 → 電表電流端子（或外掛分流器 / 霍爾環）→ 整車負載，充電器也接在電表的電池側，這樣充電電流也經過它
+2. 設定：`launch/mission.launch.py` 的 `battery_state` 參數 `meter_current_wired: true`、`capacity_ah: <電池標稱 Ah>`
+3. 方向：Reg1 是 `uint16`，可能沒有正負號。`meter_current_signed: false`（預設）時方向由「充電器在不在」決定：充電器在 = 正（充電）、不在 = 負（放電）；如果實測發現放電時 raw 變 65xxx（有號數回捲），改 `meter_current_signed: true`
+4. 估算（已實作，`test_battery_estimator.py` 有測）：
+   - `fraction += I × dt / capacity`，充放電都算
+   - 靜置（|I| < `rest_current_a` 0.1 A 持續 `rest_hold_s` 5 min）用 OCV 把估計對回去，消積分漂移
+   - 充飽：充電器在、電流 ≤ `full_tail_current_a`（0.2 A）、cell 電壓 ≥ `full_min_cell_v`（4.10 V）持續 `full_hold_s`（60 s）→ 100 %、`FULL`
+   - 充電器在但電流 ≈ 0 且沒到 CV → `NOT_CHARGING`
+5. 之後可加：剩餘時間（最近 5 min 平均電流 ÷ 剩餘 Ah）、容量學習（充飽時記下累積放電量）、板溫補償
 
-| 方案 | 說明 | 取捨 |
-|---|---|---|
-| **INA226 / INA228（I2C）** | 高側電流 + 電壓 + 功率，內建 16-bit ADC 與平均，shunt 例如 2 mΩ / 20 A | 建議；STM32F411 有空的 I2C（查 `wire.md` 腳位表），不佔 ADC mux；INA228 有內建電荷累加暫存器，STM32 只要定期讀 |
-| Hall 電流感測（ACS712/ACS758）→ ADC | 隔離、便宜 | ADC mux 4 通道已用滿，要換 8 通道 4051 或再拉一支 ADC 腳；零點漂移大，低電流不準 |
-| 帶 UART/SMBus 的 BMS | 直接給 SOC、cell 電壓、溫度 | 要換電池組；若之後換電池，優先選有通訊的 BMS，第一、二步都可以退場 |
+再進一步可以考慮給 STM32 一條「充電器在」的感測線（充電器 +24 V 經分壓進 `PA7`），取代用電壓判——電壓判在電池接近滿電、充電器 CV 設得低時會模糊。
 
-Shunt 放在電池負極（低側）最簡單，但 INA226 高側也可以（最高 36 V，25.2 V OK）。充電電流也會流過同一顆 shunt，所以充電與放電用同一個計數器，`0x89 Iout` 只當交叉檢查。
+## 充電曲線
 
-### 韌體
+`/mower_base/telemetry` 已進 `mower_recorder` bag，`charger.voltage_v / current_a` 每 500 ms 一點。電流接上之後：
 
-- 新增 `Module/battery_gauge`：每 10–20 ms 讀電流，`charge_mah += I * dt`；INA228 的話讀它的 `CHARGE` 暫存器即可
-- 靜置判定：`|I| < 0.1 A` 持續 ≥ 5 min → 用 OCV 表把 `soc` 對齊到電壓（溫度補償可用板溫 NTC）
-- 滿電判定沿用充電器 tail current；此時 `soc = 100 %` 並記下 `capacity_mah`（累積的放電量），做容量學習
-- 斷電保存：`soc` 與 `capacity_mah` 寫進 settings flash（`settings_storage`，sector 7 已用於 PID，同一區塊加欄位），開機讀回；AON 電池讓 STM32 不斷電，所以其實只在 AON 也耗盡時才需要
-- `0x8A` 加欄位或新開 `0x8B BATTERY_GAUGE`：`current_ca`（有號）、`charge_mah`、`soc_permille`、`capacity_mah`、`flags(RESTING, CALIBRATED, LEARNED)`
-
-### Host
-
-- `battery_state_node` 改成優先用韌體 SOC，`BatteryState.current` 填真實放電電流（負值）、`charge` / `capacity` 填 mAh → Ah
-- 剩餘時間：最近 5 min 平均功率 ÷ 剩餘電量，給 App 顯示「還能割 N 分鐘」
-- 低電量回充門檻改成用 SOC + 剩餘時間，而不是只看電壓
-
-### 充電曲線
-
-`/mower_base/telemetry` 已進 `mower_recorder` bag，`charger.voltage_v / current_a` 每 500 ms 一點。接上充電器後：
-
-1. 從 20 % 充到 tail current，`ros2 bag` 匯出 `charger.voltage_v / current_a vs t`
-2. 對比同一段時間的 `analog.main_battery_v`，量出充電迴路的 I·R（電壓差 ÷ 電流），可以拿來修正「充電中 OCV 高估」；電表電壓也是校正 ADC 分壓比的現成基準
-3. 充飽後靜置 30 min 再放電到截止，用第二步的庫侖計數量實際容量，重畫這顆電池的 OCV 表取代 `DEFAULT_OCV_TABLE`
+1. 從 20 % 充到 tail current，`ros2 bag` 匯出 `voltage_v / current_a vs t`
+2. 充飽後靜置 30 min 再放電到截止，用庫侖計數量實際容量，重畫這顆電池的 OCV 表取代 `DEFAULT_OCV_TABLE`
 
 ## 校正待辦
 
-- [ ] 三用電表量電池端 vs `analog.main_battery_v`，修 `MAIN_BATTERY_DIVIDER_GAIN`（或在 node 加 `voltage_gain` 參數）
-- [ ] 同上，`aon_battery_v`
-- [ ] 確認 NTC 型號 / beta，板溫才可信
 - [x] RS485 電表對照面板確認 Reg0-2 = 電壓 / 電流 / 溫度（2026-09-19，25.6 V / 0 A / 35 °C）
+- [x] 確認電表位置在電池側：拔充電器 25.64 → 24.04 V（2026-09-19）
+- [ ] 電表電流端子接進電池主線，確認放電時 `current_a` 不是 0、看 raw 有沒有正負號
+- [ ] 填 `capacity_ah`、`charge_rate_pct_per_min`（電池 Ah、充電器 A）
 - [ ] 接上充電器跑一次完整充電，看 tail current（0.2 A）與 `full_min_cell_v`（4.10 V）門檻是否合理
+- [ ] STM32 ADC mux / 分壓若之後補上，`ANALOG_MONITOR_CHANNEL_MASK` 改回 `0x0F`，並用電表電壓校正 `MAIN_BATTERY_DIVIDER_GAIN`

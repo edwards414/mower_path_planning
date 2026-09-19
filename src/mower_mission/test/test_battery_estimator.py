@@ -67,84 +67,129 @@ def test_sustained_drop_lowers_estimate_and_rebound_is_rate_limited():
     assert est.status == STATUS_DISCHARGING
 
 
-def test_charging_only_rises_and_caps_below_full_until_tail_current():
+def test_voltage_only_charging_ramps_from_last_estimate():
+    """On the charger the terminal voltage is the CV: ramp, never look up."""
     est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
+                           charge_rate_per_s=0.005 / 60.0)
+    est.update(0.0, 6 * 3.72)  # 40 %
+    est.update(1.0, 25.6, charger_present=True)
+    assert est.status == STATUS_CHARGING
+    # the 25.6 V terminal voltage would read as 100 % on the OCV table
+    assert est.fraction == pytest.approx(0.40, abs=0.001)
+    est.update(1.0 + 20 * 60, 25.6, charger_present=True)
+    assert est.fraction == pytest.approx(0.50, abs=0.001)
+    est.update(1.0 + 10 * 3600, 25.6, charger_present=True)
+    assert est.fraction == pytest.approx(0.99)
+    assert est.status == STATUS_CHARGING  # cannot prove full without current
+    assert math.isnan(est.current_a)
+
+
+def test_charger_removed_reanchors_to_ocv_after_settling():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
+                           post_charge_settle_s=300.0)
+    est.update(0.0, 6 * 3.72)  # 40 %
+    est.update(1.0, 25.6, charger_present=True)
+    est.update(3600.0, 25.6, charger_present=True)  # ramped to 70 %
+    assert est.fraction == pytest.approx(0.70, abs=0.001)
+    # unplugged: the pack relaxes from the CV towards 4.0 V/cell (80 %)
+    est.update(3601.0, 25.2)
+    assert est.status == STATUS_DISCHARGING
+    assert est.fraction == pytest.approx(0.70, abs=0.001)  # inflated V ignored
+    est.update(3601.0 + 200.0, 24.2)
+    assert est.fraction == pytest.approx(0.70, abs=0.001)  # still settling
+    est.update(3601.0 + 300.0, 24.04)
+    assert est.fraction == pytest.approx(0.8, abs=0.01)   # snapped once
+    est.update(3601.0 + 301.0, 24.04)
+    assert est.fraction == pytest.approx(0.8, abs=0.01)
+
+
+def test_first_sample_on_charger_starts_below_full():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0)
+    est.update(0.0, 25.6, charger_present=True)
+    assert est.fraction == pytest.approx(0.99)
+    assert est.status == STATUS_CHARGING
+
+
+def test_full_after_tail_current_held_at_cv():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
+                           full_tail_current_a=0.2, full_hold_s=60.0)
+    est.update(0.0, 6 * 3.72)
+    est.update(1.0, 6 * 4.20, charger_present=True, current_a=0.15)
+    assert est.status == STATUS_CHARGING
+    est.update(31.0, 6 * 4.20, charger_present=True, current_a=0.15)
+    assert est.fraction < 1.0
+    est.update(61.0, 6 * 4.20, charger_present=True, current_a=0.15)
+    assert est.fraction == pytest.approx(1.0)
+    assert est.status == STATUS_FULL
+    # parked on the charger with the current gone: still full
+    est.update(120.0, 6 * 4.20, charger_present=True, current_a=0.0)
+    assert est.status == STATUS_FULL
+    assert est.fraction == pytest.approx(1.0)
+    # tail interrupted by a real top-up -> charging again, timer restarts
+    est.update(121.0, 6 * 4.20, charger_present=True, current_a=0.5)
+    assert est.status == STATUS_CHARGING
+
+
+def test_charger_present_without_current_below_cv_is_not_charging():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0)
+    est.update(0.0, 6 * 3.85)
+    est.update(1.0, 6 * 3.90, charger_present=True, current_a=0.0)
+    assert est.status == STATUS_NOT_CHARGING
+    assert est.fraction == pytest.approx(0.60)
+
+
+def test_unplugged_mid_charge_with_current_is_not_full():
+    """Adapter pulled mid-charge: charger_present drops, current 0."""
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0, capacity_ah=20.0)
+    est.update(0.0, 6 * 3.72)
+    est.update(1.0, 25.6, charger_present=True, current_a=2.0)
+    assert est.status == STATUS_CHARGING
+    for t in (2.0, 30.0, 61.0, 120.0):
+        est.update(t, 6 * 3.72, charger_present=False, current_a=0.0)
+    assert est.status == STATUS_DISCHARGING
+    assert est.fraction == pytest.approx(0.40, abs=0.01)
+
+
+def test_coulomb_counting_discharge_and_rest_reanchor():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0, capacity_ah=10.0,
+                           rest_current_a=0.1, rest_hold_s=300.0)
+    est.update(0.0, 6 * 4.00)  # 80 %
+    # 5 A for 30 min = 2.5 Ah = 25 %; voltage sagging under load is ignored
+    t = 0.0
+    for _ in range(30):
+        t += 60.0
+        est.update(t, 6 * 3.70, current_a=-5.0)
+    assert est.fraction == pytest.approx(0.55, abs=0.005)
+    assert est.status == STATUS_DISCHARGING
+    # rest: after 5 min at ~0 A the OCV (3.80 V -> ~53 %) corrects the drift
+    for _ in range(5):
+        t += 60.0
+        est.update(t, 6 * 3.80, current_a=0.02)
+    assert est.fraction == pytest.approx(0.55, abs=0.005)
+    t += 60.0
+    est.update(t, 6 * 3.80, current_a=0.02)
+    assert est.fraction == pytest.approx(ocv_fraction(3.80), abs=0.005)
+
+
+def test_coulomb_counting_charge_then_full():
+    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0, capacity_ah=10.0,
                            full_tail_current_a=0.2, full_hold_s=60.0)
     est.update(0.0, 6 * 3.72)  # 40 %
-    est.update(1.0, 6 * 3.60, charger_online=True, charging=True,
-               charge_current_a=3.0)
-    # a dip in terminal voltage must not lower the estimate while charging
-    assert est.fraction == pytest.approx(0.40)
+    t = 0.0
+    for _ in range(60):
+        t += 60.0
+        est.update(t, 25.2, charger_present=True, current_a=2.0)  # 2 Ah = +20 %
+    assert est.fraction == pytest.approx(0.60, abs=0.005)
     assert est.status == STATUS_CHARGING
-    est.update(2.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=1.0)
+    # long CV tail: integration would overshoot, cap holds at 99 %
+    for _ in range(300):
+        t += 60.0
+        est.update(t, 25.2, charger_present=True, current_a=1.0)
     assert est.fraction == pytest.approx(0.99)
-    assert est.charge_current_a == pytest.approx(1.0)
-
-
-def test_full_after_tail_current_held():
-    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
-                           full_tail_current_a=0.2, full_hold_s=60.0)
-    est.update(0.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=0.15)
-    assert est.status == STATUS_CHARGING
-    est.update(30.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=0.15)
-    assert est.fraction == pytest.approx(0.99)
-    est.update(61.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=0.15)
-    assert est.fraction == pytest.approx(1.0)
-    assert est.status == STATUS_FULL
-    # tail interrupted -> timer restarts
-    est.update(62.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=0.5)
-    assert est.status == STATUS_CHARGING
-
-
-def test_tail_below_charging_threshold_still_completes_the_charge():
-    """The meter's CHARGING flag drops at 0.05 A, before the tail ends."""
-    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
-                           full_tail_current_a=0.2, full_hold_s=60.0)
-    est.update(0.0, 6 * 4.20, charger_online=True, charging=True,
-               input_present=True, charge_current_a=0.5)
-    assert est.status == STATUS_CHARGING
-    est.update(1.0, 6 * 4.20, charger_online=True, charging=False,
-               input_present=True, charge_current_a=0.02)
-    assert est.status == STATUS_CHARGING
-    est.update(62.0, 6 * 4.20, charger_online=True, charging=False,
-               input_present=True, charge_current_a=0.0)
+    est.update(t + 1.0, 25.2, charger_present=True, current_a=0.1)
+    est.update(t + 61.0, 25.2, charger_present=True, current_a=0.1)
     assert est.status == STATUS_FULL
     assert est.fraction == pytest.approx(1.0)
-
-
-def test_unplugged_charger_with_meter_still_reading_pack_is_not_full():
-    """Adapter pulled mid-charge: current 0, meter still sees the pack."""
-    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0,
-                           full_tail_current_a=0.2, full_hold_s=60.0)
-    est.update(0.0, 6 * 3.72, charger_online=True, charging=True,
-               input_present=True, charge_current_a=2.0)
-    assert est.status == STATUS_CHARGING
-    for t in (1.0, 30.0, 61.0, 120.0):
-        est.update(t, 6 * 3.72, charger_online=True, charging=False,
-                   input_present=True, charge_current_a=0.0)
-    assert est.status == STATUS_NOT_CHARGING
-    assert est.fraction == pytest.approx(0.40)
-
-
-def test_charger_online_without_current_reports_not_charging():
-    est = BatteryEstimator(cell_count=6, filter_tau_s=0.0)
-    est.update(0.0, 6 * 3.85, charger_online=True, charging=False,
-               charge_current_a=0.0)
-    assert est.status == STATUS_NOT_CHARGING
-    # an already-full pack parked on the charger (CHARGING flag dropped)
-    full = BatteryEstimator(cell_count=6, filter_tau_s=0.0)
-    full.update(0.0, 6 * 4.20, charger_online=True, charging=False,
-                charge_current_a=0.0)
-    assert full.status == STATUS_FULL
-    # current is only meaningful while the charger answers
-    est.update(2.0, 6 * 3.85, charger_online=False)
-    assert math.isnan(est.charge_current_a)
-    assert est.status == STATUS_DISCHARGING
 
 
 def test_single_cell_aon_battery():

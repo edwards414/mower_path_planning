@@ -218,9 +218,9 @@ void ChargerRs485_OnTxComplete(void) {
   set_driver_enabled(false);
 }
 
-bool ChargerRs485_IsCharging(const charger_rs485_snapshot_t *s) {
+bool ChargerRs485_IsCurrentPresent(const charger_rs485_snapshot_t *s) {
   return (s != nullptr) && s->online &&
-         (s->current_ca >= CHARGER_RS485_CHARGING_MIN_CA);
+         (s->current_ca >= CHARGER_RS485_CURRENT_MIN_CA);
 }
 
 bool ChargerRs485_IsInputPresent(const charger_rs485_snapshot_t *s) {

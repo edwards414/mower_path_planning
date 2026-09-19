@@ -264,7 +264,7 @@ TEST(Pid, ConfigCommandMatchesReference)
 TEST(Charger, DecodeStatus)
 {
   // voltage=25.10 V, current=1.25 A, temp=35 C, reg3=11, reg4=48961,
-  // flags=online|charging|input|seen, err=2, age=120 ms, exc=0
+  // flags=online|current|input|seen, err=2, age=120 ms, exc=0
   const uint8_t p[16] = {0xCE, 0x09, 0x7D, 0x00, 0x23, 0x00, 0x0B, 0x00,
                          0x41, 0xBF, 0x1B, 0x02, 0x78, 0x00, 0x00, 0x00};
   ChargerStatus ch;
@@ -275,7 +275,7 @@ TEST(Charger, DecodeStatus)
   EXPECT_EQ(ch.reg3, 11);
   EXPECT_EQ(ch.reg4, 48961);
   EXPECT_TRUE(ch.online());
-  EXPECT_TRUE(ch.charging());
+  EXPECT_TRUE(ch.current_present());
   EXPECT_TRUE(ch.input_present());
   EXPECT_EQ(ch.comm_error_count, 2);
   EXPECT_EQ(ch.age_ms, 120);

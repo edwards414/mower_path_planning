@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 """Publish sensor_msgs/BatteryState for the real base from STM32 telemetry.
 
-Reads the ``analog`` (0x8A: pack voltages) and ``charger`` (0x89: RS485
-voltage / current / temperature meter in the charge line) objects of
-``/mower_base/telemetry`` (mower_hardware) and runs
+Reads the ``charger`` (0x89: RS485 voltage / current / temperature meter in
+the battery pack lead) and ``analog`` (0x8A: STM32 ADC, only when those
+channels are populated) objects of ``/mower_base/telemetry``
+(mower_hardware) and runs
 :class:`mower_mission.battery_estimator.BatteryEstimator` on them:
 
 * ``/battery_state``      — 24 V main pack (6S): voltage, percentage,
-  charging / discharging / full, charge current while the meter answers
-* ``/aon_battery_state``  — 3.7 V always-on cell that keeps the STM32 alive
+  charging / discharging / full, signed current once the meter's shunt is
+  wired into the lead (``meter_current_wired``)
+* ``/aon_battery_state``  — 3.7 V always-on cell; ``present`` only when the
+  STM32 ADC divider for it exists
+
+Pack voltage: the meter when it answers, else the STM32 ADC main-battery
+channel when valid. Charger presence: the meter cannot see the charger
+(it is on the pack side), so a pack voltage at or above
+``charger_present_min_v`` — the charger's CV, above any resting OCV — means
+the charger is connected. Replace with a sense line when one exists.
 
 Replaces ``battery_simulator_node`` on the real robot; the simulator keeps
 its place in simulation launch files. ``percentage`` is NaN and ``present``
-false until the STM32 has reported a valid reading, and again if telemetry
-goes stale for ``stale_timeout_s``.
+false until a valid reading arrives, and again if telemetry goes stale for
+``stale_timeout_s``.
 """
 
 import json
@@ -51,6 +60,20 @@ class BatteryStateNode(Node):
         self.declare_parameter('main_cell_count', 6)
         self.declare_parameter('filter_tau_s', 20.0)
         self.declare_parameter('recovery_rate_pct_per_min', 1.0)
+        # Voltage-only charging ramp: 100 % / (capacity_ah / charger_a) / 60.
+        self.declare_parameter('charge_rate_pct_per_min', 0.5)
+        self.declare_parameter('post_charge_settle_s', 300.0)
+        # Pack voltage at or above this = charger connected (its CV).
+        self.declare_parameter('charger_present_min_v', 25.0)
+        # Set once the meter's shunt carries the pack current. The meter's
+        # register is unsigned: the sign is taken from charger presence
+        # unless meter_current_signed says the register wraps for discharge.
+        self.declare_parameter('meter_current_wired', False)
+        self.declare_parameter('meter_current_signed', False)
+        # Pack capacity for coulomb counting; 0 = unknown (voltage only).
+        self.declare_parameter('capacity_ah', 0.0)
+        self.declare_parameter('rest_current_a', 0.1)
+        self.declare_parameter('rest_hold_s', 300.0)
         self.declare_parameter('full_tail_current_a', 0.2)
         self.declare_parameter('full_hold_s', 60.0)
         self.declare_parameter('full_min_cell_v', 4.10)
@@ -61,12 +84,22 @@ class BatteryStateNode(Node):
         self.stale_timeout_s = float(p('stale_timeout_s'))
         self.low_battery_pct = float(p('low_battery_pct'))
         self.frame_id = str(p('frame_id'))
+        self.charger_present_min_v = float(p('charger_present_min_v'))
+        self.meter_current_wired = bool(p('meter_current_wired'))
+        self.meter_current_signed = bool(p('meter_current_signed'))
+        self.capacity_ah = float(p('capacity_ah'))
         recovery = float(p('recovery_rate_pct_per_min')) / 100.0 / 60.0
+        charge_rate = float(p('charge_rate_pct_per_min')) / 100.0 / 60.0
 
         self.main = BatteryEstimator(
             cell_count=int(p('main_cell_count')),
             filter_tau_s=float(p('filter_tau_s')),
             recovery_rate_per_s=recovery,
+            charge_rate_per_s=charge_rate,
+            post_charge_settle_s=float(p('post_charge_settle_s')),
+            capacity_ah=self.capacity_ah if self.capacity_ah > 0.0 else math.nan,
+            rest_current_a=float(p('rest_current_a')),
+            rest_hold_s=float(p('rest_hold_s')),
             full_tail_current_a=float(p('full_tail_current_a')),
             full_hold_s=float(p('full_hold_s')),
             full_min_cell_v=float(p('full_min_cell_v')),
@@ -93,8 +126,9 @@ class BatteryStateNode(Node):
 
         rate = float(p('publish_rate_hz'))
         self.create_timer(1.0 / rate if rate > 0.0 else 1.0, self._publish)
+        mode = 'coulomb counting' if (self.meter_current_wired and self.capacity_ah > 0.0) else 'OCV estimate'
         self.get_logger().info(
-            f'battery_state: {self.main.cell_count}S OCV estimate from '
+            f'battery_state: {self.main.cell_count}S {mode} from '
             f"{p('base_telemetry_topic')} -> {p('battery_topic')}"
         )
 
@@ -109,27 +143,36 @@ class BatteryStateNode(Node):
             return
         analog = data.get('analog') or {}
         charger = data.get('charger') or {}
-        if not analog.get('valid'):
-            return
         now = self._now_s()
 
-        if analog.get('main_battery_valid'):
-            online = bool(charger.get('valid')) and bool(charger.get('online'))
-            current = float(charger.get('current_a', math.nan)) if online else math.nan
-            self.main.update(
-                now,
-                float(analog.get('main_battery_v', math.nan)),
-                charger_online=online,
-                charging=bool(charger.get('charging')),
-                input_present=bool(charger.get('input_present')),
-                charge_current_a=current,
-            )
+        meter_online = bool(charger.get('valid')) and bool(charger.get('online'))
+        voltage = math.nan
+        if meter_online:
+            voltage = float(charger.get('voltage_v', math.nan))
+        elif analog.get('valid') and analog.get('main_battery_valid'):
+            voltage = float(analog.get('main_battery_v', math.nan))
+
+        if math.isfinite(voltage) and voltage > 0.0:
+            charger_present = voltage >= self.charger_present_min_v
+            current = math.nan
+            if meter_online and self.meter_current_wired:
+                current = self._signed_current(float(charger.get('current_a', math.nan)), charger_present)
+            self.main.update(now, voltage, charger_present=charger_present, current_a=current)
             self.last_main_time = now
             self._check_low(now)
 
-        if analog.get('aon_battery_valid'):
+        if analog.get('valid') and analog.get('aon_battery_valid'):
             self.aon.update(now, float(analog.get('aon_battery_v', math.nan)))
             self.last_aon_time = now
+
+    def _signed_current(self, magnitude_a: float, charger_present: bool) -> float:
+        """Meter register -> ROS sign convention (+ charging, - discharging)."""
+        if not math.isfinite(magnitude_a):
+            return math.nan
+        if self.meter_current_signed:
+            # uint16 x0.01 A that wraps for negative values
+            return magnitude_a - 655.36 if magnitude_a > 327.67 else magnitude_a
+        return abs(magnitude_a) if charger_present else -abs(magnitude_a)
 
     def _check_low(self, now: float):
         pct = self.main.percentage
@@ -172,10 +215,14 @@ class BatteryStateNode(Node):
 
         msg.present = True
         msg.voltage = float(est.voltage_v)
-        # ROS convention: positive current = charging. Discharge current is
-        # unknown until the pack gets its own sensor (docs/BATTERY.md).
-        msg.current = float(est.charge_current_a)
+        # ROS convention: positive current = charging; NaN until the meter's
+        # shunt is wired into the pack lead (docs/BATTERY.md).
+        msg.current = float(est.current_a)
         msg.percentage = float(est.fraction)
+        if est.capacity_ah > 0.0:
+            msg.design_capacity = float(est.capacity_ah)
+            msg.capacity = float(est.capacity_ah)
+            msg.charge = float(est.capacity_ah * est.fraction)
         msg.power_supply_status = _STATUS_TO_MSG.get(
             est.status, BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
         )
