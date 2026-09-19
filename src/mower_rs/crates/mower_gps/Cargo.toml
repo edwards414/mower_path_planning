@@ -1,0 +1,18 @@
+[package]
+name = "mower_gps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "u-blox ZED-F9P USB driver publishing sensor_msgs/NavSatFix (UBX NAV-PVT + NAV-HPPOSLLH), exits on a dead port so launch respawns it"
+
+[[bin]]
+name = "mower_gps"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+mower_ubx = { path = "../mower_ubx" }
+r2r.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serialport = { version = "4", default-features = false }

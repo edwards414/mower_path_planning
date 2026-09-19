@@ -1,0 +1,28 @@
+# mower_gps (src/mower_rs/crates/mower_gps): u-blox ZED-F9P over USB
+# (CDC-ACM; /dev/gps_rtk from deploy/udev/99-mower.rules, passed into the
+# runtime container by deploy/docker-compose.yaml). Launched by
+# mower.launch.py when enable_gps:=true (GPS=true in /opt/mower/.env); the
+# launch sets fix_topic to the canonical gps_fix_topic (/fix).
+#
+# The driver enables NAV-PVT + NAV-HPPOSLLH + NAV-EOE on the USB port at
+# rate_hz in the receiver's RAM at every start (nothing saved); the rest of
+# the receiver configuration, including the RTCM correction input on UART1
+# from a base station or NTRIP, is left alone. Verified on the robot
+# 2026-09-19 (4.00 Hz, indoor no-fix -> status -1 / NaN position).
+# To try other settings without a new image, put a copy in ~/.mower and pass
+# gps_params_file:=/home/mower/.mower/<file> to robot.launch.py.
+gps:
+  ros__parameters:
+    device: /dev/gps_rtk
+    # Antenna link in mower_description (real_robot.xacro); navsat_transform
+    # uses the base_link -> frame_id transform for the antenna offset.
+    frame_id: gps_link
+    rate_hz: 4.0
+    # false = do not touch the receiver (use its stored output configuration)
+    configure_receiver: true
+    # The process exits (and launch respawns it) when NAV-PVT stops for
+    # stale_timeout_s, or never starts within startup_timeout_s.
+    stale_timeout_s: 5.0
+    startup_timeout_s: 20.0
+    # 1 Hz JSON: fix_type, carrier_solution, num_sv, h_acc_m, pdop, utc, ...
+    status_topic: gps/status

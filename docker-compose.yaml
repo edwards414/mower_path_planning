@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # Dockerfile's final stage is the GPS-only image; select the full mower
-      # runtime explicitly or robot.launch.py/install will not exist.
+      # The deployable image (deploy/docker-compose.yaml pulls the same
+      # target from GHCR); `builder` would carry the whole toolchain.
       target: runtime
     restart: unless-stopped
     stop_grace_period: 60s
@@ -21,6 +21,9 @@ services:
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
       - record:=false
+      # Bench setup without the u-blox receiver. With one attached add
+      # /dev/gps_rtk:/dev/gps_rtk under devices and set enable_gps:=true.
+      - enable_gps:=false
     environment:
       # - ROS_DOMAIN_ID = 0
       - ROS_LOCALHOST_ONLY=1

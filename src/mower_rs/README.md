@@ -11,6 +11,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_adapter` | `flutter_adapter_node` (`/adapter/map_layers/*`, `/adapter/marker_layers/*`, `/adapter/robot_pose`, `/adapter/coverage_settings`, `/adapter/zone_summaries`, `/adapter/map_datum`) | `mission.launch.py rust_adapter:=true` |
 | `velocity_command_guard` | `mower_bringup/velocity_command_guard.py`, both instances (manual guard with command session, final guard mux -> ros2_control) | `twist_mux.launch.py rust_guards:=true` |
 | `mower_imu` | `wit_ros2_imu` (WIT serial IMU on `/dev/imu_usb`, `/imu/data`) | `mower.launch.py rust_imu:=true` |
+| `mower_gps` | the ROS `ublox_gps` node that the old `gps` compose service ran (u-blox ZED-F9P on `/dev/gps_rtk`, `/fix`, plus `/gps/status`) | `mower.launch.py enable_gps:=true` (no Python/C++ alternative left) |
 | `mower_ws_bridge` | `rosbridge_auth_proxy` + `rosbridge_websocket` + `rosapi` (pairing gate on `address:9090`, loopback 9091 for the agent, rosbridge v2 subset, `/rosapi/topics`) | `rosbridge.launch.py rust_bridge:=true` |
 | `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
 | `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
@@ -98,6 +99,24 @@ than 88 bytes queue up, an orientation frame published only with fresh
 accel and gyro frames, serial errors end the process. Differential test
 through socat pty pairs: identical `/imu/data` sequences, drops and
 checksum handling to the Python driver.
+
+## mower_gps
+
+`crates/mower_ubx` is the UBX layer with no dependencies (host-testable):
+resynchronising frame parser, Fletcher checksum, CFG-RATE / CFG-MSG
+encoders, NAV-PVT / NAV-HPPOSLLH / NAV-EOE / ACK decoders and the
+`NavSatFix` mapping of the ROS `ublox_gps` driver (NO_FIX unless gnssFixOK
+with a 2D/3D/GNSS+DR fix, GBAS_FIX for an RTK fixed carrier solution,
+covariance = hAcc², NaN position without a fix). `crates/mower_gps` opens
+`/dev/gps_rtk`, enables PVT + HPPOSLLH + EOE at `rate_hz` on the USB port
+(RAM only, ACK-checked, everything else in the receiver untouched), builds
+one fix per epoch on NAV-EOE with the HPPOSLLH millimetre digits, and
+publishes a 1 Hz JSON `gps/status`. It ends the process on a serial error,
+EOF, or 5 s without NAV-PVT so launch respawns it onto the re-enumerated
+device; the ROS driver spins forever on a dead port instead. Verified on
+the robot 2026-09-19: 4.00 Hz, ~2 % of a core with the receiver streaming
+its full message set, exit 0.5 s after a simulated unplug, restart on the
+same tty minor.
 
 ## mower_ws_bridge
 

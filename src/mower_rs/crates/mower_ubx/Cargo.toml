@@ -1,0 +1,9 @@
+[package]
+name = "mower_ubx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "u-blox UBX protocol: framing, checksums and the NAV/CFG/ACK messages mower_gps uses (no dependencies, host-testable)"
+
+[lib]
+path = "src/lib.rs"
