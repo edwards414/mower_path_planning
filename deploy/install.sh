@@ -70,17 +70,19 @@ for dev in stmcom imu_usb gps_rtk lte_at; do
 done
 
 echo "== systemd"
-for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-link-status.service mower-camera.service; do
+for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-update-check.service mower-update-check.timer mower-link-status.service mower-camera.service; do
   sed "s#/home/cat/.mower#$state_dir#g; s#/home/cat#$home#g; s#^User=cat#User=$user#" "$here/host/$unit" > "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload
 systemctl enable mower.service >/dev/null
 systemctl enable --now mower-host-request.path >/dev/null
 systemctl enable --now mower-update.timer >/dev/null
+systemctl enable --now mower-update-check.timer >/dev/null
 systemctl enable --now mower-link-status.service >/dev/null
 systemctl enable --now mower-camera.service >/dev/null
 echo "   enabled mower.service (stack on boot), mower-host-request.path (app-triggered update/restart/poweroff),"
 echo "           mower-update.timer (hourly channel check, MOWER_AUTO_UPDATE=0 in .env disables),"
+echo "           mower-update-check.timer (registry check every 5 min -> /robot/info update.available),"
 echo "           mower-link-status.service (LTE/Wi-Fi signal -> link_status.json for /robot/telemetry),"
 echo "           mower-camera.service (front USB camera -> MPP H.264 -> mediamtx, CAMERA_* in .env)"
 

@@ -159,7 +159,7 @@ pub fn write_atomic(path: impl AsRef<Path>, contents: &[u8]) -> std::io::Result<
 /// `<state_dir>/host.request` (see deploy/host/mower-host-request). Returns
 /// the request path.
 pub fn write_host_request(dir: &str, action: &str, requested_by: &str) -> std::io::Result<String> {
-    const ACTIONS: [&str; 4] = ["update", "restart", "reboot", "poweroff"];
+    const ACTIONS: [&str; 5] = ["update", "check", "restart", "reboot", "poweroff"];
     if !ACTIONS.contains(&action) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

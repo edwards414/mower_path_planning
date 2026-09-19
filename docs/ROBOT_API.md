@@ -86,6 +86,8 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 
 `update.state`：`idle` / `pulling` / `restarting` / `up_to_date` / `failed`（由 `deploy/host/mower-host-request.sh` 寫入）。
 
+`update` 另外帶最近一次 registry 查詢（`mower-update-check.timer` 每 5 分鐘、或 `/system/check_update`，都只查 manifest 不下載）：`remote_digest`（頻道目前的 digest）、`checked_at`（unix 秒）、`check_error`（查不到時的原因，否則 null）、`available`（`remote_digest` 與 `software.digest` 不同 = 有新版可更新；`/system/update` 之後自動變回 false）。還沒查過時這四個欄位不存在。
+
 ## `/robot/telemetry`（std_msgs/String，JSON，10 Hz）
 
 > `base` 來源 `/mower_base/telemetry` 本身是 20 Hz（與 STM32 `0x85` 同步，PID 自動校正需要這個取樣率），並多了 `t`（ROS time）與 `pid.last_rx_seq`。
@@ -145,3 +147,7 @@ Response：`success` / `message`。`start` 回 `success=true` 只代表已開始
 ## `/system/update`、`/system/restart`（std_srvs/Trigger）
 
 機器人在移動或 `/nav_operation_active` 為 true 時回 `success=false`。成功只代表「已交給 host」，進度看 `/robot/info` 的 `update`。
+
+## `/system/check_update`（std_srvs/Trigger）
+
+立刻做一次 registry 查詢（不下載、不重啟，移動中也可以），結果在幾秒後出現在 `/robot/info` 的 `update.available` / `update.remote_digest`。api 2 新增，App 用「有沒有這個 service」判斷。

@@ -50,5 +50,6 @@ services:
   /check_nav_status: std_srvs/srv/Trigger
   /system/update: std_srvs/srv/Trigger
   /system/restart: std_srvs/srv/Trigger
+  /system/check_update: std_srvs/srv/Trigger
   /pid_autotune: mower_interface/srv/PidAutotune
   /boustrophedon_coverage/set_parameters: rcl_interfaces/srv/SetParameters

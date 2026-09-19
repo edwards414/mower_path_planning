@@ -1,0 +1,15 @@
+# Ask the registry every 5 minutes whether the release channel moved, so
+# /robot/info can say "update available" (Mower Studio / the app) before the
+# hourly mower-update.timer applies it. Never pulls or restarts.
+[Unit]
+Description=Check the registry for a newer mower robot image
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=mower-update-check.service
+
+[Install]
+WantedBy=timers.target

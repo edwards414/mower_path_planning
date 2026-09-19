@@ -1,7 +1,7 @@
 #!/bin/bash
 # Serve one request from <state_dir>/host.request, written by the robot
 # container (mower_mission/host_request.py, utils/mower-host-request):
-#   {"action": "update|restart|reboot|poweroff", "time": ..., "requested_by": "..."}
+#   {"action": "update|check|restart|reboot|poweroff", "time": ..., "requested_by": "..."}
 # Triggered by mower-host-request.path whenever the file changes.
 set -uo pipefail
 
@@ -24,6 +24,9 @@ status() {
 case "$action" in
   update)
     exec "$MOWER_DIR/host/mower-update.sh"
+    ;;
+  check)
+    exec "$MOWER_DIR/host/mower-update.sh" --check
     ;;
   restart)
     status restarting "restarting robot software"

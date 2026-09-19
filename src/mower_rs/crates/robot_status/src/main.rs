@@ -7,7 +7,8 @@
 //!   consumer's own receive timeout also flags the robot offline.
 //! * `/robot/info` (std_msgs/String JSON, latched, 1 Hz and on firmware
 //!   change) plus `<state_dir>/robot_status.json`, the update lights on
-//!   `/mower_base/led_command` and the `/system/update` / `/system/restart`
+//!   `/mower_base/led_command` and the `/system/update` / `/system/restart` /
+//!   `/system/check_update`
 //!   Trigger services (host.request hand-off, refused while moving).
 //! * `/robot/telemetry` (std_msgs/String JSON, reliable, 10 Hz): the
 //!   dashboard feed built from `/fix`, `/imu/data`, odometry, the base
@@ -176,6 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- services ----------------------------------------------------------
     let mut srv_update = node.create_service::<Trigger::Service>("/system/update", QosProfile::services_default())?;
     let mut srv_restart = node.create_service::<Trigger::Service>("/system/restart", QosProfile::services_default())?;
+    let mut srv_check = node.create_service::<Trigger::Service>("/system/check_update", QosProfile::services_default())?;
 
     // ---- timers ------------------------------------------------------------
     let mut timer_heartbeat = node.create_wall_timer(period(cfg.heartbeat_publish_rate_hz))?;
@@ -307,13 +309,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---- host request services --------------------------------------------
     macro_rules! host_service {
-        ($stream:expr, $action:literal) => {{
+        ($stream:expr, $action:literal) => {
+            host_service!($stream, $action, true)
+        };
+        ($stream:expr, $action:literal, $check_busy:expr) => {{
             let shared = shared.clone();
             let info_cfg = info_cfg.clone();
             let logger = logger.clone();
             tokio::spawn(async move {
                 while let Some(req) = $stream.next().await {
-                    let busy = info::busy(&shared.lock().unwrap(), info_cfg.busy_timeout_s, Instant::now());
+                    let busy = $check_busy && info::busy(&shared.lock().unwrap(), info_cfg.busy_timeout_s, Instant::now());
                     let resp = if busy {
                         Trigger::Response {
                             success: false,
@@ -344,6 +349,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     host_service!(srv_update, "update");
     host_service!(srv_restart, "restart");
+    // A registry lookup only: allowed while the robot is moving.
+    host_service!(srv_check, "check", false);
 
     // ---- heartbeat ---------------------------------------------------------
     {

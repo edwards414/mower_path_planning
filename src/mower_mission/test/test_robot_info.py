@@ -71,6 +71,7 @@ def test_rosbridge_exposes_info_topic_and_system_services():
     services_line = text.split('services_glob')[1].split('\n')[0]
     assert "'/system/update'" in services_line
     assert "'/system/restart'" in services_line
+    assert "'/system/check_update'" in services_line
     # rosapi needs the topic too so the app can discover it
     rosapi_topics = text.split('rosapi:')[1].split('topics_glob')[1].split('\n')[0]
     assert "'/robot/info'" in rosapi_topics

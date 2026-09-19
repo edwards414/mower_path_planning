@@ -70,6 +70,25 @@ from mower_mission import identity as ident
 from mower_mission.version import ROBOT_API_VERSION, software_identity
 
 
+def _update_block(update, check, running_digest):
+    """update_status.json plus the last registry check (update_check.json,
+    written by ``mower-update.sh --check``): ``remote_digest``,
+    ``checked_at``, ``check_error`` and ``available`` = the channel's digest
+    is known and differs from the running image."""
+    block = dict(update) if isinstance(update, dict) else {}
+    if not isinstance(update, dict) and update is not None and not isinstance(check, dict):
+        return update
+    if isinstance(check, dict):
+        remote = check.get('remote_digest') or ''
+        error = check.get('error') or ''
+        running = running_digest or ''
+        block['remote_digest'] = remote or None
+        block['checked_at'] = check.get('time')
+        block['check_error'] = error or None
+        block['available'] = bool(remote and running and remote != running)
+    return block or None
+
+
 class RobotInfoNode(Node):
     """Aggregate version / update state and publish it as /robot/info."""
 
@@ -144,6 +163,7 @@ class RobotInfoNode(Node):
 
         self.create_service(Trigger, '/system/update', self._on_update)
         self.create_service(Trigger, '/system/restart', self._on_restart)
+        self.create_service(Trigger, '/system/check_update', self._on_check_update)
 
         self.create_timer(1.0 / rate, self._tick)
         self.get_logger().info(
@@ -191,6 +211,10 @@ class RobotInfoNode(Node):
 
     def _on_restart(self, _req, res):
         return self._request_host('restart', res, check_busy=True)
+
+    def _on_check_update(self, _req, res):
+        # A registry lookup only (mower-update.sh --check): fine while moving.
+        return self._request_host('check', res, check_busy=False)
 
     def _request_host(self, action: str, res, check_busy: bool):
         if check_busy and self._busy():
@@ -267,6 +291,7 @@ class RobotInfoNode(Node):
         image = host_request.read_json(host_request.IMAGE_FILE, self._state_dir) or {}
         sync = host_request.read_json(host_request.FIRMWARE_SYNC_FILE, self._state_dir)
         update = host_request.read_json(host_request.UPDATE_STATUS_FILE, self._state_dir)
+        check = host_request.read_json(host_request.UPDATE_CHECK_FILE, self._state_dir)
 
         software = dict(self._software)
         for key in ('image', 'digest', 'tag', 'pulled_at'):
@@ -306,7 +331,7 @@ class RobotInfoNode(Node):
                 'sync': sync_summary,
                 'up_to_date': up_to_date,
             },
-            'update': update,
+            'update': _update_block(update, check, software.get('digest')),
             'busy': self._busy(),
             'uptime_s': round(time.monotonic() - self._start_s, 1),
         }

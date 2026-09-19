@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the registry for a newer mower robot image (no pull)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mower/host/mower-update.sh --check

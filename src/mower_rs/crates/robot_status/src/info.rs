@@ -78,11 +78,39 @@ pub fn busy(st: &State, busy_timeout_s: f64, now: Instant) -> bool {
     moving(st, busy_timeout_s, now) || st.nav_running
 }
 
+/// `update` = update_status.json (the host update script's progress) plus
+/// the last registry check (update_check.json, written by
+/// `mower-update.sh --check` every 5 min and on demand): `remote_digest`,
+/// `checked_at`, `check_error` and `available` = the channel's digest is
+/// known and differs from the running image. Missing files leave the
+/// pre-check shape untouched.
+pub fn update_block(update: Option<Value>, check: Option<Value>, running_digest: Option<&Value>) -> Value {
+    let mut block = match update {
+        Some(Value::Object(m)) => m,
+        Some(other) if check.is_none() => return other,
+        _ => Map::new(),
+    };
+    if let Some(Value::Object(c)) = check {
+        let remote = c.get("remote_digest").and_then(|v| v.as_str()).unwrap_or("");
+        let error = c.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        let running = running_digest.and_then(|v| v.as_str()).unwrap_or("");
+        block.insert("remote_digest".into(), if remote.is_empty() { Value::Null } else { json!(remote) });
+        block.insert("checked_at".into(), c.get("time").cloned().unwrap_or(Value::Null));
+        block.insert("check_error".into(), if error.is_empty() { Value::Null } else { json!(error) });
+        block.insert("available".into(), json!(!remote.is_empty() && !running.is_empty() && remote != running));
+    }
+    if block.is_empty() {
+        return Value::Null;
+    }
+    Value::Object(block)
+}
+
 /// The `/robot/info` document.
 pub fn snapshot(cfg: &InfoConfig, st: &State, start: Instant, now: Instant) -> Value {
     let image = read_state_json(&cfg.state_dir, "image.json").unwrap_or(Value::Null);
     let sync = read_state_json(&cfg.state_dir, "firmware_sync.json");
     let update = read_state_json(&cfg.state_dir, "update_status.json");
+    let check = read_state_json(&cfg.state_dir, "update_check.json");
 
     let mut software = cfg.software.clone();
     if let Some(image) = image.as_object() {
@@ -131,6 +159,7 @@ pub fn snapshot(cfg: &InfoConfig, st: &State, start: Instant, now: Instant) -> V
         })
     });
 
+    let update = update_block(update, check, software.get("digest"));
     json!({
         "robot_id": cfg.robot_id,
         "name": cfg.robot_name,
@@ -143,7 +172,7 @@ pub fn snapshot(cfg: &InfoConfig, st: &State, start: Instant, now: Instant) -> V
             "sync": sync_summary.unwrap_or(Value::Null),
             "up_to_date": up_to_date,
         },
-        "update": update.unwrap_or(Value::Null),
+        "update": update,
         "busy": busy(st, cfg.busy_timeout_s, now),
         "uptime_s": round_to(now.duration_since(start).as_secs_f64(), 1),
     })
@@ -235,6 +264,21 @@ mod tests {
         assert_eq!(snap["firmware"]["up_to_date"], json!(true));
         assert_eq!(snap["software"]["image"], json!("ghcr.io/x:main"));
         assert_eq!(snap["software"]["version"], json!("0.6.0"));
+        assert_eq!(snap["update"]["state"], json!("pulling"));
+        // no registry check yet: the block is the plain update_status.json
+        assert!(snap["update"].get("available").is_none());
+        std::fs::write(dir.join("update_check.json"), r#"{"time":9,"remote_digest":"sha256:2","error":""}"#).unwrap();
+        let snap = snapshot(&cfg, &st, now, now);
+        assert_eq!(snap["update"]["available"], json!(true));
+        assert_eq!(snap["update"]["remote_digest"], json!("sha256:2"));
+        assert_eq!(snap["update"]["checked_at"], json!(9));
+        assert_eq!(snap["update"]["check_error"], Value::Null);
+        std::fs::write(dir.join("update_check.json"), r#"{"time":10,"remote_digest":"sha256:1","error":""}"#).unwrap();
+        assert_eq!(snapshot(&cfg, &st, now, now)["update"]["available"], json!(false));
+        std::fs::write(dir.join("update_check.json"), r#"{"time":11,"remote_digest":"","error":"registry lookup failed"}"#).unwrap();
+        let snap = snapshot(&cfg, &st, now, now);
+        assert_eq!(snap["update"]["available"], json!(false));
+        assert_eq!(snap["update"]["check_error"], json!("registry lookup failed"));
         assert_eq!(snap["update"]["state"], json!("pulling"));
         assert_eq!(snap["busy"], json!(false));
         assert_eq!(snap["pairing_required"], json!(true));

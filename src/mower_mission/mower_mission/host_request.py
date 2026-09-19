@@ -28,10 +28,11 @@ import json
 import os
 import time
 
-ACTIONS = ('update', 'restart', 'reboot', 'poweroff')
+ACTIONS = ('update', 'check', 'restart', 'reboot', 'poweroff')
 
 REQUEST_FILE = 'host.request'
 UPDATE_STATUS_FILE = 'update_status.json'
+UPDATE_CHECK_FILE = 'update_check.json'
 IMAGE_FILE = 'image.json'
 FIRMWARE_SYNC_FILE = 'firmware_sync.json'
 
