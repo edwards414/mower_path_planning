@@ -200,8 +200,8 @@ def test_controller_and_hardware_fail_closed_on_stale_or_invalid_commands():
     'config', (REAL_CONTROLLER, DESCRIPTION_CONTROLLER)
 )
 def test_controller_safety_zero_crosses_rate_limiter_within_one_cycle(config):
-    """Keep the 50 Hz controller from stretching a guard stop by ~0.5 s."""
-    update_period_s = 1.0 / 50.0
+    """Keep the controller cycle from stretching a guard stop by ~0.5 s."""
+    update_period_s = 1.0 / float(_scalar(config, 'update_rate'))
     for axis in ('linear.x', 'angular.z'):
         max_velocity = float(_scalar(config, f'{axis}.max_velocity'))
         min_velocity = float(_scalar(config, f'{axis}.min_velocity'))
