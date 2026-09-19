@@ -20,3 +20,10 @@ SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{idVendor}=="054c", ATTRS{idProduct
 # Quectel EC25 LTE modem: interface 2 is the AT command port (0 DM, 1 NMEA,
 # 3 PPP). Polled by host/mower-link-status.py for signal strength.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{idProduct}=="0125", ATTRS{bInterfaceNumber}=="02", SYMLINK+="lte_at", MODE="0660", GROUP="dialout"
+
+# Genesys Logic 4-port hub the IMU / camera hang off. The kernel default
+# power/control=auto lets it runtime-suspend the moment its ports are idle
+# (autosuspend_delay 0 ms on this kernel); the hub dropped off the bus 77
+# times on 2026-09-19, taking every sensor with it, so keep it awake. This
+# is the cheap experiment, not a proven cause.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="05e3", ATTR{idProduct}=="0610", TEST=="power/control", ATTR{power/control}="on"

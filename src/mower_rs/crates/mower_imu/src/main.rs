@@ -30,6 +30,13 @@ const COMPONENT_TIMEOUT: Duration = Duration::from_millis(200);
 /// At 9600 baud, more than two complete 0x51..0x54 cycles means the bytes
 /// are a backlog.
 const MAX_BACKLOG_BYTES: u32 = 88;
+/// The sensor streams ~40 frames/s; nothing for this long means the port is
+/// open but dead. The CH341 does that after a USB endpoint stall (kernel
+/// "urb stopped: -32"): the fd stays valid, reads just never return data
+/// until the port is closed and reopened, so the process must end for
+/// launch to respawn it (2026-09-20: 2 of 7 stalls that day were of that
+/// kind and left the previous driver silent for 6 min).
+const FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn stamp_now() -> Time {
     let ns = std::time::SystemTime::now()
@@ -72,6 +79,7 @@ impl Driver {
         let mut last_acceleration_at: Option<Instant> = None;
         let mut last_angular_velocity_at: Option<Instant> = None;
         let mut last_poll_at = Instant::now();
+        let mut last_frame_at = Instant::now();
         let mut buf = [0u8; 256];
         let mut checksum_failures_logged = 0u64;
 
@@ -87,6 +95,12 @@ impl Driver {
                 continue;
             }
             last_poll_at = poll_at;
+            if poll_at.duration_since(last_frame_at) > FRAME_TIMEOUT {
+                return Err(format!(
+                    "no complete IMU frames for {:.0} s with the port open (USB stall?); exiting for respawn",
+                    FRAME_TIMEOUT.as_secs_f64()
+                ));
+            }
             let available = port.bytes_to_read().map_err(|e| format!("IMU serial read/parser failed: {e}"))?;
             if available == 0 {
                 // Do not consume a full CPU core when the sensor is quiet.
@@ -107,7 +121,11 @@ impl Driver {
                 .map_err(|e| format!("IMU serial read/parser failed: {e}"))?;
             let now = Instant::now();
             for byte in &buf[..n] {
-                match parser.push(*byte) {
+                let frame = parser.push(*byte);
+                if frame.is_some() {
+                    last_frame_at = now;
+                }
+                match frame {
                     Some(Frame::Acceleration) => last_acceleration_at = Some(now),
                     Some(Frame::AngularVelocity) => last_angular_velocity_at = Some(now),
                     Some(Frame::Angle) => {
