@@ -1,0 +1,17 @@
+[package]
+name = "mower_battery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "sensor_msgs/BatteryState from the base telemetry (port of mower_mission/battery_state_node.py + battery_estimator.py)"
+
+[[bin]]
+name = "mower_battery"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde_json.workspace = true

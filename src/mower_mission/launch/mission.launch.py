@@ -100,6 +100,16 @@ def generate_launch_description():
                     'safety heartbeat and admission rules).',
     )
 
+    rust_battery = LaunchConfiguration('rust_battery')
+
+    declare_rust_battery = DeclareLaunchArgument(
+        'rust_battery',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_battery process instead '
+                    'of the rclpy battery_state_node (same estimator, '
+                    'topics and parameters).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -397,6 +407,7 @@ def generate_launch_description():
         executable='battery_state_node',
         name='battery_state',
         output='screen',
+        condition=UnlessCondition(rust_battery),
         parameters=[{
             'use_sim_time': False,
             # Pack voltage from the RS485 meter in the pack lead; the
@@ -404,6 +415,21 @@ def generate_launch_description():
             'charger_present_min_v': 25.0,
             # Flip to True (and set capacity_ah) once the meter's shunt
             # carries the pack current -> coulomb counting (docs/BATTERY.md).
+            'meter_current_wired': False,
+            'capacity_ah': 0.0,
+        }],
+    )
+
+    # rust_battery:=true -- the same estimator as an r2r process
+    # (src/mower_rs/crates/mower_battery): identical BatteryState output.
+    mower_battery_rs = Node(
+        package='mower_rs',
+        executable='mower_battery',
+        name='battery_state',
+        output='screen',
+        condition=IfCondition(rust_battery),
+        parameters=[{
+            'charger_present_min_v': 25.0,
             'meter_current_wired': False,
             'capacity_ah': 0.0,
         }],
@@ -442,6 +468,7 @@ def generate_launch_description():
         declare_rust_adapter,
         declare_rust_record,
         declare_rust_nav,
+        declare_rust_battery,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -466,6 +493,7 @@ def generate_launch_description():
         telemetry_node,
         robot_status_rs,
         battery_state_node,
+        mower_battery_rs,
         pid_autotune_node,
         temp_dock_pose_publisher,
         auto_coverage_node,

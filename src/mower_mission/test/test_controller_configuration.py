@@ -47,6 +47,13 @@ VELOCITY_GUARD_RS_MAIN = (
     SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/main.rs'
 )
 NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/main.rs'
+BATTERY_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_battery/src/main.rs'
+BATTERY_RS_ESTIMATOR = (
+    SRC_DIR / 'mower_rs/crates/mower_battery/src/estimator.rs'
+)
+BATTERY_ESTIMATOR = (
+    SRC_DIR / 'mower_mission/mower_mission/battery_estimator.py'
+)
 NAV_SERVER_RS_STATE = SRC_DIR / 'mower_rs/crates/mower_nav/src/state.rs'
 NAV_SERVER_RS_GEOMETRY = (
     SRC_DIR / 'mower_rs/crates/mower_nav/src/geometry.rs'
@@ -245,7 +252,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -345,6 +352,42 @@ def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
     assert 'Navigation/manual motion is active or termination is uncertain' in main
     assert 'navigation path requires at least two poses' in geometry
     assert 'canonical_dispatch_id' in geometry
+
+
+def test_rust_battery_node_keeps_the_same_model_and_wiring():
+    """rust_battery:=true swaps in mower_rs mower_battery for
+    battery_state_node: same node name, topics, OCV table, launch
+    parameters and BatteryState semantics."""
+    main = BATTERY_RS_MAIN.read_text(encoding='utf-8')
+    estimator = BATTERY_RS_ESTIMATOR.read_text(encoding='utf-8')
+    python_estimator = BATTERY_ESTIMATOR.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_battery'" in mission_launch
+    assert "condition=IfCondition(rust_battery)" in mission_launch
+    assert "condition=UnlessCondition(rust_battery)" in mission_launch
+    assert mission_launch.count("name='battery_state'") == 2
+    assert mission_launch.count("'charger_present_min_v': 25.0") == 2
+    assert mission_launch.count("'meter_current_wired': False") == 2
+    assert 'r2r::Node::create(ctx, "battery_state", "")' in main
+    for name, default in (
+        ('base_telemetry_topic', '"/mower_base/telemetry"'),
+        ('battery_topic', '"/battery_state"'),
+        ('aon_battery_topic', '"/aon_battery_state"'),
+        ('stale_timeout_s', '5.0'),
+        ('charger_present_min_v', '25.0'),
+        ('low_battery_pct', '20.0'),
+        ('frame_id', '"base_footprint"'),
+    ):
+        assert f'"{name}", {default}' in main, name
+    # the OCV table is the Python one, row for row
+    python_rows = re.findall(r'\((\d\.\d\d), (\d\.\d\d)\)', python_estimator)
+    rust_rows = re.findall(r'\((\d\.\d\d), (\d\.\d\d)\)', estimator)
+    assert python_rows and rust_rows[:len(python_rows)] == python_rows
+    assert 'msg.percentage = est.fraction as f32' in main  # 0..1, not %
+    assert 'POWER_SUPPLY_TECHNOLOGY_LION: u8 = 2' in main
+    assert 'POWER_SUPPLY_HEALTH_DEAD: u8 = 3' in main
+    assert 'POWER_SUPPLY_HEALTH_OVERVOLTAGE: u8 = 4' in main
+    assert 'make_parameter_handler' not in main
 
 
 def test_local_compose_builds_full_runtime_stage():

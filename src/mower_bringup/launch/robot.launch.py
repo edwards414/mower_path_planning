@@ -66,6 +66,7 @@ def generate_launch_description():
     rust_adapter = LaunchConfiguration('rust_adapter')
     rust_record = LaunchConfiguration('rust_record')
     rust_nav = LaunchConfiguration('rust_nav')
+    rust_battery = LaunchConfiguration('rust_battery')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_bridge = LaunchConfiguration('rust_bridge')
@@ -107,6 +108,7 @@ def generate_launch_description():
             'rust_adapter': rust_adapter,
             'rust_record': rust_record,
             'rust_nav': rust_nav,
+            'rust_battery': rust_battery,
             'rust_bridge': rust_bridge,
         }.items(),
     )
@@ -207,6 +209,12 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs mower_nav instead of the rclpy '
                         'nav_action_server',
+        ),
+        DeclareLaunchArgument(
+            'rust_battery',
+            default_value='false',
+            description='mower_rs mower_battery instead of the rclpy '
+                        'battery_state_node',
         ),
         DeclareLaunchArgument(
             'rust_guards',

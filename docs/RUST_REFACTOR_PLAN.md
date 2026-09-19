@@ -178,6 +178,12 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 驗證：7 個單元測試；與 Python 節點在同一張圖上對 mock Nav2（假的 `bt_navigator/get_state`、`navigate_to_pose`、`follow_path`：成功 / abort / 聽取消 / 不理取消）跑同一個情境：35 步（壞 dispatch_id、短路徑、未確認逾時、cancel_navigation_dispatch token、確認後完整跑完含切段、`/cancel_nav2` 中途取消、action 層取消、Nav2 失敗、mutation lock 四種情況、手動指令取消、取消逾時鎖 `uncertain` 與相關聯的自動恢復、`/nav_operation_active` 序列）+ 13 步健康閘（四個來源逐一補齊、執行中 GPS 過期取消、待確認時 IMU 過期取消、pose 消失的時序）**全部相同**；唯一保留的差異是 Nav2 錯誤字串：這版 BasicNavigator 沒有 `getTaskError()`，Rust 版回真正的 error code。Heartbeat 容器實測 20 Hz、中位 49.8 ms、p99 55 ms（Python 49.9 / 59）。Python 節點在 0.30 s 的健康期限下在本機容器裡跟不上（rclpy 每個 callback 5–12 ms，40 msg/s），健康情境要放寬到 1.0 s 才能比對；Rust 版 0.30 s 下正常（最後一筆後 0.21 s 判定過期）。開關 `rust_nav`（compose `RUST_NAV`），**真機尚未切換：安全關鍵，先做一次監督下的導航**。
 
+### 7.9 `mower_battery` 執行紀錄（battery_state_node 移植，使用者要求）
+
+`crates/mower_battery`：`estimator.rs` 逐行移植 `battery_estimator.py`（OCV 表、sag 低通、限速回升、只有電壓時的充電斜坡、拔充電器後的重新錨定、庫侖計數與靜置重錨、滿電尾電流判定），14 個 pytest 向量原樣搬成 `cargo test`；`main.rs`（node 名 `battery_state`，同樣參數，16.7 Hz telemetry JSON 以 Python truthiness 判 `valid`/`online`、電表優先 / ADC 備援、充電器在場門檻、有號電流映射、低電量一次性警告、1 Hz `BatteryState` 版面：未量測欄位 NaN、`percentage` 0..1、health 由 cell 電壓決定）。差分測試發現 Python 版遇到 `charger`/`analog` 不是物件的 frame 會 AttributeError 直接死掉，已修（isinstance 檢查），Rust 版忽略該 frame。
+
+驗證：與 Python 節點吃同一條合成 telemetry 串流（無資料、電表 23.89 V、2 s sag、充電器 25.6 V、充電器無電流、拔除、ADC 備援 + AON 3.78 V、垃圾 frame、逾時、低電壓），只有電壓與庫侖計數兩種參數各跑一次：**每一筆 1 Hz 樣本在兩個 timer 相位差內相同**（present / status / health 轉換序列完全一致）。開關 `rust_battery`（compose `RUST_BATTERY`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
@@ -215,7 +221,7 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 | 節點 | 理由 |
 |---|---|
 | ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
-| ~~path_record_node（2124 行）~~、map_manage（1470）、coverage_node（1898）、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
+| ~~path_record_node（2124 行）~~、map_manage（1470）、coverage_node（1898）、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
 | mower_agent | 0.2% |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 

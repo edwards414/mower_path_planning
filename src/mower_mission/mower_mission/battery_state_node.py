@@ -141,8 +141,11 @@ class BatteryStateNode(Node):
             data = json.loads(msg.data)
         except ValueError:
             return
-        analog = data.get('analog') or {}
-        charger = data.get('charger') or {}
+        # A frame whose objects are not objects must not take the node down.
+        analog = data.get('analog')
+        analog = analog if isinstance(analog, dict) else {}
+        charger = data.get('charger')
+        charger = charger if isinstance(charger, dict) else {}
         now = self._now_s()
 
         meter_online = bool(charger.get('valid')) and bool(charger.get('online'))

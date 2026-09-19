@@ -498,6 +498,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_battery"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_imu"
 version = "0.1.0"
 dependencies = [

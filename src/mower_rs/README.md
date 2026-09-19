@@ -14,6 +14,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_ws_bridge` | `rosbridge_auth_proxy` + `rosbridge_websocket` + `rosapi` (pairing gate on `address:9090`, loopback 9091 for the agent, rosbridge v2 subset, `/rosapi/topics`) | `rosbridge.launch.py rust_bridge:=true` |
 | `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
 | `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
+| `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -164,6 +165,24 @@ latch and its correlated recovery, `/nav_operation_active` sequence) plus
 cancel while running and while pending) identical, apart from the Nav2
 error text which the Rust port reports with the real error code where
 BasicNavigator lacks `getTaskError()`.
+
+## mower_battery
+
+`crates/mower_battery`: `estimator.rs` is the SOC model line for line
+(OCV table, sag filter, rate-limited recovery, voltage-only charge ramp,
+post-charge re-anchor, coulomb counting with rest re-anchor and the
+full-tail detector) with the 14 Python test vectors as `cargo test`;
+`main.rs` parses the 16.7 Hz telemetry JSON with Python truthiness for
+the `valid` / `online` flags, keeps the meter-first / ADC-fallback voltage
+choice, the charger-presence threshold, the signed-current mapping, the
+one-shot low-battery warning and the 1 Hz `BatteryState` layout (NaN for
+unmeasured fields, `percentage` on 0..1, health from the cell voltage). A
+frame whose `charger` / `analog` is not an object is ignored (the Python
+node used to crash on it; fixed there too). Differential run against the
+Python node on one synthetic telemetry stream (silence, meter, sag,
+charger, charger without current, unplugged, ADC fallback + AON cell,
+garbage frames, stale, low pack), voltage-only and coulomb-counting
+variants: every 1 Hz sample identical within the timers' phase offset.
 
 ## Verification
 
