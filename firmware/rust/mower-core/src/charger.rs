@@ -1,6 +1,7 @@
-//! RS485 charger (数控 30V5A CC/CV module) — the hardware-free half of
-//! `Module/Src/charger_rs485.cpp`: what the last poll said, whether the
-//! module counts as online, and how that maps onto the `0x89` frame.
+//! RS485 charge-line meter (voltage / current / temperature, no CC/CV
+//! settings) — the hardware-free half of `Module/Src/charger_rs485.cpp`:
+//! what the last poll said, whether the meter counts as online, and how
+//! that maps onto the `0x89` frame.
 //!
 //! The firmware task does the UART work (request, reply, timeout) and calls
 //! [`Snapshot::record_success`] / [`Snapshot::record_failure`].
@@ -9,17 +10,16 @@ use crate::modbus;
 use crate::protocol::{charger_status_flag, saturating_u16, ChargerStatus};
 
 pub const SLAVE_ADDR: u8 = 0x01;
-/// Holding registers 0-4: Vin, Vout, Iout, set CC, set CV (all x0.01).
+/// Holding registers 0-4: voltage (x0.01 V), current (x0.01 A),
+/// temperature (degC), then two constants of unknown meaning.
 pub const REG_COUNT: usize = 5;
 pub const POLL_PERIOD_MS: u64 = 500;
 pub const REPLY_TIMEOUT_MS: u64 = 200;
 /// Consecutive failed polls before `online` drops.
 pub const OFFLINE_AFTER_FAILS: u8 = 3;
-/// Iout at or above this counts as charging (x0.01 A).
+/// Charge current at or above this counts as charging (x0.01 A).
 pub const CHARGING_MIN_CA: u16 = 5;
-/// Vout within this of set CV counts as the CV (top-off) phase (x0.01 V).
-pub const CV_BAND_CV: u16 = 10;
-/// Vin at or above this counts as "input present" (x0.01 V).
+/// Line voltage at or above this counts as "input present" (x0.01 V).
 pub const INPUT_PRESENT_MIN_CV: u16 = 500;
 
 /// The FC03 request the poller sends every period.
@@ -29,11 +29,11 @@ pub fn read_request() -> [u8; modbus::READ_REQUEST_LEN] {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
-    pub vin_cv: u16,
-    pub vout_cv: u16,
-    pub iout_ca: u16,
-    pub set_cc_ca: u16,
-    pub set_cv_cv: u16,
+    pub voltage_cv: u16,
+    pub current_ca: u16,
+    pub temp_c: u16,
+    pub reg3: u16,
+    pub reg4: u16,
     /// Last poll(s) answered with a valid frame.
     pub online: bool,
     /// `Some(tick)` of the last valid reply; `None` until the first one.
@@ -46,11 +46,11 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub const ZERO: Self = Self {
-        vin_cv: 0,
-        vout_cv: 0,
-        iout_ca: 0,
-        set_cc_ca: 0,
-        set_cv_cv: 0,
+        voltage_cv: 0,
+        current_ca: 0,
+        temp_c: 0,
+        reg3: 0,
+        reg4: 0,
         online: false,
         last_ok_ms: None,
         comm_error_count: 0,
@@ -60,11 +60,11 @@ impl Snapshot {
 
     /// A reply with at least [`REG_COUNT`] registers arrived at `now_ms`.
     pub fn record_success(&mut self, regs: &[u16; REG_COUNT], now_ms: u32) {
-        self.vin_cv = regs[0];
-        self.vout_cv = regs[1];
-        self.iout_ca = regs[2];
-        self.set_cc_ca = regs[3];
-        self.set_cv_cv = regs[4];
+        self.voltage_cv = regs[0];
+        self.current_ca = regs[1];
+        self.temp_c = regs[2];
+        self.reg3 = regs[3];
+        self.reg4 = regs[4];
         self.online = true;
         self.last_ok_ms = Some(now_ms);
         self.consecutive_fails = 0;
@@ -101,21 +101,16 @@ impl Snapshot {
     }
 
     pub fn is_charging(&self) -> bool {
-        self.online && self.iout_ca >= CHARGING_MIN_CA
-    }
-
-    pub fn is_cv_phase(&self) -> bool {
-        self.online && self.set_cv_cv != 0 && self.vout_cv >= self.set_cv_cv.saturating_sub(CV_BAND_CV)
+        self.online && self.current_ca >= CHARGING_MIN_CA
     }
 
     pub fn is_input_present(&self) -> bool {
-        self.online && self.vin_cv >= INPUT_PRESENT_MIN_CV
+        self.online && self.voltage_cv >= INPUT_PRESENT_MIN_CV
     }
 
     pub fn flags(&self) -> u8 {
         (if self.online { charger_status_flag::ONLINE } else { 0 })
             | (if self.is_charging() { charger_status_flag::CHARGING } else { 0 })
-            | (if self.is_cv_phase() { charger_status_flag::CV_PHASE } else { 0 })
             | (if self.is_input_present() { charger_status_flag::INPUT_PRESENT } else { 0 })
             | (if self.ever_seen() { charger_status_flag::EVER_SEEN } else { 0 })
     }
@@ -123,11 +118,11 @@ impl Snapshot {
     /// The `0x89` payload as of `now_ms`.
     pub fn status(&self, now_ms: u32) -> ChargerStatus {
         ChargerStatus {
-            vin_cv: self.vin_cv,
-            vout_cv: self.vout_cv,
-            iout_ca: self.iout_ca,
-            set_cc_ca: self.set_cc_ca,
-            set_cv_cv: self.set_cv_cv,
+            voltage_cv: self.voltage_cv,
+            current_ca: self.current_ca,
+            temp_c: self.temp_c,
+            reg3: self.reg3,
+            reg4: self.reg4,
             flags: self.flags(),
             comm_error_count: self.comm_error_count,
             age_ms: match self.last_ok_ms {
@@ -144,8 +139,8 @@ impl Snapshot {
 mod tests {
     use super::*;
 
-    // Vendor example: Vin 12.59 V, Vout 4.97 V, Iout 0, CC 2.50 A, CV 5.00 V
-    const REGS: [u16; REG_COUNT] = [1259, 497, 0, 250, 500];
+    // Measured 2026-09-19 against the meter's display: 25.63 V, 0.00 A, 35 degC
+    const REGS: [u16; REG_COUNT] = [2563, 0, 35, 11, 48961];
 
     #[test]
     fn request_targets_regs_0_to_4_of_addr_1() {
@@ -166,32 +161,28 @@ mod tests {
         let mut s = Snapshot::ZERO;
         s.record_success(&REGS, 1000);
         let st = s.status(1120);
-        assert_eq!((st.vin_cv, st.vout_cv, st.iout_ca, st.set_cc_ca, st.set_cv_cv), (1259, 497, 0, 250, 500));
+        assert_eq!((st.voltage_cv, st.current_ca, st.temp_c, st.reg3, st.reg4), (2563, 0, 35, 11, 48961));
         let (age, flags) = (st.age_ms, st.flags);
         assert_eq!(age, 120);
-        // online, input present, CV phase (4.97 >= 5.00 - 0.10), not charging (0 A)
+        // online, input present, not charging (0 A); the CV_PHASE bit is never set
         assert_eq!(
             flags,
-            charger_status_flag::ONLINE
-                | charger_status_flag::INPUT_PRESENT
-                | charger_status_flag::CV_PHASE
-                | charger_status_flag::EVER_SEEN
+            charger_status_flag::ONLINE | charger_status_flag::INPUT_PRESENT | charger_status_flag::EVER_SEEN
         );
     }
 
     #[test]
     fn charging_needs_current_and_online() {
         let mut s = Snapshot::ZERO;
-        s.record_success(&[2400, 2300, 150, 300, 2520], 0);
+        s.record_success(&[2450, 150, 36, 11, 48961], 0);
         assert!(s.is_charging());
-        assert!(!s.is_cv_phase());
         for _ in 0..OFFLINE_AFTER_FAILS {
             s.record_failure(None);
         }
         assert!(!s.online);
         assert!(!s.is_charging());
         // values are kept for the host to see
-        assert_eq!(s.vout_cv, 2300);
+        assert_eq!(s.current_ca, 150);
         let flags = s.status(0).flags;
         assert_eq!(flags, charger_status_flag::EVER_SEEN);
     }

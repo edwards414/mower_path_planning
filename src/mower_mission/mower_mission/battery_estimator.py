@@ -9,10 +9,15 @@ this is an OCV lookup with just enough filtering to survive motor sag:
   ``recovery_rate_per_s`` — a wheel stall pulls the voltage down for a few
   seconds and the reading must not bounce back up as if we had gained
   charge, yet a real rebound after a long sag should still be recovered;
-* while the RS485 charger reports CHARGING the estimate may only rise;
-* CV phase with the charge current below ``full_tail_current_a`` for
-  ``full_hold_s`` means the pack is full, which pins the estimate to 100 %
-  and re-anchors it for the next discharge.
+* while the RS485 charge-line meter reports CHARGING the estimate may only
+  rise;
+* once charging, a charge current at or below ``full_tail_current_a`` for
+  ``full_hold_s`` with the charger still present and the pack sitting at
+  CV (``full_min_cell_v``) means the pack is full, which pins the estimate
+  to 100 % and re-anchors it for the next discharge. The meter has no CC/CV
+  state of its own, so the tail current is the only end-of-charge signal;
+  the cell-voltage gate stops an unplugged charger (current 0, meter still
+  reading the pack) from being mistaken for a finished charge.
 
 Accuracy is roughly +-10 % under load, better at rest. See
 docs/BATTERY.md for the coulomb-counting upgrade this is meant to grow into.
@@ -71,6 +76,7 @@ class BatteryEstimator:
         recovery_rate_per_s: float = 0.01 / 60.0,  # 1 %/min while discharging
         full_tail_current_a: float = 0.2,
         full_hold_s: float = 60.0,
+        full_min_cell_v: float = 4.10,
     ):
         if cell_count < 1:
             raise ValueError('cell_count must be >= 1')
@@ -82,6 +88,7 @@ class BatteryEstimator:
         self.recovery_rate_per_s = float(recovery_rate_per_s)
         self.full_tail_current_a = float(full_tail_current_a)
         self.full_hold_s = float(full_hold_s)
+        self.full_min_cell_v = float(full_min_cell_v)
         self.reset()
 
     def reset(self):
@@ -107,10 +114,16 @@ class BatteryEstimator:
         pack_voltage_v: float,
         charger_online: bool = False,
         charging: bool = False,
-        cv_phase: bool = False,
+        input_present: bool = False,
         charge_current_a: float = math.nan,
     ) -> float:
-        """Feed one sample; returns the new fraction (0..1)."""
+        """Feed one sample; returns the new fraction (0..1).
+
+        ``charger_online``: the meter answers on RS485. ``charging``: its
+        current is above the firmware threshold. ``input_present``: it sees
+        a line voltage, so the charger is still connected even when the
+        current has tailed off below the CHARGING threshold.
+        """
         if not math.isfinite(pack_voltage_v) or pack_voltage_v <= 0.0:
             return self.fraction
 
@@ -129,8 +142,20 @@ class BatteryEstimator:
             float(charge_current_a) if charger_online else math.nan
         )
 
-        if charger_online and charging:
-            self._update_charging(t, ocv, cv_phase)
+        tail = (
+            charger_online
+            and input_present
+            and math.isfinite(self.charge_current_a)
+            and self.charge_current_a <= self.full_tail_current_a
+            and self.cell_voltage_v >= self.full_min_cell_v
+        )
+        # Keep following the charge once it has started even after the
+        # current drops below the CHARGING threshold: that is the tail.
+        in_charge = charger_online and (
+            charging or (tail and self.status in (STATUS_CHARGING, STATUS_FULL))
+        )
+        if in_charge:
+            self._update_charging(t, ocv, tail)
         else:
             self._tail_since = None
             self._update_discharging(dt, ocv)
@@ -142,7 +167,7 @@ class BatteryEstimator:
                 self.status = STATUS_DISCHARGING
         return self.fraction
 
-    def _update_charging(self, t: float, ocv: float, cv_phase: bool):
+    def _update_charging(self, t: float, ocv: float, tail: bool):
         # Terminal voltage under charge sits above OCV, so the lookup
         # over-reads; keep it below 100 % until the tail current confirms.
         estimate = min(ocv, 0.99)
@@ -152,11 +177,6 @@ class BatteryEstimator:
             self.fraction = max(self.fraction, estimate)
         self.status = STATUS_CHARGING
 
-        tail = (
-            cv_phase
-            and math.isfinite(self.charge_current_a)
-            and self.charge_current_a <= self.full_tail_current_a
-        )
         if not tail:
             self._tail_since = None
             return

@@ -83,11 +83,11 @@ extern "C" {
 #define UART_ANALOG_STATUS_FLAG_VDDA_CALIBRATED 0x10U /* VREFINT read OK */
 #define UART_ANALOG_STATUS_FLAG_MG996_LIMIT_ACTIVE 0x20U
 
-/* 0x89 charger status flags */
+/* 0x89 charger (charge-line meter) status flags */
 #define UART_CHARGER_STATUS_FLAG_ONLINE 0x01U        /* RS485 replies OK */
-#define UART_CHARGER_STATUS_FLAG_CHARGING 0x02U      /* Iout above threshold */
-#define UART_CHARGER_STATUS_FLAG_CV_PHASE 0x04U      /* Vout at set CV */
-#define UART_CHARGER_STATUS_FLAG_INPUT_PRESENT 0x08U /* Vin present */
+#define UART_CHARGER_STATUS_FLAG_CHARGING 0x02U      /* current above threshold */
+/* 0x04 was CV_PHASE for the CC/CV module; the meter has no CV setting, always 0 */
+#define UART_CHARGER_STATUS_FLAG_INPUT_PRESENT 0x08U /* line voltage present */
 #define UART_CHARGER_STATUS_FLAG_EVER_SEEN 0x10U     /* replied at least once */
 
 #define UART_PID_STATUS_FLAG_CLOSED_LOOP_ENABLED 0x01U
@@ -250,11 +250,11 @@ typedef struct __attribute__((packed)) {
 } analog_status_payload_t;
 
 typedef struct __attribute__((packed)) {
-  uint16_t vin_cv;    /* input voltage, x0.01 V */
-  uint16_t vout_cv;   /* output / battery voltage, x0.01 V */
-  uint16_t iout_ca;   /* charge current, x0.01 A */
-  uint16_t set_cc_ca; /* configured CC limit, x0.01 A */
-  uint16_t set_cv_cv; /* configured CV limit, x0.01 V */
+  uint16_t voltage_cv; /* charge line / battery voltage, x0.01 V (reg 0) */
+  uint16_t current_ca; /* charge current, x0.01 A (reg 1) */
+  uint16_t temp_c;     /* meter temperature, degC (reg 2) */
+  uint16_t reg3;       /* raw holding register 3, meaning unknown */
+  uint16_t reg4;       /* raw holding register 4, meaning unknown */
   uint8_t flags;      /* UART_CHARGER_STATUS_FLAG_* */
   uint8_t comm_error_count; /* wraps; timeouts + bad frames since boot */
   uint16_t age_ms;    /* since the last valid reply, 0xFFFF = never */

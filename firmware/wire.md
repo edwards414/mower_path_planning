@@ -27,7 +27,7 @@
 | 電壓邏輯轉換器 | FT-555 A/B level shifter | `PA0`, `PA1`, `PA8`, `PA9` | 5 V to 3.3 V logic | 左右輪 encoder PP A/B 訊號降壓後進 STM32 |
 | WS2812 燈條 | Front/Back LED strip | `PB4`, `PB5` | `TIM3_CH1/CH2` PWM + DMA | 800 kHz data，GRB 順序；後燈 16 顆，前燈 4 條串聯共 32 顆；LED 0-2 保留給狀態燈號 |
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
-| RS485 充電模組 | 數控 30V5A 帶 OFF CC/CV 充電模組（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀 Vin / Vout / Iout / CC / CV。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
+| RS485 充電線電表 | 電壓 / 電流 / 溫度 RS485 電表（Modbus RTU） | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀電壓 / 電流 / 溫度。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
 | MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x07` 控制 |
 | 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PA6` | `ADC1_IN9`, GPIO select | 共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池 |
@@ -106,7 +106,7 @@ flowchart LR
   STM32 -->|PA5 GPIO RS485_DE| MAX485_DE[MAX485 DE + RE]
   MAX485_DI --- RS485_AB[A / B bus]
   MAX485_RO --- RS485_AB
-  RS485_AB --- CHARGER[數控 30V5A charger, Modbus addr 0x01]
+  RS485_AB --- CHARGER[RS485 V/A/temp meter, Modbus addr 0x01]
 
   STM32 -->|PB8 TIM4_CH3 PWM| BLD120A_PWM[BLD120A PWM]
   STM32 -->|PB7 GPIO OUT| BLD120A_DIR[BLD120A DIR]
@@ -305,35 +305,37 @@ Host 是野火 LubanCat 2（RK3568）。它的 40-pin 排針串口是 UART3，�
 
 同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低（`PA5-PA7` 現在沒接東西，無影響）。細節見 `BOOTLOADER.md`。
 
-## RS485 充電模組（數控 30V5A 帶 OFF）
+## RS485 充電線電表
 
-原本規劃的 MCP2515 SPI-CAN 已取消（韌體從未接上），`PA11/PA12` 改成 `USART6` 接 RS485 收發模組，讀取「數控 30V5A 帶 OFF」CC/CV 充電模組的狀態。協議是標準 Modbus RTU（9600 8N1、站號預設 `0x01`），廠商文件與 PC 工具在 `數控30V5A+2.0.zip`（不進 git）。
+原本規劃的 MCP2515 SPI-CAN 已取消（韌體從未接上），`PA11/PA12` 改成 `USART6` 接 RS485 收發模組，讀取串在充電器與電池之間的 **RS485 電壓 / 電流 / 溫度電表**。協議是標準 Modbus RTU（9600 8N1、站號預設 `0x01`）。
+
+> 原本文件寫的是「數控 30V5A 帶 OFF」CC/CV 充電模組（廠商文件與 PC 工具在 `數控30V5A+2.0.zip`，不進 git），實際裝上的模組面板只有電壓、電流、溫度，沒有 CC/CV 可設。2026-09-19 實測對照面板（25.6 V / 0 A / 35 °C）確認 Reg0-2 的對應，Reg3/Reg4 是常數。充電本身由外接的 CC/CV 變壓器負責，電表只量。
 
 收發器用常見的 MAX485 TTL 轉 RS485 小板（DI / DE / RE / RO 一側，VCC / GND / A / B 一側）：
 
 | MAX485 模組腳 | 接到 | 說明 |
 | --- | --- | --- |
 | `VCC` | 5 V | MAX485 要 4.75 V 以上，不能接 3.3 V |
-| `GND` | GND | 與 STM32、充電模組共地 |
+| `GND` | GND | 與 STM32、電表共地 |
 | `DI` | `PA11` `USART6_TX` (AF8) | STM32 3.3 V 輸出，MAX485 TTL 門檻 2 V，直接接 |
 | `RO` | `PA12` `USART6_RX` (AF8, 內部 pull-up) | 5 V TTL 輸出；`PA12` 是 5 V-tolerant 腳，直接接 |
-| `DE` + `RE` 短接 | `PA5` `RS485_DE` GPIO | high = 發送、low = 接收；韌體送 request 前拉高，TC 中斷放下 |
-| `A` | 充電模組 `A` / `485+` | 長線兩端各 120 Ω（藍色小板通常已內建 R7 120 Ω） |
-| `B` | 充電模組 `B` / `485-` | |
+| `DE` + `RE` 短接 | `PA5` `RS485_DE` GPIO | **一定要接到 PA5**，只短接不接會浮空，request 送不出去（症狀：`0x89` `age_ms=0xFFFF`、`EVER_SEEN=0`）；high = 發送、low = 接收；韌體送 request 前拉高，TC 中斷放下 |
+| `A` | 電表 `A` / `485+` | 長線兩端各 120 Ω（藍色小板通常已內建 R7 120 Ω） |
+| `B` | 電表 `B` / `485-` | |
 
 若之後換成自動收發模組，把 `hardware_pins.hpp` 的 `CHARGER_RS485_USE_DE_PIN` 改 `0` 即可，`PA5` 就空出來。
 
-Modbus holding registers（FC03 讀，FC16 寫）：
+Modbus holding registers（FC03 讀）：
 
-| Reg | 內容 | 單位 |
-| --- | --- | --- |
-| 0 | Vin 輸入電壓 | x0.01 V |
-| 1 | Vout 輸出電壓 = 電池端電壓 | x0.01 V |
-| 2 | Iout 輸出（充電）電流 | x0.01 A |
-| 3 | 設定 CC 電流 | x0.01 A |
-| 4 | 設定 CV 電壓 | x0.01 V |
+| Reg | 內容 | 單位 | 實測 |
+| --- | --- | --- | --- |
+| 0 | 電壓（充電線 = 電池端） | x0.01 V | `2563` = 25.63 V，面板 25.6 V |
+| 1 | 電流（充電電流） | x0.01 A | `0`，面板 0 A |
+| 2 | 溫度（電表本身） | °C | `35`（34↔35 跳動），面板 35 °C |
+| 3 | 不明，常數 | - | `11` |
+| 4 | 不明，常數 | - | `48961` (`0xBF41`) |
 
-範例：發 `01 03 00 00 00 05 85 C9`，回 `01 03 0A 04 EB 01 F1 00 00 00 FA 01 F4 DE B2` = Vin 12.59 V、Vout 4.97 V、Iout 0 A、CC 2.50 A、CV 5.00 V。CRC 是 Modbus CRC-16（低位元組先送）。改站號用 FC06、站號 `0x00`，總線上只能有一台。
+範例：發 `01 03 00 00 00 05 85 C9`，回 `01 03 0A 0A 03 00 00 00 23 00 0B BF 41 <CRC>` = 25.63 V、0.00 A、35 °C。CRC 是 Modbus CRC-16（低位元組先送）。改站號用 FC06、站號 `0x00`，總線上只能有一台。
 
 韌體：`Module/charger_rs485` 每 500 ms 輪詢一次 Reg0-4（`HAL_UARTEx_ReceiveToIdle_IT` 收回應，request 前先武裝 RX，所以 `RE` 接地讓 RO 回送 echo 也能用），`PA5` DE 在送 request 前拉高、`USART6` TC 中斷（最後一個 stop bit 送完）放下，結果經 `0x89` 每 50 ms 回給 host；主電源關閉時停止輪詢。純 codec 在 `Module/modbus_rtu`，可在 Mac 上跑單元測試。
 
@@ -341,8 +343,8 @@ Modbus holding registers（FC03 讀，FC16 寫）：
 
 - MAX485 用 5 V 供電、與 STM32 共地；`RO` 5 V 輸出接 `PA12`（5 V-tolerant）沒問題，其它非 FT 腳不要拿來接 RO。
 - `PA11/PA12` 同時是 BlackPill 板載 USB-C 的 D-/D+，用 RS485 期間不能插 USB 資料線。
-- 「帶 OFF」版的輸出開關暫存器文件沒寫（文件只到 Reg4），拿到實物後用 `01 03 00 00 00 08` 探 Reg5+。
-- 目前只讀不寫；之後若要由 STM32 設 CC/CV，`ModbusRtu_BuildWriteMultiple` 已備好，host 協議另外編號。
+- Reg3/Reg4 意義不明，Reg5 以後沒探過；要探用 `01 03 00 00 00 08`（讀 8 個），看回覆有幾個暫存器。
+- 目前只讀不寫；`ModbusRtu_BuildWriteMultiple` 已備好，但這顆電表沒有可寫的設定。
 
 ## BLD120A 割草馬達
 

@@ -1081,20 +1081,17 @@ void uart_send_charger_status(void) {
   ChargerRs485_GetSnapshot(&ch);
 
   charger_status_payload_t payload = {};
-  payload.vin_cv = ch.vin_cv;
-  payload.vout_cv = ch.vout_cv;
-  payload.iout_ca = ch.iout_ca;
-  payload.set_cc_ca = ch.set_cc_ca;
-  payload.set_cv_cv = ch.set_cv_cv;
+  payload.voltage_cv = ch.voltage_cv;
+  payload.current_ca = ch.current_ca;
+  payload.temp_c = ch.temp_c;
+  payload.reg3 = ch.reg3;
+  payload.reg4 = ch.reg4;
   payload.flags = 0U;
   if (ch.online) {
     payload.flags |= UART_CHARGER_STATUS_FLAG_ONLINE;
   }
   if (ChargerRs485_IsCharging(&ch)) {
     payload.flags |= UART_CHARGER_STATUS_FLAG_CHARGING;
-  }
-  if (ChargerRs485_IsCvPhase(&ch)) {
-    payload.flags |= UART_CHARGER_STATUS_FLAG_CV_PHASE;
   }
   if (ChargerRs485_IsInputPresent(&ch)) {
     payload.flags |= UART_CHARGER_STATUS_FLAG_INPUT_PRESENT;

@@ -263,20 +263,19 @@ TEST(Pid, ConfigCommandMatchesReference)
 
 TEST(Charger, DecodeStatus)
 {
-  // vin=24.50 V, vout=25.10 V, iout=1.25 A, cc=3.00 A, cv=25.20 V,
-  // flags=online|charging|cv|input|seen, err=2, age=120 ms, exc=0
-  const uint8_t p[16] = {0x92, 0x09, 0xCE, 0x09, 0x7D, 0x00, 0x2C, 0x01,
-                         0xD8, 0x09, 0x1F, 0x02, 0x78, 0x00, 0x00, 0x00};
+  // voltage=25.10 V, current=1.25 A, temp=35 C, reg3=11, reg4=48961,
+  // flags=online|charging|input|seen, err=2, age=120 ms, exc=0
+  const uint8_t p[16] = {0xCE, 0x09, 0x7D, 0x00, 0x23, 0x00, 0x0B, 0x00,
+                         0x41, 0xBF, 0x1B, 0x02, 0x78, 0x00, 0x00, 0x00};
   ChargerStatus ch;
   ASSERT_TRUE(decode_charger_status(p, sizeof(p), ch));
-  EXPECT_EQ(ch.vin_cv, 2450);
-  EXPECT_EQ(ch.vout_cv, 2510);
-  EXPECT_EQ(ch.iout_ca, 125);
-  EXPECT_EQ(ch.set_cc_ca, 300);
-  EXPECT_EQ(ch.set_cv_cv, 2520);
+  EXPECT_EQ(ch.voltage_cv, 2510);
+  EXPECT_EQ(ch.current_ca, 125);
+  EXPECT_EQ(ch.temp_c, 35);
+  EXPECT_EQ(ch.reg3, 11);
+  EXPECT_EQ(ch.reg4, 48961);
   EXPECT_TRUE(ch.online());
   EXPECT_TRUE(ch.charging());
-  EXPECT_TRUE(ch.cv_phase());
   EXPECT_TRUE(ch.input_present());
   EXPECT_EQ(ch.comm_error_count, 2);
   EXPECT_EQ(ch.age_ms, 120);

@@ -76,11 +76,11 @@ void note_failure(void) {
 }
 
 void note_success(uint32_t now) {
-  g_snapshot.vin_cv = g_regs[0];
-  g_snapshot.vout_cv = g_regs[1];
-  g_snapshot.iout_ca = g_regs[2];
-  g_snapshot.set_cc_ca = g_regs[3];
-  g_snapshot.set_cv_cv = g_regs[4];
+  g_snapshot.voltage_cv = g_regs[0];
+  g_snapshot.current_ca = g_regs[1];
+  g_snapshot.temp_c = g_regs[2];
+  g_snapshot.reg3 = g_regs[3];
+  g_snapshot.reg4 = g_regs[4];
   g_snapshot.online = true;
   g_snapshot.ever_seen = true;
   g_snapshot.last_ok_ms = now;
@@ -220,22 +220,12 @@ void ChargerRs485_OnTxComplete(void) {
 
 bool ChargerRs485_IsCharging(const charger_rs485_snapshot_t *s) {
   return (s != nullptr) && s->online &&
-         (s->iout_ca >= CHARGER_RS485_CHARGING_MIN_CA);
-}
-
-bool ChargerRs485_IsCvPhase(const charger_rs485_snapshot_t *s) {
-  if ((s == nullptr) || !s->online || (s->set_cv_cv == 0U)) {
-    return false;
-  }
-  uint16_t floor_cv = (s->set_cv_cv > CHARGER_RS485_CV_BAND_CV)
-                          ? (uint16_t)(s->set_cv_cv - CHARGER_RS485_CV_BAND_CV)
-                          : 0U;
-  return s->vout_cv >= floor_cv;
+         (s->current_ca >= CHARGER_RS485_CHARGING_MIN_CA);
 }
 
 bool ChargerRs485_IsInputPresent(const charger_rs485_snapshot_t *s) {
   return (s != nullptr) && s->online &&
-         (s->vin_cv >= CHARGER_RS485_INPUT_PRESENT_MIN_CV);
+         (s->voltage_cv >= CHARGER_RS485_INPUT_PRESENT_MIN_CV);
 }
 
 /* USART6 RX-to-idle event. Runs in the USART6 ISR. The reply may arrive in

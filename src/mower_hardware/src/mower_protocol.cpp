@@ -251,11 +251,11 @@ bool decode_charger_status(const uint8_t * p, size_t len, ChargerStatus & out)
   if (len != 16) {
     return false;
   }
-  out.vin_cv = get_u16(p);
-  out.vout_cv = get_u16(p + 2);
-  out.iout_ca = get_u16(p + 4);
-  out.set_cc_ca = get_u16(p + 6);
-  out.set_cv_cv = get_u16(p + 8);
+  out.voltage_cv = get_u16(p);
+  out.current_ca = get_u16(p + 2);
+  out.temp_c = get_u16(p + 4);
+  out.reg3 = get_u16(p + 6);
+  out.reg4 = get_u16(p + 8);
   out.flags = p[10];
   out.comm_error_count = p[11];
   out.age_ms = get_u16(p + 12);

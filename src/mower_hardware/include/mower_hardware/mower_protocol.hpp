@@ -49,11 +49,12 @@ enum Ws2812Mode : uint8_t {
 constexpr uint8_t kFwBuildFlagDirty = 0x01;
 constexpr uint8_t kFwBuildFlagUnversioned = 0x02;
 
-// 0x89 charger status flags
+// 0x89 charger (charge-line V/A/temp meter) status flags
 constexpr uint8_t kChargerFlagOnline = 0x01;        // RS485 replies OK
-constexpr uint8_t kChargerFlagCharging = 0x02;      // Iout above threshold
-constexpr uint8_t kChargerFlagCvPhase = 0x04;       // Vout at the set CV
-constexpr uint8_t kChargerFlagInputPresent = 0x08;  // Vin present
+constexpr uint8_t kChargerFlagCharging = 0x02;      // current above threshold
+// 0x04 was CV_PHASE for the CC/CV module the firmware was first written
+// for; the meter actually fitted has no CV setting and never sets it.
+constexpr uint8_t kChargerFlagInputPresent = 0x08;  // line voltage present
 constexpr uint8_t kChargerFlagEverSeen = 0x10;      // replied at least once
 
 // 0x8A analog status flags
@@ -200,21 +201,22 @@ struct FirmwareInfo {
   std::string to_json() const;
 };
 
-// 0x89: RS485 CC/CV charger module, polled by the STM32 every 500 ms.
-// Values are the last valid reply (or 0); trust them only when online().
+// 0x89: RS485 voltage / current / temperature meter in the charger-to-
+// battery line, polled by the STM32 every 500 ms. It only measures (no
+// CC/CV settings). Values are the last valid reply (or 0); trust them only
+// when online().
 struct ChargerStatus {
-  uint16_t vin_cv = 0;      // input voltage, x0.01 V
-  uint16_t vout_cv = 0;     // output = battery-side voltage, x0.01 V
-  uint16_t iout_ca = 0;     // charge current, x0.01 A
-  uint16_t set_cc_ca = 0;   // configured CC limit, x0.01 A
-  uint16_t set_cv_cv = 0;   // configured CV limit, x0.01 V
+  uint16_t voltage_cv = 0;  // charge line = battery terminal voltage, x0.01 V
+  uint16_t current_ca = 0;  // charge current, x0.01 A
+  uint16_t temp_c = 0;      // meter temperature, degC
+  uint16_t reg3 = 0;        // raw holding register 3, meaning unknown
+  uint16_t reg4 = 0;        // raw holding register 4, meaning unknown
   uint8_t flags = 0;        // kChargerFlag*
   uint8_t comm_error_count = 0;
   uint16_t age_ms = 0xFFFF;  // since the last valid reply, 0xFFFF = never
   uint8_t last_exception_code = 0;
   bool online() const { return flags & kChargerFlagOnline; }
   bool charging() const { return flags & kChargerFlagCharging; }
-  bool cv_phase() const { return flags & kChargerFlagCvPhase; }
   bool input_present() const { return flags & kChargerFlagInputPresent; }
 };
 

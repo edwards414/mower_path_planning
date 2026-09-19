@@ -79,7 +79,8 @@ pub mod servo_status_flag {
 pub mod charger_status_flag {
     pub const ONLINE: u8 = 0x01;
     pub const CHARGING: u8 = 0x02;
-    pub const CV_PHASE: u8 = 0x04;
+    /// Was CV_PHASE for the CC/CV module; the V/A/temp meter never sets it.
+    pub const RESERVED_CV_PHASE: u8 = 0x04;
     pub const INPUT_PRESENT: u8 = 0x08;
     pub const EVER_SEEN: u8 = 0x10;
 }
@@ -237,16 +238,16 @@ wire_struct!(ServoStatus, 8, {
 });
 
 wire_struct!(ChargerStatus, 16, {
-    /// input voltage, x0.01 V
-    pub vin_cv: u16,
-    /// output / battery voltage, x0.01 V
-    pub vout_cv: u16,
-    /// charge current, x0.01 A
-    pub iout_ca: u16,
-    /// configured CC limit, x0.01 A
-    pub set_cc_ca: u16,
-    /// configured CV limit, x0.01 V
-    pub set_cv_cv: u16,
+    /// reg 0: charge line / battery voltage, x0.01 V
+    pub voltage_cv: u16,
+    /// reg 1: charge current, x0.01 A
+    pub current_ca: u16,
+    /// reg 2: meter temperature, degC
+    pub temp_c: u16,
+    /// reg 3 raw, meaning unknown
+    pub reg3: u16,
+    /// reg 4 raw, meaning unknown
+    pub reg4: u16,
     pub flags: u8,
     /// wraps; timeouts + bad frames since boot
     pub comm_error_count: u8,
@@ -648,11 +649,11 @@ mod tests {
 
         // C++: five u16, u8 flags, u8 errors, u16 age, u8 exception, u8 reserved => 16 bytes
         let st = ChargerStatus {
-            vin_cv: 1259,
-            vout_cv: 497,
-            iout_ca: 0,
-            set_cc_ca: 250,
-            set_cv_cv: 500,
+            voltage_cv: 2563,
+            current_ca: 0,
+            temp_c: 35,
+            reg3: 11,
+            reg4: 48961,
             flags: 0x19,
             comm_error_count: 3,
             age_ms: 120,
@@ -660,7 +661,7 @@ mod tests {
             reserved: 0,
         };
         let b = st.as_bytes();
-        assert_eq!(&b[0..2], &1259u16.to_le_bytes());
+        assert_eq!(&b[0..2], &2563u16.to_le_bytes());
         assert_eq!(b[10], 0x19);
         assert_eq!(b[11], 3);
         assert_eq!(&b[12..14], &120u16.to_le_bytes());

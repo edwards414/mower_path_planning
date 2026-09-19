@@ -2,11 +2,12 @@
 """Publish sensor_msgs/BatteryState for the real base from STM32 telemetry.
 
 Reads the ``analog`` (0x8A: pack voltages) and ``charger`` (0x89: RS485
-CC/CV module) objects of ``/mower_base/telemetry`` (mower_hardware) and runs
+voltage / current / temperature meter in the charge line) objects of
+``/mower_base/telemetry`` (mower_hardware) and runs
 :class:`mower_mission.battery_estimator.BatteryEstimator` on them:
 
 * ``/battery_state``      — 24 V main pack (6S): voltage, percentage,
-  charging / discharging / full, charge current while the charger answers
+  charging / discharging / full, charge current while the meter answers
 * ``/aon_battery_state``  — 3.7 V always-on cell that keeps the STM32 alive
 
 Replaces ``battery_simulator_node`` on the real robot; the simulator keeps
@@ -52,6 +53,7 @@ class BatteryStateNode(Node):
         self.declare_parameter('recovery_rate_pct_per_min', 1.0)
         self.declare_parameter('full_tail_current_a', 0.2)
         self.declare_parameter('full_hold_s', 60.0)
+        self.declare_parameter('full_min_cell_v', 4.10)
         self.declare_parameter('low_battery_pct', 20.0)
         self.declare_parameter('frame_id', 'base_footprint')
 
@@ -67,6 +69,7 @@ class BatteryStateNode(Node):
             recovery_rate_per_s=recovery,
             full_tail_current_a=float(p('full_tail_current_a')),
             full_hold_s=float(p('full_hold_s')),
+            full_min_cell_v=float(p('full_min_cell_v')),
         )
         # The AON cell is charged by its own on-board charger the STM32 does
         # not see, so it only gets the voltage lookup.
@@ -112,14 +115,14 @@ class BatteryStateNode(Node):
 
         if analog.get('main_battery_valid'):
             online = bool(charger.get('valid')) and bool(charger.get('online'))
-            iout = float(charger.get('iout_a', math.nan)) if online else math.nan
+            current = float(charger.get('current_a', math.nan)) if online else math.nan
             self.main.update(
                 now,
                 float(analog.get('main_battery_v', math.nan)),
                 charger_online=online,
                 charging=bool(charger.get('charging')),
-                cv_phase=bool(charger.get('cv_phase')),
-                charge_current_a=iout,
+                input_present=bool(charger.get('input_present')),
+                charge_current_a=current,
             )
             self.last_main_time = now
             self._check_low(now)

@@ -7,7 +7,7 @@
 
 ```
 STM32 ADC mux CH2/CH3 ──0x8A ANALOG_STATUS (50 ms, 200 ms 更新)──┐
-RS485 充電模組 Vout/Iout/CC/CV ──0x89 CHARGER_STATUS (500 ms 輪詢)─┤
+RS485 充電線電表 電壓/電流/溫度 ──0x89 CHARGER_STATUS (500 ms 輪詢)─┤
                                                                  ▼
                        mower_hardware  →  /mower_base/telemetry {analog, charger}
                                                                  ▼
@@ -28,9 +28,11 @@ RS485 充電模組 Vout/Iout/CC/CV ──0x89 CHARGER_STATUS (500 ms 輪詢)─�
 1. 電池組電壓過一階低通（`filter_tau_s`，預設 20 s），吃掉馬達啟動的瞬間壓降
 2. 每 cell 電壓查 NMC 18650 典型 OCV 表（`DEFAULT_OCV_TABLE`，3.0 → 0 %、3.78 → 50 %、4.2 → 100 %）
 3. 放電中：估計值可以自由往下，往上最多 `recovery_rate_pct_per_min`（預設 1 %/min）——長時間割草壓降後電壓回彈，不會一秒跳回去，但也不會永遠卡在低點
-4. 充電中（`0x89 CHARGING`）：估計值只准往上，且上限 99 %，因為充電端電壓高於 OCV 會高估
-5. 充飽：`CV_PHASE` 且 `Iout <= full_tail_current_a`（0.2 A）持續 `full_hold_s`（60 s）→ 100 %，`FULL`，同時把估計重新對齊
-6. 充電器在線但沒電流 → `NOT_CHARGING`；≥ 99.5 % 時報 `FULL`
+4. 充電中（`0x89 CHARGING`，電表電流 ≥ 0.05 A）：估計值只准往上，且上限 99 %，因為充電端電壓高於 OCV 會高估
+5. 充飽：充電開始後，電表電流 `<= full_tail_current_a`（0.2 A）、電表仍有電壓（`INPUT_PRESENT`）、且 cell 電壓 `>= full_min_cell_v`（4.10 V，代表真的在 CV 段）持續 `full_hold_s`（60 s）→ 100 %，`FULL`，同時把估計重新對齊。電流掉到 0.05 A 以下 `CHARGING` 旗標會先消失，估算器會自己接著追完 tail
+6. 充電器在線但沒電流、也不在 tail 條件 → `NOT_CHARGING`；≥ 99.5 % 時報 `FULL`
+
+> RS485 上的模組實際是一顆「電壓 / 電流 / 溫度」電表（`firmware/wire.md`「RS485 充電線電表」），不是原本規劃的 CC/CV 充電模組，所以沒有 `CV_PHASE`、也沒有 CC/CV 設定可讀；充電本身由外接變壓器負責。cell 電壓門檻是為了擋「充到一半把變壓器拔掉、電表還讀得到電池電壓、電流 0」被誤判成充飽。
 
 限制：
 - 負載下誤差約 ±10 %，靜置後較準；OCV 表是通用值，沒對這顆電池實測
@@ -68,10 +70,10 @@ Shunt 放在電池負極（低側）最簡單，但 INA226 高側也可以（最
 
 ### 充電曲線
 
-`/mower_base/telemetry` 已進 `mower_recorder` bag，`charger.vout_v / iout_a / cv_phase` 每 500 ms 一點。有實體充電器後：
+`/mower_base/telemetry` 已進 `mower_recorder` bag，`charger.voltage_v / current_a` 每 500 ms 一點。接上充電器後：
 
-1. 從 20 % 充到 tail current，`ros2 bag` 匯出 `vout / iout vs t`
-2. 對比同一段時間的 `analog.main_battery_v`，量出充電迴路的 I·R（電壓差 ÷ Iout），可以拿來修正「充電中 OCV 高估」
+1. 從 20 % 充到 tail current，`ros2 bag` 匯出 `charger.voltage_v / current_a vs t`
+2. 對比同一段時間的 `analog.main_battery_v`，量出充電迴路的 I·R（電壓差 ÷ 電流），可以拿來修正「充電中 OCV 高估」；電表電壓也是校正 ADC 分壓比的現成基準
 3. 充飽後靜置 30 min 再放電到截止，用第二步的庫侖計數量實際容量，重畫這顆電池的 OCV 表取代 `DEFAULT_OCV_TABLE`
 
 ## 校正待辦
@@ -79,4 +81,5 @@ Shunt 放在電池負極（低側）最簡單，但 INA226 高側也可以（最
 - [ ] 三用電表量電池端 vs `analog.main_battery_v`，修 `MAIN_BATTERY_DIVIDER_GAIN`（或在 node 加 `voltage_gain` 參數）
 - [ ] 同上，`aon_battery_v`
 - [ ] 確認 NTC 型號 / beta，板溫才可信
-- [ ] 充電器到貨後跑一次完整充電，看 `CV_PHASE` / tail current 門檻是否合理
+- [x] RS485 電表對照面板確認 Reg0-2 = 電壓 / 電流 / 溫度（2026-09-19，25.6 V / 0 A / 35 °C）
+- [ ] 接上充電器跑一次完整充電，看 tail current（0.2 A）與 `full_min_cell_v`（4.10 V）門檻是否合理
