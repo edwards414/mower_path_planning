@@ -40,6 +40,11 @@ MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/main.rs'
 MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
 COVERAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/coverage_node.py'
 COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/main.rs'
+AGENT_PY = SRC_DIR / 'mower_mission/mower_mission/mower_agent.py'
+AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/main.rs'
+AGENT_RS_RELAY = SRC_DIR / 'mower_rs/crates/mower_agent/src/relay.rs'
+ROSBRIDGE_LAUNCH = SRC_DIR / 'mower_bringup/launch/rosbridge.launch.py'
+VERSION_PY = SRC_DIR / 'mower_mission/mower_mission/version.py'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -261,7 +266,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_coverage', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_coverage', 'rust_agent', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -472,6 +477,38 @@ def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
                  'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
         assert text in main, text
     assert 'make_parameter_handler' not in main
+
+
+def test_rust_agent_keeps_the_same_backend_protocol_and_wiring():
+    """rust_agent:=true swaps in mower_rs mower_agent for the Python fleet
+    agent: same endpoints, constants, relay framing, control messages, log
+    lines and launch arguments."""
+    main = AGENT_RS_MAIN.read_text(encoding='utf-8')
+    relay = AGENT_RS_RELAY.read_text(encoding='utf-8')
+    py = AGENT_PY.read_text(encoding='utf-8')
+    launch = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_agent'" in launch and launch.count("name='mower_agent'") == 2
+    assert "condition=IfCondition(rust_agent)" in launch and "condition=UnlessCondition(rust_agent)" in launch
+    assert launch.count("'--rosbridge', 'ws://127.0.0.1:9091'") == 2
+    api = re.search(r'^ROBOT_API_VERSION = (\d+)', VERSION_PY.read_text(encoding='utf-8'), re.M).group(1)
+    assert f'const ROBOT_API_VERSION: i64 = {api};' in main
+    for const in ('HEARTBEAT_S = 10', 'TELEMETRY_THROTTLE_MS = 5000', 'REGISTER_RETRY_S = 30', 'RECONNECT_MAX_S = 60',
+                  'HTTP_RELAY_TIMEOUT_S = 10', 'TURN_REFRESH_S = 3600', 'TURN_RETRY_S = 60'):
+        assert const in py
+        name, value = const.split(' = ')
+        assert re.search(rf'const {name}: \w+ = {value};', main), const
+    assert 'HTTP_RELAY_MAX_BODY: usize = 64 * 1024;' in main
+    for text in ('/v1/robots/register', '/v1/relay/robot/', '/turn', '/v3/config/global/patch', 'webrtcICEServers2',
+                 'ws://127.0.0.1:9090', 'ws://127.0.0.1:9091', 'http://127.0.0.1:8889', 'http://127.0.0.1:9997',
+                 'MOWER_BACKEND_URL not set: agent idle (development mode)', 'MOWER_PROVISION_TOKEN not set: skipping registration',
+                 'relay refused us: HTTP', 'reconnecting in', 'gate refused', 'gate unreachable', 'no such session',
+                 'session ended', 'relay lost', 'not relayed', 'camera server unreachable', 'not implemented yet',
+                 'another device_key holds this robot_id', 'bad provision token', '"X-Mower-Client"', '"@robot"'):
+        assert text in main, text
+    for const in ('SUBPROTOCOL: &str = "mrelay1"', 'SID_BYTES: usize = 8', 'T_TEXT: u8 = 0x01', 'T_TEXT_MORE: u8 = 0x11',
+                  'T_BIN: u8 = 0x02', 'T_BIN_MORE: u8 = 0x12', 'CHUNK_SIZE: usize = 512 * 1024', 'MAX_MESSAGE: usize = 64 * 1024 * 1024'):
+        assert const in relay, const
+    assert '"transport=udp", "transport=tcp"' in main
 
 
 def test_rust_battery_node_keeps_the_same_model_and_wiring():

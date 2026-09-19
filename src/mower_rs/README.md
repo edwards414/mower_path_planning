@@ -18,6 +18,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -256,6 +257,20 @@ zone sequences with `/get_channel_route`, and the tracker that cancels the
 action, watches the acknowledgment and retries `/cancel_navigation_dispatch`
 every 2 s (one live attempt per dispatch id, 0.5-30 s response deadline)
 until a terminal state is proven.
+
+## mower_agent
+
+`crates/mower_agent` has no r2r dependency: tokio + tokio-tungstenite (rustls)
+for the relay, gate and loopback-bridge WebSockets, ureq (rustls) on a
+blocking thread for the backend and MediaMTX HTTP calls, exactly where the
+Python agent used `run_in_executor`. `relay.rs` is `relay_protocol.py`
+(frames, chunking, reassembly, the pytest vectors as `cargo test`s).
+`main.rs` keeps every log line, control message (`hb`, `opened`, `open_err`,
+`close`, `http_res`), the X-Mower-* signing, the `mower-agent/<api>`
+User-Agent Cloudflare's browser check needs, the WHEP path rule, the
+64 KiB body cap and the header filter, the 1 s..60 s reconnect back-off
+with the re-registration on an HTTP refusal, the 30 s register retry, the
+TURN refresh schedule and the 0600 atomic `device_key` write.
 
 ## Verification
 

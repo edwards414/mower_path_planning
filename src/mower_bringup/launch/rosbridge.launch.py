@@ -34,6 +34,14 @@ def generate_launch_description():
                     'rosbridge_auth_proxy + rosbridge_websocket + rosapi',
     )
     rust_bridge = LaunchConfiguration('rust_bridge')
+    rust_agent_arg = DeclareLaunchArgument(
+        'rust_agent',
+        default_value='false',
+        description='Run the mower_rs fleet agent (registration, relay, '
+                    'phone sessions, WHEP relay, TURN) instead of the Python '
+                    'mower_agent',
+    )
+    rust_agent = LaunchConfiguration('rust_agent')
     address_arg = DeclareLaunchArgument(
         'address',
         default_value='127.0.0.1',
@@ -69,9 +77,25 @@ def generate_launch_description():
         executable='mower_agent',
         name='mower_agent',
         output='screen',
+        condition=UnlessCondition(rust_agent),
         arguments=[
             # The gate binds `address` (the WireGuard/LAN IP on a real robot,
             # 127.0.0.1 in dev), so the agent must dial the same address.
+            '--gate', ['ws://', LaunchConfiguration('address'), ':', LaunchConfiguration('port')],
+            '--rosbridge', 'ws://127.0.0.1:9091',
+        ],
+    )
+
+    # rust_agent:=true -- the same agent as a tokio process
+    # (src/mower_rs/crates/mower_agent): same registration, heartbeats,
+    # mrelay1 sessions through the gate, WHEP relay and TURN refresh.
+    agent_rs = Node(
+        package='mower_rs',
+        executable='mower_agent',
+        name='mower_agent',
+        output='screen',
+        condition=IfCondition(rust_agent),
+        arguments=[
             '--gate', ['ws://', LaunchConfiguration('address'), ':', LaunchConfiguration('port')],
             '--rosbridge', 'ws://127.0.0.1:9091',
         ],
@@ -126,8 +150,10 @@ def generate_launch_description():
         port_arg,
         address_arg,
         rust_bridge_arg,
+        rust_agent_arg,
         auth_proxy,
         agent,
+        agent_rs,
         rosbridge_websocket,
         rosapi,
         ws_bridge,

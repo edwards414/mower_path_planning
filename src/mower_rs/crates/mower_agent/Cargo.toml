@@ -1,0 +1,24 @@
+[package]
+name = "mower_agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Robot side of the fleet backend: registration, relay WebSocket with heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials (port of mower_mission/mower_agent.py)"
+
+[[bin]]
+name = "mower_agent"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+futures.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2", default-features = false, features = ["tls"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+data-encoding = "2"
+base64 = "0.22"

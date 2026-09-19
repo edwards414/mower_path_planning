@@ -204,6 +204,12 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 驗證：兩個節點各對同一組假件（zone map 服務、latched 風險地圖、假 Waypoint action server 含 succeed / fail / reject / hang / 4.5 s 慢接受模式、確認 / 取消 / 狀態 / 通道 / 鎖服務）跑 48 個步驟（無風險、zigzag / spiral / 錯誤 pattern / 邊界環 / 30° / 對齊與重取樣風險 / unknown_as_obstacle / 壞參數 / 無 zone、參數型別與 startup-only、zone 執行成功 / 失敗 / 被拒 / 確認失敗 / 慢接受、導航中拒絕、序列成功 / 執行中拒絕 / hang 後 stop / 通道失敗 / 導航失敗 / 單 zone）：**每個 service 回應、每筆 marker（ns、id、顏色、每個點）與路徑、假件事件序列（goal、confirm、cancel_dispatch、route、lock）全部相同**。開關 `rust_coverage`（compose `RUST_COVERAGE`）。
 
+### 7.13 `mower_agent` 執行紀錄（mower_agent 移植，使用者要求）
+
+`crates/mower_agent`：無 r2r，tokio + tokio-tungstenite（rustls）處理 relay / gate / loopback bridge 三種 WebSocket，ureq（rustls）在 blocking 執行緒做後端與 MediaMTX 的 HTTP（對應 Python 的 `run_in_executor`）。`relay.rs` 移植 `relay_protocol.py`（分塊、重組、pytest 向量）；`main.rs` 保留每一行 log、每個控制訊息、X-Mower-* 簽章與 `mower-agent/<api>` User-Agent、WHEP 路徑規則與 64 KiB 上限、header 過濾、1..60 s 重連退避與被拒後重註冊、30 s 註冊重試、TURN 更新排程、0600 原子寫入 device_key。
+
+驗證：假後端（aiohttp：註冊 / TURN / mrelay1 relay 同一埠）、假 gate（驗 X-Mower-* 的 echo）、假 loopback bridge、假 MediaMTX，各跑 43 個事件的同一劇本（註冊標頭與 body、relay 連線標頭與子協定、心跳含 info/telemetry、open/opened、文字/分塊/二進位/1 MiB 出站分塊、未知 session、WHEP POST/DELETE 轉發與 header 過濾、whip/PUT/壞 headers/超大 body/壞 base64 的 403/413、gate 端結束、hub 端關閉、壞 MAC、gate 不在、MediaMTX 不在的 502、hub 斷線後 1 s 重連、被 401 拒絕後重註冊再 2 s 重連、TURN → MediaMTX PATCH）：**兩者事件相同**（同一秒內的並行啟動順序除外）。開關 `rust_agent`（compose `RUST_AGENT`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
@@ -242,7 +248,7 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 |---|---|
 | ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
 | ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、~~coverage_node（1898）~~、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）、coverage_node 已移植為 `mower_coverage`（7.12）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
-| mower_agent | 0.2% |
+| ~~mower_agent~~ | 已移植為 `mower_agent`（7.13） |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 
 原則：Rust 只做「資料搬運、協定、驅動」；演算法與任務狀態機留在 Python。Phase 3 完成後用同一組量測腳本重評，若上表節點成為新瓶頸再排。

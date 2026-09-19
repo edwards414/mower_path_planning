@@ -140,6 +140,13 @@ def generate_launch_description():
                     'parameters and dispatch / cancel tracking).',
     )
 
+    declare_rust_agent = DeclareLaunchArgument(
+        'rust_agent',
+        default_value='false',
+        description='Run the mower_rs fleet agent instead of the Python '
+                    'mower_agent (same backend protocol).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -189,6 +196,7 @@ def generate_launch_description():
         launch_arguments={
             'address': rosbridge_address,
             'rust_bridge': LaunchConfiguration('rust_bridge'),
+            'rust_agent': LaunchConfiguration('rust_agent'),
         }.items(),
     )
 
@@ -539,6 +547,7 @@ def generate_launch_description():
         declare_rust_pid_autotune,
         declare_rust_map,
         declare_rust_coverage,
+        declare_rust_agent,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
