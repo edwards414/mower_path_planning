@@ -1,6 +1,6 @@
 controller_manager:
   ros__parameters:
-    update_rate: 50  # Hz; firmware status period is 50 ms, command timeout 300 ms
+    update_rate: 25  # Hz; firmware status period is 50 ms, command timeout 300 ms
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -21,7 +21,7 @@ diff_drive_controller:
     left_wheel_radius_multiplier: 1.0
     right_wheel_radius_multiplier: 1.0
 
-    publish_rate: 50.0
+    publish_rate: 25.0
     odom_frame_id: odom
     base_frame_id: base_link
     pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]

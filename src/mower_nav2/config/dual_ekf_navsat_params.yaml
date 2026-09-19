@@ -2,9 +2,9 @@
 
 ekf_filter_node_odom:
   ros__parameters:
-    frequency: 30.0
+    frequency: 20.0  # 30 Hz cost ~13 % of a core each on the RK3568; 20 Hz still feeds the 5 Hz throttles and the 0.1 s transform_tolerance
     two_d_mode: true # Recommended to use 2d mode for nav2 in mostly planar environments
-    print_diagnostics: true
+    print_diagnostics: false  # the diagnostics publisher is ~1 % per filter and nobody subscribes
     debug: false
     publish_tf: true
 
@@ -54,9 +54,9 @@ ekf_filter_node_odom:
 
 ekf_filter_node_map:
   ros__parameters:
-    frequency: 30.0
+    frequency: 20.0  # 30 Hz cost ~13 % of a core each on the RK3568; 20 Hz still feeds the 5 Hz throttles and the 0.1 s transform_tolerance
     two_d_mode: true  # Recommended to use 2d mode for nav2 in mostly planar environments
-    print_diagnostics: true
+    print_diagnostics: false  # the diagnostics publisher is ~1 % per filter and nobody subscribes
     debug: false
     publish_tf: true
 
