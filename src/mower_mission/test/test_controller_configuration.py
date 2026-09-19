@@ -432,11 +432,17 @@ def test_mower_camera_exposes_only_required_protocols():
                 source,
                 flags=re.MULTILINE,
             )
+    # The robot config (docs/BACKEND_ARCHITECTURE.md §8): WHEP for the app,
+    # the control API on loopback only (mower_agent writes TURN credentials
+    # there), publishing and the API restricted to loopback callers.
     production = DEPLOY_MEDIAMTX.read_text(encoding='utf-8')
-    assert 'webrtc: false' in production
-    assert 'rtspAddress: 10.77.0.2:8554' in production
-    assert 'ips: ["10.77.0.1"]' in production
-    assert 'ips: ["10.77.0.2"]' in production
+    assert re.search(r'^webrtcAddress: :8889$', production, flags=re.MULTILINE)
+    assert re.search(r'^api: yes$', production, flags=re.MULTILINE)
+    assert re.search(r'^apiAddress: 127\.0\.0\.1:9997$', production, flags=re.MULTILINE)
+    assert re.search(r'^webrtcICEServers2: \[\]$', production, flags=re.MULTILINE)
+    assert 'ips: ["127.0.0.1", "::1"]' in production
+    assert '- action: api' in production
+    assert 'whip' not in production.lower()
 
 
 def test_real_robot_health_gate_is_enabled_by_default():
