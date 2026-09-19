@@ -198,6 +198,12 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 驗證：兩個節點各對同一組假 provider（`/get_record_zone_list` 等三個 service、`/mission_operation_lock`、latched `/nav_operation_active`）跑 47 個步驟（建立自由空間含 2 點退化區域、5 個風險多邊形含單點/兩點/夾邊界、通道含離圖/錯 frame/單點、參數拒絕 0.5/字串/NaN/導航中/鎖被拒、原子設定、影像匯入含風險遮罩/重複匯入/還原/壞編碼/無白色/壞 base64/長度錯/無重疊、空與退化的區域清單、重建，另一個情境為無採集自由空間的純影像匯入/還原/過窄）：**每一筆發布的 OccupancyGrid（frame、幾何、資料 sha1）、每個 service 回應、參數結果與 lock 呼叫序列全部相同**。開關 `rust_map`（compose `RUST_MAP`）。
 
+### 7.12 `mower_coverage` 執行紀錄（coverage_node 移植，使用者要求）
+
+`mower_coverage_core` 改成可不帶 PyO3 建置（feature `python`，wheel 預設開、Rust 節點關），所以 Rust 節點直接連結與 Python 後端同一份規劃器。`crates/mower_coverage`：`contours.rs` 依 OpenCV 4.6.0 `contours.cpp` 移植 `findContours(RETR_EXTERNAL, CHAIN_APPROX_NONE)` 與 `contourArea`（Suzuki 邊界追蹤、輸出順序為最新在前），160 個隨機遮罩逐點相同；`main.rs`（node 名 `boustrophedon_coverage`、4 個服務、`nav_action_follow_path` action client、12 個參數含 rclpy 型別檢查與 startup-only / guarded 規則、marker 版面、風險重取樣、`_send_follow_path` 的 3 s 接受期限與遲到接受取消、`/check_nav_status` 拒絕理由、dispatch 確認、背景/阻塞結果、zone 序列與通道、`_track_and_cancel_navigation_goal` / `_request_nav2_cancel_fallback` 的每 2 s 相關取消重試與單一在途 attempt）。
+
+驗證：兩個節點各對同一組假件（zone map 服務、latched 風險地圖、假 Waypoint action server 含 succeed / fail / reject / hang / 4.5 s 慢接受模式、確認 / 取消 / 狀態 / 通道 / 鎖服務）跑 48 個步驟（無風險、zigzag / spiral / 錯誤 pattern / 邊界環 / 30° / 對齊與重取樣風險 / unknown_as_obstacle / 壞參數 / 無 zone、參數型別與 startup-only、zone 執行成功 / 失敗 / 被拒 / 確認失敗 / 慢接受、導航中拒絕、序列成功 / 執行中拒絕 / hang 後 stop / 通道失敗 / 導航失敗 / 單 zone）：**每個 service 回應、每筆 marker（ns、id、顏色、每個點）與路徑、假件事件序列（goal、confirm、cancel_dispatch、route、lock）全部相同**。開關 `rust_coverage`（compose `RUST_COVERAGE`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
@@ -235,7 +241,7 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 | 節點 | 理由 |
 |---|---|
 | ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
-| ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、coverage_node（1898）、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
+| ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、~~coverage_node（1898）~~、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）、coverage_node 已移植為 `mower_coverage`（7.12）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
 | mower_agent | 0.2% |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 

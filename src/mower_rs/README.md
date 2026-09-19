@@ -17,6 +17,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
+| `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -235,6 +236,26 @@ float32 `resolution` field until the message is serialised, so the node's
 cell indices come from 0.05 exactly while subscribers see
 0.05000000074505806. `Map` keeps that f64 next to the message so the Rust
 node computes the same indices (and the same bytes).
+
+## mower_coverage
+
+`crates/mower_coverage` links `mower_coverage_core` directly (the crate now
+builds without PyO3: feature `python`, on by default for the wheel, off for
+this node), so the planner is the same code the Python node calls through
+the extension. `contours.rs` is `cv2.findContours(RETR_EXTERNAL,
+CHAIN_APPROX_NONE)` + `contourArea` from OpenCV 4.6.0's `contours.cpp`
+(Suzuki border following, newest-first output) for the boundary ring,
+checked against 160 masks rendered by that build. `main.rs` keeps the node
+name `boustrophedon_coverage`, every service, parameter default and
+message, the marker layout (colours, ids, arrow every fifth pose), the
+risk resampling with `unknown_as_obstacle`, the mission guard, and the
+whole dispatch protocol of `_send_follow_path`: 3 s acceptance deadline
+with the late-acceptance cancel, `/check_nav_status` reason on rejection,
+`/confirm_navigation_dispatch`, background or blocking (600 s) result,
+zone sequences with `/get_channel_route`, and the tracker that cancels the
+action, watches the acknowledgment and retries `/cancel_navigation_dispatch`
+every 2 s (one live attempt per dispatch id, 0.5-30 s response deadline)
+until a terminal state is proven.
 
 ## Verification
 

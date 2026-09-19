@@ -30,6 +30,20 @@ impl Guard {
         self.block_reason().is_some()
     }
 
+    /// `_reject_mutation(response, operation)`: the message to answer with
+    /// (already logged) when a non-leased operation is unsafe right now.
+    pub fn reject_reason(&self, operation: &str) -> Option<String> {
+        let why = self.block_reason()?;
+        let msg = format!("Cannot {operation}: {why}");
+        r2r::log_warn!(&self.logger, "{}", msg);
+        Some(msg)
+    }
+
+    /// `self._local_mutation_lock.locked()`: a guarded operation is running.
+    pub fn busy(&self) -> bool {
+        self.local_locked
+    }
+
     fn block_reason(&self) -> Option<&'static str> {
         if !self.nav_seen {
             Some("navigation state is not available")

@@ -130,6 +130,16 @@ def generate_launch_description():
                     'parameters and occupancy bytes).',
     )
 
+    rust_coverage = LaunchConfiguration('rust_coverage')
+
+    declare_rust_coverage = DeclareLaunchArgument(
+        'rust_coverage',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_coverage process instead '
+                    'of the rclpy coverage_node (same services, markers, '
+                    'parameters and dispatch / cancel tracking).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -289,6 +299,18 @@ def generate_launch_description():
         # (/boustrophedon_coverage/set_parameters) and system_test all target it.
         name='boustrophedon_coverage',
         output='screen',
+        condition=UnlessCondition(rust_coverage),
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # rust_coverage:=true -- the same planner node as an r2r process linked
+    # directly against mower_coverage_core (src/mower_rs/crates/mower_coverage).
+    mower_coverage_rs = Node(
+        package='mower_rs',
+        executable='mower_coverage',
+        name='boustrophedon_coverage',
+        output='screen',
+        condition=IfCondition(rust_coverage),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -516,6 +538,7 @@ def generate_launch_description():
         declare_rust_battery,
         declare_rust_pid_autotune,
         declare_rust_map,
+        declare_rust_coverage,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -532,6 +555,7 @@ def generate_launch_description():
         map_manage_node,
         mower_map_rs,
         coverage_node,
+        mower_coverage_rs,
         nav_action_server,
         mower_nav_rs,
         flutter_adapter_node,

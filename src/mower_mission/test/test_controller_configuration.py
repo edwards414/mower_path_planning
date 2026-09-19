@@ -38,6 +38,8 @@ PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tunin
 MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
 MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/main.rs'
 MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
+COVERAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/coverage_node.py'
+COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/main.rs'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -259,7 +261,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_coverage', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -428,6 +430,47 @@ def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
                  'inflate_radius_m cannot change while navigation is active or unknown', 'inflate_radius_m must be finite'):
         assert text in main or text in grid, text
     assert 'guard.acquire("refresh inflated maps")' in main
+    assert 'make_parameter_handler' not in main
+
+
+def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
+    """rust_coverage:=true swaps in mower_rs mower_coverage for coverage_node:
+    same node name, services, action, topics, parameter defaults, dispatch
+    deadlines, retry cadence and user-facing messages."""
+    main = COVERAGE_RS_MAIN.read_text(encoding='utf-8')
+    py_node = COVERAGE_NODE.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_coverage'" in mission_launch
+    assert "condition=IfCondition(rust_coverage)" in mission_launch
+    assert "condition=UnlessCondition(rust_coverage)" in mission_launch
+    assert mission_launch.count("name='boustrophedon_coverage'") == 2
+    assert 'r2r::Node::create(r2r_ctx, "boustrophedon_coverage", "")' in main
+    for name in ('/generate_coverage_path', '/zone_exec_path', '/run_zone_sequence', '/stop_zone_sequence',
+                 '/get_zone_map_list_srv', '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
+                 '/check_nav_status', '/get_channel_route', '/mission_operation_lock', 'nav_action_follow_path',
+                 '/coverage_path', '/coverage_path_markers', '/coverage_invalid_segments', '/coverage_connectors',
+                 '/risk_map', '/risk_map_inflated', '/nav_operation_active'):
+        assert f'"{name}"' in main, name
+    for name, default in re.findall(r"self\.declare_parameter\('(\w+)', ([^)]+)\)", py_node):
+        rust_default = default.replace("'", '"').replace('True', 'true').replace('False', 'false')
+        assert f'"{name}", {rust_default}' in main, (name, default)
+    # the bounded dispatch: 3 s acceptance, 600 s result, 2 s confirmation, 2 s cancel cadence, 0.25 s fallback wait
+    assert 'let acceptance_timeout_s = 3.0;' in main and 'let timeout_s = 600.0;' in main
+    assert 'Duration::from_secs(2)' in main and 'Duration::from_millis(250)' in main
+    assert '(0.5..=30.0).contains(&t)' in main
+    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
+        if '{' in text or text.endswith(': '):
+            continue
+        assert text in main, text
+    for text in ('Navigation action goal accepted', 'Zone not found', 'Zone coverage path is empty',
+                 'Navigation action server unavailable', 'busy or a safety precondition failed',
+                 'A previous zone-sequence goal is not terminal; the new accepted goal is being canceled',
+                 'Zone sequence was canceled before goal dispatch', 'Navigation action completed unsuccessfully',
+                 'is startup-only; restart coverage_node with the desired backend',
+                 'coverage parameters cannot change while navigation or coverage generation is active/unknown',
+                 'action is still not terminal; retrying correlated cancel',
+                 'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
+        assert text in main, text
     assert 'make_parameter_handler' not in main
 
 

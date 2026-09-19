@@ -1,0 +1,19 @@
+[package]
+name = "mower_coverage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Coverage planner node: zone coverage paths from the mower_coverage_core planner, zone execution and zone sequences through the navigation action server (port of mower_mission/coverage_node.py)"
+
+[[bin]]
+name = "mower_coverage"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+mower_coverage_core = { path = "../../../mower_coverage_core", default-features = false }
+ndarray = "0.15"
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
