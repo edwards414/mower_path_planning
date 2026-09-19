@@ -184,6 +184,32 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 驗證：與 Python 節點吃同一條合成 telemetry 串流（無資料、電表 23.89 V、2 s sag、充電器 25.6 V、充電器無電流、拔除、ADC 備援 + AON 3.78 V、垃圾 frame、逾時、低電壓），只有電壓與庫侖計數兩種參數各跑一次：**每一筆 1 Hz 樣本在兩個 timer 相位差內相同**（present / status / health 轉換序列完全一致）。開關 `rust_battery`（compose `RUST_BATTERY`）。
 
+### 7.10 `mower_pid_autotune` 執行紀錄（pid_autotune_node 移植，使用者要求）
+
+`crates/mower_pid_autotune`：`tuning.rs` 逐行移植 `pid_tuning.py`（FOPDT 40×30 粗網格 + 兩輪細化的最小平方擬合、`check_model` 合理性範圍、SIMC PI 與 tau 下限、`step_metrics`、閉迴路模擬器），13 個 pytest 向量搬成 `cargo test`，另加 `tests/pid_tuning_golden.json`：用 Python 模組對 20 組固定樣本（含 6 種錯誤路徑）產生的模型/增益/指標，Rust 在 1e-9 內全部相同，錯誤字串逐字相同。`main.rs`（node 名 `pid_autotune`、同樣 18 個參數與預設、`/pid_autotune` 服務語意、5 Hz latched 狀態 JSON 同鍵序、`/mower_base/pid_command` / `wheel_override` / `led_command` JSON、0x84 確認規則含 flash 重試與 `flash_diag`、review 逾時、每條出口都還原舊增益、mission operation lock）。
+
+驗證：把 `test_pid_autotune_node.py` 的假 STM32 底盤（兩顆一階馬達 + 韌體 PI）改成對子程序跑，Python 節點與 Rust 二進位各跑 8 個情境（完整流程 apply、abort 還原、discard 還原、flash 存檔重試一次、兩次都失敗的 flash_diag 訊息、driver alarm 不擋、無 telemetry、導航中拒絕）：**狀態轉移序列、每個 service 回應、最終狀態/訊息/錯誤、狀態鍵序、marks 鍵、pid_command 序列（persist/closed_loop 旗標與鍵序）、override 訊息集合、LED 訊息、底盤計數器全部相同**，模型/增益/驗證指標在同一假底盤上相差 < 25 %（取樣時刻不同）。唯一差異：Rust 版在 `verify` 指標算完到 `review` 之間兩次發布只隔幾微秒，depth-1 的 latched writer 會把 progress 0.85 那筆併進 0.90（`verify` 欄位仍在後續每筆狀態裡）。開關 `rust_pid_autotune`（compose `RUST_PID_AUTOTUNE`）。
+
+### 7.11 `mower_map` 執行紀錄（map_manage_node 移植，使用者要求）
+
+`crates/mower_map`：`raster.rs` 依 OpenCV 4.6.0 `drawing.cpp` 逐位元重寫 `fillPoly`、`polylines`、粗線 `line`（`FillConvexPoly` + `Circle` 圓端）、`MORPH_ELLIPSE` kernel 與 `erode` / `dilate`（預設與 constant-0 邊界），`tests/raster_oracle.json` 720 個由同版 OpenCV 產生的隨機案例全數逐像素相同；`grid.rs` 移植 `nav_map_fusion.py`（積分影像重取樣）、`map_safety.py`、`image_mask_import.py` 與節點內的風險/區域/通道光柵化（numpy 截斷、floor/ceil、tolerance 語意），pytest 向量搬成 `cargo test`，另有 `tests/map_oracle.json` 用節點自身程式碼在差分測試的幾何上產生的期望值。`main.rs`（node 名 `map_manage`、6 個服務、8 個 latched 地圖、`/map_manage/*` 參數服務含 rclpy 的型別檢查順序與 0.75 m 下限、影像任務備份/還原、每個 mutation 的 guard）。
+
+發現並重現的細節：rclpy 在序列化前把 Python float 留在 float32 `resolution` 欄位裡，所以 Python 節點用 0.05 算格子索引而訂閱者看到 0.0500000007；第一版 Rust 用 float32 算，風險/通道/融合各差一格。`Map` 把 f64 解析度和訊息放在一起後全部相同。
+
+驗證：兩個節點各對同一組假 provider（`/get_record_zone_list` 等三個 service、`/mission_operation_lock`、latched `/nav_operation_active`）跑 47 個步驟（建立自由空間含 2 點退化區域、5 個風險多邊形含單點/兩點/夾邊界、通道含離圖/錯 frame/單點、參數拒絕 0.5/字串/NaN/導航中/鎖被拒、原子設定、影像匯入含風險遮罩/重複匯入/還原/壞編碼/無白色/壞 base64/長度錯/無重疊、空與退化的區域清單、重建，另一個情境為無採集自由空間的純影像匯入/還原/過窄）：**每一筆發布的 OccupancyGrid（frame、幾何、資料 sha1）、每個 service 回應、參數結果與 lock 呼叫序列全部相同**。開關 `rust_map`（compose `RUST_MAP`）。
+
+### 7.12 `mower_coverage` 執行紀錄（coverage_node 移植，使用者要求）
+
+`mower_coverage_core` 改成可不帶 PyO3 建置（feature `python`，wheel 預設開、Rust 節點關），所以 Rust 節點直接連結與 Python 後端同一份規劃器。`crates/mower_coverage`：`contours.rs` 依 OpenCV 4.6.0 `contours.cpp` 移植 `findContours(RETR_EXTERNAL, CHAIN_APPROX_NONE)` 與 `contourArea`（Suzuki 邊界追蹤、輸出順序為最新在前），160 個隨機遮罩逐點相同；`main.rs`（node 名 `boustrophedon_coverage`、4 個服務、`nav_action_follow_path` action client、12 個參數含 rclpy 型別檢查與 startup-only / guarded 規則、marker 版面、風險重取樣、`_send_follow_path` 的 3 s 接受期限與遲到接受取消、`/check_nav_status` 拒絕理由、dispatch 確認、背景/阻塞結果、zone 序列與通道、`_track_and_cancel_navigation_goal` / `_request_nav2_cancel_fallback` 的每 2 s 相關取消重試與單一在途 attempt）。
+
+驗證：兩個節點各對同一組假件（zone map 服務、latched 風險地圖、假 Waypoint action server 含 succeed / fail / reject / hang / 4.5 s 慢接受模式、確認 / 取消 / 狀態 / 通道 / 鎖服務）跑 48 個步驟（無風險、zigzag / spiral / 錯誤 pattern / 邊界環 / 30° / 對齊與重取樣風險 / unknown_as_obstacle / 壞參數 / 無 zone、參數型別與 startup-only、zone 執行成功 / 失敗 / 被拒 / 確認失敗 / 慢接受、導航中拒絕、序列成功 / 執行中拒絕 / hang 後 stop / 通道失敗 / 導航失敗 / 單 zone）：**每個 service 回應、每筆 marker（ns、id、顏色、每個點）與路徑、假件事件序列（goal、confirm、cancel_dispatch、route、lock）全部相同**。開關 `rust_coverage`（compose `RUST_COVERAGE`）。
+
+### 7.13 `mower_agent` 執行紀錄（mower_agent 移植，使用者要求）
+
+`crates/mower_agent`：無 r2r，tokio + tokio-tungstenite（rustls）處理 relay / gate / loopback bridge 三種 WebSocket，ureq（rustls）在 blocking 執行緒做後端與 MediaMTX 的 HTTP（對應 Python 的 `run_in_executor`）。`relay.rs` 移植 `relay_protocol.py`（分塊、重組、pytest 向量）；`main.rs` 保留每一行 log、每個控制訊息、X-Mower-* 簽章與 `mower-agent/<api>` User-Agent、WHEP 路徑規則與 64 KiB 上限、header 過濾、1..60 s 重連退避與被拒後重註冊、30 s 註冊重試、TURN 更新排程、0600 原子寫入 device_key。
+
+驗證：假後端（aiohttp：註冊 / TURN / mrelay1 relay 同一埠）、假 gate（驗 X-Mower-* 的 echo）、假 loopback bridge、假 MediaMTX，各跑 43 個事件的同一劇本（註冊標頭與 body、relay 連線標頭與子協定、心跳含 info/telemetry、open/opened、文字/分塊/二進位/1 MiB 出站分塊、未知 session、WHEP POST/DELETE 轉發與 header 過濾、whip/PUT/壞 headers/超大 body/壞 base64 的 403/413、gate 端結束、hub 端關閉、壞 MAC、gate 不在、MediaMTX 不在的 502、hub 斷線後 1 s 重連、被 401 拒絕後重註冊再 2 s 重連、TURN → MediaMTX PATCH）：**兩者事件相同**（同一秒內的並行啟動順序除外）。開關 `rust_agent`（compose `RUST_AGENT`）。
+
 ### 8.1 `mower_ws_bridge` 執行紀錄（Phase 3）
 
 `crates/mower_ws_bridge`：`config.rs`（policy YAML：`topics_sub` / `topics_pub` / `services{name: type}`，fnmatch 風格 `*`）、`auth.rs`（identity.json、base32 secret、HMAC-SHA256、±60 s skew、nonce cache；`compute_mac` 對照 Python 參考值）、`hub.rs`（r2r Node 專用執行緒 spin + 命令通道；每個 topic 一個 ROS 訂閱，QoS 依 publisher 決定（全部 reliable 才 reliable、全部 transient_local 才 latched），一次序列化 fan-out 到所有客戶端，latched topic 對新訂閱者重播最後一筆；publisher / service client 各建一次重用；service 回應在 tokio 上等，不占 node 執行緒）、`client.rs`（rosbridge v2 子集：subscribe/throttle_rate、unsubscribe、advertise、unadvertise、publish、call_service、`/rosapi/topics` 原生回答、status 錯誤）、`main.rs`（tokio-tungstenite 伺服器：`address:port` 走 pairing gate（401），`127.0.0.1:9091` 給 agent 不驗證；64 MB frame；20 s ping）。r2r 沒有 service type 的 graph 查詢，所以 service type 寫在 `mower_bringup/config/ws_bridge.yaml`，測試 `test_ws_bridge_policy_matches_the_rosbridge_allow_lists` 確保與 `rosbridge_params.yaml` 一致。
@@ -221,8 +247,8 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 | 節點 | 理由 |
 |---|---|
 | ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
-| ~~path_record_node（2124 行）~~、map_manage（1470）、coverage_node（1898）、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
-| mower_agent | 0.2% |
+| ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、~~coverage_node（1898）~~、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）、coverage_node 已移植為 `mower_coverage`（7.12）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
+| ~~mower_agent~~ | 已移植為 `mower_agent`（7.13） |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 
 原則：Rust 只做「資料搬運、協定、驅動」；演算法與任務狀態機留在 Python。Phase 3 完成後用同一組量測腳本重評，若上表節點成為新瓶頸再排。

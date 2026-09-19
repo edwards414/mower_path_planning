@@ -15,6 +15,10 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
 | `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
 | `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
+| `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
+| `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
+| `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -183,6 +187,90 @@ Python node on one synthetic telemetry stream (silence, meter, sag,
 charger, charger without current, unplugged, ADC fallback + AON cell,
 garbage frames, stale, low pack), voltage-only and coulomb-counting
 variants: every 1 Hz sample identical within the timers' phase offset.
+
+## mower_pid_autotune
+
+`crates/mower_pid_autotune`: `tuning.rs` is a line-by-line port of
+`pid_tuning.py` (FOPDT grid fit with the same 40 x 30 coarse grid and two
+refinement passes, `check_model` limits, SIMC PI with the tau floor,
+`step_metrics`, the closed-loop simulator used by the tests); the pytest
+vectors are `cargo test`s and `tests/pid_tuning_golden.json` holds fits the
+Python module produced on fixed sample sets, matched to 1e-9. `main.rs`
+keeps the node name `pid_autotune`, every parameter and default, the
+`/pid_autotune` service semantics (`start` refused while a session runs,
+`apply` / `discard` only in `review`), the 5 Hz latched status JSON with the
+same key order, the base side-channel JSON, the `0x84` acknowledgement rules
+(fresh `last_rx_seq`, matching gains, mode and `LAST_APPLY_OK`, `FLASH_VALID`
+for a persisted save, one retry with `flash_diag`), the review timeout, the
+restore of the previous gains in every exit path and the mission operation
+lock (missing service = bench, carry on).
+
+Intentional differences: the `/mower_base/telemetry` subscription is
+permanent (the Python node created it per session because rclpy paid ~6 ms
+per frame; staleness is still judged from the arrival time), and the
+progress-0.85 status (verify metrics attached) is usually coalesced into the
+0.90 `review` status by the depth-1 latched writer because the two publishes
+are microseconds apart -- `verify` stays in every later status.
+
+## mower_map
+
+`crates/mower_map`: `raster.rs` re-implements the OpenCV 4.6.0 primitives the
+Python node calls (`fillPoly`, `polylines` thickness 1, `line` with a
+thickness and round caps, `getStructuringElement(MORPH_ELLIPSE)`, `erode` /
+`dilate` with the default and the constant-0 border) from
+`modules/imgproc/src/drawing.cpp` of that release -- fixed-point edges,
+Bresenham, `FillConvexPoly`, `FillEdgeCollection`, `Circle` -- and
+`tests/raster_oracle.json` holds 720 random cases rendered by the same
+OpenCV build, matched pixel for pixel. `grid.rs` is `nav_map_fusion.py` +
+`map_safety.py` + `image_mask_import.py` + the risk / zone / channel
+rasterisation of the node with numpy's truncation, floor/ceil and integral
+image semantics; the pytest vectors are `cargo test`s and
+`tests/map_oracle.json` checks the node's own code on the differential
+run's geometry. `main.rs` keeps the node name `map_manage`, every service,
+message text, log line, latched topic, the fail-closed Nav2 snapshots, the
+image-mission backup / restore, the mutation guard on every mutation and
+the parameter services with rclpy's validation order (declared type first,
+then the node's callback, then the guarded refresh).
+
+One subtlety carried over on purpose: rclpy keeps the Python float in the
+float32 `resolution` field until the message is serialised, so the node's
+cell indices come from 0.05 exactly while subscribers see
+0.05000000074505806. `Map` keeps that f64 next to the message so the Rust
+node computes the same indices (and the same bytes).
+
+## mower_coverage
+
+`crates/mower_coverage` links `mower_coverage_core` directly (the crate now
+builds without PyO3: feature `python`, on by default for the wheel, off for
+this node), so the planner is the same code the Python node calls through
+the extension. `contours.rs` is `cv2.findContours(RETR_EXTERNAL,
+CHAIN_APPROX_NONE)` + `contourArea` from OpenCV 4.6.0's `contours.cpp`
+(Suzuki border following, newest-first output) for the boundary ring,
+checked against 160 masks rendered by that build. `main.rs` keeps the node
+name `boustrophedon_coverage`, every service, parameter default and
+message, the marker layout (colours, ids, arrow every fifth pose), the
+risk resampling with `unknown_as_obstacle`, the mission guard, and the
+whole dispatch protocol of `_send_follow_path`: 3 s acceptance deadline
+with the late-acceptance cancel, `/check_nav_status` reason on rejection,
+`/confirm_navigation_dispatch`, background or blocking (600 s) result,
+zone sequences with `/get_channel_route`, and the tracker that cancels the
+action, watches the acknowledgment and retries `/cancel_navigation_dispatch`
+every 2 s (one live attempt per dispatch id, 0.5-30 s response deadline)
+until a terminal state is proven.
+
+## mower_agent
+
+`crates/mower_agent` has no r2r dependency: tokio + tokio-tungstenite (rustls)
+for the relay, gate and loopback-bridge WebSockets, ureq (rustls) on a
+blocking thread for the backend and MediaMTX HTTP calls, exactly where the
+Python agent used `run_in_executor`. `relay.rs` is `relay_protocol.py`
+(frames, chunking, reassembly, the pytest vectors as `cargo test`s).
+`main.rs` keeps every log line, control message (`hb`, `opened`, `open_err`,
+`close`, `http_res`), the X-Mower-* signing, the `mower-agent/<api>`
+User-Agent Cloudflare's browser check needs, the WHEP path rule, the
+64 KiB body cap and the header filter, the 1 s..60 s reconnect back-off
+with the re-registration on an HTTP refusal, the 30 s register retry, the
+TURN refresh schedule and the 0600 atomic `device_key` write.
 
 ## Verification
 

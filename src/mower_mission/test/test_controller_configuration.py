@@ -31,6 +31,20 @@ MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
 IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/main.rs'
+PID_AUTOTUNE_NODE = SRC_DIR / 'mower_mission/mower_mission/pid_autotune_node.py'
+PID_TUNING = SRC_DIR / 'mower_mission/mower_mission/pid_tuning.py'
+PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/main.rs'
+PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tuning.rs'
+MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
+MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/main.rs'
+MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
+COVERAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/coverage_node.py'
+COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/main.rs'
+AGENT_PY = SRC_DIR / 'mower_mission/mower_mission/mower_agent.py'
+AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/main.rs'
+AGENT_RS_RELAY = SRC_DIR / 'mower_rs/crates/mower_agent/src/relay.rs'
+ROSBRIDGE_LAUNCH = SRC_DIR / 'mower_bringup/launch/rosbridge.launch.py'
+VERSION_PY = SRC_DIR / 'mower_mission/mower_mission/version.py'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -252,7 +266,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_coverage', 'rust_agent', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -352,6 +366,149 @@ def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
     assert 'Navigation/manual motion is active or termination is uncertain' in main
     assert 'navigation path requires at least two poses' in geometry
     assert 'canonical_dispatch_id' in geometry
+
+
+def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
+    """rust_pid_autotune:=true swaps in mower_rs mower_pid_autotune for
+    pid_autotune_node: same node name, service, parameters, plausibility
+    limits, flag bits and status states."""
+    main = PID_AUTOTUNE_RS_MAIN.read_text(encoding='utf-8')
+    tuning = PID_AUTOTUNE_RS_TUNING.read_text(encoding='utf-8')
+    py_node = PID_AUTOTUNE_NODE.read_text(encoding='utf-8')
+    py_tuning = PID_TUNING.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_pid_autotune'" in mission_launch
+    assert "condition=IfCondition(rust_pid_autotune)" in mission_launch
+    assert "condition=UnlessCondition(rust_pid_autotune)" in mission_launch
+    assert mission_launch.count("name='pid_autotune'") == 2
+    assert 'r2r::Node::create(ctx_r2r, "pid_autotune", "")' in main
+    assert 'create_service::<PidAutotune::Service>("/pid_autotune"' in main
+    # every declared parameter with the same default
+    for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M):
+        rust_default = default.replace("'", '"').replace('[', '&[').replace('300.0', '300.0')
+        assert f'"{name}", {rust_default}' in main, (name, default)
+    # plausibility limits and flag bits are the Python ones
+    for const in ('GAIN_RANGE', 'TAU_RANGE', 'DELAY_MAX', 'MIN_RESPONSE_RPM', 'MAX_FIT_RMSE_FRACTION', 'TAU_DESIGN_MIN'):
+        py_value = re.search(rf'^{const} = ([^#\n]+)', py_tuning, re.M).group(1).strip()
+        assert re.search(rf'pub const {const}: [^=]+= {re.escape(py_value)};', tuning), const
+    for flag in ('PID_FLAG_CLOSED_LOOP = 0x01', 'PID_FLAG_FLASH_VALID = 0x02', 'PID_FLAG_LAST_APPLY_OK = 0x08',
+                 'MOTOR_FLAG_DRIVER_ALARM = 0x04', 'POWER_STATE_RUNNING = 0'):
+        assert flag in py_node
+        name, value = flag.split(' = ')
+        assert f'const {name}: i64 = {value};' in main, flag
+    for state in ('precheck', 'open_loop', 'fitting', 'verify', 'review', 'saving', 'done', 'failed', 'aborted'):
+        assert f'"{state}"' in main, state
+    assert 'flash save attempt {attempt}, flash_diag=0x{diag:04x}' in main
+    assert 'make_parameter_handler' not in main
+
+
+def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
+    """rust_map:=true swaps in mower_rs mower_map for map_manage_node: same
+    node name, services, latched topics, safety floor, fail-closed rules and
+    user-facing messages."""
+    main = MAP_RS_MAIN.read_text(encoding='utf-8')
+    grid = MAP_RS_GRID.read_text(encoding='utf-8')
+    py_node = MAP_MANAGE_NODE.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_map'" in mission_launch
+    assert "condition=IfCondition(rust_map)" in mission_launch
+    assert "condition=UnlessCondition(rust_map)" in mission_launch
+    assert mission_launch.count("name='map_manage'") == 2
+    assert 'r2r::Node::create(ctx, "map_manage", "")' in main
+    assert 'const MIN_SAFE_INFLATE_RADIUS_M: f64 = 0.75;' in main
+    assert 'MIN_SAFE_INFLATE_RADIUS_M = 0.75' in py_node
+    for service in ('/create_risk_map', '/create_free_space', '/import_image_mask', '/create_chennal_map',
+                    '/get_zone_map_list_srv', '/restore_free_space_coverage', '/map_manage/get_parameters',
+                    '/map_manage/set_parameters', '/map_manage/set_parameters_atomically'):
+        assert f'"{service}"' in main, service
+    for topic in ('/free_space', '/free_space_inflated', '/risk_map', '/risk_map_inflated', '/chennal_map',
+                  '/chennal_map_inflated', '/map_grid', '/map_grid_global', '/nav_operation_active', '/mission_operation_lock'):
+        assert f'"{topic}"' in main, topic
+    # every Chinese / English user-facing message of the Python node survives
+    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
+        if '{' in text or text.endswith(': '):
+            continue
+        assert text in main or text in grid, text
+    for text in ('held occupied until its risk map is ready', 'cannot fuse', 'base and channel grid geometries must match',
+                 'base and risk grid orientations must match', 'channel point is outside the navigation map',
+                 'mask_encoding must be base64_u8_row_major', 'robot_pose_header.frame_id must be map',
+                 'inflate_radius_m cannot change while navigation is active or unknown', 'inflate_radius_m must be finite'):
+        assert text in main or text in grid, text
+    assert 'guard.acquire("refresh inflated maps")' in main
+    assert 'make_parameter_handler' not in main
+
+
+def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
+    """rust_coverage:=true swaps in mower_rs mower_coverage for coverage_node:
+    same node name, services, action, topics, parameter defaults, dispatch
+    deadlines, retry cadence and user-facing messages."""
+    main = COVERAGE_RS_MAIN.read_text(encoding='utf-8')
+    py_node = COVERAGE_NODE.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_coverage'" in mission_launch
+    assert "condition=IfCondition(rust_coverage)" in mission_launch
+    assert "condition=UnlessCondition(rust_coverage)" in mission_launch
+    assert mission_launch.count("name='boustrophedon_coverage'") == 2
+    assert 'r2r::Node::create(r2r_ctx, "boustrophedon_coverage", "")' in main
+    for name in ('/generate_coverage_path', '/zone_exec_path', '/run_zone_sequence', '/stop_zone_sequence',
+                 '/get_zone_map_list_srv', '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
+                 '/check_nav_status', '/get_channel_route', '/mission_operation_lock', 'nav_action_follow_path',
+                 '/coverage_path', '/coverage_path_markers', '/coverage_invalid_segments', '/coverage_connectors',
+                 '/risk_map', '/risk_map_inflated', '/nav_operation_active'):
+        assert f'"{name}"' in main, name
+    for name, default in re.findall(r"self\.declare_parameter\('(\w+)', ([^)]+)\)", py_node):
+        rust_default = default.replace("'", '"').replace('True', 'true').replace('False', 'false')
+        assert f'"{name}", {rust_default}' in main, (name, default)
+    # the bounded dispatch: 3 s acceptance, 600 s result, 2 s confirmation, 2 s cancel cadence, 0.25 s fallback wait
+    assert 'let acceptance_timeout_s = 3.0;' in main and 'let timeout_s = 600.0;' in main
+    assert 'Duration::from_secs(2)' in main and 'Duration::from_millis(250)' in main
+    assert '(0.5..=30.0).contains(&t)' in main
+    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
+        if '{' in text or text.endswith(': '):
+            continue
+        assert text in main, text
+    for text in ('Navigation action goal accepted', 'Zone not found', 'Zone coverage path is empty',
+                 'Navigation action server unavailable', 'busy or a safety precondition failed',
+                 'A previous zone-sequence goal is not terminal; the new accepted goal is being canceled',
+                 'Zone sequence was canceled before goal dispatch', 'Navigation action completed unsuccessfully',
+                 'is startup-only; restart coverage_node with the desired backend',
+                 'coverage parameters cannot change while navigation or coverage generation is active/unknown',
+                 'action is still not terminal; retrying correlated cancel',
+                 'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
+        assert text in main, text
+    assert 'make_parameter_handler' not in main
+
+
+def test_rust_agent_keeps_the_same_backend_protocol_and_wiring():
+    """rust_agent:=true swaps in mower_rs mower_agent for the Python fleet
+    agent: same endpoints, constants, relay framing, control messages, log
+    lines and launch arguments."""
+    main = AGENT_RS_MAIN.read_text(encoding='utf-8')
+    relay = AGENT_RS_RELAY.read_text(encoding='utf-8')
+    py = AGENT_PY.read_text(encoding='utf-8')
+    launch = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_agent'" in launch and launch.count("name='mower_agent'") == 2
+    assert "condition=IfCondition(rust_agent)" in launch and "condition=UnlessCondition(rust_agent)" in launch
+    assert launch.count("'--rosbridge', 'ws://127.0.0.1:9091'") == 2
+    api = re.search(r'^ROBOT_API_VERSION = (\d+)', VERSION_PY.read_text(encoding='utf-8'), re.M).group(1)
+    assert f'const ROBOT_API_VERSION: i64 = {api};' in main
+    for const in ('HEARTBEAT_S = 10', 'TELEMETRY_THROTTLE_MS = 5000', 'REGISTER_RETRY_S = 30', 'RECONNECT_MAX_S = 60',
+                  'HTTP_RELAY_TIMEOUT_S = 10', 'TURN_REFRESH_S = 3600', 'TURN_RETRY_S = 60'):
+        assert const in py
+        name, value = const.split(' = ')
+        assert re.search(rf'const {name}: \w+ = {value};', main), const
+    assert 'HTTP_RELAY_MAX_BODY: usize = 64 * 1024;' in main
+    for text in ('/v1/robots/register', '/v1/relay/robot/', '/turn', '/v3/config/global/patch', 'webrtcICEServers2',
+                 'ws://127.0.0.1:9090', 'ws://127.0.0.1:9091', 'http://127.0.0.1:8889', 'http://127.0.0.1:9997',
+                 'MOWER_BACKEND_URL not set: agent idle (development mode)', 'MOWER_PROVISION_TOKEN not set: skipping registration',
+                 'relay refused us: HTTP', 'reconnecting in', 'gate refused', 'gate unreachable', 'no such session',
+                 'session ended', 'relay lost', 'not relayed', 'camera server unreachable', 'not implemented yet',
+                 'another device_key holds this robot_id', 'bad provision token', '"X-Mower-Client"', '"@robot"'):
+        assert text in main, text
+    for const in ('SUBPROTOCOL: &str = "mrelay1"', 'SID_BYTES: usize = 8', 'T_TEXT: u8 = 0x01', 'T_TEXT_MORE: u8 = 0x11',
+                  'T_BIN: u8 = 0x02', 'T_BIN_MORE: u8 = 0x12', 'CHUNK_SIZE: usize = 512 * 1024', 'MAX_MESSAGE: usize = 64 * 1024 * 1024'):
+        assert const in relay, const
+    assert '"transport=udp", "transport=tcp"' in main
 
 
 def test_rust_battery_node_keeps_the_same_model_and_wiring():

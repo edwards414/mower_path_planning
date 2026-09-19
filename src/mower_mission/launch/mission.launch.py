@@ -110,6 +110,43 @@ def generate_launch_description():
                     'topics and parameters).',
     )
 
+    rust_pid_autotune = LaunchConfiguration('rust_pid_autotune')
+
+    declare_rust_pid_autotune = DeclareLaunchArgument(
+        'rust_pid_autotune',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_pid_autotune process '
+                    'instead of the rclpy pid_autotune_node (same service, '
+                    'status JSON, base side channels and parameters).',
+    )
+
+    rust_map = LaunchConfiguration('rust_map')
+
+    declare_rust_map = DeclareLaunchArgument(
+        'rust_map',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_map process instead of '
+                    'the rclpy map_manage_node (same services, latched maps, '
+                    'parameters and occupancy bytes).',
+    )
+
+    rust_coverage = LaunchConfiguration('rust_coverage')
+
+    declare_rust_coverage = DeclareLaunchArgument(
+        'rust_coverage',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_coverage process instead '
+                    'of the rclpy coverage_node (same services, markers, '
+                    'parameters and dispatch / cancel tracking).',
+    )
+
+    declare_rust_agent = DeclareLaunchArgument(
+        'rust_agent',
+        default_value='false',
+        description='Run the mower_rs fleet agent instead of the Python '
+                    'mower_agent (same backend protocol).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -159,6 +196,7 @@ def generate_launch_description():
         launch_arguments={
             'address': rosbridge_address,
             'rust_bridge': LaunchConfiguration('rust_bridge'),
+            'rust_agent': LaunchConfiguration('rust_agent'),
         }.items(),
     )
 
@@ -245,6 +283,19 @@ def generate_launch_description():
         # parameter contract all address /map_manage/{get,set}_parameters.
         name='map_manage',
         output='screen',
+        condition=UnlessCondition(rust_map),
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # rust_map:=true -- the same map manager as an r2r process
+    # (src/mower_rs/crates/mower_map): pixel-exact OpenCV ports, identical
+    # /map_grid bytes.
+    mower_map_rs = Node(
+        package='mower_rs',
+        executable='mower_map',
+        name='map_manage',
+        output='screen',
+        condition=IfCondition(rust_map),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -256,6 +307,18 @@ def generate_launch_description():
         # (/boustrophedon_coverage/set_parameters) and system_test all target it.
         name='boustrophedon_coverage',
         output='screen',
+        condition=UnlessCondition(rust_coverage),
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # rust_coverage:=true -- the same planner node as an r2r process linked
+    # directly against mower_coverage_core (src/mower_rs/crates/mower_coverage).
+    mower_coverage_rs = Node(
+        package='mower_rs',
+        executable='mower_coverage',
+        name='boustrophedon_coverage',
+        output='screen',
+        condition=IfCondition(rust_coverage),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -443,7 +506,19 @@ def generate_launch_description():
         executable='pid_autotune_node',
         name='pid_autotune',
         output='screen',
+        condition=UnlessCondition(rust_pid_autotune),
         parameters=[{'use_sim_time': False}],
+    )
+
+    # rust_pid_autotune:=true -- the same identification + SIMC maths and
+    # session state machine as an r2r process
+    # (src/mower_rs/crates/mower_pid_autotune).
+    mower_pid_autotune_rs = Node(
+        package='mower_rs',
+        executable='mower_pid_autotune',
+        name='pid_autotune',
+        output='screen',
+        condition=IfCondition(rust_pid_autotune),
     )
 
     temp_dock_pose_publisher = Node(
@@ -469,6 +544,10 @@ def generate_launch_description():
         declare_rust_record,
         declare_rust_nav,
         declare_rust_battery,
+        declare_rust_pid_autotune,
+        declare_rust_map,
+        declare_rust_coverage,
+        declare_rust_agent,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -483,7 +562,9 @@ def generate_launch_description():
         path_record_node,
         mower_record_rs,
         map_manage_node,
+        mower_map_rs,
         coverage_node,
+        mower_coverage_rs,
         nav_action_server,
         mower_nav_rs,
         flutter_adapter_node,
@@ -495,6 +576,7 @@ def generate_launch_description():
         battery_state_node,
         mower_battery_rs,
         pid_autotune_node,
+        mower_pid_autotune_rs,
         temp_dock_pose_publisher,
         auto_coverage_node,
     ])

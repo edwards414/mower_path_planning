@@ -2,7 +2,9 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::cmp::Reverse;
 
 use ndarray::{Array2, ArrayView2};
+#[cfg(feature = "python")]
 use numpy::PyReadonlyArray2;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 use crate::path_validator::validate_path_rs;
@@ -627,6 +629,7 @@ pub fn plan_spiral_coverage_rs(
 
 // ── PyO3 binding ──────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn py_generate_coverage_spiral_path(
     grid: PyReadonlyArray2<bool>,
@@ -643,6 +646,7 @@ pub fn py_generate_coverage_spiral_path(
     )
 }
 
+#[cfg(feature = "python")]
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_generate_coverage_spiral_path, m)?)?;
     Ok(())
