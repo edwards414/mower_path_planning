@@ -21,8 +21,8 @@ services:
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
       - record:=false
-      # Bench setup without the u-blox receiver. With one attached add
-      # /dev/gps_rtk:/dev/gps_rtk under devices and set enable_gps:=true.
+      # Bench setup without the u-blox receiver; with one on /dev/gps_rtk
+      # set enable_gps:=true.
       - enable_gps:=false
     environment:
       # - ROS_DOMAIN_ID = 0
@@ -32,10 +32,16 @@ services:
     pid: host
     stdin_open: true
     tty: true
-    devices:
-      - /dev/imu_usb:/dev/imu_usb
-      - /dev/stmcom:/dev/stmcom
+    # Live /dev + device cgroup rules, same as deploy/docker-compose.yaml
+    # (udev names stay valid across re-plugs; nothing must be present at
+    # start). ttyS3 = LubanCat UART3 stmcom, ttyUSB* = IMU / CP2102 stmcom,
+    # ttyACM* = u-blox receiver.
+    device_cgroup_rules:
+      - 'c 4:67 rmw'
+      - 'c 188:* rmw'
+      - 'c 166:* rmw'
     volumes:
+      - /dev:/dev
       - mower_data:/home/mower/.mower
 
   # WebRTC (WHEP) camera server. The app pulls http://<robot-ip>:8889/<feed>/whep.

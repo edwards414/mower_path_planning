@@ -26,6 +26,7 @@ ROBOT_LAUNCH = SRC_DIR / 'mower_bringup/launch/robot.launch.py'
 DOCKERFILE = SRC_DIR.parent / 'Dockerfile'
 BUILD_WORKFLOW = SRC_DIR.parent / '.github/workflows/build.yml'
 GPS_PARAMS = SRC_DIR / 'mower_bringup/config/gps.yaml'
+UDEV_RULES = SRC_DIR.parent / 'deploy/udev/99-mower.rules'
 BRINGUP_PACKAGE = SRC_DIR / 'mower_bringup/package.xml'
 MOWER_RS_CMAKE = SRC_DIR / 'mower_rs/CMakeLists.txt'
 MOWER_RS_CARGO = SRC_DIR / 'mower_rs/Cargo.toml'
@@ -834,7 +835,6 @@ def test_gps_driver_runs_inside_the_runtime_container():
     deploy = DEPLOY_COMPOSE.read_text(encoding='utf-8')
     lawan = deploy.split('  mediamtx:', 1)[0]
     assert 'enable_gps:=${GPS:-true}' in lawan
-    assert '- /dev/gps_rtk:/dev/gps_rtk' in lawan
     assert 'profiles:' not in deploy
     assert 'mower_path_planning-gps' not in deploy
     assert 'ublox' not in deploy
@@ -845,6 +845,29 @@ def test_gps_driver_runs_inside_the_runtime_container():
     assert 'gps_runtime' not in workflow
     assert 'image_suffix: -gps' not in workflow
     assert 'install/mower_rs/lib/mower_rs/mower_gps' in workflow
+
+
+def test_containers_see_the_live_dev_tree_not_static_device_nodes():
+    """USB sensors re-enumerate (hub resets, re-plugs); a `devices:` entry
+    is a copy of one major:minor made at create time in a container without
+    udev, so it only kept working while the kernel handed back the same tty
+    number. The host /dev is bind-mounted and access is limited by device
+    cgroup rules instead; nothing must be plugged in for the stack to start.
+    Verified on the robot 2026-09-20 (symlink gone/back live, driver exit
+    0.46 s, restart on the same container)."""
+    for compose in (LOCAL_COMPOSE, DEPLOY_COMPOSE):
+        source = compose.read_text(encoding='utf-8')
+        lawan = source.split('  mediamtx:', 1)[0]
+        assert not re.search(r'^\s+devices:\s*$', lawan, re.M), compose
+        assert re.search(r'^\s+- /dev:/dev\s*$', lawan, re.M), compose
+        rules = lawan.split('device_cgroup_rules:', 1)[1].split('volumes:', 1)[0]
+        for rule in ("'c 4:67 rmw'", "'c 188:* rmw'", "'c 166:* rmw'"):
+            assert rule in rules, (compose, rule)
+        assert 'privileged' not in source, compose
+    udev = UDEV_RULES.read_text(encoding='utf-8')
+    for name in ('stmcom', 'imu_usb', 'gps_rtk'):
+        assert f'SYMLINK+="{name}"' in udev, name
+    assert 'ATTR{idProduct}=="0610", TEST=="power/control", ATTR{power/control}="on"' in udev
 
 
 def test_gps_driver_fails_closed_and_keeps_the_ublox_gps_fix_contract():

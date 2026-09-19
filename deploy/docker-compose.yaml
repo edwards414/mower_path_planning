@@ -79,17 +79,26 @@ services:
     pid: host
     stdin_open: true
     tty: true
-    # udev names from udev/99-mower.rules (deploy/install.sh installs it).
-    # All three must exist or the container does not start (docker resolves
-    # `devices` at create time):
-    #   /dev/stmcom   STM32 host UART (LubanCat ttyS3 or a USB-serial adapter)
-    #   /dev/imu_usb  WIT IMU (CH340)
-    #   /dev/gps_rtk  u-blox ZED-F9P (CDC-ACM)
-    devices:
-      - /dev/stmcom:/dev/stmcom
-      - /dev/imu_usb:/dev/imu_usb
-      - /dev/gps_rtk:/dev/gps_rtk
+    # Sensors come and go on USB (the hub resets, people re-plug things), so
+    # the host /dev is bind-mounted instead of static `devices:` nodes: the
+    # udev names from udev/99-mower.rules (/dev/stmcom, /dev/imu_usb,
+    # /dev/gps_rtk) stay live inside the container and a respawned driver
+    # finds a re-enumerated device whatever tty number it got. A `devices:`
+    # node is a copy of one major:minor taken at create time and the
+    # container has no udev, so it only worked while the kernel happened to
+    # hand back the same number. Nothing has to be plugged in for the
+    # container to start; a missing sensor is a respawning driver (and a
+    # closed navigation health gate) until it appears. Access is limited by
+    # device cgroup rules to:
+    #   c 4:67    ttyS3 = /dev/stmcom, the STM32 host UART (LubanCat UART3)
+    #   c 188:*   ttyUSB* = WIT IMU (CH340), or a CP2102 stmcom on a bench
+    #   c 166:*   ttyACM* = u-blox ZED-F9P (CDC-ACM)
+    device_cgroup_rules:
+      - 'c 4:67 rmw'
+      - 'c 188:* rmw'
+      - 'c 166:* rmw'
     volumes:
+      - /dev:/dev
       - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
 
   # Camera server (mediamtx.yml): WHEP on :8889 for the app on the same LAN;

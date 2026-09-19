@@ -59,7 +59,11 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 | `/dev/imu_usb` | WIT IMU（CH340） |
 | `/dev/gps_rtk` | u-blox ZED-F9P（CDC-ACM） |
 
-三個裝置都寫在 compose 的 `devices:`，少一個容器就起不來（`install.sh` 最後會列出哪個不在）。
+容器不用 `devices:`（那是建立容器當下抄一份 major:minor 的靜態節點，容器裡沒有 udev，重插後 kernel 換了 tty 編號就指不到），而是 bind-mount 整個 `/dev` 加 `device_cgroup_rules`（只放行 `4:67` ttyS3、`188:*` ttyUSB、`166:*` ttyACM）。
+udev 的名字在容器內即時更新，重插、換 USB 口、hub reset 後 respawn 的驅動都能直接接上；裝置沒插容器照樣能起，只是對應驅動每 2 s respawn 一次、導航健康檢查關閉。
+2026-09-20 驗證：容器跑著時拔掉接收器，容器內 `/dev/gps_rtk` 立即消失、驅動 0.46 s 退出；插回後 symlink 立即回來、驅動重啟直接 4 Hz。
+
+udev 規則另外把感測器用的 Genesys hub（05e3:0610）的 `power/control` 設成 `on`（不進 runtime suspend），這是針對 hub 一天掉 77 次的實驗性對策。
 
 ## GPS
 
