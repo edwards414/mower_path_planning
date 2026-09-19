@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+pub mod guard;
+
 /// Typed access to a node's initial parameters with defaults.
 ///
 /// r2r only knows the overrides that were passed on the command line; a

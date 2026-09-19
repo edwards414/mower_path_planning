@@ -68,6 +68,7 @@ def generate_launch_description():
     rust_nav = LaunchConfiguration('rust_nav')
     rust_battery = LaunchConfiguration('rust_battery')
     rust_pid_autotune = LaunchConfiguration('rust_pid_autotune')
+    rust_map = LaunchConfiguration('rust_map')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_bridge = LaunchConfiguration('rust_bridge')
@@ -111,6 +112,7 @@ def generate_launch_description():
             'rust_nav': rust_nav,
             'rust_battery': rust_battery,
             'rust_pid_autotune': rust_pid_autotune,
+            'rust_map': rust_map,
             'rust_bridge': rust_bridge,
         }.items(),
     )
@@ -223,6 +225,12 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs mower_pid_autotune instead of the rclpy '
                         'pid_autotune_node',
+        ),
+        DeclareLaunchArgument(
+            'rust_map',
+            default_value='false',
+            description='mower_rs mower_map instead of the rclpy '
+                        'map_manage_node',
         ),
         DeclareLaunchArgument(
             'rust_guards',

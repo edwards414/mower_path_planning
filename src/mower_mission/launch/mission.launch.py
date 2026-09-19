@@ -120,6 +120,16 @@ def generate_launch_description():
                     'status JSON, base side channels and parameters).',
     )
 
+    rust_map = LaunchConfiguration('rust_map')
+
+    declare_rust_map = DeclareLaunchArgument(
+        'rust_map',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_map process instead of '
+                    'the rclpy map_manage_node (same services, latched maps, '
+                    'parameters and occupancy bytes).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -255,6 +265,19 @@ def generate_launch_description():
         # parameter contract all address /map_manage/{get,set}_parameters.
         name='map_manage',
         output='screen',
+        condition=UnlessCondition(rust_map),
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # rust_map:=true -- the same map manager as an r2r process
+    # (src/mower_rs/crates/mower_map): pixel-exact OpenCV ports, identical
+    # /map_grid bytes.
+    mower_map_rs = Node(
+        package='mower_rs',
+        executable='mower_map',
+        name='map_manage',
+        output='screen',
+        condition=IfCondition(rust_map),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -492,6 +515,7 @@ def generate_launch_description():
         declare_rust_nav,
         declare_rust_battery,
         declare_rust_pid_autotune,
+        declare_rust_map,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -506,6 +530,7 @@ def generate_launch_description():
         path_record_node,
         mower_record_rs,
         map_manage_node,
+        mower_map_rs,
         coverage_node,
         nav_action_server,
         mower_nav_rs,

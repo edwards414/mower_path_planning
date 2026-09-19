@@ -1,4 +1,6 @@
+#[cfg(feature = "python")]
 use numpy::PyReadonlyArray2;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 use crate::types::{SafeMap, ValidationResult, world_to_grid};
@@ -90,6 +92,7 @@ pub fn validate_path_rs(points: &[(f64, f64)], sm: &SafeMap) -> ValidationResult
 
 // ── PyO3 bindings ──────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn py_is_point_safe(
     x: f64,
@@ -103,6 +106,7 @@ pub fn py_is_point_safe(
     is_point_safe_rs(x, y, &sm)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn py_is_segment_safe(
     p0: (f64, f64),
@@ -116,6 +120,7 @@ pub fn py_is_segment_safe(
     is_segment_safe_rs(p0, p1, &sm)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn py_validate_path(
     points: Vec<(f64, f64)>,
@@ -129,6 +134,7 @@ pub fn py_validate_path(
     (r.valid, r.invalid_points, r.invalid_segments, r.message)
 }
 
+#[cfg(feature = "python")]
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_is_point_safe, m)?)?;
     m.add_function(wrap_pyfunction!(py_is_segment_safe, m)?)?;

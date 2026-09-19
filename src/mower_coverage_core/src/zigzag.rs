@@ -1,4 +1,6 @@
+#[cfg(feature = "python")]
 use numpy::PyReadonlyArray2;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 use crate::path_validator::validate_path_rs;
@@ -390,6 +392,7 @@ pub fn generate_coverage_zigzag_path_rs(
 
 // ── PyO3 binding ──────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (grid, strip_width_m, waypoint_spacing_m, res, h, w, origin_x, origin_y, angle_deg=0.0))]
 pub fn py_generate_coverage_zigzag_path(
@@ -409,6 +412,7 @@ pub fn py_generate_coverage_zigzag_path(
     )
 }
 
+#[cfg(feature = "python")]
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_generate_coverage_zigzag_path, m)?)?;
     Ok(())

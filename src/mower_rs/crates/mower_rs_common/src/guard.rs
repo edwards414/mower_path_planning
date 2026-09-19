@@ -25,6 +25,11 @@ impl Guard {
         Guard { owner, nav_active: true, nav_seen: false, local_locked: false, lease_held: false, client, logger }
     }
 
+    /// `_mutation_block_reason() is not None`.
+    pub fn blocked(&self) -> bool {
+        self.block_reason().is_some()
+    }
+
     fn block_reason(&self) -> Option<&'static str> {
         if !self.nav_seen {
             Some("navigation state is not available")

@@ -16,6 +16,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
 | `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
+| `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -208,6 +209,32 @@ per frame; staleness is still judged from the arrival time), and the
 progress-0.85 status (verify metrics attached) is usually coalesced into the
 0.90 `review` status by the depth-1 latched writer because the two publishes
 are microseconds apart -- `verify` stays in every later status.
+
+## mower_map
+
+`crates/mower_map`: `raster.rs` re-implements the OpenCV 4.6.0 primitives the
+Python node calls (`fillPoly`, `polylines` thickness 1, `line` with a
+thickness and round caps, `getStructuringElement(MORPH_ELLIPSE)`, `erode` /
+`dilate` with the default and the constant-0 border) from
+`modules/imgproc/src/drawing.cpp` of that release -- fixed-point edges,
+Bresenham, `FillConvexPoly`, `FillEdgeCollection`, `Circle` -- and
+`tests/raster_oracle.json` holds 720 random cases rendered by the same
+OpenCV build, matched pixel for pixel. `grid.rs` is `nav_map_fusion.py` +
+`map_safety.py` + `image_mask_import.py` + the risk / zone / channel
+rasterisation of the node with numpy's truncation, floor/ceil and integral
+image semantics; the pytest vectors are `cargo test`s and
+`tests/map_oracle.json` checks the node's own code on the differential
+run's geometry. `main.rs` keeps the node name `map_manage`, every service,
+message text, log line, latched topic, the fail-closed Nav2 snapshots, the
+image-mission backup / restore, the mutation guard on every mutation and
+the parameter services with rclpy's validation order (declared type first,
+then the node's callback, then the guarded refresh).
+
+One subtlety carried over on purpose: rclpy keeps the Python float in the
+float32 `resolution` field until the message is serialised, so the node's
+cell indices come from 0.05 exactly while subscribers see
+0.05000000074505806. `Map` keeps that f64 next to the message so the Rust
+node computes the same indices (and the same bytes).
 
 ## Verification
 

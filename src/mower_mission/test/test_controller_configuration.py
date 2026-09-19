@@ -35,6 +35,9 @@ PID_AUTOTUNE_NODE = SRC_DIR / 'mower_mission/mower_mission/pid_autotune_node.py'
 PID_TUNING = SRC_DIR / 'mower_mission/mower_mission/pid_tuning.py'
 PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/main.rs'
 PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tuning.rs'
+MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
+MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/main.rs'
+MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -256,7 +259,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -389,6 +392,42 @@ def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
     for state in ('precheck', 'open_loop', 'fitting', 'verify', 'review', 'saving', 'done', 'failed', 'aborted'):
         assert f'"{state}"' in main, state
     assert 'flash save attempt {attempt}, flash_diag=0x{diag:04x}' in main
+    assert 'make_parameter_handler' not in main
+
+
+def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
+    """rust_map:=true swaps in mower_rs mower_map for map_manage_node: same
+    node name, services, latched topics, safety floor, fail-closed rules and
+    user-facing messages."""
+    main = MAP_RS_MAIN.read_text(encoding='utf-8')
+    grid = MAP_RS_GRID.read_text(encoding='utf-8')
+    py_node = MAP_MANAGE_NODE.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_map'" in mission_launch
+    assert "condition=IfCondition(rust_map)" in mission_launch
+    assert "condition=UnlessCondition(rust_map)" in mission_launch
+    assert mission_launch.count("name='map_manage'") == 2
+    assert 'r2r::Node::create(ctx, "map_manage", "")' in main
+    assert 'const MIN_SAFE_INFLATE_RADIUS_M: f64 = 0.75;' in main
+    assert 'MIN_SAFE_INFLATE_RADIUS_M = 0.75' in py_node
+    for service in ('/create_risk_map', '/create_free_space', '/import_image_mask', '/create_chennal_map',
+                    '/get_zone_map_list_srv', '/restore_free_space_coverage', '/map_manage/get_parameters',
+                    '/map_manage/set_parameters', '/map_manage/set_parameters_atomically'):
+        assert f'"{service}"' in main, service
+    for topic in ('/free_space', '/free_space_inflated', '/risk_map', '/risk_map_inflated', '/chennal_map',
+                  '/chennal_map_inflated', '/map_grid', '/map_grid_global', '/nav_operation_active', '/mission_operation_lock'):
+        assert f'"{topic}"' in main, topic
+    # every Chinese / English user-facing message of the Python node survives
+    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
+        if '{' in text or text.endswith(': '):
+            continue
+        assert text in main or text in grid, text
+    for text in ('held occupied until its risk map is ready', 'cannot fuse', 'base and channel grid geometries must match',
+                 'base and risk grid orientations must match', 'channel point is outside the navigation map',
+                 'mask_encoding must be base64_u8_row_major', 'robot_pose_header.frame_id must be map',
+                 'inflate_radius_m cannot change while navigation is active or unknown', 'inflate_radius_m must be finite'):
+        assert text in main or text in grid, text
+    assert 'guard.acquire("refresh inflated maps")' in main
     assert 'make_parameter_handler' not in main
 
 

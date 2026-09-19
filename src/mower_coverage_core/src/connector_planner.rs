@@ -2,8 +2,10 @@ use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::cmp::Reverse;
 
 use ndarray::{Array2, ArrayView2};
+#[cfg(feature = "python")]
 use numpy::PyReadonlyArray2;
 use ordered_float::OrderedFloat;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 use crate::types::{SafeMap, world_to_grid, grid_to_world};
@@ -187,6 +189,7 @@ pub fn plan_connector_rs(
 
 // ── PyO3 bindings ──────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (start, end, grid, resolution, origin_x, origin_y, boundary_weight=0.2))]
 pub fn py_plan_connector(
@@ -202,6 +205,7 @@ pub fn py_plan_connector(
     plan_connector_rs(start, end, &sm, boundary_weight)
 }
 
+#[cfg(feature = "python")]
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_plan_connector, m)?)?;
     Ok(())

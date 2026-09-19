@@ -7,4 +7,5 @@ description = "Shared helpers for the mower_rs nodes (parameters, JSON, host sta
 
 [dependencies]
 r2r.workspace = true
+tokio.workspace = true
 serde_json.workspace = true

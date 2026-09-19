@@ -10,7 +10,6 @@
 //! work while a recording is active.
 
 mod geometry;
-mod guard;
 mod recorder;
 mod site_store;
 
@@ -28,7 +27,7 @@ use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use r2r::QosProfile;
 use tokio::sync::Mutex;
 
-use crate::guard::{Guard, RELEASE_UNCONFIRMED};
+use mower_rs_common::guard::{Guard, RELEASE_UNCONFIRMED};
 use crate::recorder::{Config, Kind, Outputs, Recorder};
 
 struct Publishers {

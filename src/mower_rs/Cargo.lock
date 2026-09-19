@@ -519,6 +519,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_map"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_nav"
 version = "0.1.0"
 dependencies = [
@@ -559,6 +571,7 @@ version = "0.1.0"
 dependencies = [
  "r2r",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
