@@ -390,6 +390,17 @@ def test_rust_battery_node_keeps_the_same_model_and_wiring():
     assert 'make_parameter_handler' not in main
 
 
+def test_imu_drivers_are_respawned_after_a_serial_failure():
+    """Both IMU drivers exit on a USB I/O error (fail-closed for the health
+    gate); launch must restart them once /dev/imu_usb is back."""
+    source = MOWER_LAUNCH.read_text(encoding='utf-8')
+    for executable in ("executable='wit_ros2_imu'", "executable='mower_imu'"):
+        # the Node(...) block ends at the first line that is just ')'
+        block = source.split(executable, 1)[1].split('\n    )\n', 1)[0]
+        assert 'respawn=True' in block, executable
+        assert 'respawn_delay=2.0' in block, executable
+
+
 def test_local_compose_builds_full_runtime_stage():
     source = LOCAL_COMPOSE.read_text(encoding='utf-8')
     lawan_service = source.split('  mediamtx:', maxsplit=1)[0]

@@ -224,12 +224,19 @@ def generate_launch_description():
     )
 
     rust_imu = LaunchConfiguration('rust_imu')
+    # Both drivers exit on a serial I/O error so that no stale-looking IMU
+    # keeps the navigation health gate open. The USB hub on the LubanCat
+    # re-enumerates the CH341 adapter every hour or two (18 times in a day
+    # on 2026-09-19), so launch has to bring the driver back once
+    # /dev/imu_usb reappears; until then the gate stays closed.
     wit_ros2_imu_node = Node(
         package='wit_ros2_imu',
         executable='wit_ros2_imu',
         name='imu',
         output='screen',
         condition=UnlessCondition(rust_imu),
+        respawn=True,
+        respawn_delay=2.0,
         remappings=[('imu/data_raw', 'imu/data')],
     )
     # rust_imu:=true -- the same WIT serial driver as an r2r process
@@ -240,6 +247,8 @@ def generate_launch_description():
         name='imu',
         output='screen',
         condition=IfCondition(rust_imu),
+        respawn=True,
+        respawn_delay=2.0,
         remappings=[('imu/data_raw', 'imu/data')],
     )
 
