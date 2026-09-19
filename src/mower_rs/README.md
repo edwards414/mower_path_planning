@@ -15,6 +15,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_record` | `path_record_node` (zone / risk / channel recording, `/edit_zone`, channel routing, work files, named-site library `/site_op`) | `mission.launch.py rust_record:=true` |
 | `mower_nav` | `nav_action_server` (`nav_action` / `nav_action_follow_path` Waypoint actions, dispatch confirmation, `/cancel_nav2`, `/check_nav_status`, `/mission_operation_lock`, sensor health gate, manual/autonomy exclusivity, the 20 Hz `/navigation_coordinator_lock` + `/navigation_safety_stop` fail-safe heartbeat, bounded Nav2 dispatch with the `uncertain` fault latch) | `mission.launch.py rust_nav:=true` |
 | `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
+| `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
@@ -183,6 +184,30 @@ Python node on one synthetic telemetry stream (silence, meter, sag,
 charger, charger without current, unplugged, ADC fallback + AON cell,
 garbage frames, stale, low pack), voltage-only and coulomb-counting
 variants: every 1 Hz sample identical within the timers' phase offset.
+
+## mower_pid_autotune
+
+`crates/mower_pid_autotune`: `tuning.rs` is a line-by-line port of
+`pid_tuning.py` (FOPDT grid fit with the same 40 x 30 coarse grid and two
+refinement passes, `check_model` limits, SIMC PI with the tau floor,
+`step_metrics`, the closed-loop simulator used by the tests); the pytest
+vectors are `cargo test`s and `tests/pid_tuning_golden.json` holds fits the
+Python module produced on fixed sample sets, matched to 1e-9. `main.rs`
+keeps the node name `pid_autotune`, every parameter and default, the
+`/pid_autotune` service semantics (`start` refused while a session runs,
+`apply` / `discard` only in `review`), the 5 Hz latched status JSON with the
+same key order, the base side-channel JSON, the `0x84` acknowledgement rules
+(fresh `last_rx_seq`, matching gains, mode and `LAST_APPLY_OK`, `FLASH_VALID`
+for a persisted save, one retry with `flash_diag`), the review timeout, the
+restore of the previous gains in every exit path and the mission operation
+lock (missing service = bench, carry on).
+
+Intentional differences: the `/mower_base/telemetry` subscription is
+permanent (the Python node created it per session because rclpy paid ~6 ms
+per frame; staleness is still judged from the arrival time), and the
+progress-0.85 status (verify metrics attached) is usually coalesced into the
+0.90 `review` status by the depth-1 latched writer because the two publishes
+are microseconds apart -- `verify` stays in every later status.
 
 ## Verification
 

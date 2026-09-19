@@ -110,6 +110,16 @@ def generate_launch_description():
                     'topics and parameters).',
     )
 
+    rust_pid_autotune = LaunchConfiguration('rust_pid_autotune')
+
+    declare_rust_pid_autotune = DeclareLaunchArgument(
+        'rust_pid_autotune',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_pid_autotune process '
+                    'instead of the rclpy pid_autotune_node (same service, '
+                    'status JSON, base side channels and parameters).',
+    )
+
     declare_rust_bridge = DeclareLaunchArgument(
         'rust_bridge',
         default_value='false',
@@ -443,7 +453,19 @@ def generate_launch_description():
         executable='pid_autotune_node',
         name='pid_autotune',
         output='screen',
+        condition=UnlessCondition(rust_pid_autotune),
         parameters=[{'use_sim_time': False}],
+    )
+
+    # rust_pid_autotune:=true -- the same identification + SIMC maths and
+    # session state machine as an r2r process
+    # (src/mower_rs/crates/mower_pid_autotune).
+    mower_pid_autotune_rs = Node(
+        package='mower_rs',
+        executable='mower_pid_autotune',
+        name='pid_autotune',
+        output='screen',
+        condition=IfCondition(rust_pid_autotune),
     )
 
     temp_dock_pose_publisher = Node(
@@ -469,6 +491,7 @@ def generate_launch_description():
         declare_rust_record,
         declare_rust_nav,
         declare_rust_battery,
+        declare_rust_pid_autotune,
         declare_rust_bridge,
         declare_auto_coverage,
         declare_record,
@@ -495,6 +518,7 @@ def generate_launch_description():
         battery_state_node,
         mower_battery_rs,
         pid_autotune_node,
+        mower_pid_autotune_rs,
         temp_dock_pose_publisher,
         auto_coverage_node,
     ])

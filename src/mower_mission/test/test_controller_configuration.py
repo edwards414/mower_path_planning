@@ -31,6 +31,10 @@ MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
 IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/main.rs'
+PID_AUTOTUNE_NODE = SRC_DIR / 'mower_mission/mower_mission/pid_autotune_node.py'
+PID_TUNING = SRC_DIR / 'mower_mission/mower_mission/pid_tuning.py'
+PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/main.rs'
+PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tuning.rs'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
 DEPLOY_MEDIAMTX = SRC_DIR.parent / 'deploy/mediamtx.yml'
 DUAL_EKF_LAUNCH = SRC_DIR / 'mower_nav2/launch/dual_ekf_navsat.launch.py'
@@ -252,7 +256,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
     assert "parameters=[{'require_command_session': True}]" in mux_launch
@@ -352,6 +356,40 @@ def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
     assert 'Navigation/manual motion is active or termination is uncertain' in main
     assert 'navigation path requires at least two poses' in geometry
     assert 'canonical_dispatch_id' in geometry
+
+
+def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
+    """rust_pid_autotune:=true swaps in mower_rs mower_pid_autotune for
+    pid_autotune_node: same node name, service, parameters, plausibility
+    limits, flag bits and status states."""
+    main = PID_AUTOTUNE_RS_MAIN.read_text(encoding='utf-8')
+    tuning = PID_AUTOTUNE_RS_TUNING.read_text(encoding='utf-8')
+    py_node = PID_AUTOTUNE_NODE.read_text(encoding='utf-8')
+    py_tuning = PID_TUNING.read_text(encoding='utf-8')
+    mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_pid_autotune'" in mission_launch
+    assert "condition=IfCondition(rust_pid_autotune)" in mission_launch
+    assert "condition=UnlessCondition(rust_pid_autotune)" in mission_launch
+    assert mission_launch.count("name='pid_autotune'") == 2
+    assert 'r2r::Node::create(ctx_r2r, "pid_autotune", "")' in main
+    assert 'create_service::<PidAutotune::Service>("/pid_autotune"' in main
+    # every declared parameter with the same default
+    for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M):
+        rust_default = default.replace("'", '"').replace('[', '&[').replace('300.0', '300.0')
+        assert f'"{name}", {rust_default}' in main, (name, default)
+    # plausibility limits and flag bits are the Python ones
+    for const in ('GAIN_RANGE', 'TAU_RANGE', 'DELAY_MAX', 'MIN_RESPONSE_RPM', 'MAX_FIT_RMSE_FRACTION', 'TAU_DESIGN_MIN'):
+        py_value = re.search(rf'^{const} = ([^#\n]+)', py_tuning, re.M).group(1).strip()
+        assert re.search(rf'pub const {const}: [^=]+= {re.escape(py_value)};', tuning), const
+    for flag in ('PID_FLAG_CLOSED_LOOP = 0x01', 'PID_FLAG_FLASH_VALID = 0x02', 'PID_FLAG_LAST_APPLY_OK = 0x08',
+                 'MOTOR_FLAG_DRIVER_ALARM = 0x04', 'POWER_STATE_RUNNING = 0'):
+        assert flag in py_node
+        name, value = flag.split(' = ')
+        assert f'const {name}: i64 = {value};' in main, flag
+    for state in ('precheck', 'open_loop', 'fitting', 'verify', 'review', 'saving', 'done', 'failed', 'aborted'):
+        assert f'"{state}"' in main, state
+    assert 'flash save attempt {attempt}, flash_diag=0x{diag:04x}' in main
+    assert 'make_parameter_handler' not in main
 
 
 def test_rust_battery_node_keeps_the_same_model_and_wiring():
