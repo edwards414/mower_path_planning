@@ -51,7 +51,8 @@ def generate_launch_description():
     )
 
     # The app's door is the pairing gate (mower_mission/rosbridge_auth_proxy):
-    # it listens on `address:port`, checks the pairing headers of every
+    # it listens on `address:port` (plus 127.0.0.1:port for the relay
+    # agent), checks the pairing headers of every
     # connection against ~/.mower/identity.json and pipes the frames to
     # rosbridge, which only ever listens on loopback. Without an identity
     # file (development, simulation) the gate passes everything through.
@@ -79,9 +80,10 @@ def generate_launch_description():
         output='screen',
         condition=UnlessCondition(rust_agent),
         arguments=[
-            # The gate binds `address` (the WireGuard/LAN IP on a real robot,
-            # 127.0.0.1 in dev), so the agent must dial the same address.
-            '--gate', ['ws://', LaunchConfiguration('address'), ':', LaunchConfiguration('port')],
+            # The gate also listens on loopback, so relayed sessions keep
+            # working when the LAN address (and its uplink) is gone and the
+            # robot is on 4G.
+            '--gate', ['ws://127.0.0.1:', LaunchConfiguration('port')],
             '--rosbridge', 'ws://127.0.0.1:9091',
         ],
     )
@@ -96,7 +98,7 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(rust_agent),
         arguments=[
-            '--gate', ['ws://', LaunchConfiguration('address'), ':', LaunchConfiguration('port')],
+            '--gate', ['ws://127.0.0.1:', LaunchConfiguration('port')],
             '--rosbridge', 'ws://127.0.0.1:9091',
         ],
     )
