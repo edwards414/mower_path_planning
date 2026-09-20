@@ -224,13 +224,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_timeout: Duration::from_secs(args.service_timeout_s),
     });
 
-    let public = TcpListener::bind((args.address.as_str(), args.port)).await.map_err(|e| format!("bind {}:{}: {e}", args.address, args.port))?;
-    r2r::log_info!(&logger, "listening on ws://{}:{} (pairing gate)", args.address, args.port);
-    let mut tasks = vec![tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone())))];
+    let mut tasks = Vec::new();
     // The same gate on loopback for the relay agent: `address` is the LAN
     // (or VPN) IP, which vanishes with its uplink, while relayed sessions
     // arrive over whichever uplink is left (4G). 0.0.0.0 already covers it.
-    if !matches!(args.address.as_str(), "127.0.0.1" | "0.0.0.0" | "::" | "localhost") {
+    let lan_address = !matches!(args.address.as_str(), "127.0.0.1" | "0.0.0.0" | "::" | "localhost");
+    if lan_address {
         let local_gate = TcpListener::bind(("127.0.0.1", args.port)).await.map_err(|e| format!("bind 127.0.0.1:{}: {e}", args.port))?;
         r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (pairing gate, relay agent)", args.port);
         tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Some(gate.clone()))));
@@ -242,6 +241,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tasks.push(tokio::spawn(serve_listener(local, shared.clone(), None)));
         }
     }
+    // A LAN address may not exist yet (booted with the cable out, on 4G):
+    // keep retrying instead of dying, the loopback gate above already serves
+    // the relay. Any other bind error (port taken, bad address) is fatal.
+    let mut attempts = 0u32;
+    let public = loop {
+        match TcpListener::bind((args.address.as_str(), args.port)).await {
+            Ok(l) => break l,
+            Err(e) if lan_address && e.kind() == std::io::ErrorKind::AddrNotAvailable => {
+                if attempts % 12 == 0 {
+                    r2r::log_warn!(&logger, "bind {}:{}: {e}; retrying every 5 s", args.address, args.port);
+                }
+                attempts += 1;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            Err(e) => return Err(format!("bind {}:{}: {e}", args.address, args.port).into()),
+        }
+    };
+    r2r::log_info!(&logger, "listening on ws://{}:{} (pairing gate)", args.address, args.port);
+    tasks.push(tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone()))));
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
