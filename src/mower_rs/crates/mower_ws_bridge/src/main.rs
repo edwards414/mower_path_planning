@@ -227,6 +227,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public = TcpListener::bind((args.address.as_str(), args.port)).await.map_err(|e| format!("bind {}:{}: {e}", args.address, args.port))?;
     r2r::log_info!(&logger, "listening on ws://{}:{} (pairing gate)", args.address, args.port);
     let mut tasks = vec![tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone())))];
+    // The same gate on loopback for the relay agent: `address` is the LAN
+    // (or VPN) IP, which vanishes with its uplink, while relayed sessions
+    // arrive over whichever uplink is left (4G). 0.0.0.0 already covers it.
+    if !matches!(args.address.as_str(), "127.0.0.1" | "0.0.0.0" | "::" | "localhost") {
+        let local_gate = TcpListener::bind(("127.0.0.1", args.port)).await.map_err(|e| format!("bind 127.0.0.1:{}: {e}", args.port))?;
+        r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (pairing gate, relay agent)", args.port);
+        tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Some(gate.clone()))));
+    }
     if let Some(port) = args.loopback_port {
         if !(args.address == "127.0.0.1" && port == args.port) {
             let local = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;

@@ -116,9 +116,14 @@ async def run(args) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: None if stop.done() else stop.set_result(None))
 
+    # The relay agent dials the gate on loopback, so it keeps working when the
+    # LAN/VPN address (and its uplink) goes away and sessions arrive over 4G.
+    hosts = [args.address]
+    if args.address not in ('127.0.0.1', '0.0.0.0', '::', 'localhost'):
+        hosts.append('127.0.0.1')
     async with serve(
         proxy.handle,
-        args.address,
+        hosts,
         args.port,
         create_protocol=make_protocol(proxy),
         max_size=args.max_size,
@@ -126,7 +131,7 @@ async def run(args) -> None:
         ping_interval=20,
         ping_timeout=20,
     ):
-        log.info('listening on ws://%s:%d -> %s', args.address, args.port, args.upstream)
+        log.info('listening on ws://%s:%d -> %s', ' + '.join(hosts), args.port, args.upstream)
         await stop
 
 
