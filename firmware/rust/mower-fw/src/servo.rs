@@ -23,9 +23,9 @@ use embassy_stm32::peripherals::TIM10;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::{OutputCompareMode, Timer};
 use embassy_stm32::timer::Channel;
-use mower_core::servo::{Servo, CENTER_PULSE_US, PERIOD_US};
+use mower_core::servo::{LimitDebounce, Servo, CENTER_PULSE_US, PERIOD_US};
 
-use crate::board::ServoPeripherals;
+use crate::board::{LimitSwitches, ServoPeripherals};
 
 /// Read by the TIM10 ISR on every update event: true = emit this pulse.
 static OUTPUT_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -38,11 +38,16 @@ pub struct ServoDrive {
     timer: Timer<'static, TIM10>,
     /// Kept alive so PB10 stays a push-pull output; the ISR drives it via BSRR.
     pin: Output<'static>,
+    limits: LimitSwitches,
+    debounce: LimitDebounce,
 }
 
 impl ServoDrive {
     pub fn new(hw: ServoPeripherals) -> Self {
-        let ServoPeripherals { pin, mut timer } = hw;
+        let ServoPeripherals { pin, mut timer, limits } = hw;
+        // Seed the debounce so a switch already pressed at boot counts at once.
+        let (up, dn) = limits.read();
+        let debounce = LimitDebounce::seeded(up, dn);
         timer.set_tick_freq(Hertz::mhz(1));
         timer.set_max_compare_value(PERIOD_US - 1);
         timer.set_output_compare_mode(Channel::Ch1, OutputCompareMode::Frozen);
@@ -61,11 +66,19 @@ impl ServoDrive {
         unsafe { interrupt::TIM1_UP_TIM10.enable() };
         timer.start();
 
-        Self { timer, pin }
+        Self { timer, pin, limits, debounce }
     }
 
-    /// Push the current command to the hardware. Called on the control tick
-    /// after `Servo::tick`, and after every command / limit change.
+    /// Sample and debounce the limit switches; call once per control tick
+    /// before `Servo::tick`. The C++ build samples every 10 ms, this every
+    /// 20 ms, so a switch takes up to 40 ms (≤ 100 µs of pulse) to register.
+    pub fn poll_limits(&mut self) -> (bool, bool) {
+        let (up, dn) = self.limits.read();
+        self.debounce.sample(up, dn)
+    }
+
+    /// Push the current pulse to the hardware. Called on the control tick
+    /// after `Servo::tick`, and after every command.
     pub fn apply(&mut self, servo: &Servo) {
         self.timer.set_compare_value(Channel::Ch1, servo.pulse_us);
         let active = servo.output_active();

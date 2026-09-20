@@ -21,8 +21,7 @@
 //! | PB7        |                 | BLD120A F/R, open-drain, low = run    |
 //! | PC13       |                 | BLD120A BRK, open-drain, low = brake  |
 //! | PB12–PB15  |                 | BTS7960 IS, advisory only             |
-//! | ADC1 IN9   | PB1             | analog mux output (`analog.rs`)       |
-//! | PB2, PA6   |                 | analog mux select S0, S1 (no PB11 on 48-pin) |
+//! | PB2, PA6   |                 | MG996 limit switches UP / DN, pull-up, close to GND |
 //! | PC15       |                 | MAIN_POWER_EN, held high              |
 //! | PC14       |                 | LEBANCAT_WAKE, held low               |
 
@@ -224,10 +223,31 @@ pub struct ChargerPeripherals {
     pub de: Output<'static>,
 }
 
-/// PB10 plus the timer that times its pulses (see `servo.rs`).
+/// PB10 plus the timer that times its pulses (see `servo.rs`), and the two
+/// travel limit microswitches.
 pub struct ServoPeripherals {
     pub pin: Output<'static>,
     pub timer: Timer<'static, TIM10>,
+    pub limits: LimitSwitches,
+}
+
+/// One microswitch per end of the mechanism, between the pin and GND with
+/// the internal pull-up (`SERVO_LIMIT_UP` / `SERVO_LIMIT_DN` in the C++
+/// build). `PRESSED_LEVEL_LOW` mirrors `SERVO_LIMIT_PRESSED_LEVEL`: true for
+/// an NO contact, false for an NC one (broken wire reads as pressed).
+pub struct LimitSwitches {
+    up: Input<'static>,
+    dn: Input<'static>,
+}
+
+impl LimitSwitches {
+    const PRESSED_LEVEL_LOW: bool = true;
+
+    /// Raw `(up, dn)` — debounce it with `mower_core::servo::LimitDebounce`.
+    pub fn read(&self) -> (bool, bool) {
+        let pressed = |pin: &Input<'static>| pin.is_low() == Self::PRESSED_LEVEL_LOW;
+        (pressed(&self.up), pressed(&self.dn))
+    }
 }
 
 pub struct Board {
@@ -235,7 +255,6 @@ pub struct Board {
     pub power: PowerPins,
     pub charger: ChargerPeripherals,
     pub servo: ServoPeripherals,
-    pub analog: crate::analog::AnalogPeripherals,
     pub usart1: embassy_stm32::Peri<'static, embassy_stm32::peripherals::USART1>,
     pub uart_tx_pin: embassy_stm32::Peri<'static, embassy_stm32::peripherals::PB6>,
     pub uart_rx_pin: embassy_stm32::Peri<'static, embassy_stm32::peripherals::PA10>,
@@ -312,13 +331,10 @@ pub fn init(p: Peripherals) -> Board {
         de: Output::new(p.PA5, Level::Low, Speed::Low),
     };
 
-    let servo = ServoPeripherals { pin: Output::new(p.PB10, Level::Low, Speed::Low), timer: Timer::new(p.TIM10) };
-
-    let analog = crate::analog::AnalogPeripherals {
-        adc: p.ADC1,
-        mux_out: p.PB1,
-        mux_s0: Output::new(p.PB2, Level::Low, Speed::Low),
-        mux_s1: Output::new(p.PA6, Level::Low, Speed::Low),
+    let servo = ServoPeripherals {
+        pin: Output::new(p.PB10, Level::Low, Speed::Low),
+        timer: Timer::new(p.TIM10),
+        limits: LimitSwitches { up: Input::new(p.PB2, Pull::Up), dn: Input::new(p.PA6, Pull::Up) },
     };
 
     Board {
@@ -326,7 +342,6 @@ pub fn init(p: Peripherals) -> Board {
         power,
         charger,
         servo,
-        analog,
         usart1: p.USART1,
         uart_tx_pin: p.PB6,
         uart_rx_pin: p.PA10,

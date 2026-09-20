@@ -92,7 +92,7 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 
 > `base` 來源 `/mower_base/telemetry` 本身是 20 Hz（與 STM32 `0x85` 同步，PID 自動校正需要這個取樣率），並多了 `t`（ROS time）與 `pid.last_rx_seq`。
 
-給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態、充電模組 `charger`、電池電壓 `analog`，來自 STM32 的 `0x81/0x83/0x84/0x85/0x86/0x89/0x8A`）、`battery`（`/battery_state` 攤平：`present / pct / voltage_v / current_a / status`，`aon` 下是小電池同格式）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（load / 記憶體 / CPU 溫度）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
+給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態、充電模組 `charger`、抬刀 servo `servo`（脈寬、上下限微動、被限位擋下）、割草馬達 `blade`，來自 STM32 的 `0x81/0x82/0x83/0x84/0x85/0x86/0x88/0x89`）、`battery`（`/battery_state` 攤平：`present / pct / voltage_v / current_a / status`，`aon` 下是小電池同格式）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（load / 記憶體 / CPU 溫度）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
 
 ## `/battery_state`（sensor_msgs/BatteryState，1 Hz）
 
@@ -143,6 +143,15 @@ Response：`success` / `message`。`start` 回 `success=true` 只代表已開始
 `t` 是自 `started_at` 起的秒數。執行中 5 Hz 更新，結束後 latched 留著最後一筆；任何非 `done` / `idle` 的結束都會把原本的增益寫回 RAM（Flash 不動）。
 
 機器人端依賴 mower_hardware 的兩個側通道：`/mower_base/pid_command`（`0x04`）與 `/mower_base/wheel_override`（繞過 `diff_drive_controller` 加速度限制的原始 permille 指令，ttl ≤ 1 s 要一直重送，沒送就回到控制器指令），見 `src/mower_hardware/README.md`。
+
+## `/mower_base/servo_command`、`/mower_base/blade_command`（std_msgs/String，JSON，App → 機器人）
+
+Mower Studio「抬刀 / 割草馬達」卡片用的兩個指令 topic，直接進 `mower_hardware`（見 `src/mower_hardware/README.md`）：
+
+- `servo_command`：`{"pulse_us":1500,"hold_ms":0}`，`pulse_us` 500–2500 是目標，STM32 以 25 µs/10 ms 滑過去，碰到上下限微動就退 50 µs 停住（狀態在 `/robot/telemetry` 的 `base.servo`：`pulse_us / limit_up / limit_down / limit_active`）；`0` 放鬆。
+- `blade_command`：`{"permille":300,"ttl_ms":500}`，**dead-man**：ttl（≤ 1 s）內沒再收到就停，App 要每 0.2 s 重送；`permille` 0 立即停。狀態在 `base.blade`。
+
+新增 topic，`api_version` 不 bump；App 用 `base.servo.valid` 判斷機器人是否支援。
 
 ## `/system/update`、`/system/restart`（std_srvs/Trigger）
 

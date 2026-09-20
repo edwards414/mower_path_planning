@@ -27,13 +27,11 @@
 | 電壓邏輯轉換器 | FT-555 A/B level shifter | `PA0`, `PA1`, `PA8`, `PA9` | 5 V to 3.3 V logic | 左右輪 encoder PP A/B 訊號降壓後進 STM32 |
 | WS2812 燈條 | Front/Back LED strip | `PB4`, `PB5` | `TIM3_CH1/CH2` PWM + DMA | 800 kHz data，GRB 順序；後燈 16 顆，前燈 4 條串聯共 32 顆；LED 0-2 保留給狀態燈號 |
 | Host UART | Host / controller | `PB6`, `PA10` | `USART1_TX/RX` + DMA | 115200 8N1，無硬體流控 |
-| RS485 電池電表 | 電壓 / 電流 / 溫度 RS485 電表（Modbus RTU），裝在電池主線上 | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀電壓 / 電流 / 溫度。`PA7` 空著（原 SPI-CAN 已取消；`PA6` 改作 ADC mux S1） |
+| RS485 電池電表 | 電壓 / 電流 / 溫度 RS485 電表（Modbus RTU），裝在電池主線上 | `PA11`, `PA12`, `PA5` | `USART6_TX/RX` 9600 8N1, GPIO DE | MAX485 TTL 模組：`PA11`→DI、RO→`PA12`、`PA5`→DE+RE；讀電壓 / 電流 / 溫度。`PA7` 空著（原 SPI-CAN 已取消） |
 | 割草馬達 | BLD120A cutting motor driver | `PB8`, `PB7`, `PC13` | `TIM4_CH3` PWM, GPIO output, GPIO open-drain | BLD120A PWM 需求為 5 V、1-3 kHz；DIR 使用 `PB7`；BRK 使用 `PC13` open-drain，EN 硬體接 GND 常開 |
 | MG996 Servo | MG996 / MG996R servo | `PB10` | GPIO + `TIM10` 中斷計時 | 50 Hz、500–2500 µs 脈波由 TIM10 update / CH1 compare 中斷產生（PB10 沒有可用的 timer channel）；servo 需外部 5-6 V 供電；host 用 `0x07` 控制 |
-| 類比監控 / ADC MUX | Current / temperature / battery monitor | `PB1`, `PB2`, `PA6` | `ADC1_IN9`, GPIO select | 規劃：共用一個 ADC 腳量 MG996 電流、板溫 NTC、24 V 主電池、3.7 V 小電池。**2026-09-19：mux、分壓、電流感測都沒裝**，`ANALOG_MONITOR_CHANNEL_MASK=0x00`，電池由 RS485 電表負責 |
-| 電流感測限位 | Current sensor module | ADC MUX CH0 | `ADC1_IN9` through mux | 量測 MG996 電流，超過門檻當作限位/卡住 |
-| 板溫檢測 | Board NTC thermistor | ADC MUX CH1 | `ADC1_IN9` through mux | 10k NTC，量測板上溫度 |
-| 電池電壓量測 | 24 V main / 3.7 V AON battery divider | ADC MUX CH2/CH3 | `ADC1_IN9` through mux | 電阻分壓後進 ADC，輸入不可超過 3.3 V |
+| MG996 限位開關 | 機構上下兩端的微動開關 | `PB2`, `PA6` | GPIO input, 內部上拉 | `PB2` = 上限、`PA6` = 下限；開關一端接腳位、另一端接 GND，不接 5 V。2026-09-20 取代原本的 ADC 電流限位 |
+| （已移除）類比監控 / ADC MUX | - | `PB1` 空著 | - | 原規劃 mux 量 MG996 電流 / NTC / 電池分壓，從未裝上；2026-09-20 從韌體與 `.ioc` 移除（ADC1、`0x8A` 一併退役），電池電壓 / 電流由 RS485 電表 `0x89` 提供 |
 | 輪速 PID / 設定儲存 | FT-555 encoder + internal Flash | `TIM5`, `TIM1`, Flash sector 7 | C++ module | 左右輪 PID 閉迴路；PID 參數存於 `0x08060000` |
 | 電源按鍵 / 低功耗 | Power button / power hold | `PB0`, `PC14`, `PC15` | EXTI input, GPIO output | 長按 3 秒：停馬達、透過 UART `0x86` 通知 LubanCat 關機、等 ack（最多 30 s）後 `PC15` 切主電源；`LOW_POWER` 時按住 1 秒喚醒 LebanCat（`PC14` high 1 s）；關機後 STM32 由小電池 AON 供電。流程見 `UART_OPEN_LOOP_PROTOCOL.md` 的 `0x05 / 0x86` |
 | 無源蜂鳴器 | Passive buzzer | `PB9` | `TIM4_CH4` PWM | 實測為無源蜂鳴器，DC 只會輕微一聲；用 TIM4_CH4 送 2 kHz 50% 方波發聲，duty 0 靜音 |
@@ -43,14 +41,14 @@
 
 ## 馬達配置總表
 
-本車共有 3 顆主要驅動馬達：左輪、右輪、專門割草馬達。左輪與右輪是 12 V、58 rpm、139:1 減速馬達，各自由一顆 BTS7960 驅動；專門割草馬達由 BLD120A 驅動。另新增一顆 MG996 servo 作機構控制，使用電流感測判斷是否到限位或卡住。
+本車共有 3 顆主要驅動馬達：左輪、右輪、專門割草馬達。左輪與右輪是 12 V、58 rpm、139:1 減速馬達，各自由一顆 BTS7960 驅動；專門割草馬達由 BLD120A 驅動。另新增一顆 MG996 servo 作機構控制，上下兩端各一顆微動開關當限位。
 
 | 馬達 | 馬達規格 | 驅動器 | 速度/位置回授 | 目前 STM32 控制腳 | 狀態 |
 | --- | --- | --- | --- | --- | --- |
 | 左輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Left FT-555, `PA0/PA1` (`TIM5`) | `PA15/PB3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與右輪共用 |
 | 右輪馬達 | 12 V, 58 rpm, 139:1 | BTS7960 | Right FT-555, `PA8/PA9` (`TIM1`) | `PA2/PA3` PWM, shared `PA4` EN | 已配置 PWM/encoder，EN 與左輪共用 |
 | 專門割草馬達 | 待補 | BLD120A | - | `PB8/TIM4_CH3` PWM, `PB7` DIR, `PC13` BRK | PWM 使用獨立 TIM4；EN 硬體常開，BRK 為韌體唯一快速停刀手段；label/應用層待同步 |
-| 機構 servo | MG996 / MG996R | Servo PWM input | Current sensor, `PB1/ADC1_IN9` | `PB10` GPIO, `TIM10` 中斷計時 | `0x07/0x88` 已接上；以電流門檻當限位 |
+| 機構 servo | MG996 / MG996R | Servo PWM input | 限位微動 `PB2`（上）/ `PA6`（下） | `PB10` GPIO, `TIM10` 中斷計時 | `0x07/0x88` 已接上；脈寬斜率滑動，碰到開關停在原地 |
 
 ## 接線總覽
 
@@ -87,13 +85,8 @@ flowchart LR
   STM32 -->|PC15 GPIO OUT| MAIN_PWR_EN[Main power enable / load switch]
   STM32 -->|PC14 GPIO OUT| LEBANCAT_WAKE[LebanCat wake / PWRKEY]
 
-  STM32 -->|PB2 GPIO OUT| ADC_MUX_S0[ADC mux S0]
-  STM32 -->|PA6 GPIO OUT| ADC_MUX_S1[ADC mux S1]
-  CURRENT_SENSOR[MG996 current sensor AO] --> ADC_MUX[Analog mux 4ch]
-  BOARD_NTC[Board NTC divider] --> ADC_MUX
-  MAIN_BAT[24V main battery divider] --> ADC_MUX
-  AON_BAT[3.7V small battery divider] --> ADC_MUX
-  ADC_MUX -->|PB1 ADC1_IN9| STM32
+  LIMIT_UP[Upper limit microswitch to GND] -->|PB2 input pull-up| STM32
+  LIMIT_DN[Lower limit microswitch to GND] -->|PA6 input pull-up| STM32
 
   STM32 -->|PB4 TIM3_CH1 DMA| LED_BACK[WS2812 Back DIN]
   STM32 -->|PB5 TIM3_CH2 DMA| LED_FRONT[WS2812 Front DIN]
@@ -123,13 +116,13 @@ flowchart LR
 | 左輪 FT-555 Encoder | `PA0` | `TIM5_CH1` encoder interface | - | input | Left FT-555 channel 1, 5 V through level shifter |
 | 左輪 FT-555 Encoder | `PA1` | `TIM5_CH2` encoder interface | - | input | Left FT-555 channel 2, 5 V through level shifter |
 | 電源按鍵 | `PB0` | `EXTI0` input, pull-up | `POWER_BUTTON_N` | input | Power button, active-low; long press shutdown, short press wake |
-| 類比監控 / ADC MUX | `PB1` | `ADCx_IN9` / `ADC1_IN9` | `ADC_MUX_OUT` | input | Analog mux output to ADC |
-| 類比監控 / ADC MUX | `PB2` | GPIO output | `ADC_MUX_S0` | output | Analog mux select bit 0 |
+| 空腳 | `PB1` | - | - | - | 未使用（原 ADC mux 輸出，2026-09-20 移除） |
+| MG996 限位 | `PB2` | GPIO input, pull-up | `SERVO_LIMIT_UP` | input | 上限微動開關，另一端接 GND，壓到 = low |
 | 右輪 BTS7960 | `PA2` | `TIM2_CH3` PWM | `RL_Motor_PWM` | output | Right wheel BTS7960 L_PWM |
 | 右輪 BTS7960 | `PA3` | `TIM2_CH4` PWM | `RR_Motor_PWM` | output | Right wheel BTS7960 R_PWM |
 | 左右輪 BTS7960 | `PA4` | GPIO output | `BTS7960_Motor_EN` | output | Shared EN, connects to left/right BTS7960 `L_EN` and `R_EN` |
 | RS485 充電模組 | `PA5` | GPIO output, initial low | `RS485_DE` | output | MAX485 `DE` + `RE`（短接），high = 發送、low = 接收；韌體在 TC 中斷放下 |
-| 類比監控 / ADC MUX | `PA6` | GPIO output | `ADC_MUX_S1` | output | Analog mux select bit 1（原本指定 `PB11`，但 UFQFPN48 封裝沒有 PB11，2026-09-18 改到這裡） |
+| MG996 限位 | `PA6` | GPIO input, pull-up | `SERVO_LIMIT_DN` | input | 下限微動開關，另一端接 GND，壓到 = low |
 | 空腳 | `PA7` | - | - | - | 未使用（原 SPI-CAN 取消） |
 | 右輪 FT-555 Encoder | `PA8` | `TIM1_CH1` encoder interface | - | input | Right FT-555 channel 1, 5 V through level shifter |
 | 右輪 FT-555 Encoder | `PA9` | `TIM1_CH2` encoder interface | - | input | Right FT-555 channel 2, 5 V through level shifter |
@@ -204,7 +197,7 @@ TIM2 PWM 設定：
 所有 alarm/diagnostic 腳位目前都是 pulldown、rising-edge EXTI。
 BTS7960 alarm 為 high active；訊號拉高代表過流觸發。
 
-> 2026-09-11 實測：BTS7960 模組的 `IS` 腳是類比電流感測輸出，不是數位 alarm。電源不限流時馬達啟動瞬間 `IS` 就超過 STM32 high 門檻，韌體把輸出切 0 再重啟，閉迴路轉速卡在一半。韌體已改成 `MOTOR_ALARM_DISABLES_OUTPUT 0`：alarm 只回報 `0x81` 旗標，不切輸出，過流保護靠 BTS7960 本身。若要真的用 `IS` 監控電流，需接 ADC（或 RC 濾波後設門檻），目前 ADC 腳位已用完。
+> 2026-09-11 實測：BTS7960 模組的 `IS` 腳是類比電流感測輸出，不是數位 alarm。電源不限流時馬達啟動瞬間 `IS` 就超過 STM32 high 門檻，韌體把輸出切 0 再重啟，閉迴路轉速卡在一半。韌體已改成 `MOTOR_ALARM_DISABLES_OUTPUT 0`：alarm 只回報 `0x81` 旗標，不切輸出，過流保護靠 BTS7960 本身。若要真的用 `IS` 監控電流，需接 ADC（或 RC 濾波後設門檻），`PB1` 現在空著可以用。
 
 | 車輪 | BTS7960 端 | STM32 腳位 | EXTI | Pull | Active level | 觸發原因 | Label |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -303,7 +296,7 @@ Host 是野火 LubanCat 2（RK3568）。它的 40-pin 排針串口是 UART3，�
 
 兩邊都是 3.3 V 邏輯，直接接，不要接 pin 2/4 的 5 V。ROS2 launch / xacro 的 device 預設已改成 `/dev/ttyS3`。
 
-同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低（`PA5-PA7` 現在沒接東西，無影響）。細節見 `BOOTLOADER.md`。
+同一條 UART 也是韌體更新通道：flash sector 0-1（`0x08000000`, 32 KB）放 UART bootloader（`bootloader/`），app 從 sector 2（`0x08008000`）開始，sector 7 仍是 PID 設定。Host 用 `tools/mower_flash.py` 送 `0x0F` 讓 app 重開進 bootloader，再用 `0x10-0x14` 下載 `.bin`。Bootloader 期間 `PC13` 拉低（刀片剎車、板載 LED 亮）、`PA4-PA7` EN 拉低（`PA5` = RS485 DE 拉低即接收、`PA6` 下限開關另一端本來就是 GND、`PA7` 空著，都無影響）。細節見 `BOOTLOADER.md`。
 
 ## RS485 電池電表
 
@@ -389,118 +382,44 @@ TIM4 PWM 設定建議：
 
 > 待處理：`PB8/TIM4_CH3` 已在 `.ioc` 標為 `BLD120A_PWM`，但仍需確認應用層已改用 `TIM4_CH3`。`PB6` 已作為 `USART1_TX`，不能再使用舊的 `PB6/TIM4_CH1`。
 
-## MG996 Servo 與電流感測限位
+## MG996 Servo 與限位開關
 
-MG996 / MG996R 使用一般 RC servo 控制訊號。因為目前硬體 timer 已分配給輪 PWM、encoder、WS2812 與 BLD120A PWM，文件先規劃 `PB10` 作 GPIO output，由韌體產生 software servo pulse。電流感測模組串在 MG996 供電路徑上，輸出先進 ADC 類比多工器，再由 `PB1/ADC1_IN9` 量測；韌體用電流門檻判定是否到限位或卡住。
+MG996 / MG996R 使用一般 RC servo 控制訊號。因為目前硬體 timer 已分配給輪 PWM、encoder、WS2812 與 BLD120A PWM，`PB10` 作 GPIO output，由 `TIM10` 中斷產生 servo pulse。機構上下兩端各裝一顆微動開關當限位（2026-09-20 取代原本規劃的電流感測限位）。
 
 MG996 控制：
 
 | 項目 | 規劃 |
 | --- | --- |
 | Signal pin | `PB10` |
-| `.ioc` mode | GPIO output, software servo pulse |
+| `.ioc` mode | GPIO output, TIM10 中斷計時 |
 | Label | `MG996_PWM` |
 | Pulse period | 20 ms, 50 Hz |
-| Pulse high time | 約 1.0-2.0 ms，中心約 1.5 ms |
+| Pulse high time | 500–2500 µs，中心 1500 µs |
 | Servo power | 外部 5-6 V，大電流電源 |
 | Ground | Servo power GND 必須與 STM32 GND 共地 |
 
-電流感測限位：
+限位開關：
 
-| 項目 | 規劃 |
-| --- | --- |
-| Sensor input | `PB1 / ADC1_IN9` |
-| `.ioc` mode | ADC input through analog mux |
-| ADC label | `ADC_MUX_OUT` |
-| Mux channel | CH0, `ADC_MUX_S1:S0 = 00` |
-| 用途 | 量測 MG996 電流，超過門檻視為限位/卡住 |
-| 保護動作 | 停止 MG996 輸出命令，並回報 limit/overcurrent 狀態 |
+| 項目 | 上限 | 下限 |
+| --- | --- | --- |
+| STM32 腳位 | `PB2` | `PA6` |
+| Label | `SERVO_LIMIT_UP` | `SERVO_LIMIT_DN` |
+| `.ioc` mode | GPIO input, pull-up | GPIO input, pull-up |
+| 接線 | 開關 COM → `PB2`，NO → GND | 開關 COM → `PA6`，NO → GND |
+| 壓到時電位 | low（`SERVO_LIMIT_PRESSED_LEVEL = GPIO_PIN_RESET`） | 同左 |
 
-韌體判斷建議：
+- 開關只接腳位和 GND，用 MCU 內部上拉，不要接 5 V。
+- 想要斷線也算觸發（fail-safe）就改接 NC 接點，並把 `hardware_pins.hpp` 的 `SERVO_LIMIT_PRESSED_LEVEL` 改成 `GPIO_PIN_SET`。
+- 線長超過幾十公分建議在腳位端加 `100 nF` 到 GND；韌體本身有 2 次取樣（10 ms 一次）去彈跳。
+- 「脈寬變長 = 往上限」是 `MG996_SERVO_UP_IS_LONGER_PULSE 1` 的假設；搖臂反裝的話改成 `0`。
 
-- 先量測空載、正常移動、碰到限位時的 ADC 值，再決定 threshold。
-- 過電流需持續一小段時間才判定，例如 `50-200 ms`，避免啟動瞬間浪湧誤判。
-- 判定過電流後，立即停止 servo 命令，必要時退回一小段角度解除機構壓力。
-- 若電流感測模組是類比輸出，輸出到 `PB1` 不可超過 3.3 V。
-- 若電流感測模組只有 comparator digital output，可把 `PB1` 改成 GPIO/EXTI input，但 active level 需再確認。
-- 因為 MG996 電流與其他慢速量測共用 ADC mux，這只能做軟體限位；若需要硬體級過流保護，需額外用 comparator、保險絲或電源開關保護。
+韌體行為（`mg996_servo.cpp`）：
 
-## 類比監控 / 板溫 / 電池電壓
-
-目前沒有多餘的外部 ADC 腳，所以使用 4-channel 類比多工器把多個慢速類比訊號切到 `PB1/ADC1_IN9`。建議使用 3.3 V 供電、低漏電的 analog mux，例如 TS5A 類、74HC4051/74HC4052 類；若使用 8-channel 4051，`S2` 可固定接 GND，只用前 4 個通道。
-
-ADC mux 控制：
-
-| 功能 | STM32 腳位 | `.ioc` Label | 說明 |
-| --- | --- | --- | --- |
-| ADC mux output | `PB1 / ADC1_IN9` | `ADC_MUX_OUT` | 類比多工器 common output |
-| ADC mux select 0 | `PB2` | `ADC_MUX_S0` | channel select bit 0 |
-| ADC mux select 1 | `PA6` | `ADC_MUX_S1` | channel select bit 1 |
-
-通道配置：
-
-| `S1:S0` | Mux channel | 量測項目 | 外部電路 |
-| --- | --- | --- | --- |
-| `00` | CH0 | MG996 current sense | 電流感測模組 analog output |
-| `01` | CH1 | Board temperature | 10k NTC divider |
-| `10` | CH2 | 24 V main battery voltage | 主電池電阻分壓 |
-| `11` | CH3 | 3.7 V AON small battery voltage | 小電池原始電壓分壓，取 regulator 前 |
-
-板溫 NTC 建議：
-
-| 項目 | 建議 |
-| --- | --- |
-| Sensor | 10k NTC, B value 3950 常見型 |
-| Divider | 10k 1% pull-up to 3.3 V, NTC to GND |
-| ADC input | Mux CH1 |
-| Placement | 放在電源轉換器、馬達驅動附近，避開大電流走線熱點太近的位置 |
-
-24 V 主電池電壓分壓建議：
-
-| 項目 | 建議值 |
-| --- | --- |
-| Rtop | 270 kOhm, 1% |
-| Rbottom | 33 kOhm, 1% |
-| Divider ratio | 33 / (270 + 33) = 0.1089 |
-| ADC full-scale battery voltage | 約 30.3 V when ADC = 3.3 V |
-| 24.0 V battery ADC voltage | 約 2.61 V |
-| 25.2 V full battery ADC voltage | 約 2.74 V |
-| Divider current | 約 83 uA at 25.2 V |
-
-主電池最高充電電壓已確認為 `25.2 V`，這組 `270k/33k` 有足夠 ADC headroom。若未來改電池且最高電壓超過 30 V，例如 8S 鋰電到 33.6 V，Rtop 需改成 `330k` 或重新依最高電壓計算。
-
-3.7 V 小電池電壓分壓建議：
-
-| 項目 | 建議值 |
-| --- | --- |
-| Rtop | 100 kOhm, 1% |
-| Rbottom | 300 kOhm, 1% |
-| Divider ratio | 300 / (100 + 300) = 0.75 |
-| ADC full-scale battery voltage | 約 4.4 V when ADC = 3.3 V |
-| 3.7 V battery ADC voltage | 約 2.78 V |
-| 4.2 V battery ADC voltage | 約 3.15 V |
-| Divider current | 約 10.5 uA at 4.2 V |
-
-小電池 CH3 建議量測 raw 3.7 V 鋰電池，也就是低靜態電流 3.3 V regulator 前的電池電壓；STM32 本身仍然只能接穩壓後的 `AON_3V3`。
-
-電池換算：
-
-```text
-Vadc = adc_raw / 4095 * Vref
-V24_MAIN = Vadc * (270 + 33) / 33
-VAON_BAT = Vadc * (100 + 300) / 300
-```
-
-所有進 analog mux / ADC 的電壓都必須低於 3.3 V。
-
-量測注意事項：
-
-- 類比多工器必須由 3.3 V 供電，所有輸入不可超過 mux 供電範圍。
-- `PB2/ADC_MUX_S0` 上電時不要外接強上拉；若需要預設 mux channel，使用弱下拉讓預設停在 CH0。
-- 每次切換 `ADC_MUX_S0/S1` 後，建議等待 `1-5 ms` 再取 ADC，讓分壓與濾波電容穩定。
-- 每個分壓輸出建議加 `10-100 nF` 到 GND 做低通濾波；24 V 主電池分壓輸出可再加 `1 kOhm` series resistor 與 ADC/mux 端保護，避免馬達雜訊尖峰直接打進 ADC。
-- 24 V 主電池分壓若接在主電池常電上會有約 100 uA 待機耗電；若關機後不需要量 24 V，可把分壓接在 `MAIN_POWER_EN` 之後的主電源 rail。
-- STM32 內部溫度感測可作 MCU die temperature 趨勢，但不等同板上環境溫度；本設計使用外部 NTC 當板溫。
+- servo 沒有位置回授，所以 host 送的 `0x07 pulse_us` 只是目標；實際脈寬以 `25 µs / 10 ms` 的斜率滑過去（500→2500 約 0.8 s），比 MG996R 本身稍慢，讓脈寬跟得上搖臂位置。
+- 每 10 ms 取樣兩顆開關；脈寬往某端滑動時該端開關被壓到，就把目標改成往反方向退 `MG996_SERVO_LIMIT_BACKOFF_US`（50 µs ≈ 4.5°）然後停住，不頂著止點，`0x88` 回報 `LIMIT_ACTIVE`。往同方向的新命令一樣被擋下，往反方向的命令正常；兩顆同時壓住則原地不動。
+- 開關被壓著的狀態在 `0x88 LIMIT_UP / LIMIT_DN`。
+- 放鬆（`0` 命令 / hold timeout）後再下命令，脈波從上一次送出的值重新開始（開機後是 1500）再滑向目標；開機後第一筆命令請送接近目前機構位置的值。
+- 開關放在機械硬止點前一點的位置（至少比退讓量多一點），讓 servo 停在觸發處時還沒頂到底；退讓量太大 / 太小就調 `MG996_SERVO_LIMIT_BACKOFF_US`。
 
 ## 無源蜂鳴器
 
@@ -583,16 +502,13 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 - MCU GPIO 只接控制訊號，不直接供馬達電源。
 - BTS7960 馬達電源走大電流電源線，不經 MCU；`L_PWM`/`R_PWM`/shared `EN` 只接邏輯訊號。
-- BTS7960、BLD120A、FT-555、電壓邏輯轉換器、WS2812、Host UART、RS485、MG996、電流感測模組、ADC mux、NTC、電池分壓需與 MCU 共地。
+- BTS7960、BLD120A、FT-555、電壓邏輯轉換器、WS2812、Host UART、RS485、MG996、限位微動開關需與 MCU 共地。
 - BTS7960 模組 VCC 目前接 5 V（2026-09-10 實測）。5 V 時輸入緩衝 high 門檻規格 3.5 V，STM32 rail 實測只有約 2.9 V，馬達能轉但沒有餘裕；建議兩顆模組 VCC 改接 3.3 V，門檻降到約 2.3 V。
 - FT-555 供電範圍是 2.5-24 V，目前 A/B encoder 使用 5 V 供電；A/B 是 PP push-pull 輸出，必須經電壓邏輯轉換器降到 3.3 V 後再進 STM32。
 - BLD120A PWM 輸入需求是 5 V logic；STM32 `PB8/TIM4_CH3` 是 3.3 V 輸出，需加 3.3 V to 5 V 電壓邏輯轉換或確認 BLD120A 可接受 3.3 V high。
 - BLD120A BRK 由 `PC13` open-drain 直接拉驅動器內部 5 V 上拉，不需電平轉換；EN 直接接 BLD120A 的 COM / GND。
 - MG996 需使用外部 5-6 V 大電流電源，不可由 STM32 或板上 3.3 V 供電。
-- 電流感測、板溫 NTC、電池分壓都經 ADC mux 進 `PB1/ADC1_IN9`，任一 mux input 不可超過 3.3 V。
-- 電流感測模組若是 5 V 類比輸出，需分壓或選 3.3 V 相容模組。
-- 24 V 主電池量測使用 ADC mux CH2，最高充電電壓 `25.2 V`，建議 `270k/33k` 分壓。
-- 3.7 V 小電池量測使用 ADC mux CH3，建議在 regulator 前用 `100k/300k` 分壓量 raw battery。
+- 限位微動開關只接腳位與 GND（內部上拉），不接任何電源。
 - STM32 低功耗關機時由小電池降壓後供應 `AON_3V3`；主電源 rail 由 `PC15/MAIN_POWER_EN` 控制；主/小電源間用二極體防反灌。
 - RS485 模組若是 5 V 邏輯，`RXD` 回 STM32 前需確認不會超過 3.3 V。
 - 蜂鳴器實測為無源型，`PB9` 用 `TIM4_CH4` 2 kHz PWM 發聲；裸蜂鳴器直掛 GPIO 需確認電流在 20 mA 內。
@@ -605,20 +521,17 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 
 | 項目 | `.ioc` 目前規劃 | 目前產生碼狀態 |
 | --- | --- | --- |
-| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5/PA6/PA7` 已從 `.ioc` 釋放，目前空著 |
+| BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5` = RS485 DE、`PA6` = 下限開關、`PA7` 空著 |
 | RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，尚未有實物測試 |
-| MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上，尚未接實物測 |
-| Analog monitor ADC mux | `PB1/ADC1_IN9` = `ADC_MUX_OUT`, `PB2/PA6` = mux select（S1 原本是不存在的 PB11，CH2/CH3 之前不可能被選到，「四通道可讀」需重測） | 已新增 C++ wrapper；`ADC1` HAL 程式碼已手動補上（`Core/Src/adc.c`、`Core/Inc/adc.h`、HAL ADC driver、`HAL_ADC_MODULE_ENABLED`），CH0/CH1 實測可讀，CH2/CH3 需在 S1 接到 PA6 後重測；每次 update 先讀 VREFINT 算出實際 VDDA 再換算（`0x8A VDDA_CALIBRATED`），不再假設 3.3 V |
-| MG996 current sense | ADC mux CH0 | 已新增 raw threshold 判定；threshold 需實測校正 |
-| Board temperature | ADC mux CH1, 10k NTC divider | 已新增 NTC beta 換算；NTC 參數需確認 |
-| Battery voltage | ADC mux CH2 = 24 V main battery, CH3 = 3.7 V AON small battery | 已新增分壓換算 wrapper，每 50 ms 由 `0x8A` 送給 host（x0.01 V）；分壓比需實測校正 |
+| MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上；2026-09-20 加入脈寬斜率與 `PB2/PA6` 限位開關，尚未接實物測 |
+| Analog monitor ADC mux（已移除） | 從未裝上 | 2026-09-20 移除：`analog_monitor.*`、`Core/Src/adc.c`、`HAL_ADC_MODULE_ENABLED`、`.ioc` ADC1、`0x8A` 全部拿掉；`PB1` 空著 |
 | Wheel PID settings | internal Flash sector 7 at `0x08060000` | 已新增 C++ storage module；需實車調 PID |
 | UART bootloader | sector 0-1 bootloader，app link 在 `0x08008000`，RAM `0x20000000` 前 32 bytes 為 boot mailbox | 已新增 `bootloader/`、`tools/mower_flash.py`、app `0x0F` handler；linker script、`system_stm32f4xx.c` VTOR、`main.c` 已改；尚未上板實測，bootloader 第一次要用 ST-Link 燒 |
 | BLD120A PWM label / app binding | `PB8/TIM4_CH3`, label `BLD120A_PWM` | 需確認應用層是否使用 `TIM4_CH3` |
 | BLD120A BRK | `PC13` GPIO open-drain, initial low, label `BLD120A_BRK` | `.ioc` 已改；`Core/*` 產生碼仍是舊的 PC13 push-pull 無 label，需重新產生或手動改 `gpio.c`/`main.h`；應用層尚未接 BRK |
 | Passive buzzer | `PB9` = `TIM4_CH4`, label `Buzzer_PWM` | 實測為無源蜂鳴器；C++ wrapper 已改成 TIM4_CH4 2 kHz PWM 發聲 |
 | Power button / low power | `PB0` EXTI pull-up, `PC14` `LEBANCAT_WAKE`, `PC15` `MAIN_POWER_EN` | 已新增 polling 狀態機 wrapper；實際 STOP low-power 進入點仍需接 task |
-| Board module runtime | module init / 10ms maintenance | 已新增 `BoardModules_Init()` / `BoardModules_Update10ms()`，接上蜂鳴器、電源按鍵、ADC 監控、MG996 限位狀態 |
+| Board module runtime | module init / 10ms maintenance | 已新增 `BoardModules_Init()` / `BoardModules_Update10ms()`，接上蜂鳴器、電源按鍵、MG996 限位開關 / 斜率 |
 | WS2812 狀態燈 protocol | LED index `0-2` 保留給狀態燈 | 已新增狀態燈 wrapper；尚未自動接入 10ms runtime，避免和 UART 燈效搶 DMA |
 | ros2_control 對接 | `ros2/mower_hardware` SystemInterface；`0x85` 改回累積 encoder 計數供里程計 | 韌體已改 `total_counts`；plugin、diff_drive 設定、xacro、launch 已加入 repo，尚未在 LebanCat 上 colcon build 驗證；`wheel_radius`/`wheel_separation` 待量 |
 | WS2812 開機動畫 | `boot_animation.cpp`，約 1.9 s：點火後轉成白光常亮，直到 UART 燈效命令覆蓋；蜂鳴器點火時兩短聲、白光亮起一長聲 | 已接入 MotorTask 的 20 ms 燈條迴圈，`main.c` 在 init 完成後啟動；動畫期間 UART 燈效命令暫緩，結束後自動套用；亮度上限 110/255 |
@@ -630,13 +543,8 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 - MAX485 `DE`/`RE` 已由 `PA5` 控制；bootloader 期間 `PA5` 也是拉低（接收），不會佔住 bus。
 - MG996 的實際供電電壓、最大電流與控制脈波範圍需確認。
 - `PB10` servo 脈波已改由 `TIM10` 中斷計時；接上 servo 後用示波器確認 20 ms / 脈寬，並實測 MG996R 的 500 / 2500 µs 端點。
-- 電流感測模組型式需確認：analog output 進 ADC mux CH0；digital comparator output 則需另找 GPIO/EXTI。
-- 電流感測輸出電壓範圍需確認；進 ADC mux / STM32 ADC 前不可超過 3.3 V。
-- 板溫 NTC 實際阻值、B value、放置位置需確認。
-- 24 V 主電池最高充電電壓已確認為 `25.2 V`；目前 `270k/33k` 分壓可用。
-- AON 小電池已規劃使用 ADC mux CH3 量測 raw 3.7 V 電池；需確認小電池類型、最低電壓門檻與充電/保護模組。
-- ADC mux 型號需確認；mux 供電 3.3 V，所有 analog input 需在 0-3.3 V 範圍內。
-- MG996 限位電流 threshold 與持續判定時間需實測校正。
+- MG996 限位開關：接上後用 `tools/mower_uart.py PORT monitor` 看 `0x88` 的 `SW_UP/SW_DN` 確認極性與上下對應；再送 `servo 2500` 確認碰到上限會停（`CLAMPED`），送 `servo 500` 確認下限。搖臂方向反了就改 `MG996_SERVO_UP_IS_LONGER_PULSE`。
+- AON 小電池類型、最低電壓門檻與充電/保護模組需確認（電壓量測已不在 STM32 上）。
 - 左右輪 PID 預設值已加入韌體，但 Kp/Ki/Kd 需在實車上調整；確認後再寫入 internal Flash。調參走 host 端自動校正：Mower Studio「自動校正」按鈕 → `mower_path_planning` `pid_autotune_node`（開環 step → 一階模型 → SIMC PI → 閉環驗證 → 確認後 `0x04 persist=1`），韌體不用改，車要先架高。
 - FT-555 A/B 已按 PP push-pull 輸出規劃；需確認選用的電壓邏輯轉換器可接受 5 V push-pull input 並輸出 3.3 V 給 STM32。
 - BLD120A PWM 需求為 5 V、1-3 kHz；STM32 `PB8/TIM4_CH3` 是 3.3 V，需電平轉換或確認 BLD120A 可接受 3.3 V high。

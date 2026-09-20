@@ -49,6 +49,8 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   led_topic_ = param_or(info, "led_topic", led_topic_.c_str());
   pid_topic_ = param_or(info, "pid_topic", pid_topic_.c_str());
   override_topic_ = param_or(info, "override_topic", override_topic_.c_str());
+  servo_topic_ = param_or(info, "servo_topic", servo_topic_.c_str());
+  blade_topic_ = param_or(info, "blade_topic", blade_topic_.c_str());
   telemetry_topic_ = param_or(info, "telemetry_topic", telemetry_topic_.c_str());
   telemetry_rate_hz_ = param_or(info, "telemetry_rate_hz", telemetry_rate_hz_);
 
@@ -117,6 +119,16 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
           override_topic_, rclcpp::QoS(1).best_effort(),
           [this](const std_msgs::msg::String & msg) { on_wheel_override(msg); });
       }
+      if (!servo_topic_.empty()) {
+        servo_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          servo_topic_, rclcpp::QoS(1).best_effort(),
+          [this](const std_msgs::msg::String & msg) { on_servo_command(msg); });
+      }
+      if (!blade_topic_.empty()) {
+        blade_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          blade_topic_, rclcpp::QoS(1).best_effort(),
+          [this](const std_msgs::msg::String & msg) { on_blade_command(msg); });
+      }
       node_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
       node_executor_->add_node(info_node_);
       node_thread_ = std::thread([this]() { node_executor_->spin(); });
@@ -126,6 +138,8 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
       led_sub_.reset();
       pid_sub_.reset();
       override_sub_.reset();
+      servo_sub_.reset();
+      blade_sub_.reset();
       firmware_info_pub_.reset();
       telemetry_pub_.reset();
       info_node_.reset();
@@ -143,6 +157,8 @@ CallbackReturn MowerSystem::on_cleanup(const rclcpp_lifecycle::State &)
   led_sub_.reset();
   pid_sub_.reset();
   override_sub_.reset();
+  servo_sub_.reset();
+  blade_sub_.reset();
   firmware_info_pub_.reset();
   info_node_.reset();
   return CallbackReturn::SUCCESS;
@@ -355,6 +371,73 @@ bool MowerSystem::override_permille(const rclcpp::Time & now, int16_t & left, in
   return true;
 }
 
+void MowerSystem::on_servo_command(const std_msgs::msg::String & msg)
+{
+  long pulse = json_int(msg.data, "pulse_us", -1);
+  if (pulse < 0) {
+    RCLCPP_WARN(logger(), "ignoring servo request without pulse_us: %s", msg.data.c_str());
+    return;
+  }
+  if (pulse != 0) {
+    pulse = std::clamp(pulse, static_cast<long>(kServoMinPulseUs), static_cast<long>(kServoMaxPulseUs));
+  }
+  const long hold = std::clamp(json_int(msg.data, "hold_ms", 0), 0L, 65535L);
+  servo_request_.store((static_cast<uint32_t>(pulse) << 16) | static_cast<uint32_t>(hold));
+  servo_serial_.fetch_add(1);
+}
+
+void MowerSystem::send_servo_if_needed()
+{
+  const uint32_t serial = servo_serial_.load();
+  if (serial == servo_sent_serial_) {
+    return;
+  }
+  const uint32_t req = servo_request_.load();
+  auto f = build_servo_command(tx_seq_++, static_cast<uint16_t>(req >> 16), static_cast<uint16_t>(req));
+  if (port_.write_all(f.data(), f.size())) {
+    servo_sent_serial_ = serial;
+  }
+}
+
+void MowerSystem::on_blade_command(const std_msgs::msg::String & msg)
+{
+  const long ttl = std::clamp(json_int(msg.data, "ttl_ms", 0), 0L, kBladeMaxTtlMs);
+  const long permille = std::clamp(json_int(msg.data, "permille", 0), 0L, 1000L);
+  blade_request_.store(
+    (static_cast<uint32_t>(ttl) << 16) | static_cast<uint32_t>(static_cast<uint16_t>(permille)));
+  blade_serial_.fetch_add(1);
+}
+
+bool MowerSystem::send_blade(const rclcpp::Time & now)
+{
+  const uint32_t serial = blade_serial_.load();
+  if (serial != blade_seen_serial_) {
+    blade_seen_serial_ = serial;
+    const uint32_t req = blade_request_.load();
+    blade_permille_ = static_cast<int16_t>(static_cast<uint16_t>(req));
+    blade_until_ = blade_permille_ > 0
+      ? now + rclcpp::Duration::from_seconds(static_cast<double>(req >> 16) / 1000.0)
+      : rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+  const bool active = blade_until_.nanoseconds() != 0 && now < blade_until_;
+  const bool was_active = blade_active_;
+  blade_active_ = active;
+  if (active != was_active) {
+    RCLCPP_INFO(logger(), active ? "blade running at %d permille (dead-man held)" : "blade stop",
+      blade_permille_);
+  }
+  if (!active && !was_active) {
+    // Nothing held: let the STM32's own command timeout keep the blade
+    // stopped rather than spending a frame per cycle on it.
+    return true;
+  }
+  // Active: refresh every cycle. Just expired (or explicitly stopped): one
+  // explicit 0 so the blade does not coast through the STM32 timeout.
+  const int16_t permille = active ? blade_permille_ : 0;
+  auto f = build_lawer_motor_command(tx_seq_++, permille, static_cast<uint16_t>(command_timeout_ms_));
+  return port_.write_all(f.data(), f.size());
+}
+
 CallbackReturn MowerSystem::on_activate(const rclcpp_lifecycle::State &)
 {
   left_.cmd_velocity = right_.cmd_velocity = 0.0;
@@ -472,11 +555,17 @@ void MowerSystem::handle_frame(uint8_t type, uint8_t seq, const uint8_t * payloa
       last_charger_status_ = st;
       have_charger_status_ = true;
     }
-  } else if (type == kAnalogStatus) {
-    AnalogStatus st;
-    if (decode_analog_status(payload, len, st)) {
-      last_analog_status_ = st;
-      have_analog_status_ = true;
+  } else if (type == kServoStatus) {
+    ServoStatus st;
+    if (decode_servo_status(payload, len, st)) {
+      last_servo_status_ = st;
+      have_servo_status_ = true;
+    }
+  } else if (type == kLawerMotorStatus) {
+    LawerMotorStatus st;
+    if (decode_lawer_motor_status(payload, len, st)) {
+      last_blade_status_ = st;
+      have_blade_status_ = true;
     }
   }
 }
@@ -595,7 +684,8 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
   const Ws2812Status & led = last_ws2812_status_;
   const PowerStatus & ps = last_power_status_;
   const ChargerStatus & ch = last_charger_status_;
-  const AnalogStatus & an = last_analog_status_;
+  const ServoStatus & sv = last_servo_status_;
+  const LawerMotorStatus & bl = last_blade_status_;
   char buf[1536];
   std::snprintf(buf, sizeof(buf),
     "{\"t\":%.3f,\"feedback_age_s\":%.3f,\"crc_errors\":%u,"
@@ -612,9 +702,9 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     "\"charger\":{\"valid\":%s,\"online\":%s,\"current_present\":%s,\"input_present\":%s,"
     "\"voltage_v\":%.2f,\"current_a\":%.2f,\"temp_c\":%u,\"reg3\":%u,\"reg4\":%u,"
     "\"flags\":%u,\"comm_errors\":%u,\"age_ms\":%u},"
-    "\"analog\":{\"valid\":%s,\"main_battery_v\":%.2f,\"main_battery_valid\":%s,"
-    "\"aon_battery_v\":%.2f,\"aon_battery_valid\":%s,\"board_temp_c\":%.1f,\"board_temp_valid\":%s,"
-    "\"vdda_mv\":%u,\"vdda_calibrated\":%s,\"mg996_current_raw\":%u,\"flags\":%u}}",
+    "\"servo\":{\"valid\":%s,\"pulse_us\":%u,\"hold_ms\":%u,\"age_ms\":%u,\"flags\":%u,"
+    "\"enabled\":%s,\"output\":%s,\"limit_active\":%s,\"limit_up\":%s,\"limit_down\":%s,\"timed_out\":%s},"
+    "\"blade\":{\"valid\":%s,\"cmd_permille\":%d,\"pwm\":%d,\"age_ms\":%u,\"flags\":%u,\"held\":%s}}",
     now.seconds(), diag_feedback_age_s_, static_cast<unsigned>(parser_.crc_errors()),
     fb.left_target_rpm, fb.left_measured_rpm, fb.left_pid_output, fb.left_total_counts,
     fb.right_target_rpm, fb.right_measured_rpm, fb.right_pid_output, fb.right_total_counts,
@@ -630,12 +720,12 @@ std::string MowerSystem::telemetry_json(const rclcpp::Time & now) const
     ch.current_present() ? "true" : "false", ch.input_present() ? "true" : "false",
     ch.voltage_cv / 100.0, ch.current_ca / 100.0, ch.temp_c, ch.reg3, ch.reg4,
     ch.flags, ch.comm_error_count, ch.age_ms,
-    have_analog_status_ ? "true" : "false",
-    an.main_battery_cv / 100.0, an.main_battery_valid() ? "true" : "false",
-    an.aon_battery_cv / 100.0, an.aon_battery_valid() ? "true" : "false",
-    an.board_temp_valid() ? an.board_temp_dc / 10.0 : 0.0, an.board_temp_valid() ? "true" : "false",
-    an.vdda_mv, (an.flags & kAnalogFlagVddaCalibrated) ? "true" : "false",
-    an.mg996_current_raw, an.flags);
+    have_servo_status_ ? "true" : "false", sv.pulse_us, sv.hold_timeout_ms, sv.command_age_ms, sv.flags,
+    sv.enabled() ? "true" : "false", sv.output_active() ? "true" : "false",
+    sv.limit_active() ? "true" : "false", sv.limit_up() ? "true" : "false",
+    sv.limit_down() ? "true" : "false", sv.timed_out() ? "true" : "false",
+    have_blade_status_ ? "true" : "false", bl.commanded_permille, bl.applied_pwm, bl.command_age_ms, bl.flags,
+    blade_active_ ? "true" : "false");
   return buf;
 }
 
@@ -649,7 +739,13 @@ int16_t MowerSystem::rad_s_to_permille(double rad_s) const
 
 bool MowerSystem::send_stop()
 {
+  // Wheels and blade: on_deactivate / shutdown must not leave a dead-man
+  // held blade to coast through the STM32 timeout.
+  blade_until_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  blade_active_ = false;
   auto f = build_wheel_speed_command(tx_seq_++, 0, 0, static_cast<uint16_t>(command_timeout_ms_));
+  auto b = build_lawer_motor_command(tx_seq_++, 0, static_cast<uint16_t>(command_timeout_ms_));
+  f.insert(f.end(), b.begin(), b.end());
   return port_.write_all(f.data(), f.size());
 }
 
@@ -667,6 +763,12 @@ return_type MowerSystem::write(const rclcpp::Time & time, const rclcpp::Duration
       port_.last_error().c_str());
     return return_type::ERROR;
   }
+  if (!send_blade(time)) {
+    RCLCPP_ERROR_THROTTLE(logger(), throttle_clock_, 2000, "serial write error (blade): %s",
+      port_.last_error().c_str());
+    return return_type::ERROR;
+  }
+  send_servo_if_needed();
   send_led_if_needed(time);
   send_pid_if_needed();
   return return_type::OK;

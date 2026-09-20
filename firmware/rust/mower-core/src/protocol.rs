@@ -44,7 +44,7 @@ pub mod frame_type {
     /// 0x87 is FIRMWARE_INFO in the mower_path_planning/firmware build.
     pub const SERVO_STATUS: u8 = 0x88;
     pub const CHARGER_STATUS: u8 = 0x89;
-    pub const ANALOG_STATUS: u8 = 0x8A;
+    /// 0x8A (analog status) is retired: the ADC mux was never fitted. Do not reuse.
     pub const ENTER_BOOTLOADER_ACK: u8 = 0x8F;
 }
 
@@ -71,9 +71,14 @@ pub mod power_action {
 
 pub mod servo_status_flag {
     pub const ENABLED: u8 = 0x01;
+    /// The last target was clamped by a limit switch; the next 0x07 clears it.
     pub const LIMIT_ACTIVE: u8 = 0x02;
     pub const OUTPUT_ACTIVE: u8 = 0x04;
     pub const TIMED_OUT: u8 = 0x08;
+    /// UP switch pressed (debounced).
+    pub const LIMIT_UP: u8 = 0x10;
+    /// DOWN switch pressed (debounced).
+    pub const LIMIT_DN: u8 = 0x20;
 }
 
 pub mod charger_status_flag {
@@ -84,16 +89,6 @@ pub mod charger_status_flag {
     pub const RESERVED_CV_PHASE: u8 = 0x04;
     pub const INPUT_PRESENT: u8 = 0x08;
     pub const EVER_SEEN: u8 = 0x10;
-}
-
-pub mod analog_status_flag {
-    pub const MAIN_BATTERY_VALID: u8 = 0x01;
-    pub const AON_BATTERY_VALID: u8 = 0x02;
-    pub const BOARD_TEMP_VALID: u8 = 0x04;
-    pub const MG996_CURRENT_VALID: u8 = 0x08;
-    /// VREFINT read OK, `vdda_mv` is measured rather than the 3300 default.
-    pub const VDDA_CALIBRATED: u8 = 0x10;
-    pub const MG996_LIMIT_ACTIVE: u8 = 0x20;
 }
 
 pub const BOOT_REQUEST_MAGIC: u32 = 0xB007_B007;
@@ -255,21 +250,6 @@ wire_struct!(ChargerStatus, 16, {
     /// since the last valid reply, 0xFFFF = never
     pub age_ms: u16,
     pub last_exception_code: u8,
-    pub reserved: u8,
-});
-
-wire_struct!(AnalogStatus, 12, {
-    /// 24 V main battery, x0.01 V; 0 if invalid
-    pub main_battery_cv: u16,
-    /// 3.7 V AON battery, x0.01 V; 0 if invalid
-    pub aon_battery_cv: u16,
-    /// NTC board temperature, x0.1 C; i16::MIN if invalid
-    pub board_temp_dc: i16,
-    /// ADC reference used for the conversions, mV
-    pub vdda_mv: u16,
-    /// raw 12-bit ADC counts of the MG996 current sensor
-    pub mg996_current_raw: u16,
-    pub flags: u8,
     pub reserved: u8,
 });
 
@@ -666,26 +646,6 @@ mod tests {
         assert_eq!(b[10], 0x19);
         assert_eq!(b[11], 3);
         assert_eq!(&b[12..14], &120u16.to_le_bytes());
-    }
-
-    #[test]
-    fn analog_status_layout() {
-        // C++: u16 main, u16 aon, i16 temp, u16 vdda, u16 raw, u8 flags, u8 reserved => 12 bytes
-        let st = AnalogStatus {
-            main_battery_cv: 2412,
-            aon_battery_cv: 385,
-            board_temp_dc: -15,
-            vdda_mv: 2910,
-            mg996_current_raw: 123,
-            flags: 0x1F,
-            reserved: 0,
-        };
-        let b = st.as_bytes();
-        assert_eq!(b.len(), 12);
-        assert_eq!(&b[0..2], &2412u16.to_le_bytes());
-        assert_eq!(&b[4..6], &(-15i16).to_le_bytes());
-        assert_eq!(&b[6..8], &2910u16.to_le_bytes());
-        assert_eq!(b[10], 0x1F);
     }
 
     #[test]

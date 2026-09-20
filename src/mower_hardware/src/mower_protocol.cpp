@@ -91,6 +91,16 @@ std::vector<uint8_t> build_lawer_motor_command(uint8_t seq, int16_t permille, ui
   return build_frame(kLawerMotorCommand, seq, p, sizeof(p));
 }
 
+std::vector<uint8_t> build_servo_command(uint8_t seq, uint16_t pulse_us, uint16_t hold_timeout_ms)
+{
+  uint8_t p[8] = {};
+  put_u16(p + 0, pulse_us);
+  put_u16(p + 2, hold_timeout_ms);
+  put_u16(p + 4, 0);
+  put_u16(p + 6, 0);
+  return build_frame(kServoCommand, seq, p, sizeof(p));
+}
+
 std::vector<uint8_t> build_power_command(uint8_t seq, uint8_t action)
 {
   uint8_t p[4] = {action, 0, 0, 0};
@@ -263,17 +273,29 @@ bool decode_charger_status(const uint8_t * p, size_t len, ChargerStatus & out)
   return true;
 }
 
-bool decode_analog_status(const uint8_t * p, size_t len, AnalogStatus & out)
+bool decode_servo_status(const uint8_t * p, size_t len, ServoStatus & out)
 {
-  if (len != 12) {
+  if (len != 8) {
     return false;
   }
-  out.main_battery_cv = get_u16(p);
-  out.aon_battery_cv = get_u16(p + 2);
-  out.board_temp_dc = get_i16(p + 4);
-  out.vdda_mv = get_u16(p + 6);
-  out.mg996_current_raw = get_u16(p + 8);
-  out.flags = p[10];
+  out.pulse_us = get_u16(p);
+  out.hold_timeout_ms = get_u16(p + 2);
+  out.command_age_ms = get_u16(p + 4);
+  out.flags = p[6];
+  out.last_rx_seq = p[7];
+  return true;
+}
+
+bool decode_lawer_motor_status(const uint8_t * p, size_t len, LawerMotorStatus & out)
+{
+  if (len != 8) {
+    return false;
+  }
+  out.commanded_permille = get_i16(p);
+  out.applied_pwm = get_i16(p + 2);
+  out.command_age_ms = get_u16(p + 4);
+  out.flags = p[6];
+  out.last_rx_seq = p[7];
   return true;
 }
 

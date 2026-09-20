@@ -11,7 +11,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use mower_core::analog;
 use mower_core::charger;
 use mower_core::command::Timed;
 use mower_core::protocol::{self, FrameBytes, LawerMotorStatus, MotorStatus, PidConfigCommand};
@@ -71,11 +70,6 @@ pub static TELEMETRY: Mutex<CriticalSectionRawMutex, RefCell<Telemetry>> = Mutex
 pub static CHARGER: Mutex<CriticalSectionRawMutex, RefCell<charger::Snapshot>> =
     Mutex::new(RefCell::new(charger::Snapshot::ZERO));
 
-/// Last ADC mux scan, written by the analog task, read for 0x8A and the
-/// servo current limit. `mg996_limit_raw` is the one field others may write.
-pub static ANALOG: Mutex<CriticalSectionRawMutex, RefCell<analog::Snapshot>> =
-    Mutex::new(RefCell::new(analog::Snapshot::ZERO));
-
 /// A PID configuration request. The motor task owns the controller and the
 /// flash, so the RX task hands the request over instead of applying it.
 /// `Signal` keeps only the latest request, which is the C++ behaviour too.
@@ -109,8 +103,4 @@ pub fn with_telemetry<R>(f: impl FnOnce(&mut Telemetry) -> R) -> R {
 
 pub fn with_charger<R>(f: impl FnOnce(&mut charger::Snapshot) -> R) -> R {
     CHARGER.lock(|c| f(&mut c.borrow_mut()))
-}
-
-pub fn with_analog<R>(f: impl FnOnce(&mut analog::Snapshot) -> R) -> R {
-    ANALOG.lock(|a| f(&mut a.borrow_mut()))
 }

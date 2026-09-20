@@ -90,9 +90,9 @@ private:
   // Raw STM32 status frames, republished as one JSON message on
   // /mower_base/telemetry at telemetry_rate_hz (0 disables) so the parameter
   // dashboard can plot wheel target vs. measured RPM, PID output / gains,
-  // light state, power state, charger (0x89) and battery/analog readings
-  // (0x8A, consumed by mower_mission battery_state_node) without touching
-  // ros2_control. 20 Hz matches
+  // light state, power state, charger (0x89, consumed by mower_mission
+  // battery_state_node), blade motor (0x82) and lift servo (0x88) without
+  // touching ros2_control. 20 Hz matches
   // the 0x85 period, which the PID auto-tune needs to sample a step response.
   std::string telemetry_topic_ = "/mower_base/telemetry";
   double telemetry_rate_hz_ = 20.0;
@@ -105,13 +105,15 @@ private:
   Ws2812Status last_ws2812_status_;
   PowerStatus last_power_status_;
   ChargerStatus last_charger_status_;
-  AnalogStatus last_analog_status_;
+  ServoStatus last_servo_status_;
+  LawerMotorStatus last_blade_status_;
   bool have_motor_status_ = false;
   bool have_pid_config_ = false;
   bool have_ws2812_status_ = false;
   bool have_power_status_ = false;
   bool have_charger_status_ = false;
-  bool have_analog_status_ = false;
+  bool have_servo_status_ = false;
+  bool have_blade_status_ = false;
   void publish_telemetry_if_due(const rclcpp::Time & now);
   std::string telemetry_json(const rclcpp::Time & now) const;
 
@@ -164,6 +166,38 @@ private:
   bool override_active_ = false;
   void on_wheel_override(const std_msgs::msg::String & msg);
   bool override_permille(const rclcpp::Time & now, int16_t & left, int16_t & right);
+
+  // Lift servo request (0x07), JSON on a best-effort topic:
+  //   {"pulse_us":1500,"hold_ms":0}
+  // pulse_us 500-2500 is a target the STM32 slews to (stopping at the limit
+  // microswitches); 0 releases the servo. hold_ms 0 = hold until the next
+  // command. Sent once per message; the result is in telemetry `servo`.
+  std::string servo_topic_ = "/mower_base/servo_command";
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr servo_sub_;
+  std::atomic<uint32_t> servo_request_{0};  // packed: [31:16] pulse_us, [15:0] hold_ms
+  std::atomic<uint32_t> servo_serial_{0};
+  uint32_t servo_sent_serial_ = 0;
+  void on_servo_command(const std_msgs::msg::String & msg);
+  void send_servo_if_needed();
+
+  // Blade motor request (0x02), JSON on a best-effort topic:
+  //   {"permille":300,"ttl_ms":500}
+  // Dead-man: while the ttl (clamped to kBladeMaxTtlMs) has not expired,
+  // write() re-sends the permille every cycle with the STM32's own command
+  // timeout, so a dead publisher, a dropped link or a stalled controller
+  // manager all stop the blade within ttl + command_timeout_ms. On expiry
+  // one explicit 0 is sent. permille <= 0 stops immediately.
+  std::string blade_topic_ = "/mower_base/blade_command";
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr blade_sub_;
+  static constexpr long kBladeMaxTtlMs = 1000;
+  std::atomic<uint32_t> blade_request_{0};  // packed: [31:16] ttl_ms, [15:0] permille
+  std::atomic<uint32_t> blade_serial_{0};
+  uint32_t blade_seen_serial_ = 0;
+  rclcpp::Time blade_until_{0, 0, RCL_ROS_TIME};
+  int16_t blade_permille_ = 0;
+  bool blade_active_ = false;
+  void on_blade_command(const std_msgs::msg::String & msg);
+  bool send_blade(const rclcpp::Time & now);
 
   SerialPort port_;
   FrameParser parser_;

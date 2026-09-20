@@ -15,27 +15,29 @@
 #define MG996_PWM_GPIO_Port GPIOB
 #endif
 
-#ifndef ADC_MUX_S0_Pin
-#define ADC_MUX_S0_Pin GPIO_PIN_2
-#define ADC_MUX_S0_GPIO_Port GPIOB
+/* MG996 travel limit microswitches, one per end of the mechanism. PB2 and
+ * PA6 used to be the analog mux select lines; the mux, the dividers and the
+ * MG996 current sensor were never fitted (the pack voltage comes from the
+ * RS485 meter, 0x89), so the pins are inputs now. Each switch sits between
+ * its pin and GND and the internal pull-up does the rest: no 5 V anywhere
+ * near the switch. PB1 (the old ADC_MUX_OUT) is spare. */
+#ifndef SERVO_LIMIT_UP_Pin
+#define SERVO_LIMIT_UP_Pin GPIO_PIN_2
+#define SERVO_LIMIT_UP_GPIO_Port GPIOB
 #endif
-
-/* S1 lives on PA6: PB11 is not bonded out on the UFQFPN48 STM32F411CEU6
- * (Black Pill), so the original PB11 assignment could never toggle. */
-#ifndef ADC_MUX_S1_Pin
-#define ADC_MUX_S1_Pin GPIO_PIN_6
-#define ADC_MUX_S1_GPIO_Port GPIOA
+#ifndef SERVO_LIMIT_DN_Pin
+#define SERVO_LIMIT_DN_Pin GPIO_PIN_6
+#define SERVO_LIMIT_DN_GPIO_Port GPIOA
 #endif
-
-/* Which analog mux channels are actually populated, as a bit mask of
- * (1 << ANALOG_MONITOR_CHANNEL_*). A channel that is not populated is never
- * sampled and its 0x8A *_VALID flag stays clear, so a floating PB1 cannot
- * masquerade as a battery voltage or trip the MG996 current limit.
- * 2026-09-19: no mux, no dividers and no MG996 current sensor are fitted;
- * the pack voltage (and, once its shunt is wired, current) comes from the
- * RS485 meter (0x89). Set to 0x0F once the mux and dividers exist. */
-#ifndef ANALOG_MONITOR_CHANNEL_MASK
-#define ANALOG_MONITOR_CHANNEL_MASK 0x00U
+/* Pin level while the switch is pressed. NO contact to GND = RESET; wire an
+ * NC contact instead (broken wire reads as "pressed") and set this to SET. */
+#ifndef SERVO_LIMIT_PRESSED_LEVEL
+#define SERVO_LIMIT_PRESSED_LEVEL GPIO_PIN_RESET
+#endif
+/* 1 = a longer pulse drives the mechanism towards the UP switch. Flip to 0
+ * if the horn is mounted the other way round. */
+#ifndef MG996_SERVO_UP_IS_LONGER_PULSE
+#define MG996_SERVO_UP_IS_LONGER_PULSE 1
 #endif
 
 #ifndef POWER_BUTTON_N_Pin
@@ -56,7 +58,7 @@
 /* PA11/PA12: USART6 TX/RX to the MAX485 TTL module (DI / RO).
  * PA5: MAX485 DE and RE tied together. High = drive the bus, low = listen.
  * Set CHARGER_RS485_USE_DE_PIN to 0 for an auto-direction transceiver.
- * PA6/PA7 are free since the SPI-CAN was dropped. */
+ * PA7 is free since the SPI-CAN was dropped. */
 #define CHARGER_RS485_USE_DE_PIN 1
 #ifndef RS485_DE_Pin
 #define RS485_DE_Pin GPIO_PIN_5

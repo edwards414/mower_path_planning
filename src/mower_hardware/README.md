@@ -28,9 +28,9 @@ The `0x87` build identity is also published latched (transient_local) as JSON
 on `/mower_base/firmware_info` (param `firmware_info_topic`, empty disables);
 `/robot/info` merges it for the app.
 
-The raw status frames (`0x81` motor, `0x83` lights, `0x84` PID gains, `0x85`
-wheel feedback, `0x86` power, `0x89` RS485 charger, `0x8A` analog/battery)
-are republished together as one JSON message on `/mower_base/telemetry`, one
+The raw status frames (`0x81` motor, `0x82` blade motor, `0x83` lights,
+`0x84` PID gains, `0x85` wheel feedback, `0x86` power, `0x88` lift servo,
+`0x89` RS485 charger) are republished together as one JSON message on `/mower_base/telemetry`, one
 per `0x85` frame (every 50 ms, so the PID auto-tune sees every sample;
 `telemetry_rate_hz` only throttles when set below that; best-effort; param
 `telemetry_topic` empty or rate 0 disables). Each message carries `t` (ROS
@@ -44,17 +44,25 @@ current_a, temp_c, reg3, reg4, flags, comm_errors, age_ms}` — the RS485
 V/A/temp meter in the battery pack lead (it only measures, no CC/CV
 settings; `current_a` is 0 until its shunt is wired in); values are the
 last Modbus reply, meaningful only while `online`.
-`analog` = `{valid, main_battery_v, main_battery_valid, aon_battery_v,
-aon_battery_valid, board_temp_c, board_temp_valid, vdda_mv, vdda_calibrated,
-mg996_current_raw, flags}` — refreshed by the STM32 every 200 ms.
+`servo` = `{valid, pulse_us, hold_ms, age_ms, flags, enabled, output,
+limit_active, limit_up, limit_down, timed_out}` — the MG996 blade-lift
+servo (`0x88`). `pulse_us` is the pulse on the wire, slewing towards the
+last target; `limit_active` means the last target was cut short by a limit
+microswitch and the servo backed off and stopped there.
+`blade` = `{valid, cmd_permille, pwm, age_ms, flags, held}` — the BLD120A
+blade motor (`0x82`); `held` is this driver's dead-man state (below).
+(`0x8A` analog is retired: the ADC mux was never fitted.)
 
-Two command side channels (JSON on `std_msgs/String`), used by the
-`mower_mission` `pid_autotune_node`:
+Four command side channels (JSON on `std_msgs/String`); the first two are
+used by the `mower_mission` `pid_autotune_node`, the last two by Mower
+Studio's 機構 / 割草 card:
 
 | Topic | Payload | Effect |
 | --- | --- | --- |
 | `/mower_base/pid_command` | `{"left":{"kp","ki","kd"},"right":{...},"persist":0\|1,"closed_loop":0\|1}` | one `0x04` per message; result shows up in telemetry `pid.flags` (`LAST_APPLY_OK`, `LAST_SAVE_OK`). `persist=1` writes STM32 flash, do not spam it |
 | `/mower_base/wheel_override` | `{"left_permille":400,"right_permille":400,"ttl_ms":300}` | while the ttl (clamped to 1 s) has not expired, `write()` sends these permille instead of the controller's velocity command, so an open-loop / closed-loop step is a real step and not one shaped by `diff_drive_controller`'s acceleration limits. Keep re-publishing to hold it; it falls back to the controller on expiry |
+| `/mower_base/servo_command` | `{"pulse_us":1500,"hold_ms":0}` | one `0x07` per message. `pulse_us` 500–2500 is a target the STM32 slews to at 25 µs/10 ms, stopping (and backing off 50 µs) when a limit microswitch trips; `0` releases the servo. `hold_ms` 0 = hold until the next command, else pulses stop that long after the command |
+| `/mower_base/blade_command` | `{"permille":300,"ttl_ms":500}` | dead-man: while the ttl (clamped to 1 s) has not expired `write()` re-sends `0x02` every cycle with the STM32 command timeout; on expiry (or `permille` 0) one explicit stop goes out. A dead publisher, a dropped link or a stalled controller manager all stop the blade within ttl + `command_timeout_ms`. Keep re-publishing (e.g. 5 Hz, ttl 500) to hold it |
 
 Two joints, left then right, in the order they appear in the URDF.
 

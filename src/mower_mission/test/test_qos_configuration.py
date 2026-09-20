@@ -83,7 +83,8 @@ def test_robot_pose_relay_and_health_gate_reject_stale_source_data():
 def test_rosbridge_is_loopback_only_by_default():
     source = ROSBRIDGE_CONFIG.read_text(encoding='utf-8')
     assert 'address: "127.0.0.1"' in source
-    assert "topics_pub_glob: \"['/app_joy_cmd', '/mower_recorder/command']\"" in source
+    assert ("topics_pub_glob: \"['/app_joy_cmd', '/mower_recorder/command', "
+            "'/mower_base/servo_command', '/mower_base/blade_command']\"") in source
     assert "'/manual_command_clock'" in source
     assert "'/joy_cmd'" not in source
 
