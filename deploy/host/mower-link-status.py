@@ -46,7 +46,8 @@ def lte():
     if not os.path.exists(AT_PORT):
         return {'present': False}
     info = {'present': True, 'rssi_dbm': None, 'csq': None, 'ber': None,
-            'registered': None, 'operator': None, 'tech': None, 'error': None}
+            'registered': None, 'operator': None, 'tech': None, 'error': None,
+            'band': None, 'plmn': None, 'rsrp_dbm': None, 'sinr_db': None, 'rsrq_db': None}
     try:
         fd = os.open(AT_PORT, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     except OSError as e:
@@ -66,6 +67,18 @@ def lte():
         if m:
             info['operator'] = m.group(1)
             info['tech'] = {'0': 'GSM', '2': 'UTRAN', '7': 'LTE'}.get(m.group(2) or '', m.group(2))
+        # Quectel extras: the serving band and the LTE quality numbers CSQ
+        # hides. +QNWINFO: "FDD LTE","46692","LTE BAND 7",3050
+        m = re.search(r'\+QNWINFO:\s*"([^"]*)","(\d*)","([^"]*)",(\d+)', at(fd, 'AT+QNWINFO'))
+        if m:
+            info['band'] = m.group(3)
+            info['plmn'] = m.group(2)
+        # +QCSQ: "LTE",<rssi>,<rsrp>,<sinr>,<rsrq>; sinr is (value/5 - 20) dB
+        m = re.search(r'\+QCSQ:\s*"LTE",(-?\d+),(-?\d+),(-?\d+),(-?\d+)', at(fd, 'AT+QCSQ'))
+        if m:
+            info['rsrp_dbm'] = int(m.group(2))
+            info['sinr_db'] = round(int(m.group(3)) / 5.0 - 20.0, 1)
+            info['rsrq_db'] = int(m.group(4))
     except OSError as e:
         info['error'] = str(e)
     finally:
