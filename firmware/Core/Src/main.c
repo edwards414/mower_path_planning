@@ -20,7 +20,6 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
-#include "adc.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -109,7 +108,6 @@ int main(void)
   MX_TIM5_Init();
   MX_TIM4_Init();
   MX_TIM10_Init();
-  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   MowerMotor_Init();
   BoardModules_Init();

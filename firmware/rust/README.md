@@ -15,16 +15,14 @@ rust/
 │   ├── settings  flash record (CRC-32), sanitising, defaults
 │   ├── modbus    Modbus RTU CRC-16, FC03/FC16 requests, echo-tolerant reply scan
 │   ├── charger   RS485 charger snapshot, online logic, 0x89 flags
-│   ├── servo     MG996 command state: clamp, hold timeout, limit gating, 0x88
-│   └── analog    ADC mux maths: VREFINT → VDDA, dividers, NTC, 0x8A
+│   └── servo     MG996 command state: slew, hold timeout, limit switches, 0x88
 └── mower-fw/     Embassy firmware for STM32F411CE
     ├── board.rs   pin map / timers / flash (mirrors the .ioc)
     ├── shared.rs  cross-task state (Mutex<RefCell>, Channel, Signal)
     ├── fault.rs   panic + HardFault → motors off, blade braked, servo/RS485 released
     ├── charger.rs USART6 + MAX485 DE poll task (DMA, idle-line, 200 ms timeout)
     ├── servo.rs   TIM10 update/compare ISR → PB10 pulse
-    ├── analog.rs  ADC1 + PB2/PA6 mux select scan task (200 ms)
-    └── main.rs    uart_rx_task · motor_task · uart_tx_task · charger_task · analog_task
+    └── main.rs    uart_rx_task · motor_task · uart_tx_task · charger_task
 ```
 
 ## What is ported
@@ -40,12 +38,11 @@ rust/
 | bootloader hand-off (0x0F) | `main.rs::enter_bootloader`  | same RAM mailbox + reset                           |
 | `modbus_rtu.cpp`           | `modbus.rs`                  | vendor example frames as unit tests                |
 | `charger_rs485.cpp`        | `charger.rs` (both crates)   | USART6 PA11/PA12, PA5 DE, 500 ms poll, `0x89`     |
-| `mg996_servo.cpp`          | `servo.rs` (both crates)     | TIM10 ISR on PB10, `0x07` command, `0x88` status   |
-| `analog_monitor.cpp`       | `analog.rs` (both crates)    | ADC1 IN9 behind the mux, VREFINT calibration, `0x8A`; feeds the servo current limit |
+| `mg996_servo.cpp`          | `servo.rs` (both crates)     | TIM10 ISR on PB10, PB2/PA6 limit switches, pulse slew, `0x07` command, `0x88` status |
 
 Status frames sent every 50 ms: `0x81` motor, `0x85` wheel feedback, `0x82`
 blade, `0x84` PID config, `0x86` power (always "running, rail on"), `0x88`
-servo, `0x89` charger, `0x8A` analog (batteries, board temperature).
+servo, `0x89` charger.
 
 ## Not ported (yet)
 

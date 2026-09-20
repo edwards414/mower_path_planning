@@ -283,28 +283,58 @@ TEST(Charger, DecodeStatus)
   EXPECT_FALSE(decode_charger_status(p, 15, ch));
 }
 
-TEST(Analog, DecodeStatus)
+TEST(Servo, CommandFrameLayout)
 {
-  // main=24.12 V, aon=3.85 V, temp=31.2 C, vdda=2910 mV, mg996 raw=123,
-  // flags=main|aon|temp|curr|vdda_cal
-  const uint8_t p[12] = {0x6C, 0x09, 0x81, 0x01, 0x38, 0x01,
-                         0x5E, 0x0B, 0x7B, 0x00, 0x1F, 0x00};
-  AnalogStatus an;
-  ASSERT_TRUE(decode_analog_status(p, sizeof(p), an));
-  EXPECT_EQ(an.main_battery_cv, 2412);
-  EXPECT_EQ(an.aon_battery_cv, 385);
-  EXPECT_EQ(an.board_temp_dc, 312);
-  EXPECT_EQ(an.vdda_mv, 2910);
-  EXPECT_EQ(an.mg996_current_raw, 123);
-  EXPECT_TRUE(an.main_battery_valid());
-  EXPECT_TRUE(an.aon_battery_valid());
-  EXPECT_TRUE(an.board_temp_valid());
-  EXPECT_FALSE(decode_analog_status(p, 11, an));
+  // 0x07: pulse 1500 us, hold 0, reserved
+  const auto f = build_servo_command(9, 1500, 0);
+  ASSERT_EQ(f.size(), kFrameOverhead + 8);
+  EXPECT_EQ(f[3], kServoCommand);
+  EXPECT_EQ(f[4], 9);
+  EXPECT_EQ(f[5], 8);
+  EXPECT_EQ(f[6], 0xDC);
+  EXPECT_EQ(f[7], 0x05);
+  for (size_t i = 8; i < 14; ++i) {
+    EXPECT_EQ(f[i], 0) << i;
+  }
+  FrameParser parser;
+  int seen = 0;
+  parser.feed(f.data(), f.size(), [&](uint8_t t, uint8_t, const uint8_t *, size_t l) {
+    EXPECT_EQ(t, kServoCommand);
+    EXPECT_EQ(l, 8u);
+    ++seen;
+  });
+  EXPECT_EQ(seen, 1);
+}
 
-  // invalid temperature sentinel survives the signed decode
-  const uint8_t q[12] = {0, 0, 0, 0, 0x00, 0x80, 0xE4, 0x0C, 0, 0, 0x00, 0};
-  ASSERT_TRUE(decode_analog_status(q, sizeof(q), an));
-  EXPECT_EQ(an.board_temp_dc, INT16_MIN);
-  EXPECT_FALSE(an.board_temp_valid());
-  EXPECT_FALSE(an.main_battery_valid());
+TEST(Servo, DecodeStatus)
+{
+  // pulse=2050, hold=0, age=120 ms, flags=ENABLED|LIMIT_ACTIVE|OUTPUT|LIMIT_UP, seq=7
+  const uint8_t p[8] = {0x02, 0x08, 0x00, 0x00, 0x78, 0x00, 0x17, 0x07};
+  ServoStatus st;
+  ASSERT_TRUE(decode_servo_status(p, sizeof(p), st));
+  EXPECT_EQ(st.pulse_us, 2050);
+  EXPECT_EQ(st.hold_timeout_ms, 0);
+  EXPECT_EQ(st.command_age_ms, 120);
+  EXPECT_EQ(st.last_rx_seq, 7);
+  EXPECT_TRUE(st.enabled());
+  EXPECT_TRUE(st.limit_active());
+  EXPECT_TRUE(st.output_active());
+  EXPECT_FALSE(st.timed_out());
+  EXPECT_TRUE(st.limit_up());
+  EXPECT_FALSE(st.limit_down());
+  EXPECT_FALSE(decode_servo_status(p, 7, st));
+}
+
+TEST(LawerMotor, DecodeStatus)
+{
+  // cmd=300, pwm=60, age=40 ms, flags=COMMAND_VALID, seq=3
+  const uint8_t p[8] = {0x2C, 0x01, 0x3C, 0x00, 0x28, 0x00, 0x01, 0x03};
+  LawerMotorStatus st;
+  ASSERT_TRUE(decode_lawer_motor_status(p, sizeof(p), st));
+  EXPECT_EQ(st.commanded_permille, 300);
+  EXPECT_EQ(st.applied_pwm, 60);
+  EXPECT_EQ(st.command_age_ms, 40);
+  EXPECT_EQ(st.flags, kStatusFlagCommandValid);
+  EXPECT_EQ(st.last_rx_seq, 3);
+  EXPECT_FALSE(decode_lawer_motor_status(p, 9, st));
 }

@@ -58,7 +58,7 @@
 | `0x87` | STM32 -> Host | 韌體版本 / build 身分（每 1 s 一次，或回應 `0x06`） |
 | `0x88` | STM32 -> Host | MG996 servo 狀態 |
 | `0x89` | STM32 -> Host | RS485 充電線電表狀態（電壓 / 電流 / 溫度） |
-| `0x8A` | STM32 -> Host | 類比監控（主電池 / AON 小電池電壓、板溫、MG996 電流、VDDA） |
+| `0x8A` | — | 已退役（類比監控；ADC mux 從未裝上）。ID 不再使用 |
 | `0x8F` | STM32 -> Host | `0x0F` 的 ack，送完立刻 reset |
 | `0x10` ~ `0x14`, `0x90`, `0x91` | Host <-> bootloader | 只有 bootloader 會處理，app 會忽略；定義在 `BOOTLOADER.md` |
 
@@ -197,7 +197,11 @@ MG996 servo（`PB10`，TIM10 中斷計時，50 Hz）。Payload 長度固定 `8` 
 | 4 | `uint16_t` | `reserved0` | 固定 `0` |
 | 6 | `uint16_t` | `reserved1` | 固定 `0` |
 
-跟馬達命令一樣，`SHUTDOWN_PENDING / LIGHTS_OFF / LOW_POWER` 期間會被忽略；關機流程會直接 disable servo。ADC 電流限位觸發（`0x88 LIMIT_ACTIVE`）時脈波暫停，限位解除後自動恢復，不用重送命令。
+跟馬達命令一樣，`SHUTDOWN_PENDING / LIGHTS_OFF / LOW_POWER` 期間會被忽略；關機流程會直接 disable servo。
+
+`pulse_us` 是**目標**，不是立刻送出的脈寬：STM32 以 `25 µs / 10 ms` 的斜率把實際脈寬從現在的位置滑到目標（500→2500 全程約 0.8 s），這樣脈寬才會跟得上 servo 實際位置，限位開關才有「停在原地」可言。servo 放鬆狀態（`0` 命令 / hold timeout 之後）再下命令時，脈波從上一次送出的值重新開始（開機後是 `1500`），再滑到目標——所以開機後第一筆命令請先送一個接近目前機構位置的值。
+
+機構兩端各有一顆微動開關（`PB2` 上限、`PA6` 下限，見 `wire.md`）。脈寬往某端滑動時該端開關被壓到，STM32 就把目標改成「從目前脈寬往反方向退 50 µs」（`MG996_SERVO_LIMIT_BACKOFF_US`），退開後停住（`0x88 LIMIT_ACTIVE`），不會頂著止點；之後往同方向的命令一樣會被擋下、退 50 µs，往反方向的命令正常。兩顆開關同時被壓住時原地不動。開關狀態本身在 `0x88 LIMIT_UP / LIMIT_DN`。
 
 角度換算由 host 做：`pulse_us = 500 + angle_deg / 180 * 2000`（MG996R 的實際端點請實測）。
 
@@ -396,6 +400,31 @@ Payload 長度固定 `16` bytes（`firmware_info_payload_t`，值由 `Module/Inc
 
 `ros2/mower_hardware` 已實作步驟 3：收到 `SHUTDOWN_REQUESTED` 就回 ack 並執行 `shutdown_command` 參數（預設 `systemctl poweroff`，設空字串停用）。ros2_control 通常不是 root，需要 polkit 允許該使用者 `org.freedesktop.login1.power-off`，或把參數改成 `sudo -n systemctl poweroff` 並在 sudoers 放行。
 
+## `0x88` Servo Status
+
+STM32 每 `50ms` 送一次。Frame header 的 `seq` 是最後一筆被接受的 `0x07` 的 seq。Payload 長度固定 `8` bytes。
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `uint16_t` | `pulse_us` | **目前送出的**脈寬（正在往目標滑動）；放鬆時是最後送出的值 |
+| 2 | `uint16_t` | `hold_timeout_ms` | 最後一筆 `0x07` 的 hold timeout |
+| 4 | `uint16_t` | `command_age_ms` | 距最後一筆 `0x07` 的毫秒數，飽和在 `65535` |
+| 6 | `uint8_t` | `flags` | 見下表 |
+| 7 | `uint8_t` | `last_rx_seq` | 最後一筆被接受的 `0x07` 的 seq |
+
+`flags`:
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `ENABLED`，host 要求送脈波 |
+| 1 | `0x02` | `LIMIT_ACTIVE`，最後一筆目標碰到限位開關、已退開停住，沒走到；下一筆 `0x07` 清掉 |
+| 2 | `0x04` | `OUTPUT_ACTIVE`，脈波真的在送 |
+| 3 | `0x08` | `TIMED_OUT`，hold timeout 到期、脈波已停 |
+| 4 | `0x10` | `LIMIT_UP`，上限微動被壓著（去彈跳後） |
+| 5 | `0x20` | `LIMIT_DN`，下限微動被壓著（去彈跳後） |
+
+判斷「到位」：`pulse_us` 等於你送的目標且 `LIMIT_ACTIVE` 為 0；`LIMIT_ACTIVE` 為 1 表示機構碰到開關，`pulse_us` 是退開後停住的位置（觸發點 ± 50 µs）。
+
 ## `0x89` Charger Status
 
 STM32 每 `50ms` 送一次，資料來源是 `USART6`（PA11/PA12）接的 RS485 **電壓 / 電流 / 溫度電表**（裝在電池組主線上：電壓永遠是電池端電壓，電流是電池組電流——分流器接進主線之前讀 0；只量測、沒有 CC/CV 設定），STM32 每 `500ms` 用 Modbus RTU（站號 `0x01`、9600 8N1、FC03 讀 Reg0-4）輪詢一次，所以數值每 500 ms 才會更新。Frame header 的 `seq` 固定 `0`。主電源關閉（`0x86 MAIN_POWER_ENABLED=0`）時暫停輪詢。
@@ -431,35 +460,6 @@ Payload 長度固定 `16` bytes。
 `CURRENT_PRESENT / INPUT_PRESENT` 只在 `ONLINE=1` 時才會被設定。電表看不到充電器本身，「充電中」由 Host 用電池端電壓判（≥ 25.0 V = 充電器頂著），充飽用 tail current（`docs/BATTERY.md`）。
 
 ---
-
-## `0x8A` Analog Status
-
-STM32 每 `50ms` 送一次，資料來源是 `PB1/ADC1_IN9` 經 4 通道 analog mux 讀到的四個慢速類比訊號（見 `wire.md`），STM32 每 `200ms` 掃一輪，所以數值每 200 ms 才會更新。哪些通道有裝由 `hardware_pins.hpp` 的 `ANALOG_MONITOR_CHANNEL_MASK` 決定：沒裝的通道不採樣、`*_VALID` 永遠 0、值為 0——**目前是 `0x00`（沒有 mux、沒有分壓、沒有電流感測），四個 `*_VALID` 全是 0**，電池電壓請看 `0x89`。每輪掃描前會先讀 `VREFINT` 算出實際 VDDA，所有換算都用這個值而不是假設 3.3 V。Frame header 的 `seq` 固定 `0`。
-
-Payload 長度固定 `12` bytes。
-
-| Offset | Type | Field | Description |
-|---|---|---|---|
-| 0 | `uint16_t` | `main_battery_cv` | 24 V 主電池電壓（`270k/33k` 分壓還原），x0.01 V；無效時 `0` |
-| 2 | `uint16_t` | `aon_battery_cv` | 3.7 V AON 小電池電壓（`100k/300k` 分壓還原），x0.01 V；無效時 `0` |
-| 4 | `int16_t` | `board_temp_dc` | 板溫 NTC（10k / beta 3950），x0.1 °C；無效時 `INT16_MIN` (`-32768`) |
-| 6 | `uint16_t` | `vdda_mv` | 這輪換算用的 ADC 參考電壓，mV（未校正時 `3300`） |
-| 8 | `uint16_t` | `mg996_current_raw` | MG996 電流感測原始 12-bit ADC 值 |
-| 10 | `uint8_t` | `flags` | 見下表 |
-| 11 | `uint8_t` | `reserved` | 固定 `0` |
-
-`flags`:
-
-| Bit | Mask | Meaning |
-|---|---|---|
-| 0 | `0x01` | `MAIN_BATTERY_VALID`，CH2 這輪讀取成功 |
-| 1 | `0x02` | `AON_BATTERY_VALID`，CH3 這輪讀取成功 |
-| 2 | `0x04` | `BOARD_TEMP_VALID`，CH1 讀取成功且 NTC 在合理範圍（開路 / 短路會清掉） |
-| 3 | `0x08` | `MG996_CURRENT_VALID`，CH0 這輪讀取成功 |
-| 4 | `0x10` | `VDDA_CALIBRATED`，`VREFINT` 讀取成功，`vdda_mv` 是實測值 |
-| 5 | `0x20` | `MG996_LIMIT_ACTIVE`，電流超過限位 threshold（與 `0x88 LIMIT_ACTIVE` 同源） |
-
-Host 應以 `flags` 為準：對應 bit 為 `0` 時該欄位沒有意義。分壓電阻比與 NTC 參數尚未實測校正，`main_battery_cv` 目前當作相對值使用。
 
 ## Status Flags
 

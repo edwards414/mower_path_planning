@@ -26,6 +26,8 @@ topics_sub:
 topics_pub:
   - '/app_joy_cmd'
   - '/mower_recorder/command'
+  - '/mower_base/servo_command'
+  - '/mower_base/blade_command'
 services:
   /record_zone_start: std_srvs/srv/Trigger
   /record_zone_end: std_srvs/srv/Trigger

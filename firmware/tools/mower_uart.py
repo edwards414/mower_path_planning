@@ -98,21 +98,12 @@ def flags87(f):
 
 def flags88(f):
     s = []
-    if f & 1: s.append("ENABLED")
-    if f & 2: s.append("LIMIT")
-    if f & 4: s.append("OUTPUT")
-    if f & 8: s.append("TIMED_OUT")
-    return "|".join(s) or "none"
-
-
-def flags8a(f):
-    s = []
-    if f & 0x01: s.append("MAIN")
-    if f & 0x02: s.append("AON")
-    if f & 0x04: s.append("TEMP")
-    if f & 0x08: s.append("CURR")
-    if f & 0x10: s.append("VDDA_CAL")
-    if f & 0x20: s.append("MG996_LIMIT")
+    if f & 0x01: s.append("ENABLED")
+    if f & 0x02: s.append("CLAMPED")
+    if f & 0x04: s.append("OUTPUT")
+    if f & 0x08: s.append("TIMED_OUT")
+    if f & 0x10: s.append("SW_UP")
+    if f & 0x20: s.append("SW_DN")
     return "|".join(s) or "none"
 
 
@@ -150,11 +141,6 @@ def decode(ftype, seq, p):
         pulse, hold, age, fl, rxseq = struct.unpack("<HHHBB", p)
         hold_s = "forever" if hold == 0 else f"{hold}ms"
         return f"88 SERVO  pulse={pulse:4d}us hold={hold_s} age={age:5d}ms {flags88(fl)} rxseq={rxseq}"
-    if ftype == 0x8A and len(p) == 12:
-        vmain, vaon, temp, vdda, curr, fl, _ = struct.unpack("<HHhHHBB", p)
-        temp_s = "n/a" if temp == -32768 else f"{temp/10:.1f}C"
-        return (f"8A ANALOG main={vmain/100:5.2f}V aon={vaon/100:4.2f}V temp={temp_s} "
-                f"vdda={vdda}mV mg996_raw={curr:4d}  {flags8a(fl)}")
     return f"{ftype:02X} seq={seq} payload={p.hex()}"
 
 

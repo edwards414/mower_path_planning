@@ -1,15 +1,14 @@
 //! Mower robot firmware — Rust/Embassy port of the UART + motor slice.
 //!
-//! Five tasks on one thread-mode executor:
+//! Four tasks on one thread-mode executor:
 //!
 //! * `uart_rx_task` — DMA ring buffer → frame parser → shared command state
 //! * `motor_task` — fixed 20 ms tick: encoders → PID → PWM, blade timeout,
-//!   servo hold timeout, PID-config/flash requests, 50 ms status burst
+//!   servo limit switches / slew / hold timeout, PID-config/flash requests,
+//!   50 ms status burst
 //! * `uart_tx_task` — drains the TX queue over DMA; performs the bootloader
 //!   hand-off
 //! * `charger_task` — polls the RS485 charger every 500 ms (`charger.rs`)
-//! * `analog_task` — VREFINT + 4-channel ADC mux scan every 200 ms
-//!   (`analog.rs`): battery voltages, board NTC, servo current limit
 //!
 //! The MG996 pulse itself comes from the TIM10 interrupt (`servo.rs`).
 //!
@@ -19,7 +18,6 @@
 #![no_std]
 #![no_main]
 
-mod analog;
 mod board;
 mod charger;
 mod fault;
@@ -39,9 +37,7 @@ use mower_core::protocol::{
 };
 use mower_core::settings::{ControllerSettings, Record, StorageStatus};
 use mower_core::wheel::{CounterWidth, WheelController};
-use shared::{
-    send_frame, with_analog, with_charger, with_commands, with_telemetry, TxItem, PID_CONFIG_REQUEST, TX_QUEUE,
-};
+use shared::{send_frame, with_charger, with_commands, with_telemetry, TxItem, PID_CONFIG_REQUEST, TX_QUEUE};
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
@@ -117,7 +113,6 @@ async fn main(spawner: Spawner) {
     spawner.spawn(uart_tx_task(tx).expect("tx task"));
     spawner.spawn(motor_task(board.motor, servo_drive).expect("motor task"));
     spawner.spawn(charger::charger_task(charger_link).expect("charger task"));
-    spawner.spawn(analog::analog_task(analog::AnalogMonitor::new(board.analog)).expect("analog task"));
 }
 
 fn now_ms() -> u32 {
@@ -243,11 +238,9 @@ async fn motor_task(mut hw: board::MotorPeripherals, mut servo_drive: servo::Ser
             hold_for_bootloader(hw, servo_drive, seq).await;
         }
 
-        // Current limit from the last ADC scan (board_modules.cpp does the
-        // same hand-over every 200 ms; here it is re-read every tick).
-        let limit_active = with_analog(|a| a.adc_available() && a.mg996_current_limit());
+        let (limit_up, limit_dn) = servo_drive.poll_limits();
         let (wheel_cmd, blade_cmd, servo_cmd) = with_commands(|c| {
-            c.servo.set_limit_active(limit_active);
+            c.servo.set_limits(limit_up, limit_dn);
             c.servo.tick(now);
             (c.wheels.evaluate(now), c.blade.evaluate(now), c.servo)
         });
@@ -360,12 +353,10 @@ fn send_status_burst() {
     let now = now_ms();
     let charger = with_charger(|c| c.status(now));
     let servo = with_commands(|c| c.servo.status(now));
-    let analog = with_analog(|a| a.status());
     let extra = [
         power_status_frame(),
         encode_payload(frame_type::CHARGER_STATUS, 0, &charger),
         encode_payload(frame_type::SERVO_STATUS, servo.last_rx_seq, &servo),
-        encode_payload(frame_type::ANALOG_STATUS, 0, &analog),
     ];
     for frame in frames.into_iter().chain(extra).flatten() {
         send_frame(frame);
