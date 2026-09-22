@@ -30,7 +30,9 @@ UDEV_RULES = SRC_DIR.parent / 'deploy/udev/99-mower.rules'
 BRINGUP_PACKAGE = SRC_DIR / 'mower_bringup/package.xml'
 MOWER_RS_CMAKE = SRC_DIR / 'mower_rs/CMakeLists.txt'
 MOWER_RS_CARGO = SRC_DIR / 'mower_rs/Cargo.toml'
-GPS_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_gps/src/main.rs'
+MOWER_RSD_MAIN = SRC_DIR / 'mower_rs/crates/mower_rsd/src/main.rs'
+MOWER_RSD_PARAMS = SRC_DIR / 'mower_bringup/config/mower_rsd.yaml'
+GPS_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_gps/src/lib.rs'
 UBX_RS = SRC_DIR / 'mower_rs/crates/mower_ubx/src/lib.rs'
 NAV2_CONFIG = SRC_DIR / 'mower_nav2/config/nav2_no_map_params.yaml'
 NAV2_LAUNCH = SRC_DIR / 'mower_nav2/launch/navigation.launch.py'
@@ -38,18 +40,18 @@ MAKEFILE = SRC_DIR.parent / 'Makefile'
 MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
-IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/main.rs'
+IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/lib.rs'
 PID_AUTOTUNE_NODE = SRC_DIR / 'mower_mission/mower_mission/pid_autotune_node.py'
 PID_TUNING = SRC_DIR / 'mower_mission/mower_mission/pid_tuning.py'
-PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/main.rs'
+PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/lib.rs'
 PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tuning.rs'
 MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
-MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/main.rs'
+MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/lib.rs'
 MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
 COVERAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/coverage_node.py'
-COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/main.rs'
+COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/lib.rs'
 AGENT_PY = SRC_DIR / 'mower_mission/mower_mission/mower_agent.py'
-AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/main.rs'
+AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/lib.rs'
 AGENT_RS_RELAY = SRC_DIR / 'mower_rs/crates/mower_agent/src/relay.rs'
 ROSBRIDGE_LAUNCH = SRC_DIR / 'mower_bringup/launch/rosbridge.launch.py'
 VERSION_PY = SRC_DIR / 'mower_mission/mower_mission/version.py'
@@ -66,10 +68,10 @@ VELOCITY_GUARD_RS = (
     SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/core.rs'
 )
 VELOCITY_GUARD_RS_MAIN = (
-    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/main.rs'
+    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/lib.rs'
 )
-NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/main.rs'
-BATTERY_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_battery/src/main.rs'
+NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/lib.rs'
+BATTERY_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_battery/src/lib.rs'
 BATTERY_RS_ESTIMATOR = (
     SRC_DIR / 'mower_rs/crates/mower_battery/src/estimator.rs'
 )
@@ -263,6 +265,50 @@ def test_final_velocity_guard_owns_the_only_mux_to_controller_boundary():
     )
 
 
+def test_rust_daemon_runs_the_enabled_modules_in_one_process():
+    """rust_daemon:=true starts one mower_rsd (one r2r Context, one DDS
+    participant) with the module set derived from the same rust_* switches,
+    and every separate mower_rs binary stays down. Node names, the per-node
+    parameter file and the node-scoped remappings are the contract."""
+    robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    assert "executable='mower_rsd'" in robot_launch
+    # derived from the existing switches, not a second source of truth
+    for switch in ('rust_status', 'rust_guards', 'rust_imu', 'enable_gps',
+                   'rust_map', 'rust_coverage', 'rust_nav', 'rust_record',
+                   'rust_adapter', 'rust_battery', 'rust_pid_autotune',
+                   'rust_bridge', 'rust_agent'):
+        assert f"'{switch}')," in robot_launch, switch
+    # a bare __node:= would rename every node in the process, so the Node
+    # action must not carry a name= at all
+    node_block = robot_launch.split("executable='mower_rsd',", 1)[1].split(
+        ')]', 1)[0]
+    assert 'name=' not in node_block
+    # launch remappings become node-scoped rcl rules
+    assert "'imu:imu/data_raw:=imu/data'" in robot_launch
+    assert "'manual_velocity_guard:cmd_vel_in:=/app_joy_cmd'" in robot_launch
+    assert "'velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel'" \
+        in robot_launch
+    assert 'respawn=True' in robot_launch
+
+    # the same node names the module table uses, one parameter section each
+    params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    for node in ('robot_status', 'manual_velocity_guard',
+                 'velocity_command_guard', 'map_manage',
+                 'boustrophedon_coverage', 'nav_action_server',
+                 'path_record_node', 'flutter_adapter', 'battery_state',
+                 'pid_autotune'):
+        assert f'\n{node}:\n  ros__parameters:' in params, node
+        assert f'node: "{node}"' in daemon_main, node
+
+    # the daemon and the separate binaries are mutually exclusive everywhere
+    for launch in (MISSION_LAUNCH, TWIST_MUX_LAUNCH, ROSBRIDGE_LAUNCH,
+                   MOWER_LAUNCH):
+        text = launch.read_text(encoding='utf-8')
+        assert '_rust_binary(' in text, launch.name
+        assert "'rust_daemon'" in text, launch.name
+
+
 def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     """rust_guards:=true swaps in mower_rs velocity_command_guard: same
     remappings, session requirement, limits, stop barriers and clocks."""
@@ -270,7 +316,7 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     main = VELOCITY_GUARD_RS_MAIN.read_text(encoding='utf-8')
     mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
     assert "package='mower_rs'" in mux_launch
-    assert "condition=IfCondition(rust_guards)" in mux_launch
+    assert "condition=_rust_binary(rust_guards, rust_daemon)" in mux_launch
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
@@ -313,10 +359,10 @@ def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
     geometry = NAV_SERVER_RS_GEOMETRY.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_nav'" in mission_launch
-    assert "condition=IfCondition(rust_nav)" in mission_launch
+    assert "condition=_rust_binary(rust_nav, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_nav)" in mission_launch
     assert mission_launch.count("name='nav_action_server'") == 1
-    assert 'r2r::Node::create(rctx, "nav_action_server", "")' in main
+    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     for name in ('nav_action', 'nav_action_follow_path'):
         assert f'"{name}"' in main, name
     for service in (
@@ -386,10 +432,10 @@ def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
     py_tuning = PID_TUNING.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_pid_autotune'" in mission_launch
-    assert "condition=IfCondition(rust_pid_autotune)" in mission_launch
+    assert "condition=_rust_binary(rust_pid_autotune, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_pid_autotune)" in mission_launch
     assert mission_launch.count("name='pid_autotune'") == 2
-    assert 'r2r::Node::create(ctx_r2r, "pid_autotune", "")' in main
+    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     assert 'create_service::<PidAutotune::Service>("/pid_autotune"' in main
     # every declared parameter with the same default
     for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M):
@@ -419,10 +465,10 @@ def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
     py_node = MAP_MANAGE_NODE.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_map'" in mission_launch
-    assert "condition=IfCondition(rust_map)" in mission_launch
+    assert "condition=_rust_binary(rust_map, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_map)" in mission_launch
     assert mission_launch.count("name='map_manage'") == 2
-    assert 'r2r::Node::create(ctx, "map_manage", "")' in main
+    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     assert 'const MIN_SAFE_INFLATE_RADIUS_M: f64 = 0.75;' in main
     assert 'MIN_SAFE_INFLATE_RADIUS_M = 0.75' in py_node
     for service in ('/create_risk_map', '/create_free_space', '/import_image_mask', '/create_chennal_map',
@@ -454,10 +500,10 @@ def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
     py_node = COVERAGE_NODE.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_coverage'" in mission_launch
-    assert "condition=IfCondition(rust_coverage)" in mission_launch
+    assert "condition=_rust_binary(rust_coverage, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_coverage)" in mission_launch
     assert mission_launch.count("name='boustrophedon_coverage'") == 2
-    assert 'r2r::Node::create(r2r_ctx, "boustrophedon_coverage", "")' in main
+    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     for name in ('/generate_coverage_path', '/zone_exec_path', '/run_zone_sequence', '/stop_zone_sequence',
                  '/get_zone_map_list_srv', '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
                  '/check_nav_status', '/get_channel_route', '/mission_operation_lock', 'nav_action_follow_path',
@@ -496,7 +542,7 @@ def test_rust_agent_keeps_the_same_backend_protocol_and_wiring():
     py = AGENT_PY.read_text(encoding='utf-8')
     launch = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_agent'" in launch and launch.count("name='mower_agent'") == 2
-    assert "condition=IfCondition(rust_agent)" in launch and "condition=UnlessCondition(rust_agent)" in launch
+    assert "condition=_rust_binary(rust_agent, rust_daemon)" in launch and "condition=UnlessCondition(rust_agent)" in launch
     assert launch.count("'--rosbridge', 'ws://127.0.0.1:9091'") == 2
     api = re.search(r'^ROBOT_API_VERSION = (\d+)', VERSION_PY.read_text(encoding='utf-8'), re.M).group(1)
     assert f'const ROBOT_API_VERSION: i64 = {api};' in main
@@ -528,12 +574,12 @@ def test_rust_battery_node_keeps_the_same_model_and_wiring():
     python_estimator = BATTERY_ESTIMATOR.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_battery'" in mission_launch
-    assert "condition=IfCondition(rust_battery)" in mission_launch
+    assert "condition=_rust_binary(rust_battery, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_battery)" in mission_launch
     assert mission_launch.count("name='battery_state'") == 2
     assert mission_launch.count("'charger_present_min_v': 25.0") == 2
     assert mission_launch.count("'meter_current_wired': False") == 2
-    assert 'r2r::Node::create(ctx, "battery_state", "")' in main
+    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     for name, default in (
         ('base_telemetry_topic', '"/mower_base/telemetry"'),
         ('battery_topic', '"/battery_state"'),
@@ -716,7 +762,8 @@ def test_imu_driver_discards_backlog_and_requires_fresh_complete_samples():
     assert 'Discarded oversized IMU serial backlog' in rust
     assert 'Discarded IMU serial backlog after a host timing gap' in rust
     assert 'acceleration/gyro components are stale' in rust
-    assert 'std::process::exit(exit_code)' in rust
+    # a dead port ends the process, now as an Err the caller turns into exit 1
+    assert 'Some(message) => Err(message.into())' in rust
 
 
 def test_mower_camera_exposes_only_required_protocols():
@@ -805,7 +852,7 @@ def test_gps_driver_runs_inside_the_runtime_container():
     assert head.rstrip().endswith("package='mower_rs',")
     block = block.split('\n    )\n', 1)[0]
     assert "name='gps'" in block
-    assert 'condition=IfCondition(enable_gps)' in block
+    assert 'condition=_rust_binary(enable_gps' in block
     assert 'respawn=True' in block
     assert 'respawn_delay=2.0' in block
     # the canonical topic goes in as a parameter, no remapping
@@ -828,7 +875,7 @@ def test_gps_driver_runs_inside_the_runtime_container():
     assert '<exec_depend>mower_rs</exec_depend>' in manifest
     assert 'ublox' not in manifest
     cmake = MOWER_RS_CMAKE.read_text(encoding='utf-8')
-    assert re.search(r'^set\(MOWER_RS_BINARIES .* mower_gps\)$', cmake, re.M)
+    assert re.search(r'^set\(MOWER_RS_BINARIES .* mower_gps mower_rsd\)$', cmake, re.M)
     cargo = MOWER_RS_CARGO.read_text(encoding='utf-8')
     assert '"crates/mower_ubx"' in cargo and '"crates/mower_gps"' in cargo
 
@@ -878,7 +925,7 @@ def test_gps_driver_fails_closed_and_keeps_the_ublox_gps_fix_contract():
     assert 'returned EOF' in main
     assert 'no NAV-PVT from the receiver for' in main
     assert 'no NAV-PVT from the receiver within' in main
-    assert 'std::process::exit(exit_code)' in main
+    assert 'Some(message) => Err(message.into())' in main
     assert 'serial_thread.is_finished()' in main
     assert 'COVARIANCE_TYPE_DIAGONAL_KNOWN' in main
     ubx = UBX_RS.read_text(encoding='utf-8')

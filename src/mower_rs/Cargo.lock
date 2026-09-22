@@ -788,6 +788,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_rsd"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_adapter",
+ "mower_agent",
+ "mower_battery",
+ "mower_coverage",
+ "mower_gps",
+ "mower_imu",
+ "mower_map",
+ "mower_nav",
+ "mower_pid_autotune",
+ "mower_record",
+ "mower_rs_common",
+ "mower_ws_bridge",
+ "r2r",
+ "robot_status",
+ "tokio",
+ "velocity_command_guard",
+]
+
+[[package]]
 name = "mower_ubx"
 version = "0.1.0"
 

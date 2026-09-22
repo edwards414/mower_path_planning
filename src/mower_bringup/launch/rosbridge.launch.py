@@ -4,8 +4,22 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+
+
+# `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
+# process (started by robot.launch.py), so the separate binaries must not also
+# start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
+_TRUE = "('true', '1', 'yes', 'on')"
+
+
+def _rust_binary(flag, rust_daemon):
+    """Run the separate mower_rs binary: switch on and daemon not running."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.lower() in ", _TRUE,
+        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+    ]))
 
 
 def generate_launch_description():
@@ -42,6 +56,14 @@ def generate_launch_description():
                     'mower_agent',
     )
     rust_agent = LaunchConfiguration('rust_agent')
+    rust_daemon_arg = DeclareLaunchArgument(
+        'rust_daemon',
+        default_value='false',
+        description='The bridge and the agent run as modules of the mower_rsd '
+                    'process started by robot.launch.py, so the separate '
+                    'binaries stay down here',
+    )
+    rust_daemon = LaunchConfiguration('rust_daemon')
     address_arg = DeclareLaunchArgument(
         'address',
         default_value='127.0.0.1',
@@ -96,7 +118,7 @@ def generate_launch_description():
         executable='mower_agent',
         name='mower_agent',
         output='screen',
-        condition=IfCondition(rust_agent),
+        condition=_rust_binary(rust_agent, rust_daemon),
         arguments=[
             '--gate', ['ws://127.0.0.1:', LaunchConfiguration('port')],
             '--rosbridge', 'ws://127.0.0.1:9091',
@@ -139,7 +161,7 @@ def generate_launch_description():
         executable='mower_ws_bridge',
         name='mower_ws_bridge',
         output='screen',
-        condition=IfCondition(rust_bridge),
+        condition=_rust_binary(rust_bridge, rust_daemon),
         arguments=[
             '--address', LaunchConfiguration('address'),
             '--port', LaunchConfiguration('port'),
@@ -153,6 +175,7 @@ def generate_launch_description():
         address_arg,
         rust_bridge_arg,
         rust_agent_arg,
+        rust_daemon_arg,
         auth_proxy,
         agent,
         agent_rs,
