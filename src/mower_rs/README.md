@@ -21,6 +21,12 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
+Not every crate is a node: `mower_base_core` is a library only — the ROS-free
+core of the Rust base driver (STM32 serial protocol, diff-drive odometry and
+speed limits, the `BaseCycle` hardware state machine, serial record/replay).
+It has no `r2r` dependency, so `cargo test -p mower_base_core` runs anywhere;
+see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
+
 `robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
 `/opt/mower/.env`) so the safety-critical guards can be enabled last, after
