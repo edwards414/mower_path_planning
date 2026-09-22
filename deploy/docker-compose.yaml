@@ -66,6 +66,11 @@ services:
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
+      # RUST_DAEMON puts every module enabled above into one
+      # mower_rsd process (one DDS participant); it changes no
+      # behaviour, so flip it only once the modules themselves
+      # have been through their own supervised checks.
+      - rust_daemon:=${RUST_DAEMON:-false}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the
       # domain id only separates it from anything else on the box.

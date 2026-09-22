@@ -7,12 +7,26 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 import os
 import xacro
+
+
+# `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
+# process (started by robot.launch.py), so the separate binaries must not also
+# start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
+_TRUE = "('true', '1', 'yes', 'on')"
+
+
+def _rust_binary(flag, rust_daemon):
+    """Run the separate mower_rs binary: switch on and daemon not running."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.lower() in ", _TRUE,
+        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+    ]))
 
 
 def _reject_sim_time_for_real_hardware(context):
@@ -52,6 +66,14 @@ def generate_launch_description():
         'rust_guards',
         default_value='false',
         description='Run the mower_rs velocity guards instead of the rclpy ones',
+    )
+
+    declare_rust_daemon = DeclareLaunchArgument(
+        'rust_daemon',
+        default_value='false',
+        description='The enabled mower_rs modules run inside one mower_rsd '
+                    'process started by robot.launch.py, so the separate '
+                    'binaries stay down here',
     )
 
     declare_rust_imu = DeclareLaunchArgument(
@@ -172,6 +194,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'rust_guards': LaunchConfiguration('rust_guards'),
+            'rust_daemon': LaunchConfiguration('rust_daemon'),
         }.items(),
     )
 
@@ -275,7 +298,7 @@ def generate_launch_description():
         executable='mower_imu',
         name='imu',
         output='screen',
-        condition=IfCondition(rust_imu),
+        condition=_rust_binary(rust_imu, LaunchConfiguration('rust_daemon')),
         respawn=True,
         respawn_delay=2.0,
         remappings=[('imu/data_raw', 'imu/data')],
@@ -297,7 +320,7 @@ def generate_launch_description():
         executable='mower_gps',
         name='gps',
         output='screen',
-        condition=IfCondition(enable_gps),
+        condition=_rust_binary(enable_gps, LaunchConfiguration('rust_daemon')),
         respawn=True,
         respawn_delay=2.0,
         parameters=[gps_params_file, {'fix_topic': gps_fix_topic}],
@@ -343,6 +366,7 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_rust_guards,
         declare_rust_imu,
+        declare_rust_daemon,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
         declare_enable_navigation,

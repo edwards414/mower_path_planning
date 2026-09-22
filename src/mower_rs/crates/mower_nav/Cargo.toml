@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Navigation action server: coverage execution through Nav2 with the dispatch / cancel / health / mutation-lock protocol (port of mower_mission/navigation/nav_action_server.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_nav"
 path = "src/main.rs"

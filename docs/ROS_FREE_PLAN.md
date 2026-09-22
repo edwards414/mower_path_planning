@@ -84,6 +84,35 @@
 
 A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 phase 都是往這個骨架裡加模組。
 
+#### A5 執行紀錄（2026-09-23，`feat/rf-a5-mower-rsd`）
+
+`src/mower_rs` 的每個 crate 拆成 library（`pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult`）+ 三行的 `main.rs`，舊的一個一個 binary 照樣建、照樣跑（launch 與 `RUST_*` 開關在整個切換期間都不用動）。新的 `mower_rsd` 把任意子集跑在同一個 `r2r::Context` 上。
+
+- **為什麼一個 Context 就夠**：`r2r::Context::create()` 是 process 級 `OnceLock`，十三個模組共用同一個 context，也就是 **一個 DDS participant**、一套 discovery 執行緒、一個 tokio runtime。每個模組仍各自 `Node::create`，所以 node 名、namespace、topic/service/action、每個 node 的 parameter service 全部不變。
+- **參數**：不發明新機制。`--params-file` 由 rcl 解析進共用 context，`Node::create` 只把「寫著自己 node 名」（或 `/**`）的那一節交給該 node——跟以前每個 process 自己吃 `--ros-args` 完全一樣。因此 `mower_bringup/config/mower_rsd.yaml` 一個檔案、一個 node 一節即可；`rust_daemon_params_file:=` 可指向 `~/.mower` 的副本。
+- **remap**：也是 rcl 的——`-r <node>:<from>:=<to>` 只作用在該 node，IMU 與兩個 velocity guard 的 launch `remappings=` 就這樣照搬。**絕不能**傳不帶前綴的 `-r __node:=`，那會把 process 裡每個 node 都改名；這也是模組表要自帶正式 node 名的原因（`path_record_node`、`imu`、`gps` 與 binary 內建預設不同）。
+- **bridge / agent** 的命令列用 `--module-args <id>=<args>` 傳。
+- **監督**：每個模組是包了 `catch_unwind` 的 tokio task。任何模組 panic、回傳 `Err`、或在沒被要求停止時就結束，都會記錄原因、把共用 shutdown 拉起來讓其他模組收尾，10 s 窗口後整個 process 以非 0 結束，讓 launch 的 `respawn` 重來。沒有 `panic = "abort"`，也不接受「半死不活」的 daemon。實測：`--modules imu,battery` 配一個不存在的 `/dev` → imu 回 Err、battery 乾淨停止、exit 1。
+- 早期版本的一個 bug：`Shutdown::trigger` 用 `watch::Sender::send`，在當下沒有任何 subscriber 時會失敗而且**不會**更新值，等於丟掉一次 shutdown。改成 `send_replace`，並補了測試。
+
+**影子比對**（`src/mower_rs/tools/shadow_compare.py`，arm64 Jazzy 容器、`ROS_DOMAIN_ID=82`）：一個 rclpy harness 同時扮演假上游（odom / GPS / IMU / base telemetry / 地圖與 marker 圖層 / 搖桿與 mux 速度命令）與假服務（`/boustrophedon_coverage`、`/map_manage` 的 get_parameters、`/get_zone_map_list_srv`、`/toLL`），錄下所有輸出。同一組輸入分別餵給「五個獨立 binary」與「一個 `mower_rsd`」：
+
+23 個 topic 全部 **IDENTICAL**（`/adapter/robot_pose` 139 筆逐筆相同、兩個 guard 的接受/拒絕序列相同、四張 map layer 與六張 marker layer 的 JSON 逐位元組相同、`/robot/info`、`/robot/online`、`/adapter/{coverage_settings,zone_summaries,map_datum}`、`/mower_base/led_command` 相同）。只有兩處給了容差並記錄原因：`/battery_state`、`/aon_battery_state` 1e-3（sag 低通與庫侖積分的 dt 是真實時間），`/robot/telemetry` 2e-2（10 Hz 快照對 10 Hz 輸入，兩邊 timer 相位不同，偶爾抓到前一筆 odom 或落後一筆的 rate 估計）——與 Python→Rust 移植時記錄的「只差取樣時刻」同一類。
+
+**CPU 與執行緒**（同一台 arm64 容器、同樣的假輸入速率、`/proc` 的 utime+stime 30 s 差分）：
+
+| 模組集合 | | process | 單核 CPU % | 執行緒 |
+|---|---|---|---|---|
+| status, battery, adapter, guards（5 個 node） | 獨立 binary | 5 | 6.76 | 85 |
+| | `mower_rsd` | 1 | **5.60** | **23** |
+| 再加 map, coverage, nav, record, pid_autotune（11 個 node） | 獨立 binary | 10 | 14.66 | 174 |
+| | `mower_rsd` | 1 | **6.36** | **28** |
+
+也就是 11 個 node 的情況下 CPU −57%、執行緒 −84%、process 10 → 1。容器是 Apple Silicon 上的 arm64，每個 process 的 DDS 固定成本比 RK3568 低（計畫裡量到的是每事件 1 ms 以上），真機的絕對收益應該更大；**真機尚未切換**，`rust_daemon` 預設 false。
+
+待辦：真機開 `rust_daemon:=true` 跑一輪（含監督試車，因為 guards 在裡面），並在同一份量測腳本下記錄 LubanCat 的數字。
+
+
 ### Phase B：Rust base driver 取代 ros2_control（3–4 天，預估 -20）
 
 取代 `controller_manager` + `diff_drive_controller` + `mower_hardware` + `joint_state_broadcaster` + `robot_state_publisher`。

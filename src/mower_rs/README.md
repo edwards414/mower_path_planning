@@ -19,6 +19,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_rsd` | nothing: it *is* the binaries below, as modules of one process on one r2r Context (one DDS participant). See the section after this table. | `robot.launch.py rust_daemon:=true` |
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
 Not every crate is a node: `mower_base_core` is a library only — the ROS-free
@@ -31,6 +32,65 @@ see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
 `/opt/mower/.env`) so the safety-critical guards can be enabled last, after
 a supervised drive.
+
+## `mower_rsd`: the same modules in one process
+
+Each crate above is a library (`run(ctx, ModuleCtx)`) plus a three-line
+binary, so the same code runs either as its own process or as a module of
+`mower_rsd`. `rust_daemon:=true` on `robot.launch.py` starts one `mower_rsd`
+with the module set derived from the `rust_*` switches (plus `enable_gps`)
+and holds the separate binaries down; `rust_daemon:=false` is the roll-back
+and changes nothing else. Background: `docs/ROS_FREE_PLAN.md` Phase A5.
+
+```bash
+mower_rsd --modules status,guards,adapter,battery \
+          [--module-args bridge=--address 0.0.0.0 --port 9090 ...] \
+          [--worker-threads 4] [--stop-timeout 10] \
+          --ros-args --params-file config/mower_rsd.yaml \
+                     -r imu:imu/data_raw:=imu/data
+mower_rsd --list-modules      # module id, launch switch, node name(s)
+```
+
+Why one process: `r2r::Context::create()` is a process-wide `OnceLock`, so
+thirteen modules share one context, i.e. **one DDS participant**, one set of
+discovery threads and one tokio runtime instead of one of each per binary.
+
+What does **not** change: every module still creates its own `r2r::Node` with
+its own name, so the graph, the topic and service and action names, and the
+per-node parameter services are identical.
+
+* **Parameters** come from an ordinary `--params-file` with a section per
+  *node* name (`mower_bringup/config/mower_rsd.yaml`). rcl parses it into the
+  shared context and `Node::create` hands each node the section addressed to
+  it (or `/**`), which is exactly what happened when each node had its own
+  `--ros-args`. Copy the file into `~/.mower` and pass
+  `rust_daemon_params_file:=` to change values without a new image.
+* **Remapping** uses rcl's node-scoped rules, `-r <node>:<from>:=<to>`, which
+  is how the IMU driver's and the two velocity guards' launch `remappings=`
+  are reproduced. A bare `-r __node:=x` must never be passed to `mower_rsd`:
+  it would rename *every* node in the process. That is also why the module
+  table carries the production node names — `path_record_node`, `imu` and
+  `gps` differ from the binaries' own defaults.
+* **The bridge and the agent** keep their command line, passed as
+  `--module-args <id>=<args>`.
+* **Supervision**: each module is a task wrapped in `catch_unwind`. One that
+  panics, fails, or returns before it was asked to stop logs the reason,
+  trips the shared shutdown for the rest, and the process exits non-zero
+  after a 10 s unwind window, so launch's `respawn` restarts the set. There
+  is deliberately no `panic = "abort"` and no partial operation.
+
+Verification (`tools/shadow_compare.py`, run inside a container with the
+workspace sourced):
+
+```bash
+tools/shadow_compare.py --mode split  --bin-dir <target>/release \
+    --params-file <params.yaml> --out /tmp/split.json
+tools/shadow_compare.py --mode daemon --bin-dir <target>/release \
+    --params-file <params.yaml> --out /tmp/daemon.json
+tools/shadow_compare.py --diff /tmp/split.json /tmp/daemon.json
+# and, for the cost:
+tools/shadow_compare.py --mode split|daemon --measure 30 --modules ...
+```
 
 ## Build
 

@@ -1,0 +1,105 @@
+# mower_rsd (src/mower_rs/crates/mower_rsd): the mower_rs nodes as modules of
+# one process sharing a single r2r Context, i.e. one DDS participant instead of
+# eleven to fourteen (docs/ROS_FREE_PLAN.md Phase A5).
+#
+# This is an ordinary ROS 2 parameter file. rcl parses it into the shared
+# context and r2r's Node::create hands each node the section addressed to *its*
+# node name, so every module reads exactly the parameters it read when it was
+# its own process, and the per-node parameter services (/map_manage/*,
+# /boustrophedon_coverage/*) are unchanged. The keys below are therefore node
+# names, not module names: `mower_rsd --list-modules` prints the mapping.
+#
+# Values that used to come from a launch argument are set here instead; the
+# handful that are still dynamic (the bridge's listen address and port, the
+# agent's gate URL) are passed on the command line with --module-args, see
+# rosbridge.launch.py. robot.launch.py pins use_sim_time:=false,
+# gps_fix_topic:=/fix and require_navigation_health:=true for production, which
+# is what this file assumes.
+#
+# To try other values without a new image, copy this file into ~/.mower and
+# pass rust_daemon_params_file:=/home/mower/.mower/<file> to robot.launch.py.
+
+# --- status (rust_status) ----------------------------------------------------
+robot_status:
+  ros__parameters:
+    # Wall clock only: staleness must reflect real message arrival.
+    heartbeat_source_topic: /odom_slow
+    heartbeat_stale_timeout_s: 2.0
+    heartbeat_publish_rate_hz: 2.0
+    odom_topic: /odom_slow
+    gps_fix_topic: /fix
+
+# --- guards (rust_guards) ----------------------------------------------------
+# Two instances of the same code. Their topics stay relative and are remapped
+# per node name from --ros-args (see twist_mux.launch.py); only the session
+# rule differs.
+manual_velocity_guard:
+  ros__parameters:
+    require_command_session: true
+velocity_command_guard:
+  ros__parameters:
+    require_command_session: false
+
+# --- imu (rust_imu) ----------------------------------------------------------
+imu:
+  ros__parameters:
+    port: /dev/imu_usb
+
+# --- gps (enable_gps) --------------------------------------------------------
+# The receiver settings stay in config/gps.yaml, which is already keyed by the
+# node name `gps`; robot.launch.py passes that file after this one, so it wins
+# on any key it sets.
+gps:
+  ros__parameters:
+    # robot.launch.py refuses any other value for gps_fix_topic.
+    fix_topic: /fix
+
+# --- map (rust_map) ----------------------------------------------------------
+map_manage:
+  ros__parameters:
+    use_sim_time: false
+
+# --- coverage (rust_coverage) ------------------------------------------------
+boustrophedon_coverage:
+  ros__parameters:
+    use_sim_time: false
+
+# --- nav (rust_nav) ----------------------------------------------------------
+nav_action_server:
+  ros__parameters:
+    require_navigation_health: true
+    gps_fix_topic: /fix
+
+# --- record (rust_record) ----------------------------------------------------
+path_record_node:
+  ros__parameters:
+    save_dir: zone_record
+    sites_dir: ~/.mower/sites
+    robot_pose_source_topic: /odometry/global_slow
+
+# --- adapter (rust_adapter) --------------------------------------------------
+flutter_adapter:
+  ros__parameters:
+    robot_pose_source_topic: /odometry/global_slow
+
+# --- battery (rust_battery) --------------------------------------------------
+battery_state:
+  ros__parameters:
+    # Pack voltage from the RS485 meter in the pack lead; the charger is
+    # "present" while the pack sits at its CV.
+    charger_present_min_v: 25.0
+    # Flip to true (and set capacity_ah) once the meter's shunt carries the
+    # pack current -> coulomb counting (docs/BATTERY.md).
+    meter_current_wired: false
+    capacity_ah: 0.0
+
+# --- pid_autotune (rust_pid_autotune) ----------------------------------------
+pid_autotune:
+  ros__parameters:
+    # All eighteen parameters keep their built-in defaults, as the separate
+    # process did (mission.launch.py passes none).
+    {}
+
+# --- bridge (rust_bridge) / agent (rust_agent) -------------------------------
+# No ROS parameters; both are configured with --module-args from
+# rosbridge.launch.py (address, port, policy file, gate and rosbridge URLs).

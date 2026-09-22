@@ -11,6 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub mod guard;
+pub mod module;
+
+pub use module::{module_main, BoxError, ModuleCtx, ModuleResult, ModuleRun, Shutdown};
 
 /// Typed access to a node's initial parameters with defaults.
 ///

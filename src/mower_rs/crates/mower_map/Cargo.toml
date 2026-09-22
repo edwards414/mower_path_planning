@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Mission map manager: free-space / risk / channel occupancy grids and the fail-closed Nav2 maps (port of mower_mission/map_manage_node.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_map"
 path = "src/main.rs"

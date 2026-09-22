@@ -6,8 +6,22 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+
+
+# `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
+# process (started by robot.launch.py), so the separate binaries must not also
+# start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
+_TRUE = "('true', '1', 'yes', 'on')"
+
+
+def _rust_binary(flag, rust_daemon):
+    """Run the separate mower_rs binary: switch on and daemon not running."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.lower() in ", _TRUE,
+        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+    ]))
 
 
 def generate_launch_description():
@@ -66,6 +80,18 @@ def generate_launch_description():
         'heartbeat_source_topic',
         default_value='/odom_slow',
         description='Topic whose freshness drives the /robot/online heartbeat',
+    )
+
+    rust_daemon = LaunchConfiguration('rust_daemon')
+
+    declare_rust_daemon = DeclareLaunchArgument(
+        'rust_daemon',
+        default_value='false',
+        description='The enabled mower_rs modules run inside one mower_rsd '
+                    'process started by robot.launch.py (one r2r Context, one '
+                    'DDS participant), so the separate binaries stay down '
+                    'here; the rclpy fallbacks still follow their own rust_* '
+                    'switch. See src/mower_rs/README.md.',
     )
 
     rust_status = LaunchConfiguration('rust_status')
@@ -197,6 +223,7 @@ def generate_launch_description():
             'address': rosbridge_address,
             'rust_bridge': LaunchConfiguration('rust_bridge'),
             'rust_agent': LaunchConfiguration('rust_agent'),
+            'rust_daemon': rust_daemon,
         }.items(),
     )
 
@@ -268,7 +295,7 @@ def generate_launch_description():
         executable='mower_record',
         name='path_record_node',
         output='screen',
-        condition=IfCondition(rust_record),
+        condition=_rust_binary(rust_record, rust_daemon),
         parameters=[{
             'save_dir': zone_record_dir,
             'sites_dir': sites_dir,
@@ -295,7 +322,7 @@ def generate_launch_description():
         executable='mower_map',
         name='map_manage',
         output='screen',
-        condition=IfCondition(rust_map),
+        condition=_rust_binary(rust_map, rust_daemon),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -318,7 +345,7 @@ def generate_launch_description():
         executable='mower_coverage',
         name='boustrophedon_coverage',
         output='screen',
-        condition=IfCondition(rust_coverage),
+        condition=_rust_binary(rust_coverage, rust_daemon),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -343,7 +370,7 @@ def generate_launch_description():
         executable='mower_nav',
         name='nav_action_server',
         output='screen',
-        condition=IfCondition(rust_nav),
+        condition=_rust_binary(rust_nav, rust_daemon),
         parameters=[{
             'require_navigation_health': require_navigation_health,
             'gps_fix_topic': gps_fix_topic,
@@ -370,7 +397,7 @@ def generate_launch_description():
         executable='mower_adapter',
         name='flutter_adapter',
         output='screen',
-        condition=IfCondition(rust_adapter),
+        condition=_rust_binary(rust_adapter, rust_daemon),
         parameters=[{'robot_pose_source_topic': '/odometry/global_slow'}],
     )
 
@@ -453,7 +480,7 @@ def generate_launch_description():
         executable='robot_status',
         name='robot_status',
         output='screen',
-        condition=IfCondition(rust_status),
+        condition=_rust_binary(rust_status, rust_daemon),
         parameters=[{
             'heartbeat_source_topic': heartbeat_source_topic,
             'heartbeat_stale_timeout_s': 2.0,
@@ -490,7 +517,7 @@ def generate_launch_description():
         executable='mower_battery',
         name='battery_state',
         output='screen',
-        condition=IfCondition(rust_battery),
+        condition=_rust_binary(rust_battery, rust_daemon),
         parameters=[{
             'charger_present_min_v': 25.0,
             'meter_current_wired': False,
@@ -518,7 +545,7 @@ def generate_launch_description():
         executable='mower_pid_autotune',
         name='pid_autotune',
         output='screen',
-        condition=IfCondition(rust_pid_autotune),
+        condition=_rust_binary(rust_pid_autotune, rust_daemon),
     )
 
     temp_dock_pose_publisher = Node(
@@ -539,6 +566,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
+        declare_rust_daemon,
         declare_rust_status,
         declare_rust_adapter,
         declare_rust_record,
