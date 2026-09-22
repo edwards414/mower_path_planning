@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Zone / risk-zone / channel recorder with the named-site library (port of mower_mission/path_record_node.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_record"
 path = "src/main.rs"

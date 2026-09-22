@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "WIT (JY901-style) serial IMU driver publishing sensor_msgs/Imu (port of wit_ros2_imu)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_imu"
 path = "src/main.rs"
