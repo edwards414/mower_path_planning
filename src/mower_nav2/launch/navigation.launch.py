@@ -264,6 +264,24 @@ def generate_launch_description():
         ],
     )
 
+    # A3 (docs/ROS_FREE_PLAN.md): one process for the whole Nav2 stack.
+    # `component_container_isolated` gives every component its own callback
+    # group / executor thread inside a single process, so the 7 servers plus
+    # the lifecycle manager stop paying the per-message DDS loopback cost
+    # (~0.8 ms of CPU per packet on the LubanCat) for /tf, /map_grid and the
+    # costmap topics they share. `use_intra_process_comms` on each component
+    # then passes those messages by pointer instead of serialising them.
+    nav2_container = Node(
+        name=container_name,
+        package='rclcpp_components',
+        executable='component_container_isolated',
+        parameters=[configured_params, {'autostart': autostart}],
+        arguments=['--ros-args', '--log-level', log_level],
+        remappings=remappings,
+        output='screen',
+        condition=IfCondition(use_composition),
+    )
+
     load_composable_nodes = GroupAction(
         condition=IfCondition(use_composition),
         actions=[
@@ -275,6 +293,7 @@ def generate_launch_description():
                         package='nav2_controller',
                         plugin='nav2_controller::ControllerServer',
                         name='controller_server',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
                     ),
@@ -282,6 +301,7 @@ def generate_launch_description():
                         package='nav2_smoother',
                         plugin='nav2_smoother::SmootherServer',
                         name='smoother_server',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings,
                     ),
@@ -289,6 +309,7 @@ def generate_launch_description():
                         package='nav2_planner',
                         plugin='nav2_planner::PlannerServer',
                         name='planner_server',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings,
                     ),
@@ -296,6 +317,7 @@ def generate_launch_description():
                         package='nav2_behaviors',
                         plugin='behavior_server::BehaviorServer',
                         name='behavior_server',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=(
                             remappings + [('cmd_vel', '/cmd_vel_nav')]
@@ -305,6 +327,7 @@ def generate_launch_description():
                         package='nav2_bt_navigator',
                         plugin='nav2_bt_navigator::BtNavigator',
                         name='bt_navigator',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings,
                     ),
@@ -312,6 +335,7 @@ def generate_launch_description():
                         package='nav2_waypoint_follower',
                         plugin='nav2_waypoint_follower::WaypointFollower',
                         name='waypoint_follower',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings,
                     ),
@@ -319,6 +343,7 @@ def generate_launch_description():
                         package='nav2_velocity_smoother',
                         plugin='nav2_velocity_smoother::VelocitySmoother',
                         name='velocity_smoother',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[configured_params],
                         remappings=remappings
                         + [
@@ -330,6 +355,7 @@ def generate_launch_description():
                         package='nav2_lifecycle_manager',
                         plugin='nav2_lifecycle_manager::LifecycleManager',
                         name='lifecycle_manager_navigation',
+                        extra_arguments=[{'use_intra_process_comms': True}],
                         parameters=[
                             {'autostart': autostart, 'node_names': lifecycle_nodes,
                              'bond_timeout': 0.0}
@@ -355,6 +381,7 @@ def generate_launch_description():
     ld.add_action(declare_launch_battery_simulator_cmd)
     ld.add_action(declare_cmd_vel_output_topic_cmd)
     ld.add_action(load_nodes)
+    ld.add_action(nav2_container)
     ld.add_action(load_composable_nodes)
     ld.add_action(battery_simulator_node)
 

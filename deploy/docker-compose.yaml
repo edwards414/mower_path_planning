@@ -47,6 +47,10 @@ services:
       # u-blox ZED-F9P driver (mower_rs mower_gps) in this container ->
       # /fix + /gps/status; parameters in src/mower_bringup/config/gps.yaml.
       - enable_gps:=${GPS:-true}
+      # Nav2 as components in one component_container_isolated process
+      # (docs/ROS_FREE_PLAN.md A3). NAV_COMPOSITION=false in .env falls back
+      # to one process per server without a new image.
+      - nav_composition:=${NAV_COMPOSITION:-true}
       # mower_rs (Rust) processes instead of their rclpy versions, one switch
       # each (src/mower_rs/README.md). Set in .env after the shadow check;
       # RUST_GUARDS and RUST_NAV only after a supervised drive.

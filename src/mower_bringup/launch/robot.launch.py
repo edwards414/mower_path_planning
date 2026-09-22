@@ -64,6 +64,7 @@ def generate_launch_description():
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
+    nav_composition = LaunchConfiguration('nav_composition')
     rust_status = LaunchConfiguration('rust_status')
     rust_adapter = LaunchConfiguration('rust_adapter')
     rust_record = LaunchConfiguration('rust_record')
@@ -93,6 +94,7 @@ def generate_launch_description():
             'gps_params_file': gps_params_file,
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
+            'nav_composition': nav_composition,
         }.items(),
     )
 
@@ -204,6 +206,12 @@ def generate_launch_description():
             ),
             description='mower_gps parameter file; point at a copy under '
                         '~/.mower to try receiver settings without a new image',
+        ),
+        DeclareLaunchArgument(
+            'nav_composition',
+            default_value='true',
+            description='Run the Nav2 servers as components in one '
+                        'component_container_isolated process',
         ),
         DeclareLaunchArgument(
             'require_navigation_health',

@@ -35,6 +35,7 @@ def generate_launch_description():
     enable_navigation = LaunchConfiguration('enable_navigation')
     enable_apriltag_docking = LaunchConfiguration('enable_apriltag_docking')
     nav_autostart = LaunchConfiguration('nav_autostart')
+    nav_composition = LaunchConfiguration('nav_composition')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     enable_physical_joystick = LaunchConfiguration(
         'enable_physical_joystick'
@@ -83,6 +84,14 @@ def generate_launch_description():
         'nav_autostart',
         default_value='true',
         description='Automatically activate Nav2 lifecycle nodes',
+    )
+    declare_nav_composition = DeclareLaunchArgument(
+        'nav_composition',
+        default_value='true',
+        description=(
+            'Run the Nav2 servers as components in one '
+            'component_container_isolated process instead of one process each'
+        ),
     )
     declare_nav2_params_file = DeclareLaunchArgument(
         'nav2_params_file',
@@ -194,6 +203,10 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'params_file': nav2_params_file,
             'autostart': nav_autostart,
+            # A3 (docs/ROS_FREE_PLAN.md): one process for the whole stack on
+            # the robot. Simulation launches keep navigation.launch.py's own
+            # default (separate processes) so a crashing server is obvious.
+            'use_composition': nav_composition,
             # This is the real-robot bringup. Never publish synthetic battery
             # telemetry here; simulation launch files keep their own default.
             'launch_battery_simulator': 'false',
@@ -335,6 +348,7 @@ def generate_launch_description():
         declare_enable_navigation,
         declare_enable_apriltag_docking,
         declare_nav_autostart,
+        declare_nav_composition,
         declare_nav2_params_file,
         declare_enable_physical_joystick,
         declare_physical_joystick_enable_button,
