@@ -50,8 +50,12 @@ impl Shutdown {
     }
 
     /// Ask every holder to stop. Idempotent.
+    ///
+    /// `send_replace`, not `send`: `send` fails and leaves the value untouched
+    /// when no one is subscribed at that instant, which would silently lose a
+    /// shutdown raised between two `wait()` calls.
     pub fn trigger(&self) {
-        let _ = self.tx.send(true);
+        self.tx.send_replace(true);
     }
 
     pub fn is_triggered(&self) -> bool {
@@ -163,6 +167,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shutdown_with_nobody_listening_is_still_remembered() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let s = Shutdown::new();
+            s.trigger();
+            assert!(s.is_triggered());
+            tokio::time::timeout(std::time::Duration::from_secs(1), s.wait()).await.unwrap();
+        });
+    }
 
     #[test]
     fn shutdown_is_observable_before_and_after_the_wait() {

@@ -258,6 +258,32 @@ enum Outcome {
     Failed(String),
 }
 
+/// Run one module and classify how it ended.
+///
+/// A panic in one module must not take the others down silently: it is caught
+/// here, reported, and the caller stops everything in order. Returning at all
+/// before the shutdown was tripped counts as a failure too — a module that
+/// quietly gives up would leave a process that still looks alive to the
+/// health gates.
+async fn supervised(
+    label: String, stopping: Shutdown,
+    fut: impl Future<Output = ModuleResult>,
+) -> Outcome {
+    match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(Ok(())) if stopping.is_triggered() => Outcome::Stopped(label),
+        Ok(Ok(())) => Outcome::Failed(format!("{label}: returned before shutdown")),
+        Ok(Err(e)) => Outcome::Failed(format!("{label}: {e}")),
+        Err(p) => {
+            let what = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_string());
+            Outcome::Failed(format!("{label}: panicked: {what}"))
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
@@ -319,23 +345,7 @@ fn main() -> ExitCode {
                 println!("[mower_rsd] starting {label}");
                 started += 1;
                 tokio::spawn(async move {
-                    // A panic in one module must not take the others down
-                    // silently: catch it, report it, and let the supervisor
-                    // stop everything in order.
-                    let outcome = match std::panic::AssertUnwindSafe(run(ctx, m)).catch_unwind().await {
-                        Ok(Ok(())) if stopping.is_triggered() => Outcome::Stopped(label),
-                        Ok(Ok(())) => Outcome::Failed(format!("{label}: returned before shutdown")),
-                        Ok(Err(e)) => Outcome::Failed(format!("{label}: {e}")),
-                        Err(p) => {
-                            let what = p
-                                .downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "panic".to_string());
-                            Outcome::Failed(format!("{label}: panicked: {what}"))
-                        }
-                    };
-                    let _ = report.send(outcome);
+                    let _ = report.send(supervised(label, stopping, run(ctx, m)).await);
                 });
             }
         }
@@ -432,6 +442,39 @@ mod tests {
             let got: Vec<&str> = m.instances.iter().map(|i| i.node).collect();
             assert_eq!(got, nodes, "{id}");
         }
+    }
+
+    fn outcome(label: &str, triggered: bool, fut: impl Future<Output = ModuleResult>) -> Outcome {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let s = Shutdown::new();
+        if triggered {
+            s.trigger();
+        }
+        rt.block_on(supervised(label.to_string(), s, fut))
+    }
+
+    #[test]
+    fn a_panicking_module_is_caught_and_named() {
+        let o = outcome("imu/imu", true, async { panic!("serial exploded") });
+        match o {
+            Outcome::Failed(why) => {
+                assert!(why.contains("imu/imu"), "{why}");
+                assert!(why.contains("panicked: serial exploded"), "{why}");
+            }
+            Outcome::Stopped(_) => panic!("a panic must not look like a clean stop"),
+        }
+    }
+
+    #[test]
+    fn failing_and_early_returns_are_failures_but_an_asked_for_stop_is_not() {
+        let err = outcome("gps/gps", true, async { Err("port went away".into()) });
+        assert!(matches!(err, Outcome::Failed(ref w) if w.contains("port went away")));
+        // returned on its own, nobody asked it to
+        let early = outcome("nav/nav_action_server", false, async { Ok(()) });
+        assert!(matches!(early, Outcome::Failed(ref w) if w.contains("before shutdown")));
+        // returned because the shutdown was tripped
+        let clean = outcome("status/robot_status", true, async { Ok(()) });
+        assert!(matches!(clean, Outcome::Stopped(ref l) if l == "status/robot_status"));
     }
 
     #[test]
