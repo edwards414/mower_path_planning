@@ -1,0 +1,15 @@
+[package]
+name = "mower_base_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS-free core of the Rust base driver: STM32 UART protocol, diff-drive odometry/limits and the hardware cycle state machine (ports of mower_hardware + diff_drive_controller)"
+
+[lib]
+name = "mower_base_core"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+serde_json.workspace = true
