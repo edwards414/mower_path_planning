@@ -39,10 +39,14 @@
 //!
 //! **Supervision.** Every module is a tokio task wrapped in `catch_unwind`.
 //! A module that panics, returns `Err`, or returns at all before it was asked
-//! to stop, trips the shared shutdown, lets the others unwind, and the
-//! process exits non-zero so the launch `respawn` restarts the set — the same
-//! failure model as one crashing binary, never a half-dead daemon that still
-//! looks alive to the health gates.
+//! to stop is reported and started again 2 s later on its own (the launch
+//! files' `respawn_delay`), while the other modules keep running — the same
+//! failure model as the separate binaries, where one crashing driver (an IMU
+//! with its USB port gone) never took the bridge or the guards down with it.
+//! Restarting inside the process also keeps the DDS participant, so a driver
+//! stuck in a restart loop no longer floods discovery. A failure during a
+//! shutdown, or a module that does not stop within `--stop-timeout`, makes
+//! the process exit non-zero so the launch `respawn` restarts the set.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -55,6 +59,10 @@ use mower_rs_common::{ModuleCtx, ModuleResult, Shutdown};
 
 type BoxFut = Pin<Box<dyn Future<Output = ModuleResult> + Send>>;
 type Runner = fn(r2r::Context, ModuleCtx) -> BoxFut;
+
+/// Pause before a failed module is started again: the same 2 s the launch
+/// files use as `respawn_delay` for the separate binaries.
+const RESTART_DELAY: Duration = Duration::from_secs(2);
 
 /// One node inside a module. `guards` is the only module with two.
 struct Instance {
@@ -323,10 +331,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
 
-        // Each module reports its outcome once; the supervisor only has to
-        // count them, so no join-handle bookkeeping.
-        let (report, mut reports) = tokio::sync::mpsc::unbounded_channel::<Outcome>();
-        let mut started = 0usize;
+        // One slot per node instance. A slot reports every time its module
+        // ends; the supervisor restarts it (after RESTART_DELAY, the launch
+        // files' respawn_delay) unless the process is shutting down.
+        struct Slot {
+            label: String,
+            node: &'static str,
+            run: Runner,
+            extra: Vec<String>,
+        }
+        let (report, mut reports) = tokio::sync::mpsc::unbounded_channel::<(usize, Outcome)>();
+        let mut slots: Vec<Slot> = Vec::new();
         for id in &args.modules {
             let module = MODULES.iter().find(|m| m.id == *id).expect("checked in parse_args");
             let extra: Vec<String> = args
@@ -336,34 +351,56 @@ fn main() -> ExitCode {
                 .flat_map(|(_, v)| v.clone())
                 .collect();
             for inst in module.instances {
-                let m = ModuleCtx::new(inst.node, shutdown.clone()).with_args(extra.clone());
-                let ctx = ctx.clone();
-                let run = inst.run;
-                let label = format!("{}/{}", module.id, inst.node);
-                let stopping = shutdown.clone();
-                let report = report.clone();
-                println!("[mower_rsd] starting {label}");
-                started += 1;
-                tokio::spawn(async move {
-                    let _ = report.send(supervised(label, stopping, run(ctx, m)).await);
+                slots.push(Slot {
+                    label: format!("{}/{}", module.id, inst.node),
+                    node: inst.node,
+                    run: inst.run,
+                    extra: extra.clone(),
                 });
             }
         }
-        drop(report);
+        let launch = |slot_idx: usize, delay: Duration| {
+            let slot = &slots[slot_idx];
+            let m = ModuleCtx::new(slot.node, shutdown.clone()).with_args(slot.extra.clone());
+            let ctx = ctx.clone();
+            let run = slot.run;
+            let label = slot.label.clone();
+            let stopping = shutdown.clone();
+            let report = report.clone();
+            tokio::spawn(async move {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                    if stopping.is_triggered() {
+                        let _ = report.send((slot_idx, Outcome::Stopped(label)));
+                        return;
+                    }
+                    println!("[mower_rsd] restarting {label}");
+                } else {
+                    println!("[mower_rsd] starting {label}");
+                }
+                let _ = report.send((slot_idx, supervised(label, stopping, run(ctx, m)).await));
+            });
+        };
+        for i in 0..slots.len() {
+            launch(i, Duration::ZERO);
+        }
+        let mut alive = slots.len();
 
-        // Supervise: the first module that fails trips the shutdown for all,
-        // then everyone gets `stop_timeout` to unwind. A module that wedges
-        // must not keep the process from restarting.
+        // Supervise. A module that fails while the process is running is
+        // restarted on its own, like launch respawns one crashing binary; the
+        // others keep running. Once the shutdown is tripped (signal, or a
+        // failure during the stop) everyone gets `stop_timeout` to unwind. A
+        // module that wedges must not keep the process from restarting.
         let mut failures: Vec<String> = Vec::new();
-        let mut done = 0usize;
-        while done < started {
+        let mut restarts = 0usize;
+        while alive > 0 {
             let next = if shutdown.is_triggered() {
                 match tokio::time::timeout(args.stop_timeout, reports.recv()).await {
                     Ok(v) => v,
                     Err(_) => {
                         let why = format!(
                             "{} module(s) did not stop within {:.1} s",
-                            started - done,
+                            alive,
                             args.stop_timeout.as_secs_f64()
                         );
                         eprintln!("[mower_rsd] {why}");
@@ -374,17 +411,28 @@ fn main() -> ExitCode {
             } else {
                 reports.recv().await
             };
-            let Some(outcome) = next else { break };
-            done += 1;
+            let Some((slot_idx, outcome)) = next else { break };
             match outcome {
-                Outcome::Stopped(label) => println!("[mower_rsd] {label} stopped"),
-                Outcome::Failed(why) => {
+                Outcome::Stopped(label) => {
+                    alive -= 1;
+                    println!("[mower_rsd] {label} stopped");
+                }
+                Outcome::Failed(why) if shutdown.is_triggered() => {
+                    alive -= 1;
                     eprintln!("[mower_rsd] {why}");
                     failures.push(why);
-                    shutdown.trigger();
+                }
+                Outcome::Failed(why) => {
+                    restarts += 1;
+                    eprintln!(
+                        "[mower_rsd] {why}; restarting in {:.1} s (restart #{restarts})",
+                        RESTART_DELAY.as_secs_f64()
+                    );
+                    launch(slot_idx, RESTART_DELAY);
                 }
             }
         }
+        drop(report);
 
         if failures.is_empty() {
             println!("[mower_rsd] stopped");

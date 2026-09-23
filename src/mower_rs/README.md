@@ -74,10 +74,16 @@ per-node parameter services are identical.
 * **The bridge and the agent** keep their command line, passed as
   `--module-args <id>=<args>`.
 * **Supervision**: each module is a task wrapped in `catch_unwind`. One that
-  panics, fails, or returns before it was asked to stop logs the reason,
-  trips the shared shutdown for the rest, and the process exits non-zero
-  after a 10 s unwind window, so launch's `respawn` restarts the set. There
-  is deliberately no `panic = "abort"` and no partial operation.
+  panics, fails, or returns before it was asked to stop logs the reason and
+  is started again 2 s later on its own (the launch files' `respawn_delay`)
+  while the others keep running — a driver whose USB port is gone restarts
+  in a loop exactly as its separate binary did, but inside the same DDS
+  participant, so it no longer floods discovery. Only a failure during a
+  shutdown, or a module that does not stop within the 10 s unwind window,
+  makes the process exit non-zero so launch's `respawn` restarts the set.
+  There is deliberately no `panic = "abort"`. (The first version tripped the
+  whole process on any failure; on a robot without its IMU/GPS attached that
+  restarted all 13 nodes every few seconds.)
 
 Verification (`tools/shadow_compare.py`, run inside a container with the
 workspace sourced):
