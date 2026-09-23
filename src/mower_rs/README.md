@@ -123,10 +123,10 @@ serial thread and the fail-closed path.
 
 | direction | topic | type | QoS | rate | comes from |
 |---|---|---|---|---|---|
-| sub | `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | system default | whatever twist_mux + the final guard produce | `diff_controller`'s `~/cmd_vel`, remapped in `controller_test.launch.py`. Jazzy's controller is TwistStamped-only; the `use_stamped_vel: true` in the yaml is a no-op left over from Iron |
-| pub | `/odom` | `nav_msgs/Odometry` | system default | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
-| pub | `/tf` | `tf2_msgs/TFMessage` | system default | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
-| pub | `/joint_states` | `sensor_msgs/JointState` | system default | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them |
+| sub | `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | **best effort**, depth 1 | whatever twist_mux + the final guard produce | `diff_controller`'s `~/cmd_vel`, remapped in `controller_test.launch.py`. Jazzy's controller is TwistStamped-only; the `use_stamped_vel: true` in the yaml is a no-op left over from Iron |
+| pub | `/odom` | `nav_msgs/Odometry` | reliable + **transient local**, depth 1 | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
+| pub | `/tf` | `tf2_msgs/TFMessage` | reliable + **transient local**, depth 1 | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
+| pub | `/joint_states` | `sensor_msgs/JointState` | reliable + **transient local**, depth 1 | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them |
 | pub | `/mower_base/telemetry` | `std_msgs/String` (JSON) | best effort, depth 1 | one per new 0x85, gated at `0.8 / telemetry_rate_hz` (20 Hz) -> ~15-17 Hz against a 50 ms frame and a 40 ms loop | `MowerSystem::publish_telemetry_if_due` |
 | pub | `/mower_base/firmware_info` | `std_msgs/String` (JSON) | transient local, reliable, depth 1 | once per distinct 0x87 (latched) | `MowerSystem::on_firmware_info` |
 | sub | `/mower_base/led_command` | `std_msgs/String` | transient local, reliable, depth 1 | on change, re-asserted every 5 s | `led_topic` |
@@ -134,6 +134,14 @@ serial thread and the fail-closed path.
 | sub | `/mower_base/wheel_override` | `std_msgs/String` | best effort, depth 1 | raw permille while the ttl holds (<= 1000 ms) | `override_topic` |
 | sub | `/mower_base/servo_command` | `std_msgs/String` | best effort, depth 1 | one 0x07 per message | `servo_topic` |
 | sub | `/mower_base/blade_command` | `std_msgs/String` | best effort, depth 1 | dead-man, refreshed every cycle, one explicit 0 on expiry | `blade_topic` |
+
+None of the four is `rclcpp::SystemDefaultsQoS()`, which is what the
+upstream sources read like: the durability and reliability above were read
+off the *running* graph (the endpoint info the differential test records).
+`diff_drive_controller` and `joint_state_broadcaster` latch their state
+topics, and `diff_controller`'s command subscription is best effort — a
+reliable subscription there would silently refuse a best-effort publisher,
+so it is not a harmless difference.
 
 Frames on the wire, unchanged: 0x01 every cycle with the firmware's own
 300 ms `command_timeout_ms`, 0x02/0x03/0x04/0x07 as requested, 0x05 to ack a
