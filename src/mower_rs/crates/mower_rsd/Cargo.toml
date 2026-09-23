@@ -28,3 +28,4 @@ mower_pid_autotune = { path = "../mower_pid_autotune" }
 mower_map = { path = "../mower_map" }
 mower_coverage = { path = "../mower_coverage" }
 mower_agent = { path = "../mower_agent" }
+mower_localize = { path = "../mower_localize" }

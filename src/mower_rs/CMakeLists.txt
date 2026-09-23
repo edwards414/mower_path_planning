@@ -27,7 +27,7 @@ endif()
 # One binary per node, plus mower_rsd, which runs any subset of them in one
 # process on a single r2r Context (docs/ROS_FREE_PLAN.md Phase A5). Both are
 # installed: the launch files pick between them with rust_daemon.
-set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_rsd)
+set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_localize mower_rsd)
 
 add_custom_target(mower_rs_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env
