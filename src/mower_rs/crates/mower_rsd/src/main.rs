@@ -118,6 +118,19 @@ const MODULES: &[Module] = &[
         instances: &[Instance { node: "gps", run: |c, m| Box::pin(mower_gps::run(c, m)) }],
     },
     Module {
+        id: "localize",
+        switch: "rust_localize",
+        // The three nodes of dual_ekf_navsat.launch.py, kept as three
+        // instances so a failing filter restarts on its own, exactly as the
+        // three launch Nodes did. They share nothing but the process-local
+        // transform cache (mower_localize::tfbus).
+        instances: &[
+            Instance { node: "ekf_filter_node_odom", run: |c, m| Box::pin(mower_localize::run(c, m)) },
+            Instance { node: "ekf_filter_node_map", run: |c, m| Box::pin(mower_localize::run(c, m)) },
+            Instance { node: "navsat_transform", run: |c, m| Box::pin(mower_localize::run(c, m)) },
+        ],
+    },
+    Module {
         id: "map",
         switch: "rust_map",
         instances: &[Instance { node: "map_manage", run: |c, m| Box::pin(mower_map::run(c, m)) }],
@@ -483,6 +496,7 @@ mod tests {
             ("guards", vec!["manual_velocity_guard", "velocity_command_guard"]),
             ("imu", vec!["imu"]),
             ("gps", vec!["gps"]),
+            ("localize", vec!["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]),
             ("map", vec!["map_manage"]),
             ("coverage", vec!["boustrophedon_coverage"]),
             ("nav", vec!["nav_action_server"]),

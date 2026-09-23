@@ -57,6 +57,7 @@ _DAEMON_MODULES = (
     ('guards', 'rust_guards'),
     ('imu', 'rust_imu'),
     ('gps', 'enable_gps'),
+    ('localize', 'rust_localize'),
     ('map', 'rust_map'),
     ('coverage', 'rust_coverage'),
     ('nav', 'rust_nav'),
@@ -179,6 +180,7 @@ def generate_launch_description():
     rust_agent = LaunchConfiguration('rust_agent')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
+    rust_localize = LaunchConfiguration('rust_localize')
     rust_bridge = LaunchConfiguration('rust_bridge')
     rust_base = LaunchConfiguration('rust_base')
     rust_daemon = LaunchConfiguration('rust_daemon')
@@ -200,6 +202,7 @@ def generate_launch_description():
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
             'rust_base': rust_base,
+            'rust_localize': rust_localize,
             'nav_composition': nav_composition,
             'rust_daemon': rust_daemon,
         }.items(),
@@ -391,6 +394,14 @@ def generate_launch_description():
             'rust_imu',
             default_value='false',
             description='mower_rs mower_imu instead of the wit_ros2_imu driver',
+        ),
+        DeclareLaunchArgument(
+            'rust_localize',
+            default_value='false',
+            description='mower_rs mower_localize instead of the two '
+                        'robot_localization ekf_node processes and '
+                        'navsat_transform_node (same node names, topics, '
+                        'transforms and services)',
         ),
         DeclareLaunchArgument(
             'rust_bridge',

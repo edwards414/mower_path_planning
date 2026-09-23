@@ -752,6 +752,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_localize"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_localize_core",
+ "mower_rs_common",
+ "r2r",
+ "tokio",
+]
+
+[[package]]
 name = "mower_localize_core"
 version = "0.1.0"
 dependencies = [
@@ -826,6 +837,7 @@ dependencies = [
  "mower_coverage",
  "mower_gps",
  "mower_imu",
+ "mower_localize",
  "mower_map",
  "mower_nav",
  "mower_pid_autotune",

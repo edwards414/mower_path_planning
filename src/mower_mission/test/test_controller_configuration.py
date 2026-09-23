@@ -311,6 +311,68 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
         assert "'rust_daemon'" in text, launch.name
 
 
+def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
+    """rust_localize:=true swaps the two robot_localization ekf_node processes
+    and navsat_transform_node for one mower_rs mower_localize process with the
+    same three node names. The switch must be exclusive: two publishers of
+    map->odom would fight over tf and nav2 steers on it."""
+    dual = DUAL_EKF_LAUNCH.read_text(encoding='utf-8')
+    # every C++ node is gated off by the same switch that turns the module on
+    assert dual.count('condition=cpp_localization,') == 3
+    assert 'cpp_localization = UnlessCondition(rust_localize)' in dual
+    assert "executable='mower_localize'" in dual
+    assert 'condition=_rust_localize_binary(rust_localize, rust_daemon)' in dual
+    # a bare __node:= would rename all three nodes in the process
+    rust_block = dual.split("executable='mower_localize',", 1)[1].split(
+        '),\n        ]', 1)[0]
+    assert 'name=' not in rust_block
+    assert 'respawn=True' in rust_block
+    assert 'navsat_transform:gps_fix_topic:=' in rust_block
+
+    # the switch reaches dual_ekf_navsat.launch.py from the production entry
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mower = MOWER_LAUNCH.read_text(encoding='utf-8')
+    assert "('localize', 'rust_localize')," in robot
+    assert "'rust_localize': rust_localize," in robot
+    assert "'rust_localize',\n            default_value='false'," in robot
+    assert "'rust_localize': LaunchConfiguration('rust_localize')," in mower
+
+    # one module, three nodes, one parameter section each
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    assert 'id: "localize"' in daemon_main
+    assert 'switch: "rust_localize"' in daemon_main
+    for node in ('ekf_filter_node_odom', 'ekf_filter_node_map',
+                 'navsat_transform'):
+        assert f'node: "{node}"' in daemon_main, node
+        assert f'\n{node}:\n  ros__parameters:' in params, node
+    # navsat stays at 30 Hz: the health gate wants /odometry/gps within 0.30 s
+    assert 'frequency: 30.0' in params.split('navsat_transform:', 1)[1]
+
+    # built and shipped like the other mower_rs binaries
+    cmake = MOWER_RS_CMAKE.read_text(encoding='utf-8')
+    cargo = MOWER_RS_CARGO.read_text(encoding='utf-8')
+    assert 'mower_localize ' in cmake or 'mower_localize)' in cmake
+    assert '"crates/mower_localize"' in cargo
+    assert '"crates/mower_localize_core"' in cargo
+
+    # compose switch and its documented default
+    deploy = DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    assert 'rust_localize:=${RUST_LOCALIZE:-false}' in deploy
+    env_example = (SRC_DIR.parent / 'deploy/.env.example').read_text(
+        encoding='utf-8'
+    )
+    assert 'RUST_LOCALIZE=false' in env_example
+
+    # the ported core is the only source of the filter numbers
+    ekf_rs = (
+        SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
+    ).read_text(encoding='utf-8')
+    assert 'config::ekf_odom_config()' in ekf_rs
+    assert 'config::ekf_map_config()' in ekf_rs
+    assert 'MissedTickBehavior::Skip' in ekf_rs
+
+
 def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     """rust_guards:=true swaps in mower_rs velocity_command_guard: same
     remappings, session requirement, limits, stop barriers and clocks."""
