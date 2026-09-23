@@ -19,6 +19,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_localize` | `robot_localization`'s two `ekf_node`s and `navsat_transform_node` (`/odometry/local`, `/odometry/global`, `/odometry/gps`, `/gps/filtered`, the `odom -> base_footprint` and `map -> odom` broadcasts, `/toLL`, `/fromLL`, `/fromLLArray`, `/datum`) | `dual_ekf_navsat.launch.py rust_localize:=true` |
 | `mower_rsd` | nothing: it *is* the binaries below, as modules of one process on one r2r Context (one DDS participant). See the section after this table. | `robot.launch.py rust_daemon:=true` |
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
@@ -348,6 +349,117 @@ zone sequences with `/get_channel_route`, and the tracker that cancels the
 action, watches the acknowledgment and retries `/cancel_navigation_dispatch`
 every 2 s (one live attempt per dispatch id, 0.5-30 s response deadline)
 until a terminal state is proven.
+
+## mower_localize
+
+`crates/mower_localize` is the ROS shell; every number comes from
+[`crates/mower_localize_core`](crates/mower_localize_core/README.md), the
+line-by-line port of robot_localization 3.8.3 that is checked against the
+installed `librl_lib.so` on generated vectors (1.3e-15 on the filter state,
+1.6e-9 m on the navsat output). Phase C of `docs/ROS_FREE_PLAN.md`.
+
+**Three nodes, one module.** `ekf_filter_node_odom`, `ekf_filter_node_map` and
+`navsat_transform` keep their names, so `ros2 node list`, every log line and
+the per-node parameter services look as they did. They are three `r2r::Node`s
+and — under `mower_rsd` — three supervised instances, so one filter failing
+restarts only itself, the same blast radius as the three launch `Node`s; the
+`mower_localize` binary runs the same three roles in one process and returns
+`Err` if any of them stops. `run()` picks the role from the node name.
+
+The external contract, from the launch file, the yaml and the consumers:
+
+| | topic / service | QoS | rate |
+|---|---|---|---|
+| in | `/odom`, `/imu/data`, `/fix`, `/odometry/gps` (map EKF), `/odometry/global` (navsat) | best effort, keep last 10 | as published |
+| in | `/tf_static` | reliable, transient local | once |
+| out | `/odometry/local` (odom EKF), `/odometry/global` (map EKF) | reliable, keep last 10 | 20 Hz |
+| out | `/odometry/gps`, `/gps/filtered` | reliable, keep last 10 | 30 Hz timer, one message per new fix / per new odometry |
+| out | `/tf`: `odom -> base_footprint` (odom EKF), `map -> odom` (map EKF) | reliable, keep last 100 | 20 Hz, stamped with the filter's last measurement time |
+| out | `/tf_static`: `map -> utm` | reliable, transient local | once, when the datum locks |
+| srv | `/toLL`, `/fromLL`, `/fromLLArray`, `/datum` | services default | — |
+| srv | `<node>/{get,set,list,describe}_parameters`, `get_parameter_types`, `set_parameters_atomically` | services default | — |
+
+Consumers that must not notice: the two `topic_tools` throttles
+(`/odometry/global` -> `/odometry/global_slow`), nav2 (`map -> odom` and
+`/odometry/global`), `mower_adapter` (`/toLL` until the datum locks, then
+`/adapter/map_datum`), `mower_record` and `mower_nav` (the health gate wants
+`/odometry/gps` within 0.30 s of a fix, which is why navsat stays at 30 Hz).
+
+**Not replicated**, none of it reachable or used here:
+
+* `/set_pose` (topic and service), `/enable`, `/toggle`, `/reset` — the EKF's
+  runtime controls. Nothing on this robot calls them, and two `ekf_node`s in
+  one namespace advertise the same four names anyway.
+* `/setUTMZone` — it needs the MGRS zone strings, which the core does not port.
+* `/diagnostics` — upstream advertises it unconditionally and publishes only
+  when `print_diagnostics` is true; the yaml turns it off (it was ~1 % of a
+  core per filter), so the module does not advertise it at all.
+* Setting a parameter. `get` / `list` / `describe` answer with what the filter
+  is really running; a `set` is refused with a reason rather than accepted and
+  ignored, which is what rclcpp does for the many values `ekf_node` reads only
+  at start-up.
+* The launch file's `remappings=`. One process holds three nodes, so an
+  unprefixed rule would hit all of them; the resolved topic names are
+  parameters instead (`odom0`, `odom1`, `imu0`, `odometry_topic`,
+  `gps_fix_topic`, ...) whose defaults are the production wiring.
+* `tf2_ros::Buffer`. The static sensor offsets come from `/tf_static`; the two
+  dynamic transforms the ported code looks up (`base_footprint <- odom` for the
+  map EKF, `map <- base_footprint` for navsat) are the ones these filters
+  broadcast, so they are shared in process (`src/tfbus.rs`) instead of being
+  read back from `/tf` — that topic also carries robot_state_publisher's wheel
+  joints at ~77 Hz, about 1 ms of CPU per message on the RK3568. Consequence:
+  another publisher of `odom -> base_footprint` or `map -> odom` would be
+  invisible. Nothing does that here (`diff_drive_controller` has
+  `enable_odom_tf: false`).
+
+**Differential method** (`tools/localize_compare.py`, arm64 Jazzy container,
+`ROS_DOMAIN_ID=87`). One rclpy harness plays the whole upstream side —
+`/tf_static` with a real GPS-antenna and IMU offset, `/odom` at 25 Hz with
+covariance, `/imu/data` at 10 Hz, `/fix` at 4 Hz in UTM zone 51N, with stale
+(0.6 s old), out-of-order and duplicate stamps injected — records
+`/odometry/local`, `/odometry/global`, `/odometry/gps`, `/gps/filtered` and
+both tf broadcasts, then asks `/toLL`, `/fromLL` and `/datum` a fixed set of
+questions. Stamps are `t0 + k*dt` from the harness's own start, so two separate
+runs share a relative timeline and every sample can be matched to its
+counterpart by stamp. The robot stands still for the first two seconds: the
+datum is whichever fix is latest when odometry, IMU and GPS have all been seen,
+and that race resolves differently in two runs unless the candidates are all
+the same fix.
+
+What must be identical is: `/toLL` 7.1e-15, `/fromLL` 4.7e-10 m, `/toLL` after
+a `/datum` call 1.1e-14, the `map -> utm` static transform 4.7e-10, every
+frame, child frame and status, and the rates.
+
+The filter state cannot be identical, and the honest way to read it is against
+two runs of the *same* stack. Worst absolute difference over the matched
+samples of a 30 s run:
+
+| | C++ vs C++ | Rust vs Rust | C++ vs Rust |
+|---|---|---|---|
+| `/odometry/local` position | 2.7e-4 m | 2.4e-4 m | 2.0e-4 m |
+| `/odometry/local` orientation | 1.4e-15 | 8.0e-4 | 1.6e-6 |
+| `/odometry/local` velocity | 2.2e-5 | 2.4e-4 | 4.3e-4 |
+| `/odometry/global` position | 2.28e-2 m | 2.11e-2 m | 2.28e-2 m |
+| `/odometry/gps` position | 4.1e-3 m | 3.2e-3 m | 3.3e-3 m |
+| `/gps/filtered` lat/lon | 2.3e-7 deg | 2.1e-7 deg | 2.3e-7 deg |
+| tf `map -> odom` position | 1.40e-1 m | — | 1.35e-1 m |
+
+Two runs of the C++ stack differ from each other by as much as the Rust module
+differs from it, and two runs of the Rust module differ by more. That is
+`periodicUpdate` on a wall clock: `prepareTwist` and `prepareAcceleration` take
+their lever-arm terms from the *current* filter state and from an angular
+acceleration differentiated on the timer, and a tick that finds an empty
+measurement queue predicts forward and re-stamps. The differences are
+concentrated at the moment the acceleration ramp starts and grow slowly after
+it; the arithmetic itself is the core's, at 1e-15 against the real library.
+
+**Cost** (same container, per-process `/proc` utime+stime over 30 s with the
+stream playing; indication only, the RK3568 pays far more per process):
+
+| | processes | threads | CPU |
+|---|---|---|---|
+| `ekf_node` x2 + `navsat_transform_node` | 3 | 48 | 8.2 % of a core |
+| `mower_localize` (release) | 1 | 21 | **4.4 %** |
 
 ## mower_agent
 

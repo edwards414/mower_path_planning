@@ -129,6 +129,41 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
 - 驗證：用 `make record` 的 bag 餵相同輸入序列，比 /odometry/local、/odometry/global、tf 差 < 1e-6；再看 /adapter/map_datum 與場地庫重投影不變。
 - 完成後 A–C 合計預估 55–70% 單核；**第 7 節的 Go/No-Go 在這裡決定**。
 
+#### C 執行紀錄（2026-09-23，`feat/rf-c-localize-node`）
+
+核心（`crates/mower_localize_core`，EKF + preprocessing + navsat/UTM）先前已移植並用容器內的 `librl_lib.so` 產生的向量驗到 1e-15；這一輪補的是 ROS 外殼 `crates/mower_localize`。
+
+- **三個節點、一個模組**：節點名維持 `ekf_filter_node_odom` / `ekf_filter_node_map` / `navsat_transform`，所以 graph、log 與每個 node 的 parameter service 都沒變。在 `mower_rsd` 裡是三個各自被監督的 instance（某個 filter 掛掉只重啟它自己，等同原本三個 launch `Node`），獨立 binary 則把三個角色跑在同一個 process，任一個結束就整個 `Err`。`run()` 用 node 名決定角色。
+- **不走 `/tf`**：移植的程式碼只查四個 transform，兩個靜態的（`base_footprint <- imu_link` / `<- gps_link`，來自 `/tf_static`）和兩個動態的（`base_footprint <- odom`、`map <- base_footprint`），而後兩個正是這兩個 filter 自己廣播的。所以它們走 process 內的 `tfbus`，不從 `/tf` 讀回來——那個 topic 還載著 robot_state_publisher 的輪子 joint，77 Hz，在 RK3568 上每則約 1 ms CPU，正好是這個 phase 想省的錢。代價是「別人發的 `odom -> base_footprint` 看不到」，本車沒有（`diff_drive_controller` 的 `enable_odom_tf: false`）。
+- **沒有複製**：`/set_pose`、`/enable`、`/toggle`、`/reset`（沒人呼叫，而且同 namespace 的兩個 `ekf_node` 本來就互相蓋掉）、`/setUTMZone`（要 MGRS，核心沒移植）、`/diagnostics`（`print_diagnostics: false`，上游仍會 advertise 但不發）、以及「set parameter 成功但不生效」——這裡直接回絕並附理由。launch 的 `remappings=` 變成 node 範圍的參數，預設值就是生產線路。
+- **開關**：`dual_ekf_navsat.launch.py rust_localize:=true`（compose `RUST_LOCALIZE`），預設 false；`rust_daemon:=true` 時改成把 `localize` 放進 `mower_rsd` 的模組集合。兩條路徑互斥有測試把關（兩個 `map -> odom` 發布者會搶 tf，而 nav2 就是靠它導航）。
+
+**差分比對**（`src/mower_rs/tools/localize_compare.py`，arm64 Jazzy 容器、`ROS_DOMAIN_ID=87`）：一個 rclpy harness 扮演整個上游——`/tf_static`（真實的 GPS 天線與 IMU 偏移）、25 Hz 帶 covariance 的 `/odom`、10 Hz `/imu/data`、4 Hz 且落在 UTM 51N 的 `/fix`，並注入過期 0.6 s、亂序與重複時戳——錄下五個 topic 與兩個 tf，最後問 `/toLL`、`/fromLL`、`/datum`。時戳用 `t0 + k*dt` 產生，兩次獨立的 run 因此共用同一條相對時間軸，可以逐筆對時戳比。開頭兩秒靜止：datum 是「odom/IMU/GPS 都到齊時最新的那一筆 fix」，不靜止的話兩次 run 會錨在不同的 fix 上（第一版就是這樣，map frame 差 3 cm）。
+
+必須完全一致的部分都一致：`/toLL` 7.1e-15、`/fromLL` 4.7e-10 m、下 `/datum` 之後的 `/toLL` 1.1e-14、`map -> utm` 靜態 transform 4.7e-10、所有 frame / child_frame / status、以及速率。
+
+filter state 不可能逐位元相同，正確的讀法是跟「同一套實作跑兩次」比。30 s、逐時戳配對後的最大絕對差：
+
+| | C++ vs C++ | Rust vs Rust | C++ vs Rust |
+|---|---|---|---|
+| `/odometry/local` 位置 | 2.7e-4 m | 2.4e-4 m | 2.0e-4 m |
+| `/odometry/local` 姿態 | 1.4e-15 | 8.0e-4 | 1.6e-6 |
+| `/odometry/global` 位置 | 2.28e-2 m | 2.11e-2 m | 2.28e-2 m |
+| `/odometry/gps` 位置 | 4.1e-3 m | 3.2e-3 m | 3.3e-3 m |
+| `/gps/filtered` 經緯度 | 2.3e-7 度 | 2.1e-7 度 | 2.3e-7 度 |
+| tf `map -> odom` 位置 | 1.40e-1 m | — | 1.35e-1 m |
+
+也就是 C++ 自己跟自己差多少，Rust 跟 C++ 就差多少（Rust 自己跟自己還更大）。原因是 `periodicUpdate` 跑在牆鐘上：`prepareTwist` / `prepareAcceleration` 的槓桿臂項取自**當下**的 filter state 與 timer 微分出來的角加速度，而且 queue 空掉的那個 tick 會 predict 到現在並重新蓋時戳。差異集中在加速度斜坡開始的那一刻，之後緩慢累積。算術本身是核心的，對真實 library 到 1e-15。
+
+**CPU**（同一個容器、同樣的假輸入、`/proc` utime+stime 30 s 差分；僅供參考，RK3568 每個 process 的固定成本高得多）：
+
+| | process | 執行緒 | 單核 CPU |
+|---|---|---|---|
+| `ekf_node` ×2 + `navsat_transform_node` | 3 | 48 | 8.2 % |
+| `mower_localize`（release） | 1 | 21 | **4.4 %** |
+
+待辦：真機開 `rust_localize:=true` 跑一輪監督試車（nav2 靠 `map -> odom` 導航），並在同一份量測腳本下記錄 LubanCat 的數字與 23 % 的對照。
+
 ### Phase D：導航子集（2–3 週，預估 -25，風險最高）
 
 只移植這台車設定檔實際啟用的東西，不做通用 nav2：
