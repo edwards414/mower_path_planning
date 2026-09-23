@@ -259,8 +259,8 @@ class Harness(Node):
         self.rec["telemetry"].append({"t": round(self.rel(), 6), "data": msg.data})
 
     def on_firmware(self, msg: String) -> None:
-        if not self.started:
-            return
+        # No `started` gate: this topic is latched and its one message
+        # arrives during the discovery wait, which is the point of latching.
         self.rec["firmware_info"].append({"t": round(self.rel(), 6), "data": msg.data})
 
     # -- graph snapshot --------------------------------------------------

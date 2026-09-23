@@ -19,6 +19,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_base` | the whole `ros2_control` chain: `ros2_control_node` (`controller_manager`), `mower_hardware::MowerSystem` and its `mower_hardware_info` node, `diff_drive_controller` (`diff_controller`), `joint_state_broadcaster` and the two `spawner` processes (`/odom`, `/joint_states`, `/mower_base/telemetry`, `/mower_base/firmware_info` and the five `/mower_base/*_command` channels) | `mower.launch.py rust_base:=true` |
 | `mower_rsd` | nothing: it *is* the binaries below, as modules of one process on one r2r Context (one DDS participant). See the section after this table. | `robot.launch.py rust_daemon:=true` |
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
@@ -28,10 +29,10 @@ speed limits, the `BaseCycle` hardware state machine, serial record/replay).
 It has no `r2r` dependency, so `cargo test -p mower_base_core` runs anywhere;
 see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 
-`robot.launch.py` takes all five switches (compose: `RUST_STATUS` /
-`RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` in
-`/opt/mower/.env`) so the safety-critical guards can be enabled last, after
-a supervised drive.
+`robot.launch.py` takes all the switches (compose: `RUST_STATUS` /
+`RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` / `RUST_BASE` in
+`/opt/mower/.env`) so the safety-critical ones — the guards and the base
+driver — can be enabled last, after a supervised drive.
 
 ## `mower_rsd`: the same modules in one process
 
@@ -97,6 +98,141 @@ tools/shadow_compare.py --diff /tmp/split.json /tmp/daemon.json
 # and, for the cost:
 tools/shadow_compare.py --mode split|daemon --measure 30 --modules ...
 ```
+
+
+## `mower_base`: the base driver (ROS_FREE_PLAN Phase B)
+
+`rust_base:=true` on `mower.launch.py` replaces five processes with one
+node: `ros2_control_node`, the `mower_hardware::MowerSystem` plugin inside
+it (including its `mower_hardware_info` side-channel node),
+`diff_drive_controller` as `diff_controller`, `joint_state_broadcaster`, and
+the two `controller_manager/spawner` processes. On the LubanCat the chain
+costs 28 % of a core for a 25 Hz loop that moves eight bytes each way.
+`robot_state_publisher` is **not** replaced; it stays, and it is why
+`/joint_states` still has to come out every cycle.
+
+Every computation is `mower_base_core`, which is checked against the
+original C++ with generated vectors (`crates/mower_base_core/README.md`):
+the frame format and CRC, `control_toolbox::RateLimiter`,
+`diff_drive_controller::Odometry`, one controller update cycle, the
+`MowerSystem` read/write state machine and the telemetry JSON. The crate
+here is the transport wrapper — parameters, publishers, subscriptions, the
+serial thread and the fail-closed path.
+
+### What it reproduces
+
+| direction | topic | type | QoS | rate | comes from |
+|---|---|---|---|---|---|
+| sub | `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | system default | whatever twist_mux + the final guard produce | `diff_controller`'s `~/cmd_vel`, remapped in `controller_test.launch.py`. Jazzy's controller is TwistStamped-only; the `use_stamped_vel: true` in the yaml is a no-op left over from Iron |
+| pub | `/odom` | `nav_msgs/Odometry` | system default | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
+| pub | `/tf` | `tf2_msgs/TFMessage` | system default | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
+| pub | `/joint_states` | `sensor_msgs/JointState` | system default | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them |
+| pub | `/mower_base/telemetry` | `std_msgs/String` (JSON) | best effort, depth 1 | one per new 0x85, gated at `0.8 / telemetry_rate_hz` (20 Hz) -> ~15-17 Hz against a 50 ms frame and a 40 ms loop | `MowerSystem::publish_telemetry_if_due` |
+| pub | `/mower_base/firmware_info` | `std_msgs/String` (JSON) | transient local, reliable, depth 1 | once per distinct 0x87 (latched) | `MowerSystem::on_firmware_info` |
+| sub | `/mower_base/led_command` | `std_msgs/String` | transient local, reliable, depth 1 | on change, re-asserted every 5 s | `led_topic` |
+| sub | `/mower_base/pid_command` | `std_msgs/String` | reliable, depth 4 | one 0x04 per message | `pid_topic` |
+| sub | `/mower_base/wheel_override` | `std_msgs/String` | best effort, depth 1 | raw permille while the ttl holds (<= 1000 ms) | `override_topic` |
+| sub | `/mower_base/servo_command` | `std_msgs/String` | best effort, depth 1 | one 0x07 per message | `servo_topic` |
+| sub | `/mower_base/blade_command` | `std_msgs/String` | best effort, depth 1 | dead-man, refreshed every cycle, one explicit 0 on expiry | `blade_topic` |
+
+Frames on the wire, unchanged: 0x01 every cycle with the firmware's own
+300 ms `command_timeout_ms`, 0x02/0x03/0x04/0x07 as requested, 0x05 to ack a
+0x86 SHUTDOWN_REQUESTED (and then `shutdown_command`), 0x06 once at start-up.
+`cmd_vel_timeout` (0.25 s) zeroes the *reference* and the limiter ramps the
+command down at `max_deceleration` — the ramp is the safety-zero, the
+command is never dropped in one step.
+
+The parameter defaults are `mower_controller/controllers/diff_drive_controller.yaml`,
+the file the robot actually launches, **not**
+`mower_hardware/config/mower_controllers.yaml`, which is a bench file and
+disagrees with it on `open_loop`, `enable_odom_tf`, `base_frame_id`, the
+wheel geometry and `cmd_vel_timeout`. Only `device` and `shutdown_command`
+are written out, in `mower_bringup/config/mower_rsd.yaml`.
+
+### What it deliberately does not reproduce
+
+* **`/controller_manager/*` services** (`list_controllers`,
+  `switch_controller`, `load_controller`, ...) and the controller lifecycle.
+  Nothing in this repo calls them — `ros2controlcli` and the two spawners
+  are the only users, and the spawners go away with the chain. `ros2 control
+  list_controllers` on a robot running `rust_base:=true` finds nothing.
+* **pal_statistics / `~/introspection_data`**, four topics at the loop rate
+  with no subscriber (~323 KB/s on the robot).
+* **`/dynamic_joint_states`** (`control_msgs/DynamicJointState`), which
+  `joint_state_broadcaster` also publishes and which carried
+  `MowerSystem`'s eleven diagnostic state interfaces (`mower_base/crc_errors`,
+  `feedback_age_s`, `power_flags`, `firmware_version`, ...). No consumer:
+  every one of those values is already in the `/mower_base/telemetry` JSON,
+  which is what the app, `mower_battery`, `mower_pid_autotune` and
+  `robot_status` read.
+* **`~/cmd_vel_out`** (`publish_limited_velocity`, off in the yaml) and the
+  chainable-controller reference interfaces.
+* **The `robot_description` parameter/topic.** The driver has its own
+  parameters; `robot_state_publisher` still publishes `/robot_description`
+  for everything else.
+
+### Verification
+
+The serial port cannot be opened twice, so the two implementations are run
+one after the other against a fake STM32 on a `socat` pty pair:
+
+```bash
+socat -d pty,raw,echo=0,link=/tmp/base_host pty,raw,echo=0,link=/tmp/base_stm &
+tools/fake_base.py --port /tmp/base_stm --log /tmp/fake.jsonl --seconds 60
+#  ... start ros2_control (device:=/tmp/base_host) or mower_base, then:
+tools/base_harness.py --out /tmp/out_a/run.json --label a
+tools/base_compare.py --a /tmp/out_a --b /tmp/out_b
+```
+
+`fake_base.py` answers 0x85 at the firmware's 50 ms period from a
+deterministic first-order wheel model driven by the received 0x01 commands,
+plus 0x81/0x82/0x83/0x84/0x86/0x87/0x88/0x89 once a second, and logs every
+frame with a timestamp. `base_harness.py` publishes the same scripted
+`/drivetrain_guarded_cmd_vel` (a *continuous* ramp, so the up-to-40 ms phase
+difference between the two runs' control loops costs `a*h^2/2` per corner
+instead of `v*h`) and the same side-channel bursts, and records `/odom`,
+`/joint_states`, `/tf`, `/mower_base/telemetry` and the graph's QoS. It
+waits for every endpoint to match before it starts the clock — without that
+the run whose driver started later loses its first seconds of `/odom` and
+the two trajectories are offset by the test, not by the code.
+
+Result of a 32 s run on an arm64 Jazzy container (2026-09-23; the Rust node
+is a **debug** build here, the release one is faster):
+
+| | `ros2_control` | `mower_base` |
+|---|---|---|
+| `/odom`, `/joint_states` | 25.001 / 25.002 Hz | 25.004 / 25.004 Hz |
+| `/tf` (from `robot_state_publisher`) | 25.11 Hz | 25.06 Hz |
+| `/mower_base/telemetry` | 15.07 Hz | 15.37 Hz |
+| graph endpoints + QoS on all six topics | — | identical |
+| telemetry JSON keys | 84 | 84, none missing or extra |
+| odometry | — | 1.9e-3 m apart after 3.006 m travelled (0.06 %); mean \|dx\| 9.8e-4 m, max \|dv_x\| 2.5e-3 m/s |
+| wheel angle in `/joint_states` | 39.4606 / 31.6384 rad | 39.4733 / 31.6525 rad (1.3e-2 rad after 39 rad) |
+| 0x01 command frames | 25.007 Hz, `timeout_ms` 300 | 25.029 Hz, `timeout_ms` 300; median \|d permille\| = 1 on a 40 ms grid |
+| safety zero after the ramp | 13.532 s | 13.520 s (12 ms, under one cycle) |
+| wheel_override burst | 56 frames, 16.533-18.733 s | 56 frames, 16.520-18.720 s (13 ms, under one cycle) |
+| 0x02 / 0x03 / 0x04 / 0x06 / 0x07 payloads | — | byte-identical |
+| CPU, utime+stime over 34 s | 19.16 % of a core | **6.49 %** of a core |
+
+The odometry residual is the two runs' control loops sampling the same
+command script at different instants, not a difference in the arithmetic:
+`mower_base_core`'s oracle vectors already pin the limiter, the odometry and
+a 200-cycle controller run to 1e-12 against the original C++. Repeats of the
+whole run land between 8.6e-4 and 1.9e-3 m, in either direction.
+
+### Capturing a real serial recording on the robot
+
+For the exact, timing-free comparison, capture what `ros2_control` really
+does on the robot and replay it offline — the format and both capture
+recipes (a `socat` pty tee, or `strace` on the live process, neither of
+which changes the running stack) are in
+[`crates/mower_base_core/README.md`](crates/mower_base_core/README.md#capturing-a-real-one-on-the-robot).
+Record `/cmd_vel` and `/odom` alongside (`ros2 bag record
+/drivetrain_guarded_cmd_vel /odom /joint_states /mower_base/telemetry`): the
+capture has the rx bytes but not the commands that produced them, so the
+replay is driven from the bag and `/odom` from the same bag is the
+reference. `tests/replay.rs` is the harness; point it at the new
+`.mowerlog`.
 
 ## Build
 

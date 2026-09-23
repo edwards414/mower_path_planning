@@ -115,13 +115,71 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
 
 ### Phase B：Rust base driver 取代 ros2_control（3–4 天，預估 -20）
 
-取代 `controller_manager` + `diff_drive_controller` + `mower_hardware` + `joint_state_broadcaster` + `robot_state_publisher`。
+取代 `controller_manager` + `diff_drive_controller` + `mower_hardware` + `joint_state_broadcaster`（`robot_state_publisher` **留著**，見下方執行紀錄）。
 
 - 移植 `mower_protocol.cpp`（幀格式、CRC、status/command）到 `mower_base` crate；serial 用專用 thread，`VMIN=0` 非阻塞讀法照舊。
 - 差速運動學 + odom 積分（照 diff_drive_controller 的公式與 covariance），/odom、/joint_states、tf odom→base_link 由它發。
 - 安全減速界限、command timeout 前的重送、safety-zero 行為要和 controllers.yaml 裡的參數一模一樣。
 - 驗證：同一根串口不能兩個程序同時開，所以用 **錄放法**：先錄 ros2_control 在真機上 10 分鐘的串口 rx/tx + /odom，離線把 rx 餵給 Rust driver，比 tx 幀與 odom 序列（容差 1e-9）；再監督試車（搖桿、放開即停、一段 nav）。
 - 這階段仍是 ROS 節點（在 `mower_rsd` 裡）。pal_statistics 那 323 KB/s 順便消失。
+
+#### B 執行紀錄（2026-09-23，`feat/rf-b-base-node`）
+
+**狀態：程式與驗證完成，`rust_base` 預設 false，真機尚未切換（缺監督試車）。**
+
+新 crate `src/mower_rs/crates/mower_base`（node 名 `mower_base`，也是 `mower_rsd` 的 `base` 模組），
+取代 `ros2_control_node`（controller_manager）+ `mower_hardware::MowerSystem`（含它的
+`mower_hardware_info` node）+ `diff_drive_controller`（`diff_controller`）+
+`joint_state_broadcaster` + 兩個 spawner。**`robot_state_publisher` 沒有取代**——它留著，
+也正是 `/joint_states` 必須照樣每個週期發的原因（原計畫寫「取代 robot_state_publisher」是錯的）。
+
+所有計算都用已經對過 C++ 測試向量的 `mower_base_core`（協定、rate limiter、odometry、
+控制器週期、telemetry JSON）；這個 crate 只做搬運。
+
+- **參數預設值取自真正啟動的那份檔** `mower_controller/controllers/diff_drive_controller.yaml`
+  （`open_loop: true`、`enable_odom_tf: false`、`base_footprint`、0.35/0.09 m、
+  `cmd_vel_timeout: 0.25`），**不是** `mower_hardware/config/mower_controllers.yaml`——
+  那是 bench 用的，上述每一項都不同。
+- **QoS 是從跑起來的 graph 量出來的，不是照 upstream 原始碼猜的**：
+  `diff_drive_controller` 的 `/odom`、`/tf` 與 `joint_state_broadcaster` 的 `/joint_states`
+  都是 reliable + **transient_local**（晚到的訂閱者拿得到最後一筆），而 `diff_controller`
+  的 cmd_vel 訂閱是 **best_effort**——若這裡用 reliable，best-effort 的發布者會配不上。
+  `/joint_states` 的 `effort` 是兩個 NaN。
+- **執行緒**：25 Hz 迴圈是專用 std thread（`VMIN=0` 非阻塞讀 → `tick` → 寫 → 自己發佈；
+  r2r 的 publish 就是一次 `rcl_publish`，不需要 executor）。tokio 只負責 spin 六個訂閱，
+  每個訂閱把請求寫進 mutex slot，迴圈每週期取走一次；**不用 channel**，因為塞住的 channel
+  會把過期的 cmd_vel 遲到送達，而 C++ 的 realtime box 正是要避免這件事。
+- **失效**：任何 serial 錯誤 → `BaseCycle::fault()` → 送 stop burst → 回 `Err`，
+  launch（或 `mower_rsd` supervisor）2 s 後重啟；在那之前韌體自己的 300 ms command timeout
+  已經把輪子停住了。
+- **刻意不做**：`/controller_manager/*` 服務與 controller lifecycle（repo 內沒有任何呼叫者，
+  只有 spawner 和 `ros2controlcli`）、pal_statistics 的 introspection topic、
+  `/dynamic_joint_states`（它帶的十一個 `mower_base/*` 診斷值全都已經在
+  `/mower_base/telemetry` JSON 裡，沒有其他消費者）、`~/cmd_vel_out`、`robot_description` 參數。
+
+**差分驗證**（`tools/fake_base.py` + `base_harness.py` + `base_compare.py`，arm64 Jazzy 容器，
+`ROS_DOMAIN_ID=86`；同一根 pty 上先後跑兩套，同一份腳本化 `/cmd_vel` 與側通道）：
+
+| | ros2_control | mower_base |
+|---|---|---|
+| `/odom`、`/joint_states` | 25.001 / 25.002 Hz | 25.004 / 25.004 Hz |
+| `/mower_base/telemetry` | 15.07 Hz | 15.37 Hz |
+| 六個 topic 的 endpoint 與 QoS | — | 完全相同 |
+| telemetry JSON 欄位 | 84 | 84，無多無缺 |
+| odometry | — | 走 3.006 m 後差 1.9e-3 m（0.06 %）；平均 \|dx\| 9.8e-4 m |
+| 0x01 指令幀 | 25.007 Hz、timeout 300 | 25.029 Hz、timeout 300；40 ms 網格上 median \|d permille\| = 1 |
+| 安全歸零時刻 | 13.532 s | 13.520 s（差 12 ms，不到一個週期） |
+| wheel_override 爆發 | 56 幀 16.533–18.733 s | 56 幀 16.520–18.720 s（差 13 ms） |
+| 0x02/0x03/0x04/0x06/0x07 payload | — | 逐位元組相同 |
+| CPU（34 s utime+stime） | 19.16 % 單核 | **6.49 %** 單核（debug build） |
+
+odometry 的殘差是兩次獨立 wall-clock 跑的取樣相位差，不是算術差：`mower_base_core` 的
+oracle 向量已經把 limiter、odometry 與 200 週期的控制器對到 1e-12。重跑數次落在
+8.6e-4 ~ 1.9e-3 m，方向不固定。容器是 Apple Silicon 上的 arm64，RK3568 上的絕對收益
+應該更大（計畫裡量到 ros2_control_node 佔 29 %，PR #13 降到 25 Hz 後約 28 %）。
+
+待辦：真機 `rust_base:=true` 監督試車（搖桿、放開即停、一段 nav、拔掉串口看 fail-closed
+與重啟），並照 `crates/mower_base_core/README.md` 的格式錄一段真機串口做離線 replay 比對。
 
 ### Phase C：定位（3–4 天，預估 -15~20）
 

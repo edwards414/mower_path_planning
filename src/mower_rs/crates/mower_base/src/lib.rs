@@ -1,14 +1,14 @@
 //! mower_base: the whole `ros2_control` chain of the real robot as one node.
 //!
-//! Phase B of [`docs/ROS_FREE_PLAN.md`]. What this replaces, all of it in one
+//! Phase B of `docs/ROS_FREE_PLAN.md`. What this replaces, all of it in one
 //! process and one thread pair:
 //!
 //! | replaced | by |
 //! |---|---|
-//! | `controller_manager/ros2_control_node` (the 25 Hz loop, the resource manager, pal_statistics) | the [`serial`] thread here |
+//! | `controller_manager/ros2_control_node` (the 25 Hz loop, the resource manager, pal_statistics) | the serial thread here |
 //! | `mower_hardware::MowerSystem` (`read` / `write`, the side channels, the `mower_hardware_info` node) | [`mower_base_core::cycle::BaseCycle`] + this node |
 //! | `diff_drive_controller` (`diff_controller`) | [`mower_base_core::diff_drive`] |
-//! | `joint_state_broadcaster` | [`Driver::publish_joint_states`] |
+//! | `joint_state_broadcaster` | `Driver::publish_joint_states` |
 //! | the two `controller_manager/spawner` processes | nothing: there is no lifecycle to drive |
 //!
 //! `robot_state_publisher` is **not** replaced — it stays, and it is the
@@ -34,7 +34,7 @@
 //!
 //! Fail-closed
 //! -----------
-//! Any serial read or write error latches [`BaseCycle::fault`], writes the
+//! Any serial read or write error latches `BaseCycle::fault`, writes the
 //! stop burst (wheels 0, blade 0) if the port still takes bytes, and ends
 //! the module with `Err`. As a binary that is exit 1 and launch's
 //! `respawn_delay=2.0`; inside `mower_rsd` the supervisor restarts the
