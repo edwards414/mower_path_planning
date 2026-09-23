@@ -17,6 +17,8 @@
 //!   expressed as a state machine over `(bytes, now)` and `(cmd_vel, now)`.
 //! * [`record`] — the serial record/replay log used to verify the port against
 //!   a capture taken from the running `ros2_control` stack.
+//! * [`telemetry`] — the `/mower_base/telemetry` JSON, byte-for-byte the
+//!   `snprintf` in `MowerSystem::telemetry_json`.
 //!
 //! Time is an `i64` monotonic nanosecond count throughout; `rclcpp::Time` is
 //! the same thing, and `seconds()` is `ns as f64 / 1e9` in both.
@@ -27,6 +29,7 @@ pub mod limiter;
 pub mod odometry;
 pub mod protocol;
 pub mod record;
+pub mod telemetry;
 
 /// Monotonic nanoseconds. Matches `rclcpp::Time::nanoseconds()`.
 pub type TimeNs = i64;

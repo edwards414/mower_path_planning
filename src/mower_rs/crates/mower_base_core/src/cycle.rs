@@ -176,6 +176,8 @@ pub struct BaseCycle {
     faulted: bool,
 
     telemetry: Telemetry,
+    /// `telemetry_pending_`: a new 0x85 arrived since the last publish.
+    telemetry_pending: bool,
     firmware_info: Option<proto::FirmwareInfo>,
     firmware_protocol_mismatch: bool,
     shutdown_acked: bool,
@@ -216,6 +218,7 @@ impl BaseCycle {
             last_tick_ns: None,
             faulted: false,
             telemetry: Telemetry::default(),
+            telemetry_pending: false,
             firmware_info: None,
             firmware_protocol_mismatch: false,
             shutdown_acked: false,
@@ -246,6 +249,27 @@ impl BaseCycle {
     }
     pub fn telemetry(&self) -> &Telemetry {
         &self.telemetry
+    }
+    /// `telemetry_pending_`: a 0x85 has been decoded since the last
+    /// [`BaseCycle::clear_telemetry_pending`]. `MowerSystem` publishes
+    /// `/mower_base/telemetry` only when this and
+    /// [`BaseCycle::feedback_valid`] are both true, so one message goes out
+    /// per new frame rather than per control cycle.
+    pub fn telemetry_pending(&self) -> bool {
+        self.telemetry_pending
+    }
+    /// Call after publishing `/mower_base/telemetry`.
+    pub fn clear_telemetry_pending(&mut self) {
+        self.telemetry_pending = false;
+    }
+    /// At least one 0x85 has been decoded since activation (`feedback_valid_`).
+    pub fn feedback_valid(&self) -> bool {
+        self.feedback_valid
+    }
+    /// `blade_active_`: the dead-man is still holding the blade. Reported as
+    /// `blade.held` in the telemetry JSON.
+    pub fn blade_active(&self) -> bool {
+        self.blade.active
     }
     pub fn firmware_info(&self) -> Option<proto::FirmwareInfo> {
         self.firmware_info
@@ -411,6 +435,7 @@ impl BaseCycle {
                 self.last_feedback_ns = now;
                 self.feedback_valid = true;
                 self.feedback_stale = false;
+                self.telemetry_pending = true;
             }
             proto::MOTOR_STATUS => {
                 if let Some(ms) = proto::decode_motor_status(payload) {
