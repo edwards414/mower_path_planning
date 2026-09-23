@@ -66,6 +66,7 @@ services:
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
+      - rust_localize:=${RUST_LOCALIZE:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour, so flip it only once the modules themselves

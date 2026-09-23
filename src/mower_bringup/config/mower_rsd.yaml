@@ -54,6 +54,37 @@ gps:
     # robot.launch.py refuses any other value for gps_fix_topic.
     fix_topic: /fix
 
+# --- localize (rust_localize) ------------------------------------------------
+# The three nodes of dual_ekf_navsat.launch.py. The filter itself (20 Hz,
+# two_d_mode, the frames, both process_noise_covariance diagonals, the sensor
+# configs, navsat's datum settings) is compiled in from
+# mower_localize_core::config, which is the port of
+# mower_nav2/config/dual_ekf_navsat_params.yaml; only the topic wiring the C++
+# nodes got from the launch file's `remappings=` is a parameter here, and the
+# defaults already are the production wiring.
+ekf_filter_node_odom:
+  ros__parameters:
+    odom0: /odom
+    imu0: /imu/data
+    odometry_topic: /odometry/local
+ekf_filter_node_map:
+  ros__parameters:
+    odom0: /odom
+    odom1: /odometry/gps
+    imu0: /imu/data
+    odometry_topic: /odometry/global
+navsat_transform:
+  ros__parameters:
+    # robot.launch.py refuses any other value for gps_fix_topic.
+    gps_fix_topic: /fix
+    imu_topic: /imu/data
+    odometry_topic: /odometry/global
+    gps_odometry_topic: /odometry/gps
+    filtered_gps_topic: /gps/filtered
+    # The navigation health gate wants /odometry/gps within 0.30 s of a fix,
+    # so this one stays at 30 Hz (docs/ROS_FREE_PLAN.md section 1).
+    frequency: 30.0
+
 # --- map (rust_map) ----------------------------------------------------------
 map_manage:
   ros__parameters:

@@ -76,6 +76,13 @@ def generate_launch_description():
                     'binaries stay down here',
     )
 
+    declare_rust_localize = DeclareLaunchArgument(
+        'rust_localize',
+        default_value='false',
+        description='Run mower_rs mower_localize instead of the two ekf_node '
+                    'processes and navsat_transform_node',
+    )
+
     declare_rust_imu = DeclareLaunchArgument(
         'rust_imu',
         default_value='false',
@@ -210,6 +217,8 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'gps_fix_topic': gps_fix_topic,
+            'rust_localize': LaunchConfiguration('rust_localize'),
+            'rust_daemon': LaunchConfiguration('rust_daemon'),
         }.items(),
     )
 
@@ -366,6 +375,7 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_rust_guards,
         declare_rust_imu,
+        declare_rust_localize,
         declare_rust_daemon,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
