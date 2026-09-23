@@ -83,6 +83,14 @@ struct Module {
 /// Every module `mower_rsd` can run. The order is the start order.
 const MODULES: &[Module] = &[
     Module {
+        // The drivetrain first: it is what everything else waits on, and on
+        // a restart the firmware's 300 ms command timeout has already
+        // stopped the wheels (docs/ROS_FREE_PLAN.md Phase B).
+        id: "base",
+        switch: "rust_base",
+        instances: &[Instance { node: "mower_base", run: |c, m| Box::pin(mower_base::run(c, m)) }],
+    },
+    Module {
         id: "status",
         switch: "rust_status",
         instances: &[Instance { node: "robot_status", run: |c, m| Box::pin(robot_status::run(c, m)) }],
@@ -470,6 +478,7 @@ mod tests {
     #[test]
     fn module_table_carries_the_production_node_names() {
         let expected = [
+            ("base", vec!["mower_base"]),
             ("status", vec!["robot_status"]),
             ("guards", vec!["manual_velocity_guard", "velocity_command_guard"]),
             ("imu", vec!["imu"]),

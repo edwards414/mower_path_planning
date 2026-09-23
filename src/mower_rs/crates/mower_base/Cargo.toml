@@ -1,0 +1,22 @@
+[package]
+name = "mower_base"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust base driver: the STM32 UART link, diff-drive odometry and /mower_base side channels in one node, replacing ros2_control_node + mower_hardware + diff_drive_controller + joint_state_broadcaster"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mower_base"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+mower_base_core = { path = "../mower_base_core" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serialport = { version = "4", default-features = false }

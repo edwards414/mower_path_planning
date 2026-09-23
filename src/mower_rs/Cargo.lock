@@ -678,6 +678,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_base"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_base_core",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "serialport",
+ "tokio",
+]
+
+[[package]]
 name = "mower_base_core"
 version = "0.1.0"
 dependencies = [
@@ -808,6 +821,7 @@ dependencies = [
  "futures",
  "mower_adapter",
  "mower_agent",
+ "mower_base",
  "mower_battery",
  "mower_coverage",
  "mower_gps",
