@@ -23,7 +23,7 @@ from launch.actions import (
     OpaqueFunction,
     SetEnvironmentVariable,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LoadComposableNodes, SetParameter
 from launch_ros.actions import Node
@@ -161,7 +161,10 @@ def generate_launch_description():
     )
 
     load_nodes = GroupAction(
-        condition=IfCondition(PythonExpression(['not ', use_composition])),
+        # UnlessCondition, not PythonExpression(['not ', ...]): the robot
+        # launch passes the flag as 'true'/'false', which is not a Python
+        # literal (NameError: name 'true' is not defined).
+        condition=UnlessCondition(use_composition),
         actions=[
             SetParameter('use_sim_time', use_sim_time),
             Node(
