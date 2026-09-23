@@ -586,19 +586,28 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let servo_topic = params::string(&node, "servo_topic", "/mower_base/servo_command");
     let blade_topic = params::string(&node, "blade_topic", "/mower_base/blade_command");
 
-    // QoS, one for one with what the chain uses today:
-    //   odom / joint_states / tf / cmd_vel  rclcpp::SystemDefaultsQoS()
-    //   telemetry                           QoS(1).best_effort()
-    //   firmware_info, led                  QoS(1).transient_local().reliable()
-    //   pid                                 QoS(4).reliable()
-    //   wheel_override, servo, blade        QoS(1).best_effort()
-    let system_default = QosProfile::default();
+    // QoS, one for one with what the chain announces on the graph today
+    // (read off `ros2 topic info -v` / the endpoint info in the differential
+    // test, not guessed from the upstream sources):
+    //   /odom, /joint_states, /tf        reliable + TRANSIENT_LOCAL, keep last 1
+    //                                    -- diff_drive_controller and
+    //                                    joint_state_broadcaster both latch,
+    //                                    so a late joiner gets the last state
+    //   cmd_vel (subscription)           reliable-compatible BEST_EFFORT,
+    //                                    which is what diff_controller
+    //                                    subscribes with; a reliable
+    //                                    subscription would refuse a
+    //                                    best-effort publisher
+    //   /mower_base/telemetry            best effort, keep last 1
+    //   /mower_base/firmware_info, led   transient local + reliable, depth 1
+    //   pid                              reliable, depth 4
+    //   wheel_override, servo, blade     best effort, depth 1
     let latched = QosProfile::default().keep_last(1).transient_local().reliable();
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
 
-    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
-    let joint_pub = node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
-    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
+    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, latched.clone())?;
+    let joint_pub = node.create_publisher::<JointState>(&joint_states_topic, latched.clone())?;
+    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, latched.clone())?;
     let telemetry_pub = if telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0 {
         None
     } else {
@@ -613,7 +622,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let slots: Shared = Arc::new(Mutex::new(Slots::default()));
 
     // ---- subscriptions ---------------------------------------------------
-    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
+    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, best_effort_1.clone())?;
     {
         let slots = slots.clone();
         tokio::spawn(async move {
@@ -734,6 +743,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
     let mut joint_template = JointState::default();
     joint_template.name = vec!["left_wheel_joint".to_string(), "right_wheel_joint".to_string()];
+    // joint_state_broadcaster fills every array it exports and writes NaN
+    // for an interface the hardware does not have; these joints export
+    // position and velocity only, so effort is two NaNs, not empty.
+    joint_template.effort = vec![f64::NAN, f64::NAN];
     let mut tf_template = TransformStamped::default();
     tf_template.header.frame_id = diff_drive.odom_frame_id.clone();
     tf_template.child_frame_id = diff_drive.base_frame_id.clone();

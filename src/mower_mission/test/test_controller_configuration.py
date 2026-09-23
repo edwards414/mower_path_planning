@@ -877,7 +877,10 @@ def test_gps_driver_runs_inside_the_runtime_container():
     assert '<exec_depend>mower_rs</exec_depend>' in manifest
     assert 'ublox' not in manifest
     cmake = MOWER_RS_CMAKE.read_text(encoding='utf-8')
-    assert re.search(r'^set\(MOWER_RS_BINARIES .* mower_gps mower_rsd\)$', cmake, re.M)
+    binaries = re.search(r'^set\(MOWER_RS_BINARIES (.*)\)$', cmake, re.M)
+    assert binaries is not None
+    assert 'mower_gps' in binaries.group(1).split()
+    assert 'mower_rsd' in binaries.group(1).split()
     cargo = MOWER_RS_CARGO.read_text(encoding='utf-8')
     assert '"crates/mower_ubx"' in cargo and '"crates/mower_gps"' in cargo
 
