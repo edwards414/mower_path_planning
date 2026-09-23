@@ -50,9 +50,11 @@ CMD_SCRIPT = [
     (14.5, 16.5, None, None),                  # cmd_vel timeout
     (16.5, 18.5, None, None),                  # wheel_override burst (below)
     (18.5, 20.5, (0.0, 0.0), (0.0, 0.0)),      # explicit zero again
+    # A quiet tail so the per-process CPU window is a full 30 s.
+    (20.5, 32.0, (0.0, 0.0), (0.0, 0.0)),
 ]
 CMD_RATE_HZ = 200.0
-RUN_SECONDS = 21.0
+RUN_SECONDS = 32.0
 
 # (t_from, t_to, rate_hz, topic, payload)
 SIDE_SCRIPT = [
@@ -121,6 +123,13 @@ class Harness(Node):
         self.create_subscription(String, "/mower_base/telemetry", self.on_telemetry, best_effort_1)
         self.create_subscription(String, "/mower_base/firmware_info", self.on_firmware, latched)
 
+        # Nothing is published or recorded until wait_for_discovery() has
+        # finished and reset the clock: spinning during discovery would
+        # otherwise fire the command timer, drive the robot a few
+        # centimetres before t = 0, and leave the two runs at different
+        # start poses -- which reads as an odometry difference and is not
+        # one.
+        self.started = False
         self.create_timer(1.0 / CMD_RATE_HZ, self.on_cmd_tick)
         self.create_timer(0.02, self.on_side_tick)
         self._side_sent = {}
@@ -146,7 +155,16 @@ class Harness(Node):
                     rclpy.spin_once(self, timeout_sec=0.05)
                 self.t0 = time.monotonic()
                 self.rec["t0_monotonic"] = self.t0
+                # not firmware_info: it is latched and arrives once, during
+                # discovery, which is exactly what latching is for
+                for key in ("odom", "joint_states", "tf", "telemetry",
+                            "cmd_log", "side_log"):
+                    self.rec[key].clear()
+                self.started = True
                 return True
+        self.t0 = time.monotonic()
+        self.rec["t0_monotonic"] = self.t0
+        self.started = True
         return False
 
     # -- clock -----------------------------------------------------------
@@ -155,6 +173,8 @@ class Harness(Node):
 
     # -- publishing ------------------------------------------------------
     def on_cmd_tick(self) -> None:
+        if not self.started:
+            return
         t = self.rel()
         command = command_at(t)
         if command is None:
@@ -171,6 +191,8 @@ class Harness(Node):
         )
 
     def on_side_tick(self) -> None:
+        if not self.started:
+            return
         t = self.rel()
         for i, (lo, hi, rate, topic, payload) in enumerate(SIDE_SCRIPT):
             if not (lo <= t < hi):
@@ -184,6 +206,8 @@ class Harness(Node):
 
     # -- recording -------------------------------------------------------
     def on_odom(self, msg: Odometry) -> None:
+        if not self.started:
+            return
         self.rec["odom"].append(
             {
                 "t": round(self.rel(), 6),
@@ -201,6 +225,8 @@ class Harness(Node):
         )
 
     def on_joints(self, msg: JointState) -> None:
+        if not self.started:
+            return
         self.rec["joint_states"].append(
             {
                 "t": round(self.rel(), 6),
@@ -213,6 +239,8 @@ class Harness(Node):
         )
 
     def on_tf(self, msg: TFMessage) -> None:
+        if not self.started:
+            return
         for tr in msg.transforms:
             self.rec["tf"].append(
                 {
@@ -226,9 +254,13 @@ class Harness(Node):
             )
 
     def on_telemetry(self, msg: String) -> None:
+        if not self.started:
+            return
         self.rec["telemetry"].append({"t": round(self.rel(), 6), "data": msg.data})
 
     def on_firmware(self, msg: String) -> None:
+        if not self.started:
+            return
         self.rec["firmware_info"].append({"t": round(self.rel(), 6), "data": msg.data})
 
     # -- graph snapshot --------------------------------------------------

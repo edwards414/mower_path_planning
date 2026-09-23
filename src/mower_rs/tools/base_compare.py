@@ -151,28 +151,51 @@ def main() -> int:
         out["rates"][key] = {"a": ra, "b": rb, "n_a": na, "n_b": nb}
 
     # ---- 3. odometry ---------------------------------------------------
+    #
+    # The two runs are separate wall-clock runs, so their 25 Hz loops sample
+    # the command script at a different phase -- up to one cycle, and in
+    # practice one to two, because the loop's own start is arbitrary. That
+    # phase is a property of the test, not of either implementation, so the
+    # numbers are reported twice: raw, and after shifting B by the single
+    # offset that best lines up its velocity with A's. What is left after the
+    # shift is what the two implementations actually disagree about.
     section("odometry (B resampled onto A's stamps, %.0f-%.0f s)" % WINDOW)
     grid = [s["t"] for s in run_a["odom"] if WINDOW[0] <= s["t"] <= WINDOW[1]]
-    diffs = {k: [] for k in ["x", "y", "yaw", "vx", "wz"]}
-    for t in grid:
-        for k in diffs:
-            va = interp(run_a["odom"], k, t)
-            vb = interp(run_b["odom"], k, t)
-            diffs[k].append(abs(va - vb))
-    for k, values in diffs.items():
-        if values:
-            print(f"  {k:4s} max {max(values):.3e}   mean {statistics.fmean(values):.3e}")
-            out.setdefault("odom_diff", {})[k] = {"max": max(values), "mean": statistics.fmean(values)}
-    if grid:
-        dx = interp(run_a["odom"], "x", grid[-1]) - interp(run_b["odom"], "x", grid[-1])
-        dy = interp(run_a["odom"], "y", grid[-1]) - interp(run_b["odom"], "y", grid[-1])
-        drift = math.hypot(dx, dy)
-        travelled = math.hypot(
-            interp(run_a["odom"], "x", grid[-1]), interp(run_a["odom"], "y", grid[-1])
-        )
-        print(f"  final position difference {drift:.3e} m after {travelled:.3f} m travelled")
-        out["odom_final_drift_m"] = drift
-        out["odom_travelled_m"] = travelled
+
+    def odom_stats(shift):
+        d = {k: [] for k in ["x", "y", "yaw", "vx", "wz"]}
+        for t in grid:
+            for k in d:
+                d[k].append(abs(interp(run_a["odom"], k, t) - interp(run_b["odom"], k, t + shift)))
+        return d
+
+    best_shift, best_cost = 0.0, None
+    step = 0.001
+    shift = -0.200
+    while shift <= 0.200 + 1e-9:
+        cost = statistics.fmean(odom_stats(shift)["vx"])
+        if best_cost is None or cost < best_cost:
+            best_shift, best_cost = shift, cost
+        shift += step
+    out["phase_shift_s"] = best_shift
+    print(f"  command-phase offset between the runs: {best_shift * 1e3:+.0f} ms")
+    for label, shift in (("raw", 0.0), ("phase-aligned", best_shift)):
+        diffs = odom_stats(shift)
+        print(f"  [{label}]")
+        for k, values in diffs.items():
+            if values:
+                print(f"    {k:4s} max {max(values):.3e}   mean {statistics.fmean(values):.3e}")
+                out.setdefault("odom_diff_" + label.replace("-", "_"), {})[k] = {
+                    "max": max(values), "mean": statistics.fmean(values)}
+        if grid:
+            t = grid[-1]
+            dx = interp(run_a["odom"], "x", t) - interp(run_b["odom"], "x", t + shift)
+            dy = interp(run_a["odom"], "y", t) - interp(run_b["odom"], "y", t + shift)
+            drift = math.hypot(dx, dy)
+            travelled = math.hypot(interp(run_a["odom"], "x", t), interp(run_a["odom"], "y", t))
+            print(f"    final position difference {drift:.3e} m after {travelled:.3f} m travelled")
+            out["odom_final_drift_m_" + label.replace("-", "_")] = drift
+            out["odom_travelled_m"] = travelled
     for key in ["frame_id", "child_frame_id", "pose_cov", "twist_cov"]:
         va = run_a["odom"][0][key] if run_a["odom"] else None
         vb = run_b["odom"][0][key] if run_b["odom"] else None
@@ -225,21 +248,30 @@ def main() -> int:
         hz = (len(c) - 1) / span if span else 0.0
         print(f"  {label}: {len(c)} frames, {hz:.3f} Hz, timeout_ms={sorted({x[3] for x in c})}")
         out.setdefault("wheel_frames", {})[label] = {"n": len(c), "hz": hz}
-    # zero-order hold on a 40 ms grid, over the window
-    t = WINDOW[0]
-    mismatch = worst = 0
-    total = 0
-    while t <= WINDOW[1]:
-        ha, hb = hold(ca, t), hold(cb, t)
-        if ha and hb:
-            total += 1
-            d = max(abs(ha[1] - hb[1]), abs(ha[2] - hb[2]))
-            worst = max(worst, d)
-            if d:
-                mismatch += 1
-        t += 0.04
-    print(f"  40 ms grid: {total - mismatch}/{total} samples identical, worst |d permille| = {worst}")
-    out["wheel_permille"] = {"samples": total, "identical": total - mismatch, "worst": worst}
+    # Zero-order hold on a 40 ms grid, over the window, with the same phase
+    # offset the odometry section measured: a ramping command sampled one or
+    # two cycles apart differs by the ramp rate times that offset (about
+    # 7 permille per cycle here), which says nothing about the two
+    # implementations.
+    for label, shift in (("raw", 0.0), ("phase-aligned", out["phase_shift_s"])):
+        t = WINDOW[0]
+        mismatch = worst = total = 0
+        residuals = []
+        while t <= WINDOW[1]:
+            ha, hb = hold(ca, t), hold(cb, t + shift)
+            if ha and hb:
+                total += 1
+                d = max(abs(ha[1] - hb[1]), abs(ha[2] - hb[2]))
+                residuals.append(d)
+                worst = max(worst, d)
+                if d:
+                    mismatch += 1
+            t += 0.04
+        median = statistics.median(residuals) if residuals else 0
+        print(f"  [{label}] 40 ms grid: {total - mismatch}/{total} samples identical, "
+              f"median |d permille| = {median}, worst = {worst}")
+        out.setdefault("wheel_permille", {})[label] = {
+            "samples": total, "identical": total - mismatch, "median": median, "worst": worst}
 
     # ---- 7. cmd_vel timeout ---------------------------------------------
     section("cmd_vel timeout (script goes silent at 14.5 s, cmd_vel_timeout = 0.25 s)")
