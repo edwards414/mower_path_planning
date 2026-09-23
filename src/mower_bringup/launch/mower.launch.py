@@ -82,6 +82,30 @@ def generate_launch_description():
         description='Run the mower_rs WIT IMU driver instead of wit_ros2_imu',
     )
 
+    # rust_base:=true replaces the whole ros2_control chain -- the
+    # controller_manager process, mower_hardware::MowerSystem, diff_controller,
+    # joint_state_broadcaster and the two spawners -- with one mower_rs node
+    # (src/mower_rs/crates/mower_base). Same serial protocol, same /odom,
+    # /joint_states and /mower_base/* contract; ~28 % of a core on the
+    # LubanCat is what the chain costs there (docs/ROS_FREE_PLAN.md Phase B).
+    # robot_state_publisher is NOT replaced and still needs /joint_states.
+    declare_rust_base = DeclareLaunchArgument(
+        'rust_base',
+        default_value='false',
+        description='mower_rs mower_base instead of ros2_control_node + '
+                    'mower_hardware + diff_controller + '
+                    'joint_state_broadcaster',
+    )
+    declare_base_params_file = DeclareLaunchArgument(
+        'base_params_file',
+        default_value=os.path.join(
+            mower_bringup_dir, 'config', 'mower_rsd.yaml'
+        ),
+        description='Parameter file for the Rust base driver; the same '
+                    'per-node file mower_rsd reads, whose `mower_base:` '
+                    'section is the only one that applies here',
+    )
+
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -170,6 +194,10 @@ def generate_launch_description():
         'robot_description': xacro.process_file(robot_description_path).toxml()
     }
 
+    rust_base = LaunchConfiguration('rust_base')
+
+    # ros2_control_node + the two spawners. Exactly one of this and the
+    # mower_base node below ever runs: they open the same serial port.
     mower_controller_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -178,9 +206,25 @@ def generate_launch_description():
                 'controller_test.launch.py'
             )
         ),
+        condition=UnlessCondition(rust_base),
         launch_arguments={
             'publish_robot_state_publisher': 'false',
         }.items(),
+    )
+
+    # The same 25 Hz cycle as one r2r node. A serial failure ends the
+    # process fail-closed (the firmware's own 300 ms command timeout has
+    # already stopped the wheels) and launch brings it back after 2 s, which
+    # is what the controller_manager's ERROR return did by deactivating.
+    mower_base_node = Node(
+        package='mower_rs',
+        executable='mower_base',
+        name='mower_base',
+        output='screen',
+        condition=_rust_binary(rust_base, LaunchConfiguration('rust_daemon')),
+        respawn=True,
+        respawn_delay=2.0,
+        parameters=[LaunchConfiguration('base_params_file')],
     )
 
     twist_mux_launch = IncludeLaunchDescription(
@@ -366,6 +410,8 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_rust_guards,
         declare_rust_imu,
+        declare_rust_base,
+        declare_base_params_file,
         declare_rust_daemon,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
@@ -385,6 +431,7 @@ def generate_launch_description():
         mower_imu_node,
         mower_gps_node,
         mower_controller_launch,
+        mower_base_node,
         twist_mux_launch,
         robot_localization_launch,
         navigation_launch,

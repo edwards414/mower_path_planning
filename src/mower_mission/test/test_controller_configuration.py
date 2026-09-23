@@ -38,6 +38,8 @@ NAV2_CONFIG = SRC_DIR / 'mower_nav2/config/nav2_no_map_params.yaml'
 NAV2_LAUNCH = SRC_DIR / 'mower_nav2/launch/navigation.launch.py'
 MAKEFILE = SRC_DIR.parent / 'Makefile'
 MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
+MOWER_BASE_RS = SRC_DIR / 'mower_rs/crates/mower_base/src/lib.rs'
+ENV_EXAMPLE = SRC_DIR.parent / 'deploy/.env.example'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
 IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/lib.rs'
@@ -958,3 +960,88 @@ def test_navfn_never_substitutes_a_nearby_coverage_goal():
         'smoother_server:', maxsplit=1
     )[0]
     assert re.search(r'^\s*tolerance:\s*0\.0\s*$', planner, re.MULTILINE)
+
+
+def test_rust_base_and_ros2_control_are_mutually_exclusive():
+    """rust_base:=true replaces the whole ros2_control chain -- the
+    controller_manager process, mower_hardware::MowerSystem, diff_controller,
+    joint_state_broadcaster and their two spawners -- with one mower_rs node.
+    They open the same serial port, so exactly one of them may ever start;
+    robot_state_publisher is *not* replaced and still needs /joint_states."""
+    mower_launch = MOWER_LAUNCH.read_text(encoding='utf-8')
+    robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
+
+    # the include that starts ros2_control_node + both spawners
+    assert 'controller_test.launch.py' in mower_launch
+    controller_block = mower_launch.split('controller_test.launch.py', 1)[1]
+    assert 'condition=UnlessCondition(rust_base)' in controller_block.split(
+        'mower_base_node', 1)[0]
+    # ... and the node that replaces it, off whenever the daemon runs it
+    assert "executable='mower_base'" in mower_launch
+    assert ("condition=_rust_binary(rust_base, LaunchConfiguration('rust_daemon'))"
+            in mower_launch)
+    assert 'respawn_delay=2.0' in mower_launch
+    # both are in the launch description, so the conditions are what decides
+    for item in ('mower_controller_launch,', 'mower_base_node,'):
+        assert item in mower_launch
+    # robot_state_publisher is untouched by the switch
+    rsp = mower_launch.split('robot_state_publisher = Node(', 1)[1].split(')', 1)[0]
+    assert 'condition' not in rsp
+
+    # the switch itself: declared false, threaded down, and a daemon module
+    argument = re.search(
+        r"DeclareLaunchArgument\(\s*'rust_base'(.*?)\n\s*\),",
+        robot_launch,
+        flags=re.DOTALL,
+    )
+    assert argument is not None
+    assert re.search(r"default_value='false'", argument.group(1))
+    assert "'rust_base': rust_base," in robot_launch
+    assert "('base', 'rust_base')," in robot_launch
+
+    # one module of mower_rsd, one parameter section, one installed binary
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    assert 'id: "base"' in daemon_main
+    assert 'switch: "rust_base"' in daemon_main
+    assert 'node: "mower_base"' in daemon_main
+    params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    assert '\nmower_base:\n  ros__parameters:' in params
+    assert 'mower_base' in MOWER_RS_CMAKE.read_text(encoding='utf-8').split(
+        'set(MOWER_RS_BINARIES', 1)[1].split(')', 1)[0]
+    assert '"crates/mower_base"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
+
+    # compose switch, default off
+    assert 'rust_base:=${RUST_BASE:-false}' in DEPLOY_COMPOSE.read_text(
+        encoding='utf-8')
+    assert 'RUST_BASE=false' in ENV_EXAMPLE.read_text(encoding='utf-8')
+
+
+def test_rust_base_reproduces_the_launched_controller_parameters():
+    """The Rust driver's built-in defaults are the production
+    diff_controller yaml, not mower_hardware's bench file: the two differ in
+    open_loop, enable_odom_tf, the base frame and the wheel geometry."""
+    source = MOWER_BASE_RS.read_text(encoding='utf-8')
+    block = source.split('pub fn production_diff_drive()', 1)[1]
+    for key, value in (
+        ('wheel_separation', _scalar(REAL_CONTROLLER, 'wheel_separation')),
+        ('wheel_radius', _scalar(REAL_CONTROLLER, 'wheel_radius')),
+        ('publish_rate', _scalar(REAL_CONTROLLER, 'publish_rate')),
+        ('cmd_vel_timeout', _scalar(REAL_CONTROLLER, 'cmd_vel_timeout')),
+    ):
+        assert f'{key}: {float(value)}' in block, key
+    assert f"base_frame_id: \"{_scalar(REAL_CONTROLLER, 'base_frame_id')}\"" in block
+    assert f"odom_frame_id: \"{_scalar(REAL_CONTROLLER, 'odom_frame_id')}\"" in block
+    assert 'open_loop: true' in block
+    assert 'enable_odom_tf: false' in block
+    for axis in ('linear', 'angular'):
+        prefix = 'linear.x' if axis == 'linear' else 'angular.z'
+        for key in ('max_velocity', 'min_velocity', 'max_acceleration',
+                    'max_acceleration_reverse', 'max_deceleration',
+                    'max_deceleration_reverse'):
+            expected = float(_scalar(REAL_CONTROLLER, f'{prefix}.{key}'))
+            assert f'{key}: {expected}' in block, f'{prefix}.{key}'
+    # the input topic and the two side channels the app and the auto-tune use
+    assert '"/drivetrain_guarded_cmd_vel"' in source
+    assert '"/mower_base/telemetry"' in source
+    assert '"/mower_base/firmware_info"' in source
+    assert '"/mower_base/wheel_override"' in source

@@ -52,6 +52,7 @@ def _enforce_production_safety(context):
 # runs as its Python node.
 _DAEMON_MODULES = (
     # module id      launch switch
+    ('base', 'rust_base'),
     ('status', 'rust_status'),
     ('guards', 'rust_guards'),
     ('imu', 'rust_imu'),
@@ -179,6 +180,7 @@ def generate_launch_description():
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_bridge = LaunchConfiguration('rust_bridge')
+    rust_base = LaunchConfiguration('rust_base')
     rust_daemon = LaunchConfiguration('rust_daemon')
 
     mower_launch = IncludeLaunchDescription(
@@ -197,6 +199,7 @@ def generate_launch_description():
             'gps_params_file': gps_params_file,
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
+            'rust_base': rust_base,
             'nav_composition': nav_composition,
             'rust_daemon': rust_daemon,
         }.items(),
@@ -394,6 +397,19 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs mower_ws_bridge instead of rosbridge_auth_proxy '
                         '+ rosbridge_websocket + rosapi',
+        ),
+        DeclareLaunchArgument(
+            'rust_base',
+            default_value='false',
+            description='mower_rs mower_base instead of the whole '
+                        'ros2_control chain: ros2_control_node '
+                        '(controller_manager), mower_hardware::MowerSystem, '
+                        'diff_controller, joint_state_broadcaster and their '
+                        'two spawners. Same serial protocol, same /odom, '
+                        '/joint_states and /mower_base/* contract; '
+                        'robot_state_publisher stays and keeps its '
+                        '/joint_states input. Flip only after a supervised '
+                        'drive.',
         ),
         DeclareLaunchArgument(
             'rust_daemon',

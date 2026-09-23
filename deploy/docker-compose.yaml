@@ -66,6 +66,11 @@ services:
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
+      # RUST_BASE replaces the whole ros2_control chain
+      # (controller_manager + mower_hardware + diff_controller +
+      # joint_state_broadcaster, ~28 % of a core) with one mower_rs
+      # node. It drives the wheels: supervised drive first.
+      - rust_base:=${RUST_BASE:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour, so flip it only once the modules themselves
