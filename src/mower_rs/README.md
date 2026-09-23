@@ -402,6 +402,11 @@ Consumers that must not notice: the two `topic_tools` throttles
   unprefixed rule would hit all of them; the resolved topic names are
   parameters instead (`odom0`, `odom1`, `imu0`, `odometry_topic`,
   `gps_fix_topic`, ...) whose defaults are the production wiring.
+* Dropping navsat's IMU subscription once the datum is good. Upstream resets
+  it; the module only stops feeding the core, so `/imu/data` keeps one extra
+  subscriber that reads nothing. The `delay` parameter is carried but does
+  nothing, as upstream's does not either: both stacks published their first
+  `/odometry/gps` 0.17 s into the differential run, not 3 s.
 * `tf2_ros::Buffer`. The static sensor offsets come from `/tf_static`; the two
   dynamic transforms the ported code looks up (`base_footprint <- odom` for the
   map EKF, `map <- base_footprint` for navsat) are the ones these filters
