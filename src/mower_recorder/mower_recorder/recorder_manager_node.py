@@ -66,6 +66,9 @@ class RecorderManager(Node):
         self.declare_parameter('params_dump_nodes', [''])
         self.declare_parameter('gps_topic', '/fix')
         self.declare_parameter('fault_topic', '/mower_recorder/fault')
+        # red breathing rear light while recording (mower_hardware driver ->
+        # STM32 0x03 overlay); '' disables
+        self.declare_parameter('rear_light_topic', '/mower_base/rear_light')
 
         self._robot_id = self.get_parameter('robot_id').value
         self._output_root = os.path.expanduser(
@@ -101,6 +104,11 @@ class RecorderManager(Node):
         self._start_time = None
         self._status_pub = self.create_publisher(
             String, '/mower_recorder/status', _latched())
+        # Re-sent with every status tick: the driver drops the overlay after
+        # ~6 s without a refresh, so a dead recorder cannot leave it on.
+        rear_topic = self.get_parameter('rear_light_topic').value
+        self._rear_pub = (self.create_publisher(String, rear_topic, _latched())
+                          if rear_topic else None)
         self.create_timer(2.0, self._publish_status, callback_group=cb)
         self._publish_status()
 
@@ -219,6 +227,9 @@ class RecorderManager(Node):
         m = String()
         m.data = json.dumps(st, ensure_ascii=False)
         self._status_pub.publish(m)
+        if self._rear_pub is not None:
+            self._rear_pub.publish(String(
+                data=json.dumps({'effect': 'recording' if recording else 'off'})))
 
     @staticmethod
     def _dir_size(path):

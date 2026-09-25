@@ -13,6 +13,7 @@ extern DMA_HandleTypeDef hdma_tim3_ch2;
 
 uint16_t ws2812_buf_front[BUF_LEN_FRONT];
 uint16_t ws2812_buf_back[BUF_LEN_BACK];
+uint16_t *ws2812_back_override = NULL;
 
 void WS2812_Test(void) {
   static uint16_t data[24 + RESET_LENGTH] = {
@@ -67,10 +68,14 @@ void ws2812_clear_all(void) {
 }
 
 void ws2812_show_dual(void) {
+  uint16_t *back =
+      (ws2812_back_override != NULL) ? ws2812_back_override : ws2812_buf_back;
+
   // reset slot
   for (int i = 0; i < RESET_SLOTS; i++) {
     ws2812_buf_front[LED_NUM_FRONT * BITS_PER_LED + i] = 0;
     ws2812_buf_back[LED_NUM_BACK * BITS_PER_LED + i] = 0;
+    back[LED_NUM_BACK * BITS_PER_LED + i] = 0;
   }
 
   // 先停止之前的 DMA 传输
@@ -87,7 +92,7 @@ void ws2812_show_dual(void) {
   }
 
   // 後燈 CH1
-  HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1, (uint32_t *)ws2812_buf_back,
+  HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1, (uint32_t *)back,
                         BUF_LEN_BACK);
 
   HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_2, (uint32_t *)ws2812_buf_front,

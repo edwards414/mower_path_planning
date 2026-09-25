@@ -1,6 +1,7 @@
 #include "mower_hardware/mower_system.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -47,6 +48,8 @@ CallbackReturn MowerSystem::on_init(const hardware_interface::HardwareInfo & inf
   shutdown_command_ = param_or(info, "shutdown_command", shutdown_command_.c_str());
   firmware_info_topic_ = param_or(info, "firmware_info_topic", firmware_info_topic_.c_str());
   led_topic_ = param_or(info, "led_topic", led_topic_.c_str());
+  rear_light_topic_ = param_or(info, "rear_light_topic", rear_light_topic_.c_str());
+  rear_light_timeout_s_ = param_or(info, "rear_light_timeout_s", rear_light_timeout_s_);
   pid_topic_ = param_or(info, "pid_topic", pid_topic_.c_str());
   override_topic_ = param_or(info, "override_topic", override_topic_.c_str());
   servo_topic_ = param_or(info, "servo_topic", servo_topic_.c_str());
@@ -109,6 +112,11 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
           led_topic_, rclcpp::QoS(1).transient_local().reliable(),
           [this](const std_msgs::msg::String & msg) { on_led_command(msg); });
       }
+      if (!rear_light_topic_.empty()) {
+        rear_light_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
+          rear_light_topic_, rclcpp::QoS(1).transient_local().reliable(),
+          [this](const std_msgs::msg::String & msg) { on_rear_light(msg); });
+      }
       if (!pid_topic_.empty()) {
         pid_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
           pid_topic_, rclcpp::QoS(4).reliable(),
@@ -136,6 +144,7 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
       RCLCPP_WARN(logger(), "side-channel node unavailable: %s", e.what());
       stop_node_thread();
       led_sub_.reset();
+      rear_light_sub_.reset();
       pid_sub_.reset();
       override_sub_.reset();
       servo_sub_.reset();
@@ -155,6 +164,7 @@ CallbackReturn MowerSystem::on_cleanup(const rclcpp_lifecycle::State &)
   port_.close();
   stop_node_thread();
   led_sub_.reset();
+  rear_light_sub_.reset();
   pid_sub_.reset();
   override_sub_.reset();
   servo_sub_.reset();
@@ -216,6 +226,35 @@ long json_int(const std::string & s, const char * key, long def)
   return v;
 }
 
+// same, for a string value ("" when missing)
+std::string json_str(const std::string & s, const char * key)
+{
+  std::string k = std::string("\"") + key + "\"";
+  auto pos = s.find(k);
+  if (pos == std::string::npos) {
+    return "";
+  }
+  pos = s.find(':', pos + k.size());
+  if (pos == std::string::npos) {
+    return "";
+  }
+  pos = s.find('"', pos + 1);
+  if (pos == std::string::npos) {
+    return "";
+  }
+  auto end = s.find('"', pos + 1);
+  if (end == std::string::npos) {
+    return "";
+  }
+  return s.substr(pos + 1, end - pos - 1);
+}
+
+int64_t steady_ns()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // same, for a float value; `key` may be nested one level ("left" -> "kp")
 double json_double(const std::string & s, const char * section, const char * key, double def)
 {
@@ -267,13 +306,31 @@ void MowerSystem::on_led_command(const std_msgs::msg::String & msg)
     mode, json_int(msg.data, "r", 0), json_int(msg.data, "g", 0), json_int(msg.data, "b", 0), period);
 }
 
-void MowerSystem::send_led_if_needed(const rclcpp::Time & now)
+void MowerSystem::on_rear_light(const std_msgs::msg::String & msg)
 {
-  const uint64_t req = led_request_.load();
-  if (req == 0) {
+  const std::string effect = json_str(msg.data, "effect");
+  const bool recording = effect == "recording";
+  if (!recording && effect != "off") {
+    RCLCPP_WARN(logger(), "ignoring rear light request without a known effect: %s", msg.data.c_str());
     return;
   }
-  const bool changed = req != led_sent_;
+  rear_recording_until_ns_.store(
+    recording ? steady_ns() + static_cast<int64_t>(rear_light_timeout_s_ * 1e9) : 0);
+}
+
+void MowerSystem::send_led_if_needed(const rclcpp::Time & now)
+{
+  uint64_t req = led_request_.load();
+  const int64_t until = rear_recording_until_ns_.load();
+  const uint8_t overlay = (until != 0 && steady_ns() < until) ? kLedOverlayRearRecording : 0;
+  if (req == 0) {
+    if (overlay == 0 && led_overlay_sent_ == 0) {
+      return;
+    }
+    // nobody set a base light yet: keep what is on the strips (SHOW)
+    req = pack_led(kLedShow, 0, 0, 0, 0, 0);
+  }
+  const bool changed = req != led_sent_ || overlay != led_overlay_sent_;
   const bool stale = led_sent_time_.nanoseconds() == 0 ||
                      (now - led_sent_time_).seconds() >= kLedResendPeriodS;
   if (!changed && !stale) {
@@ -281,9 +338,14 @@ void MowerSystem::send_led_if_needed(const rclcpp::Time & now)
   }
   auto f = build_ws2812_command(
     tx_seq_++, static_cast<uint8_t>(req >> 24), static_cast<uint8_t>(req >> 16),
-    static_cast<uint8_t>(req >> 8), static_cast<uint8_t>(req), static_cast<uint16_t>(req >> 32));
+    static_cast<uint8_t>(req >> 8), static_cast<uint8_t>(req), static_cast<uint16_t>(req >> 32),
+    overlay);
   if (port_.write_all(f.data(), f.size())) {
+    if (overlay != led_overlay_sent_) {
+      RCLCPP_INFO(logger(), "rear light: recording breath %s", overlay ? "on" : "off");
+    }
     led_sent_ = req;
+    led_overlay_sent_ = overlay;
     led_sent_time_ = now;
   }
 }

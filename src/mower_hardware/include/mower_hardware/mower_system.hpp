@@ -133,6 +133,20 @@ private:
   static uint64_t pack_led(uint8_t mode, uint8_t r, uint8_t g, uint8_t b, uint16_t period_ms, uint8_t serial);
   void on_led_command(const std_msgs::msg::String & msg);
   void send_led_if_needed(const rclcpp::Time & now);
+
+  // Rear-light overlay (0x03 byte 6), from its own topic so it survives
+  // whoever publishes the base light request:
+  //   {"effect":"recording"}  red breath on the back strip
+  //   {"effect":"off"}
+  // The publisher (mower_recorder) repeats it every ~2 s; without a refresh
+  // for rear_light_timeout_s the overlay drops, so a dead recorder cannot
+  // leave the robot claiming it is still recording.
+  std::string rear_light_topic_ = "/mower_base/rear_light";
+  double rear_light_timeout_s_ = 6.0;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr rear_light_sub_;
+  std::atomic<int64_t> rear_recording_until_ns_{0};  // steady clock; 0 = off
+  uint8_t led_overlay_sent_ = 0;
+  void on_rear_light(const std_msgs::msg::String & msg);
   void stop_node_thread();
 
   // PID gains request (0x04), JSON on a reliable topic:

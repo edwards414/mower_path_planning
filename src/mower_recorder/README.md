@@ -49,6 +49,12 @@ IncludeLaunchDescription(PythonLaunchDescriptionSource(
                  'launch', 'record.launch.py')))
 ```
 
+While a recording is running the robot's **rear light breathes red** (front
+light unchanged): `recorder_manager_node` publishes `{"effect":"recording"}` /
+`{"effect":"off"}` on `/mower_base/rear_light` with every 2 s status tick, and
+the `mower_hardware` driver turns it into the STM32 `0x03` overlay bit (drops it
+after 6 s without a refresh). Param `rear_light_topic` (`''` disables).
+
 ### Control services
 
 ```bash

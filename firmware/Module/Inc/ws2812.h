@@ -39,5 +39,9 @@ void ws2812_all_on(uint8_t r, uint8_t g, uint8_t b);
 //
 extern uint16_t ws2812_buf_front[BUF_LEN_FRONT];  // CH2 = 前燈, 32 顆
 extern uint16_t ws2812_buf_back[BUF_LEN_BACK];     // CH1 = 後燈, 16 顆
+/* When non-NULL, ws2812_show_dual() clocks this buffer out on the back strip
+ * instead of ws2812_buf_back, which stays the untouched base layer (the
+ * rear-light overlay in led_effects.cpp composes into it). */
+extern uint16_t *ws2812_back_override;
 
 #endif /* MODULE_INC_WS2812_H_ */

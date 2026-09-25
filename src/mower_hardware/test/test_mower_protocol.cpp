@@ -188,6 +188,17 @@ TEST(Ws2812, CommandFrameLayout)
   EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
 }
 
+TEST(Ws2812, RearRecordingOverlayByte)
+{
+  // steady white base with the rear recording breath on top
+  auto f = build_ws2812_command(3, kLedAllOn, 110, 110, 110, 0, kLedOverlayRearRecording);
+  ASSERT_EQ(f.size(), kFrameOverhead + 8);
+  EXPECT_EQ(f[6], kLedAllOn);
+  EXPECT_EQ(f[12], kLedOverlayRearRecording);
+  EXPECT_EQ(f[13], 0);
+  EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
+}
+
 TEST(Ws2812, DecodeStatus)
 {
   // mode=flow, r/g/b=10/20/30, period=1600, flags=1, seq=7

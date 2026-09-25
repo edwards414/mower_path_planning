@@ -116,7 +116,7 @@ Payload 長度固定 `8` bytes。
 | 2 | `uint8_t` | `g` | 綠色 |
 | 3 | `uint8_t` | `b` | 藍色 |
 | 4 | `uint16_t` | `effect_period_ms` | 動畫步進週期 |
-| 6 | `uint8_t` | `reserved0` | 目前固定填 `0` |
+| 6 | `uint8_t` | `overlay` | 疊加在 `mode` 上的燈效 bits，`0x01` = `REAR_RECORDING`（只有後燈紅色呼吸）；舊 host 填 `0` = 沒有疊加 |
 | 7 | `uint8_t` | `reserved1` | 目前固定填 `0` |
 
 `mode` 定義:
@@ -263,7 +263,7 @@ Payload 長度固定 `8` bytes。
 | 2 | `uint8_t` | `g` | 目前綠色 |
 | 3 | `uint8_t` | `b` | 目前藍色 |
 | 4 | `uint16_t` | `effect_period_ms` | 目前動畫步進週期 |
-| 6 | `uint8_t` | `flags` | 狀態 bit flags |
+| 6 | `uint8_t` | `flags` | 狀態 bit flags：`0x01` `COMMAND_VALID`、`0x08` `REAR_RECORDING`（韌體正在套用後燈疊加；舊韌體不會設） |
 | 7 | `uint8_t` | `last_rx_seq` | 最近一次成功接收命令的 seq |
 
 ## `0x84` PID Config Status

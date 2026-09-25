@@ -56,6 +56,11 @@ extern "C" {
 #define UART_WS2812_MODE_SHOW 0x05U
 #define UART_WS2812_MODE_ORBIT 0x06U /* smooth comet around the strips, see led_effects.hpp */
 
+/* 0x03 payload `overlay` bits: drawn on top of `mode`, independent of it */
+#define UART_WS2812_OVERLAY_REAR_RECORDING 0x01U /* red breath on the back strip */
+/* 0x83 `flags`: bit0 is MOTOR_STATUS_FLAG_COMMAND_VALID */
+#define UART_WS2812_STATUS_FLAG_REAR_RECORDING 0x08U /* overlay requested (and supported) */
+
 /* 0x05 power command actions */
 #define UART_POWER_ACTION_NONE 0x00U
 #define UART_POWER_ACTION_HOST_SHUTDOWN_ACK 0x01U /* host is halting, cut after grace */
@@ -138,7 +143,7 @@ typedef struct __attribute__((packed)) {
   uint8_t g;
   uint8_t b;
   uint16_t effect_period_ms;
-  uint8_t reserved0;
+  uint8_t overlay; /* UART_WS2812_OVERLAY_* bits, 0 on older hosts */
   uint8_t reserved1;
 } ws2812_command_payload_t;
 
