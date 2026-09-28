@@ -114,16 +114,35 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 兩個都是安全關鍵：`mower_base` 直接驅動輪子，nav2 靠 `mower_localize` 發的 `map→odom` 導航。
 第一次開啟一定要監督試車：搖桿、放開即停、一段導航；底盤另外要測斷線與重啟（見下）。
 
-底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` 之後的行為）：
+底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` + `fix/rf-base-cmdtimeout` 之後的行為）：
 
 - **拔串口線測不到重啟**：`/dev/stmcom` 是板載 UART ttyS3，線拔掉讀寫都不會出錯，
-  `mower_base` 不會 fail、不會重啟。它測的是兩件事：韌體 300 ms 逾時讓輪子停，
-  以及 `mower_base` 的回授遺失鎖——日誌出現 `no wheel feedback for 0.52 s` 和
-  `arm latch: wheel feedback lost`；**插回去時搖桿繼續推著，輪子要保持不動**，
+  `mower_base` 不會 fail、不會重啟。它測的是韌體 300 ms 逾時讓輪子停，以及 `mower_base`
+  的 arm latch。latch 有三個觸發，**每一種拔法各對一個，三種都要測**：
+
+  | 拔什麼 | host 看到什麼 | 日誌 |
+  |---|---|---|
+  | 兩條線都拔（或只拔 STM32 TX → LubanCat RX） | 0x85 回授停了 | `no wheel feedback for 0.52 s`、`arm latch: wheel feedback lost` |
+  | **只拔 LubanCat TX → STM32 RX**（40-pin pin 8 → PA10） | 回授照來，0x81 報 COMMAND_TIMEOUT、`command_age_ms` 一直長 | `STM32 reports COMMAND_TIMEOUT: no 0x01 for 3xx ms ...`、`arm latch: the STM32 is not receiving our commands` |
+  | STM32 重開（reset 鍵、掉電、燒韌體） | bootloader 0.5 s 沒聲音，回來後 0x81 COMMAND_VALID 清掉或編碼器總數歸零 | 先 `arm latch: wheel feedback lost`，板子回來後 `STM32 restart: ...`、`arm latch: the STM32 restarted` |
+
+  共同的判準：**插回去（或板子回來）時搖桿繼續推著，輪子要保持不動**——板子收到的是
+  `mower_base` 送的 0/0；日誌先出現 `STM32 receiving commands again`（只拔 TX 和重開兩種），
   放開（或 0.25 s 沒有 cmd_vel）後出現 `arm latch: cmd_vel re-armed`，再推才會走。
   C++ 那條鏈沒有這個鎖，插回去當下就照搖桿走。
+  **只拔 TX 那一種是 2026-09-28 第一次上機實際踩到的**：舊映像（沒有這個觸發）拔了
+  pin 8、搖桿推著，STM32 的回授一直在（feedback age 0.00–0.04 s）、0x81 flags 0x03、
+  `command_age_ms` 350 → 7850、PWM 0；插回去下一包 0x01 就是搖桿的指令，輪子立刻轉
+  （第一個取樣 pwm 81）。新版在第二個逾時回報（約 350–400 ms）就鎖住，日誌只寫一次。
   另一種順序也要測：**靜止時拔線 → 拔著的時候推搖桿 → 推著插回去**，輪子一樣要不動，
-  放開再推才走（線還沒插回去之前鎖不會解開，所以不會在線外把速度爬上去、插回去一步到位）。
+  放開再推才走（線還沒插回去、板子還沒回報收得到之前鎖不會解開，所以不會在線外把速度爬上去、
+  插回去一步到位）。
+  兩條都拔、只插回 STM32 TX 那條：回授回來約 0.45–0.55 s 後會補一次 COMMAND_TIMEOUT 的鎖
+  （回授剛回來的那段時間，板子的逾時回報講的是已經被回授遺失鎖住的那次斷線，不算）；
+  再插回另一條時板子收到的一樣是 0/0。兩條一起插回去時日誌只有回授那兩行，不會多出
+  `not receiving our commands`。
+  PID 自動調參按 apply 寫 flash 時 STM32 會卡約 1 s，日誌會出現一次 `wheel feedback lost`
+  （或 COMMAND_TIMEOUT）——正常，調參的收尾 0/0 就解鎖，下一次調參照常能轉。
 - **重啟路徑**：`kill -9` 獨立的 `mower_base` 程序（`RUST_DAEMON=false`），launch 2 秒後重生；
   重生後即使 nav2／搖桿還在送非零指令，輪子也要不動，直到出現停止邊緣
   （`arm latch: cmd_vel re-armed by ...`）。DDS discovery 還沒配對好之前收不到東西，

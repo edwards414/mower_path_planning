@@ -154,30 +154,84 @@ same as the C++ chain's; run it under the robot's RMW (`tools/base_ab.sh`).
 Three deliberate differences from the C++ chain, the first two for the
 restart this node gets and the chain never had:
 
-* **The arm latch.** After every (re)activation, and when 0x85 feedback
-  that had been arriving stops for longer than `feedback_timeout_s`, the
-  cmd_vel reference is held at zero (the limiter brakes it as a cmd_vel
-  timeout would) until cmd_vel shows a stop edge: a finite 0/0, or nothing
-  for longer than `cmd_vel_timeout`. `wheel_override` gets the same rule on
-  its own stream: not applied, a running override dropped, until a 0/0 or
-  ttl-0 request or the same silence. The C++ chain deactivated its
+* **The arm latch.** After every (re)activation, and on each of the losses
+  below, the cmd_vel reference is held at zero (the limiter brakes it as a
+  cmd_vel timeout would) until cmd_vel shows a stop edge: a finite 0/0, or
+  nothing for longer than `cmd_vel_timeout`. `wheel_override` gets the same
+  rule on its own stream: not applied, a running override dropped, until a
+  0/0 or ttl-0 request or the same silence. The C++ chain deactivated its
   controllers for good on a runtime error; this node is restarted after 2 s
   and would otherwise resume a live nav2 or teleop command by itself. On the
-  robot's native UART a pulled lead is no read or write error at all, only
-  missing 0x85, so the feedback half of the latch is what turns a re-seated
-  lead into "stopped until released" instead of a lurch. Feedback that never
-  arrived since activation only logs a warning — a board that does not send
-  0x85 is not bricked. Disarm and re-arm are logged (`arm latch: ...`).
+  robot's native UART a pulled lead is no read or write error at all, so
+  the losses are read off what the board sends, one trigger per way the
+  link can break:
+
+  | what came out | what the host sees | trigger (`arm latch: ...`) |
+  |---|---|---|
+  | both leads, or the STM32 TX -> LubanCat RX lead | no 0x85 for longer than `feedback_timeout_s` (0.5 s) | **feedback loss** (`wheel feedback lost`) |
+  | the LubanCat TX -> STM32 RX lead only (40-pin pin 8 -> PA10) | 0x85 keeps coming; 0x81 reports COMMAND_TIMEOUT with a growing `command_age_ms` | **command path loss** (`the STM32 is not receiving our commands`, plus `STM32 reports COMMAND_TIMEOUT: no 0x01 for N ms ...` once) |
+  | the STM32 restarted (reset, brown-out, a flash) | 0.5 s of silence in its bootloader, then 0x81 COMMAND_VALID cleared or the encoder totals back at zero | feedback loss first, then **STM32 restart** (`STM32 restart: ...`) |
+
+  The command path loss needs, since the activation, one fresh 0x81 that
+  showed the board receiving (COMMAND_VALID set, COMMAND_TIMEOUT clear),
+  then two fresh 0x81 in a row with COMMAND_TIMEOUT while this node wrote a
+  0x01 at least every 150 ms for the last 450 ms (the board's 300 ms timeout
+  plus that half again). A single report is CRC-checked and genuine, but a
+  dropout that heals before the second one stopped the wheels for at most
+  one 50 ms status period — a stutter, not a lurch — and is not worth
+  stranding a nav2 goal on; a pulled lead reports every 50 ms. At activation
+  the board's timeout is its memory of the time no driver ran, and after a
+  stall of this loop it is the firmware timeout doing its job: neither
+  counts. Nor do the reports while the feedback is lost and for 450 ms after
+  it returns: they describe the outage the feedback loss has already
+  latched, and when both leads are re-seated together the board's first
+  reports (two, if the contact bounce eats the first frames) still predate
+  our first frame landing. If only the STM32 TX lead came back, the reports
+  go on and the command path loss follows 0.45-0.55 s after the feedback,
+  long before the second lead can be re-seated; until then the streams may
+  have re-armed at rest and a push goes into the cut lead, but the disarm
+  zeroes it and the re-seat gets 0/0. The restart is COMMAND_VALID dropping
+  (the firmware clears it only in `MowerMotor_Init`, and reports "no command
+  yet" as flags 0x02, which the protocol table listed as 0x00 until this
+  change; `firmware/UART_OPEN_LOOP_PROTOCOL.md` is corrected) or both
+  encoder totals back near zero by a jump no wheel can make in the time
+  since the previous 0x85 (they count from 0 at `WheelController_Init`). The
+  frame `seq` (the last 0x01 seq the board accepted, i.e. ours) and the 0x87
+  firmware info (sent every second anyway, identical across a restart) are
+  not restart signatures. Neither shows every restart: the new boot's first
+  0x81 goes out 60 ms after the app starts, by which time one of the 25 Hz
+  0x01 has usually landed, and the totals only show a restart after the
+  wheels have turned about a revolution since the last one. What covers
+  every restart today is the 500 ms bootloader grace: the feedback loss
+  fires at 0.52 s, before the board is back, so the new boot only ever
+  receives zeros. The restart trigger is the backstop for a board that comes
+  back faster than `feedback_timeout_s`; then up to one status period of the
+  live command reaches the new boot before the first 0x85 tells the host,
+  the one gap only the firmware could close.
+
+  Re-arming needs each stream's stop edge **and** the link back: nothing
+  re-arms while the feedback is still lost, nor after a command path loss
+  or a restart until a fresh 0x81 shows the board receiving again
+  (COMMAND_TIMEOUT clear, `command_age_ms` within two control periods,
+  80 ms; logged as `STM32 receiving commands again`). The 0x01 frames it
+  receives by then are this node's zeros, so a re-seated lead gets 0/0,
+  whatever the stick does. A command given with a lead out would otherwise
+  ramp up against wheels that cannot move and hit them as a step on the
+  re-seat; on the cycle the link returns, a stream at rest re-arms and a
+  pushed one stays held. Feedback that never arrived since activation only
+  logs a warning — a board that does not send 0x85 is not bricked.
   Two rules keep "silence" honest. A restarted node's reader hears nothing
   from a live writer until DDS discovery has matched the two (2.7 s has been
   seen under load), so silence only counts once the topic has had a
   publisher in the graph for `publisher_settle_s` (2 s), or after a message
   has actually arrived; with neither, only an explicit stop re-arms
-  (`cmd_vel: publisher in the graph ... after activation` is logged). And
-  nothing re-arms while the feedback is still lost: a command given with the
-  lead out would otherwise ramp up against wheels that cannot move and hit
-  them as a step on the re-seat; on the cycle the feedback returns, a
-  stream at rest re-arms and a pushed one stays held.
+  (`cmd_vel: publisher in the graph ... after activation` is logged).
+  `mower_pid_autotune`'s flash save stalls the STM32 for about a second (no
+  frames, no commands taken), which trips the feedback loss (or, for a
+  shorter erase, the command path loss); by then the run's steps are over,
+  and its closing cancel (0/0, ttl 0) is the override stream's stop edge,
+  so the next run drives the wheels as usual. `arm_latch: false` (the
+  parity tests only) turns off all of it, the 0x81 checks included.
 * **The control clock is CLOCK_MONOTONIC**, as ros2_control's steady trigger
   clock is: the loop period, the command age, the feedback age, the blade,
   override and LED deadlines, the telemetry throttle and the telemetry `t`
@@ -254,16 +308,22 @@ python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b   # exit 
 run A /out/a_pull "" --scenario pull             # the cable pull, both sides
 run B /out/b_pull /repo/path/to/new/mower_base --scenario pull
 python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a_pull --b /tmp/ab/b_pull
-# the same shape for --scenario pullpush (pushed while the lead is out) and
-# --scenario live (a restart under a stream that is already running); give
+# the same shape for --scenario pullpush (pushed while the lead is out),
+# --scenario txpull (the LubanCat TX lead alone: the feedback keeps coming),
+# --scenario live (a restart under a stream that is already running) and
+# --scenario autotune (mower_pid_autotune, from $AUTOTUNE_BIN or next to the
+# B binary, through a run with a flash save and a second run after it); give
 # live a loaded variant too, discovery latency is what it is about:
 #   docker run --cpus=1 -e LOAD=8 ... base_ab.sh B /out/b_live_load <bin> --scenario live
 ```
 
-`fake_base.py` answers 0x85 at the firmware's 50 ms period from a
-deterministic first-order wheel model driven by the received 0x01 commands,
-plus 0x81/0x82/0x83/0x84/0x86/0x87/0x88/0x89 once a second, and logs every
-frame with a timestamp. `base_harness.py` publishes the same scripted
+`fake_base.py` answers 0x85 and 0x81 at the firmware's 50 ms period, the
+0x85 from a deterministic first-order wheel model driven by the received
+0x01 commands, the 0x81 with COMMAND_VALID / COMMAND_TIMEOUT /
+`command_age_ms` as `motor.cpp` computes them; 0x82/0x83/0x84/0x86/0x87/
+0x88/0x89 once a second, a 0x84 right after each 0x04, and a 1 s stall
+(nothing sent, nothing taken) for a 0x04 that saves to flash, like the
+sector erase. It logs every frame with a timestamp. `base_harness.py` publishes the same scripted
 `/drivetrain_guarded_cmd_vel` (a *continuous* ramp, so the up-to-40 ms phase
 difference between the two runs' control loops costs `a*h^2/2` per corner
 instead of `v*h`) and the same side-channel bursts, and records `/odom`,
@@ -341,6 +401,36 @@ release build of `fix/rf-base-preflight`, same image and RMW:
   C++ 50/50 frames at 549 permille from the first frame after the re-seat;
   `mower_base` 0/49, re-armed by the release. `--scenario pull` again:
   C++ 71/71 non-zero, `mower_base` 0/75.
+
+Re-run 2026-09-28 for the command-path and restart triggers
+(`fix/rf-base-cmdtimeout`: release build, same image, CycloneDDS,
+`ROS_DOMAIN_ID=72`, a host at a load of ~7), with `fake_base.py`'s 0x81 now
+computed as the firmware does:
+
+* `--scenario txpull` (stick held at 0.30 m/s, only the LubanCat TX lead out
+  4-6 s). The fake's view is the robot's: 40 feedback frames still sent
+  during the cut, 35 of 40 0x81 with COMMAND_TIMEOUT from 0.30 s after it,
+  `command_age_ms` up to ~2000. C++: after the re-seat 75 of 75 frames at
+  549 permille from the first one (6.02 s), wheels up to 31.8 rpm: the
+  lurch. `mower_base`: `STM32 reports COMMAND_TIMEOUT: no 0x01 for 361 ms`
+  and the disarm, once; after the re-seat 0 of 75 non-zero and the wheels at
+  0 rpm, `STM32 receiving commands again (command_age_ms 22)`, re-armed by
+  the release's explicit stop and followed the next push (47 non-zero
+  frames).
+* `--scenario autotune`, both sides: `precheck -> open_loop -> fitting ->
+  verify -> review -> saving -> done`, then a second run to `review ->
+  idle`. The save's 1 s stall left one 0x81 with COMMAND_TIMEOUT
+  (`command_age_ms` 1001 / 1002) behind it; `mower_base` logged the feedback
+  loss at 0.52 s and re-armed both streams by silence on the cycle the
+  feedback came back (a report while the feedback is lost does not count).
+  The second run's 400 / 700 / 500 permille steps reached the fake (205 and
+  206 non-zero frames after the save).
+* No change elsewhere, and no command path loss or restart logged in any of
+  them: `pull` C++ 75/75 non-zero after the re-seat, `mower_base` 0/75 with
+  only the feedback-loss lines; `pullpush` 50/50 vs 0/50; `live` 223 of 240
+  vs 0 of 248; the default script with QoS identical on all eleven topics,
+  telemetry keys 84 = 84, the side-channel payloads identical, odometry
+  2.3e-4 m apart after 3.0 m.
 
 ### Capturing a real serial recording on the robot
 

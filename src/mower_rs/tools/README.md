@@ -7,7 +7,7 @@ the bottom drive an A/B measurement on the real robot.
 | tool | what it does |
 |---|---|
 | `shadow_compare.py` | separate mower_rs binaries vs one `mower_rsd` process, every topic compared (Phase A5) |
-| `fake_base.py`, `base_harness.py`, `base_compare.py`, `base_ab.sh` | a fake STM32 on a pty, then the `ros2_control` chain vs `mower_base` against it (Phase B); `base_ab.sh` runs one side in the runtime image under the robot's CycloneDDS, `base_compare.py` exits 1 on any endpoint QoS difference, `--scenario pull` / `pullpush` are the cable pull with the stick pushed before / during it, `--scenario live` a restart under a stream that was already running (run it with `--cpus=1 -e LOAD=8` too: discovery latency is what it tests) (recipe in `../README.md`, mower_base "Verification") |
+| `fake_base.py`, `base_harness.py`, `base_compare.py`, `base_ab.sh` | a fake STM32 on a pty, then the `ros2_control` chain vs `mower_base` against it (Phase B); `base_ab.sh` runs one side in the runtime image under the robot's CycloneDDS, `base_compare.py` exits 1 on any endpoint QoS difference, `--scenario pull` / `pullpush` are the cable pull (both leads) with the stick pushed before / during it, `--scenario txpull` the LubanCat TX lead alone (the fake goes deaf but keeps sending, 0x81 COMMAND_TIMEOUT), `--scenario live` a restart under a stream that was already running (run it with `--cpus=1 -e LOAD=8` too: discovery latency is what it tests), `--scenario autotune` `mower_pid_autotune` through a run with a flash save (the fake stalls like the sector erase) and a second run after it (recipe in `../README.md`, mower_base "Verification") |
 | `localize_compare.py` | `dual_ekf_navsat.launch.py` vs `mower_localize` on one synthetic sensor stream (Phase C); `--yaw0 --imu-start --launch` replays the robot's start-up (heading far from east, `/odom` before the IMU, stack started with the stream) so navsat's `delay` is exercised |
 | `datum_check.py` | **before a GPS run**: asks navsat (`/toLL`, `/fromLL`) whether the `map -> utm` datum is rotated, which it is by 10-15 degrees, in both stacks, when `/odom` reached the map EKF before the IMU (the usual start-up order with `rust_base`); `--fix` re-sets it at the same origin via `/datum` |
 | `slow_copy_check.py` | a source topic and its throttled copies (`/odom` -> `/odom_slow`, `/odometry/global` -> `/odometry/global_slow`): rate, spacing, byte-identity with a source message, publisher QoS; run a `topic_tools throttle` on the same source next to the module's copy to compare (`../README.md`, "The slow copies") |
@@ -81,6 +81,8 @@ docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' \
   ghcr.io/edwards414/mower_path_planning:rosfree-test | grep MOWER_GIT_SHA   # must be $SHA
 docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
   -caF 'arm latch: wheel feedback lost' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1, not 0
+docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+  -caF 'not receiving our commands' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the TX-lead trigger
 docker save ghcr.io/edwards414/mower_path_planning:rosfree-test | gzip -1 > /tmp/rosfree-test.tar.gz
 scp /tmp/rosfree-test.tar.gz cat@<robot>:/tmp/
 ssh cat@<robot> 'gunzip -c /tmp/rosfree-test.tar.gz | sudo docker load && rm /tmp/rosfree-test.tar.gz'
@@ -162,14 +164,21 @@ and main finds its own build still on the board.
 **Pulling the STM32 cable does not test the restart path.** `/dev/stmcom` is
 the LubanCat's native UART (ttyS3), which reports no I/O error when the cable
 goes. Pulling it exercises only the firmware's 300 ms command timeout plus
-mower_base's feedback-loss latch (`fix/rf-base-preflight` 27bbfaa; the image
-check above makes sure it is in the binary), never the serial-error stop
-burst and the 2 s restart. The log shows `no wheel feedback for ...` and
-`arm latch: wheel feedback lost` when the lead goes, and after the re-seat
-the wheels stay put until cmd_vel stops (`arm latch: cmd_vel re-armed by
-...`); read it with `sudo docker logs mower-lawan_node-1 2>&1 | grep 'arm
-latch'`. Still re-seat only with the sticks released and navigation idle:
-the latch is what is being tested, not something to rely on yet. To test
+mower_base's arm latch, never the serial-error stop burst and the 2 s
+restart. Each way of pulling has its own trigger, so do all three: both
+leads (or the STM32 TX one) is the feedback loss (`no wheel feedback for
+...`, `arm latch: wheel feedback lost`; `fix/rf-base-preflight` 27bbfaa);
+the LubanCat TX -> STM32 RX lead alone (40-pin pin 8 -> PA10), the pull of
+the 2026-09-28 run, is the command path loss (`STM32 reports
+COMMAND_TIMEOUT: no 0x01 for ... ms`, `arm latch: the STM32 is not
+receiving our commands`; `fix/rf-base-cmdtimeout`, the second grep in the
+image check above); an STM32 reset is the feedback loss and then `STM32
+restart: ...`. After the re-seat the log shows `STM32 receiving commands
+again` (the last two) and the wheels stay put until cmd_vel stops (`arm
+latch: cmd_vel re-armed by ...`); read it with `sudo docker logs
+mower-lawan_node-1 2>&1 | grep -E 'arm latch|STM32'`. Still re-seat only
+with the sticks released and navigation idle: the latch is what is being
+tested, not something to rely on yet. To test
 the restart, kill the driver by PID (`sudo docker top mower-lawan_node-1 -o
 pid,args | grep mower_base`, then `sudo kill -9 <pid>`; not `pkill -f`,
 whose pattern can match and kill your own shell). Launch respawns it after
