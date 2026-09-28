@@ -207,7 +207,12 @@ impl<'a> Reader<'a> {
 }
 
 /// `process_noise_covariance` / `initial_estimate_covariance`: 15 values are a
-/// diagonal, 225 a full row-major matrix, anything else is fatal upstream.
+/// diagonal, 225 a full matrix read column-major, as upstream's
+/// `Eigen::MatrixXd::Map` reads it (element `i` is row `i % 15`, column
+/// `i / 15`; the transpose of the row-major reading for an asymmetric matrix).
+/// Any other length is refused. Upstream means to throw there too, but its
+/// check tests the destination's size (always 225) instead of the list's, so
+/// it maps 225 values out of a shorter list.
 fn covariance(node: &str, key: &str, flat: &[f64]) -> Result<Mat15, String> {
     let mut m = ZERO_MAT15;
     if flat.len() == STATE_SIZE {
@@ -216,7 +221,7 @@ fn covariance(node: &str, key: &str, flat: &[f64]) -> Result<Mat15, String> {
         }
     } else if flat.len() == STATE_SIZE * STATE_SIZE {
         for (i, v) in flat.iter().enumerate() {
-            m[i / STATE_SIZE][i % STATE_SIZE] = *v;
+            m[i % STATE_SIZE][i / STATE_SIZE] = *v;
         }
     } else {
         return Err(format!(
@@ -654,10 +659,17 @@ mod tests {
         let m = covariance("n", "k", &diag).unwrap();
         assert_eq!(m[3][3], 4.0);
         assert_eq!(m[3][4], 0.0);
+        // An asymmetric matrix shows the storage order: Eigen's Map is
+        // column-major, so the 16th value is row 0, column 1 (and the 3rd is
+        // row 2, column 0), not row 1, column 0.
         let mut full = vec![0.0; STATE_SIZE * STATE_SIZE];
-        full[STATE_SIZE + 2] = 7.0;
-        assert_eq!(covariance("n", "k", &full).unwrap()[1][2], 7.0);
+        full[STATE_SIZE] = 7.0;
+        full[2] = 5.0;
+        let m = covariance("n", "k", &full).unwrap();
+        assert_eq!((m[0][1], m[1][0]), (7.0, 0.0));
+        assert_eq!((m[2][0], m[0][2]), (5.0, 0.0));
         assert!(covariance("n", "k", &[1.0; 3]).is_err());
+        assert!(covariance("n", "k", &[1.0; STATE_SIZE * STATE_SIZE - 1]).is_err());
     }
 
     #[test]
