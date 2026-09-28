@@ -10,6 +10,12 @@ side-channel bursts, and records `/odom`, `/joint_states`, `/tf` and
 
     ros2 run ... base_harness.py --out /tmp/run_a.json --label ros2_control
 
+`--scenario pull --mute-file F` runs PULL_SCRIPT instead: the stick is held
+while the harness makes `fake_base.py` go deaf and mute for two seconds (a
+pulled UART lead) and back, then released and pushed again. The C++ chain
+resumes the held command the moment the lead is back; `mower_base` holds
+the wheels until the release (its arm latch).
+
 Nothing here runs on the robot.
 """
 
@@ -18,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 
 import rclpy
@@ -56,6 +63,20 @@ CMD_SCRIPT = [
 CMD_RATE_HZ = 200.0
 RUN_SECONDS = 32.0
 
+# The cable-pull scenario: the lead is out from MUTE[0] to MUTE[1] while the
+# stick stays at 0.30 m/s, released at 9.0 s and pushed again at 9.5 s.
+PULL_SCRIPT = [
+    (0.0, 1.5, None, None),
+    (1.5, 3.5, (0.0, 0.30), (0.0, 0.0)),
+    (3.5, 9.0, (0.30, 0.30), (0.0, 0.0)),      # held through the pull
+    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
+    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
+    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
+    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+]
+PULL_MUTE = (4.0, 6.0)
+PULL_SECONDS = 14.0
+
 # (t_from, t_to, rate_hz, topic, payload)
 SIDE_SCRIPT = [
     (2.0, 2.1, 10.0, "led", '{"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}'),
@@ -68,9 +89,9 @@ SIDE_SCRIPT = [
 ]
 
 
-def command_at(t: float):
+def command_at(t: float, script=CMD_SCRIPT):
     """(linear.x, angular.z) at `t`, or None where the script is silent."""
-    for lo, hi, lin, ang in CMD_SCRIPT:
+    for lo, hi, lin, ang in script:
         if lo <= t < hi:
             if lin is None:
                 return None
@@ -83,17 +104,28 @@ def yaw_of(q) -> float:
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
 
+def name_of(policy) -> str:
+    """`RELIABLE`, not `1`: Jazzy's QoS policies are IntEnums, whose str() is the number."""
+    return getattr(policy, "name", str(policy))
+
+
 def stamp_s(header) -> float:
     return header.stamp.sec + header.stamp.nanosec * 1e-9
 
 
 class Harness(Node):
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, scenario: str = "default", mute_file: str = "") -> None:
         super().__init__("base_harness")
         self.label = label
+        self.scenario = scenario
+        self.script = PULL_SCRIPT if scenario == "pull" else CMD_SCRIPT
+        self.side_script = [] if scenario == "pull" else SIDE_SCRIPT
+        self.mute_file = mute_file
         self.t0 = time.monotonic()
         self.rec = {
             "label": label,
+            "scenario": scenario,
+            "mute": list(PULL_MUTE) if scenario == "pull" else None,
             # CLOCK_MONOTONIC is shared across processes on Linux, so this
             # is what lines the harness up with fake_base.py's log.
             "t0_monotonic": self.t0,
@@ -176,7 +208,13 @@ class Harness(Node):
         if not self.started:
             return
         t = self.rel()
-        command = command_at(t)
+        if self.mute_file and self.scenario == "pull":
+            muted = PULL_MUTE[0] <= t < PULL_MUTE[1]
+            if muted and not os.path.exists(self.mute_file):
+                open(self.mute_file, "w").close()
+            elif not muted and os.path.exists(self.mute_file):
+                os.unlink(self.mute_file)
+        command = command_at(t, self.script)
         if command is None:
             return
         lin, ang = command
@@ -194,7 +232,7 @@ class Harness(Node):
         if not self.started:
             return
         t = self.rel()
-        for i, (lo, hi, rate, topic, payload) in enumerate(SIDE_SCRIPT):
+        for i, (lo, hi, rate, topic, payload) in enumerate(self.side_script):
             if not (lo <= t < hi):
                 continue
             last = self._side_sent.get(i)
@@ -231,6 +269,7 @@ class Harness(Node):
             {
                 "t": round(self.rel(), 6),
                 "stamp": stamp_s(msg.header),
+                "frame_id": msg.header.frame_id,
                 "name": list(msg.name),
                 "position": list(msg.position),
                 "velocity": list(msg.velocity),
@@ -266,6 +305,7 @@ class Harness(Node):
     # -- graph snapshot --------------------------------------------------
     def snapshot_graph(self) -> None:
         info = {}
+        # every topic mower_base owns, both directions
         for topic in [
             "/odom",
             "/joint_states",
@@ -273,20 +313,27 @@ class Harness(Node):
             "/mower_base/telemetry",
             "/mower_base/firmware_info",
             "/drivetrain_guarded_cmd_vel",
+            "/mower_base/led_command",
+            "/mower_base/pid_command",
+            "/mower_base/wheel_override",
+            "/mower_base/servo_command",
+            "/mower_base/blade_command",
         ]:
             entries = []
             for endpoint in self.get_publishers_info_by_topic(topic) + (
                 self.get_subscriptions_info_by_topic(topic)
             ):
+                qos = endpoint.qos_profile
                 entries.append(
                     {
                         "node": endpoint.node_name,
                         "type": endpoint.topic_type,
-                        "kind": str(endpoint.endpoint_type),
-                        "reliability": str(endpoint.qos_profile.reliability),
-                        "durability": str(endpoint.qos_profile.durability),
-                        "depth": endpoint.qos_profile.depth,
-                        "history": str(endpoint.qos_profile.history),
+                        "kind": name_of(endpoint.endpoint_type),
+                        "reliability": name_of(qos.reliability),
+                        "durability": name_of(qos.durability),
+                        "depth": qos.depth,
+                        "history": name_of(qos.history),
+                        "liveliness": name_of(qos.liveliness),
                     }
                 )
             info[topic] = entries
@@ -301,11 +348,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", required=True)
-    ap.add_argument("--seconds", type=float, default=RUN_SECONDS)
+    ap.add_argument("--seconds", type=float)
+    ap.add_argument("--scenario", choices=["default", "pull"], default="default")
+    ap.add_argument("--mute-file", default="",
+                    help="the file fake_base.py --mute-file watches (used by --scenario pull)")
     args = ap.parse_args()
+    if args.seconds is None:
+        args.seconds = PULL_SECONDS if args.scenario == "pull" else RUN_SECONDS
+    if args.scenario == "pull" and not args.mute_file:
+        ap.error("--scenario pull needs --mute-file")
 
     rclpy.init()
-    node = Harness(args.label)
+    node = Harness(args.label, args.scenario, args.mute_file)
     if not node.wait_for_discovery():
         print(f"[{args.label}] WARNING: not every endpoint matched before the run")
     end = time.monotonic() + args.seconds
@@ -317,6 +371,8 @@ def main() -> int:
             graphed = True
     if not graphed:
         node.snapshot_graph()
+    if args.mute_file and os.path.exists(args.mute_file):
+        os.unlink(args.mute_file)
     with open(args.out, "w") as f:
         json.dump(node.rec, f)
     print(
