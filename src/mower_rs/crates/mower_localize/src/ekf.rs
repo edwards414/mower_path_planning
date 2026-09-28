@@ -83,6 +83,33 @@ fn tf_static_qos() -> QosProfile {
     QosProfile::default().keep_last(100).reliable().transient_local()
 }
 
+/// `periodicUpdate`'s corrected-data rule. A tick whose filtered state carries
+/// a stamp no newer than the last one published -- nothing new was fused and
+/// the queue was empty for less than `sensor_timeout`, or the only new
+/// measurement was out of order, e.g. a late `/odometry/gps` -- publishes
+/// neither the transform nor the odometry, unless
+/// `permit_corrected_publication` is set (upstream's default is false and the
+/// yaml does not set it). The stamp is remembered either way.
+struct PublishGate {
+    permit_corrected_publication: bool,
+    /// `last_published_stamp_`, `rclcpp::Time(0)` at start.
+    last_published_stamp_ns: i64,
+}
+
+impl PublishGate {
+    fn new(permit_corrected_publication: bool) -> Self {
+        Self { permit_corrected_publication, last_published_stamp_ns: 0 }
+    }
+
+    /// Whether a state stamped `stamp_ns` goes out.
+    fn admit(&mut self, stamp_ns: i64) -> bool {
+        let corrected =
+            !self.permit_corrected_publication && self.last_published_stamp_ns >= stamp_ns;
+        self.last_published_stamp_ns = stamp_ns;
+        !corrected
+    }
+}
+
 /// The filter plus the transform revision its `TransformTree` was built from.
 struct Filter {
     core: RosFilterCore,
@@ -143,6 +170,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
         Kind::Map => config::ekf_map_config(),
     };
     let t = topics(&node, kind);
+    let permit_corrected_publication = params::bool(&node, "permit_corrected_publication", false);
 
     let filter = Arc::new(Mutex::new(Filter {
         core: config::build_filter(&config),
@@ -200,7 +228,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
     let odom_pub = node.create_publisher::<ROdometry>(&t.out, output_qos())?;
     let tf_pub = node.create_publisher::<TFMessage>("/tf", tf_qos())?;
 
-    paramsrv::advertise(&mut node, &m.node_name, parameters(&config, kind, &t))?;
+    let mut advertised = parameters(&config, kind, &t);
+    advertised.push(paramsrv::boolean("permit_corrected_publication", permit_corrected_publication));
+    paramsrv::advertise(&mut node, &m.node_name, advertised)?;
 
     // ---- spin ---------------------------------------------------------------
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -231,6 +261,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
     // src/mower_rs/README.md).
     let mut tick = tokio::time::interval(Duration::from_secs_f64(1.0 / config.frequency));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut gate = PublishGate::new(permit_corrected_publication);
     loop {
         tokio::select! {
             _ = m.shutdown.wait() => break,
@@ -248,6 +279,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
             None
         };
         drop(f);
+        if !gate.admit(odom.header.stamp_ns) {
+            // Not even the in-process tfbus: the C++ consumers would not
+            // have seen this value on /tf either.
+            continue;
+        }
 
         if config.publish_tf {
             // `periodicUpdate` stamps the transform with the filtered
@@ -327,6 +363,48 @@ mod tests {
         assert_eq!(odom.base_link_frame, "base_footprint");
         assert!(odom.publish_tf && map.publish_tf);
         assert!(odom.two_d_mode && map.two_d_mode);
+    }
+
+    #[test]
+    fn a_state_whose_stamp_did_not_advance_is_not_published_again() {
+        let mut gate = PublishGate::new(false);
+        let admitted: Vec<bool> = [10, 20, 20, 30, 25, 40].iter().map(|&s| gate.admit(s)).collect();
+        assert_eq!(admitted, [true, true, false, true, false, true]);
+        // permit_corrected_publication: true publishes every tick.
+        let mut permissive = PublishGate::new(true);
+        assert!([10, 20, 20, 30, 25].iter().all(|&s| permissive.admit(s)));
+    }
+
+    #[test]
+    fn two_ticks_without_a_new_measurement_publish_once() {
+        // The real filter: one /odom fused, then two ticks less than
+        // sensor_timeout (50 ms at 20 Hz) after it. Both report the same
+        // stamp, and only the first goes out.
+        use mower_localize_core::msgs::{Header, Odometry};
+        let cfg = config::ekf_odom_config();
+        let mut core = config::build_filter(&cfg);
+        let t0 = 1_000_000_000_000i64;
+        let mut odom = Odometry {
+            header: Header { frame_id: "odom".into(), stamp_ns: t0 },
+            child_frame_id: "base_footprint".into(),
+            ..Default::default()
+        };
+        odom.twist.linear.x = 0.3;
+        for k in 0..6 {
+            odom.twist.covariance[k][k] = 0.01;
+        }
+        core.odometry_callback(&odom, &config::odom_ekf_odom0());
+        let mut gate = PublishGate::new(false);
+        let mut published = 0;
+        for now in [t0 + 10_000_000, t0 + 30_000_000] {
+            core.integrate_measurements(now);
+            let stamp = core.filtered_odometry().expect("initialised").header.stamp_ns;
+            assert_eq!(stamp, t0);
+            if gate.admit(stamp) {
+                published += 1;
+            }
+        }
+        assert_eq!(published, 1);
     }
 
     #[test]
