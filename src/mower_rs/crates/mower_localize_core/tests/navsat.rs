@@ -4,8 +4,8 @@
 
 mod common;
 
+use common::oracle_config::navsat_config;
 use common::*;
-use mower_localize_core::config::navsat_config;
 use mower_localize_core::msgs::*;
 use mower_localize_core::navsat::NavSatTransformCore;
 use mower_localize_core::tf::{Quaternion, Transform, Vector3};
@@ -241,4 +241,64 @@ fn navsat_transform_matches_robot_localization() {
          max covariance error {max_cov:.3e}",
         steps.len()
     );
+}
+
+/// `toLLCallback` answers nothing (so the client gets the default (0, 0, 0))
+/// until the datum exists, even though a good fix has already set the UTM
+/// zone. `map_to_ll` alone would project the identity transform through that
+/// zone: (0.0, 118.51) here, which the adapters would lock as a datum.
+#[test]
+fn to_ll_answers_nothing_before_the_datum() {
+    let mut core = NavSatTransformCore::new(navsat_config());
+    let mut fix = NavSatFix {
+        header: Header {
+            frame_id: "base_footprint".to_string(),
+            stamp_ns: 1,
+        },
+        status: STATUS_FIX,
+        latitude: 23.6940,
+        longitude: 120.5377,
+        altitude: 50.0,
+        position_covariance: ZERO_MAT3,
+    };
+    fix.position_covariance[0][0] = 0.04;
+    core.gps_fix_callback(&fix);
+    core.compute_transform();
+    assert!(!core.transform_good, "no odometry or IMU yet");
+    assert_eq!(core.utm_zone, 51, "the fix alone already set the zone");
+
+    let origin = Vector3::new(0.0, 0.0, 0.0);
+    assert_eq!(core.to_ll(&origin), None);
+    let (lat, lon, _) = core.map_to_ll(&origin);
+    assert!(lat.abs() < 1e-9 && (lon - 118.51).abs() < 0.01, "{lat} {lon}");
+
+    // No fix at all: map_to_ll has no zone and answers NaN, to_ll still None.
+    let empty = NavSatTransformCore::new(navsat_config());
+    assert_eq!(empty.to_ll(&origin), None);
+    assert!(empty.map_to_ll(&origin).0.is_nan());
+
+    // Odometry and IMU complete the datum; from then on it is map_to_ll.
+    let odom = Odometry {
+        header: Header {
+            frame_id: "map".to_string(),
+            stamp_ns: 2,
+        },
+        child_frame_id: "base_footprint".to_string(),
+        ..Default::default()
+    };
+    core.odom_callback(&odom);
+    let imu = Imu {
+        header: Header {
+            frame_id: "base_footprint".to_string(),
+            stamp_ns: 2,
+        },
+        orientation: Quaternion::identity(),
+        ..Default::default()
+    };
+    core.imu_callback(&imu);
+    core.gps_fix_callback(&fix);
+    core.compute_transform();
+    assert!(core.transform_good);
+    let (lat, lon, _) = core.to_ll(&origin).expect("datum exists");
+    assert!((lat - 23.6940).abs() < 1e-7 && (lon - 120.5377).abs() < 1e-7, "{lat} {lon}");
 }

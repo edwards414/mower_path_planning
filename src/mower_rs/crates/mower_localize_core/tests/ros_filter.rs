@@ -9,8 +9,8 @@
 
 mod common;
 
+use common::oracle_config::*;
 use common::*;
-use mower_localize_core::config::*;
 use mower_localize_core::msgs::*;
 use mower_localize_core::prepare::{RosFilterCore, SensorConfig};
 use mower_localize_core::tf::{Quaternion, Transform, Vector3};

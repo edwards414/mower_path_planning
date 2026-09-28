@@ -767,6 +767,7 @@ name = "mower_localize_core"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

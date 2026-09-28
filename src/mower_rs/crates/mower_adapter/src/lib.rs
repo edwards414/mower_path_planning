@@ -322,12 +322,13 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             }
             // Once navsat gives a real datum we lock it (latched pub keeps it live).
             loop {
-                let origin = to_ll(&client, 0.0).await.filter(|r| {
-                    // navsat datum not established (no valid GPS fix) -> fallback.
-                    r.ll_point.latitude.abs() >= 1e-6 || r.ll_point.longitude.abs() >= 1e-6
-                });
+                // navsat datum not established (default (0, 0, 0) answer, or a
+                // non-finite one) -> fallback.
+                let is_datum =
+                    |r: &ToLL::Response| dto::is_navsat_datum_point(r.ll_point.latitude, r.ll_point.longitude);
+                let origin = to_ll(&client, 0.0).await.filter(is_datum);
                 if let Some(origin) = origin {
-                    if let Some(probe) = to_ll(&client, DATUM_PROBE_M).await {
+                    if let Some(probe) = to_ll(&client, DATUM_PROBE_M).await.filter(is_datum) {
                         let (lat0, lon0) = (origin.ll_point.latitude, origin.ll_point.longitude);
                         let bearing = dto::bearing_to_north(lat0, lon0, probe.ll_point.latitude, probe.ll_point.longitude);
                         publish_datum(&publisher, lat0, lon0, bearing, "navsat");

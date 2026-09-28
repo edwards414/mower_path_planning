@@ -11,3 +11,5 @@ description = "ROS-free port of the robot_localization paths this mower uses: th
 
 [dev-dependencies]
 serde_json.workspace = true
+# tests/yaml_config.rs reads mower_nav2/config/dual_ekf_navsat_params.yaml.
+serde_yaml = "0.9"

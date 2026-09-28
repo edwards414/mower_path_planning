@@ -203,6 +203,13 @@ def generate_launch_description():
         description='mower_gps parameter file (device, rate_hz, frame_id, '
                     'timeouts)',
     )
+    declare_localize_params_file = DeclareLaunchArgument(
+        'localize_params_file',
+        default_value=os.path.join(
+            mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml'),
+        description='Parameters of the two EKFs and navsat_transform, for '
+                    'the C++ nodes and mower_localize alike',
+    )
 
     robot_description_path = os.path.join(
         get_package_share_directory('mower_description'),
@@ -275,6 +282,8 @@ def generate_launch_description():
             'gps_fix_topic': gps_fix_topic,
             'rust_localize': LaunchConfiguration('rust_localize'),
             'rust_daemon': LaunchConfiguration('rust_daemon'),
+            'localize_params_file': LaunchConfiguration(
+                'localize_params_file'),
         }.items(),
     )
 
@@ -448,6 +457,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_enable_gps,
         declare_gps_params_file,
+        declare_localize_params_file,
         robot_state_publisher,
         wit_ros2_imu_node,
         mower_imu_node,

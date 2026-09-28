@@ -7,9 +7,10 @@
 //! values the node only ever reads at start-up.
 //!
 //! This module answers `get` / `get_parameter_types` / `list` / `describe`
-//! from the values the node is actually running with, and **refuses every
-//! `set`** with a reason instead of accepting a change that would not take
-//! effect. Nothing on this robot calls these services (`mower_adapter` only
+//! from the values the node is actually running with -- the declared set that
+//! `mower_localize_core::config` resolved from the params file, defaults
+//! included, as rclcpp would list it -- and **refuses every `set`** with a
+//! reason instead of accepting a change that would not take effect. Nothing on this robot calls these services (`mower_adapter` only
 //! calls `/map_manage/*` and `/boustrophedon_coverage/*`); they exist so
 //! `ros2 param get <node> frequency` still answers with the truth.
 
@@ -23,6 +24,7 @@ use r2r::rcl_interfaces::srv::{
 use r2r::QosProfile;
 
 use futures::stream::StreamExt;
+use mower_localize_core::config::{ParamValue as CoreValue, Params as CoreParams};
 
 // rcl_interfaces/msg/ParameterType
 pub const PARAMETER_NOT_SET: u8 = 0;
@@ -30,7 +32,10 @@ pub const PARAMETER_BOOL: u8 = 1;
 pub const PARAMETER_INTEGER: u8 = 2;
 pub const PARAMETER_DOUBLE: u8 = 3;
 pub const PARAMETER_STRING: u8 = 4;
+pub const PARAMETER_BOOL_ARRAY: u8 = 6;
+pub const PARAMETER_INTEGER_ARRAY: u8 = 7;
 pub const PARAMETER_DOUBLE_ARRAY: u8 = 8;
+pub const PARAMETER_STRING_ARRAY: u8 = 9;
 
 /// One exposed parameter and its current value.
 pub struct Param {
@@ -45,40 +50,63 @@ pub fn boolean(name: &str, v: bool) -> Param {
     }
 }
 
-pub fn double(name: &str, v: f64) -> Param {
-    Param {
-        name: name.to_string(),
-        value: ParameterValue { type_: PARAMETER_DOUBLE, double_value: v, ..Default::default() },
-    }
-}
-
-pub fn string(name: &str, v: &str) -> Param {
-    Param {
-        name: name.to_string(),
-        value: ParameterValue {
-            type_: PARAMETER_STRING,
-            string_value: v.to_string(),
+/// A resolved value, as the parameter services report it.
+pub fn from_core(name: &str, v: &CoreValue) -> Param {
+    let value = match v {
+        CoreValue::Bool(b) => ParameterValue { type_: PARAMETER_BOOL, bool_value: *b, ..Default::default() },
+        CoreValue::Integer(i) => {
+            ParameterValue { type_: PARAMETER_INTEGER, integer_value: *i, ..Default::default() }
+        }
+        CoreValue::Double(d) => ParameterValue { type_: PARAMETER_DOUBLE, double_value: *d, ..Default::default() },
+        CoreValue::String(s) => {
+            ParameterValue { type_: PARAMETER_STRING, string_value: s.clone(), ..Default::default() }
+        }
+        CoreValue::BoolArray(a) => {
+            ParameterValue { type_: PARAMETER_BOOL_ARRAY, bool_array_value: a.clone(), ..Default::default() }
+        }
+        CoreValue::IntegerArray(a) => ParameterValue {
+            type_: PARAMETER_INTEGER_ARRAY,
+            integer_array_value: a.clone(),
             ..Default::default()
         },
-    }
-}
-
-pub fn integer(name: &str, v: i64) -> Param {
-    Param {
-        name: name.to_string(),
-        value: ParameterValue { type_: PARAMETER_INTEGER, integer_value: v, ..Default::default() },
-    }
-}
-
-pub fn double_array(name: &str, v: Vec<f64>) -> Param {
-    Param {
-        name: name.to_string(),
-        value: ParameterValue {
+        CoreValue::DoubleArray(a) => ParameterValue {
             type_: PARAMETER_DOUBLE_ARRAY,
-            double_array_value: v,
+            double_array_value: a.clone(),
             ..Default::default()
         },
-    }
+        CoreValue::StringArray(a) => ParameterValue {
+            type_: PARAMETER_STRING_ARRAY,
+            string_array_value: a.clone(),
+            ..Default::default()
+        },
+    };
+    Param { name: name.to_string(), value }
+}
+
+/// The node's parameter overrides (its section of every `--params-file`, and
+/// `-p` rules), in the core's terms.
+pub fn overrides(node: &r2r::Node) -> CoreParams {
+    let params = node.params.lock().unwrap();
+    params
+        .iter()
+        .filter_map(|(name, p)| {
+            let v = match &p.value {
+                r2r::ParameterValue::NotSet => return None,
+                r2r::ParameterValue::Bool(b) => CoreValue::Bool(*b),
+                r2r::ParameterValue::Integer(i) => CoreValue::Integer(*i),
+                r2r::ParameterValue::Double(d) => CoreValue::Double(*d),
+                r2r::ParameterValue::String(s) => CoreValue::String(s.clone()),
+                r2r::ParameterValue::BoolArray(a) => CoreValue::BoolArray(a.clone()),
+                r2r::ParameterValue::ByteArray(a) => {
+                    CoreValue::IntegerArray(a.iter().map(|b| *b as i64).collect())
+                }
+                r2r::ParameterValue::IntegerArray(a) => CoreValue::IntegerArray(a.clone()),
+                r2r::ParameterValue::DoubleArray(a) => CoreValue::DoubleArray(a.clone()),
+                r2r::ParameterValue::StringArray(a) => CoreValue::StringArray(a.clone()),
+            };
+            Some((name.clone(), v))
+        })
+        .collect()
 }
 
 fn not_set() -> ParameterValue {
@@ -89,9 +117,8 @@ fn refusal(p: &Parameter) -> SetParametersResult {
     SetParametersResult {
         successful: false,
         reason: format!(
-            "{} is read-only in mower_localize: the filter is built from \
-             mower_localize_core::config at start-up, change the launch \
-             parameters and restart",
+            "{} is read-only in mower_localize: the settings are resolved from \
+             dual_ekf_navsat_params.yaml at start-up, change the file and restart",
             p.name
         ),
     }
@@ -233,10 +260,23 @@ mod tests {
 
     #[test]
     fn the_constructors_set_the_rcl_type_tag() {
-        assert_eq!(boolean("two_d_mode", true).value.type_, PARAMETER_BOOL);
-        assert_eq!(double("frequency", 20.0).value.type_, PARAMETER_DOUBLE);
-        assert_eq!(string("world_frame", "odom").value.type_, PARAMETER_STRING);
-        assert_eq!(integer("odom0_queue_size", 10).value.type_, PARAMETER_INTEGER);
-        assert_eq!(double_array("process_noise_covariance", vec![1.0]).value.type_, PARAMETER_DOUBLE_ARRAY);
+        assert_eq!(boolean("use_sim_time", false).value.type_, PARAMETER_BOOL);
+        assert_eq!(
+            from_core("process_noise_covariance", &CoreValue::DoubleArray(vec![1.0])).value.type_,
+            PARAMETER_DOUBLE_ARRAY
+        );
+        assert_eq!(from_core("frequency", &CoreValue::Double(20.0)).value.type_, PARAMETER_DOUBLE);
+        assert_eq!(from_core("world_frame", &CoreValue::String("odom".into())).value.type_, PARAMETER_STRING);
+        assert_eq!(from_core("odom0_queue_size", &CoreValue::Integer(10)).value.type_, PARAMETER_INTEGER);
+    }
+
+    #[test]
+    fn resolved_values_keep_their_rcl_type() {
+        let p = from_core("odom0_config", &CoreValue::BoolArray(vec![true, false]));
+        assert_eq!(p.value.type_, PARAMETER_BOOL_ARRAY);
+        assert_eq!(p.value.bool_array_value, [true, false]);
+        assert_eq!(from_core("odom0_queue_size", &CoreValue::Integer(10)).value.integer_value, 10);
+        assert_eq!(from_core("odom0", &CoreValue::String("odom".into())).value.string_value, "odom");
+        assert_eq!(from_core("frequency", &CoreValue::Double(20.0)).value.type_, PARAMETER_DOUBLE);
     }
 }

@@ -125,6 +125,13 @@ pub fn params_to_coverage_settings(coverage: &Map<String, Value>, map: &Map<Stri
     })
 }
 
+/// Whether a `/toLL` answer is a navsat datum point. navsat_transform answers
+/// the default (0, 0, 0) until its datum exists; anything non-finite (a UTM
+/// projection without a zone) is no datum either, and must never be latched.
+pub fn is_navsat_datum_point(lat: f64, lon: f64) -> bool {
+    lat.is_finite() && lon.is_finite() && (lat.abs() >= 1e-6 || lon.abs() >= 1e-6)
+}
+
 /// Bearing of the map +X axis clockwise from true north, derived from two
 /// toLL samples taken along map +X.
 pub fn bearing_to_north(lat0: f64, lon0: f64, lat1: f64, lon1: f64) -> f64 {
@@ -232,5 +239,18 @@ mod tests {
         assert!((b.to_degrees() - 90.0).abs() < 1e-6);
         let n = bearing_to_north(25.0, 121.0, 25.0001, 121.0);
         assert!(n.abs() < 1e-9);
+    }
+
+    #[test]
+    fn only_a_finite_non_zero_to_ll_answer_is_a_navsat_datum() {
+        assert!(is_navsat_datum_point(23.694, 120.5377));
+        assert!(is_navsat_datum_point(0.0, 118.51), "the check is value-blind beyond (0, 0)");
+        // navsat's "no datum yet" answer
+        assert!(!is_navsat_datum_point(0.0, 0.0));
+        assert!(!is_navsat_datum_point(5e-7, -5e-7));
+        // a projection without a UTM zone
+        assert!(!is_navsat_datum_point(f64::NAN, f64::NAN));
+        assert!(!is_navsat_datum_point(23.694, f64::NAN));
+        assert!(!is_navsat_datum_point(f64::INFINITY, 120.0));
     }
 }

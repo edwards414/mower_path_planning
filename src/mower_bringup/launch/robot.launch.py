@@ -84,6 +84,16 @@ _DAEMON_REMAPS = {
         'velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input',
         'velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel',
     ],
+    # dual_ekf_navsat.launch.py's remappings= for the three localization
+    # nodes; navsat's gps/fix rule is added with the gps_fix_topic value.
+    'localize': [
+        'ekf_filter_node_odom:odometry/filtered:=odometry/local',
+        'ekf_filter_node_odom:imu:=imu/data',
+        'ekf_filter_node_map:odometry/filtered:=odometry/global',
+        'ekf_filter_node_map:imu:=imu/data',
+        'navsat_transform:imu:=imu/data',
+        'navsat_transform:odometry/filtered:=odometry/global',
+    ],
 }
 
 
@@ -149,6 +159,15 @@ def _rust_daemon_node(context):
             'sites_dir': LaunchConfiguration('sites_dir').perform(context),
         }))
     remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
+    if 'localize' in modules:
+        # The file the C++ nodes read, keyed by the same node names: the one
+        # source of the filter and navsat settings. After mower_rsd.yaml, so
+        # it wins on any key it sets, like gps.yaml; an override goes through
+        # localize_params_file, which reaches either stack.
+        parameters.append(
+            LaunchConfiguration('localize_params_file').perform(context))
+        remaps.append('navsat_transform:gps/fix:=' + LaunchConfiguration(
+            'gps_fix_topic').perform(context))
     if remaps:
         arguments.append('--ros-args')
         for rule in remaps:
@@ -191,6 +210,7 @@ def generate_launch_description():
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
     enable_gps = LaunchConfiguration('enable_gps')
     gps_params_file = LaunchConfiguration('gps_params_file')
+    localize_params_file = LaunchConfiguration('localize_params_file')
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
@@ -225,6 +245,7 @@ def generate_launch_description():
             'gps_fix_topic': gps_fix_topic,
             'enable_gps': enable_gps,
             'gps_params_file': gps_params_file,
+            'localize_params_file': localize_params_file,
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
             'rust_base': rust_base,
@@ -343,6 +364,17 @@ def generate_launch_description():
             ),
             description='mower_gps parameter file; point at a copy under '
                         '~/.mower to try receiver settings without a new image',
+        ),
+        DeclareLaunchArgument(
+            'localize_params_file',
+            default_value=os.path.join(
+                get_package_share_directory('mower_nav2'), 'config',
+                'dual_ekf_navsat_params.yaml'
+            ),
+            description='EKF and navsat_transform parameter file, read by the '
+                        'C++ nodes and mower_localize alike; point at a copy '
+                        'under ~/.mower to try other values without a new '
+                        'image',
         ),
         DeclareLaunchArgument(
             'nav_composition',

@@ -1,6 +1,8 @@
 //! Helpers shared by the oracle tests.
 #![allow(dead_code)]
 
+pub mod oracle_config;
+
 use serde_json::Value;
 
 pub fn load(name: &str) -> Value {
