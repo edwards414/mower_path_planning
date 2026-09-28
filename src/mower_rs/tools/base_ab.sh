@@ -13,6 +13,7 @@
 #   ... base_ab.sh B /out/b_pull "" --scenario pull            # the cable pull
 #   ... base_ab.sh B /out/b_pp "" --scenario pullpush          # pushed during the pull
 #   ... base_ab.sh B /out/b_tx "" --scenario txpull            # LubanCat TX lead only
+#   ... base_ab.sh B /out/b_ts "" --scenario txstart           # ... out before the start
 #   ... base_ab.sh B /out/b_live "" --scenario live            # restart under a live stream
 #   ... base_ab.sh B /out/b_at "" --scenario autotune          # pid_autotune + flash save
 #   python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b
@@ -60,6 +61,9 @@ echo "[base_ab] $side: RMW=$RMW_IMPLEMENTATION CYCLONEDDS_URI=${CYCLONEDDS_URI:-
 
 mkdir -p "$out"
 rm -f "$out/mute" "$out/deaf"
+# txstart: the LubanCat TX lead is out before the driver starts; the
+# harness takes it away at the re-seat
+[ "$scenario" = txstart ] && touch "$out/deaf"
 load=()
 for _ in $(seq "${LOAD:-0}"); do
   ( while :; do :; done ) &

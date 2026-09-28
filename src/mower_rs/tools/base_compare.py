@@ -14,19 +14,23 @@ What is compared, and why each tolerance is what it is, is printed with the
 numbers. Exit status 1 if the endpoint QoS of any topic mower_base owns
 differs between the two (run both under the robot's RMW,
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: SystemDefaultsQoS resolves
-differently per RMW).
+differently per RMW), or if a scenario's check below fails.
 
 Runs recorded with `base_harness.py --scenario pull` / `pullpush` / `txpull`
-get the cable-pull report instead of the parity sections: what each chain
-commanded after the lead came back with the stick still pushed (`txpull`:
-only the LubanCat TX lead was out, the feedback never stopped). `--scenario
+/ `txstart` get the cable-pull report instead of the parity sections: what
+each chain commanded after the lead came back with the stick still pushed
+(`txpull`: only the LubanCat TX lead was out, the feedback never stopped;
+`txstart`: that lead was already out when the driver started). `--scenario
 live` gets the restart report: what reached the wheels while a stream that
 was running before the driver started was still live. `mower_base` must
-send 0/0 in all of them until the release; the C++ chain has no latch and
-follows at once. `--scenario autotune` gets the pid_autotune report: the
-run's states, the flash save's stall, and whether the second run's steps
-reached the wheels after it. Where a run directory has the driver's log
-(`base_ab.sh` writes `driver.log`), its arm-latch lines are printed.
+send 0/0 in all of them until the release and follow the stick after it;
+the C++ chain has no latch and follows at once — if it does not, the run
+did not reproduce the fault and proves nothing, which fails too.
+`--scenario autotune` gets the pid_autotune report: the run's states, the
+flash save's stall, and whether the second run's steps reached the wheels
+after it; both sides must save (`done`), end the second run `idle` without
+an error, and drive after the save. Where a run directory has the driver's
+log (`base_ab.sh` writes `driver.log`), its arm-latch lines are printed.
 
 Nothing here runs on the robot.
 """
@@ -185,7 +189,7 @@ def main() -> int:
           + ("all SAME" if out["qos_same"] else f"DIFFERENT {differ}, no endpoint {missing}"))
 
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    if scenario in ("pull", "pullpush", "txpull"):
+    if scenario in ("pull", "pullpush", "txpull", "txstart"):
         pull_report(run_a, frames_a, run_b, frames_b, out)
         return finish(args, out)
     if scenario == "live":
@@ -383,11 +387,25 @@ def main() -> int:
 
 
 def finish(args, out) -> int:
+    failures = out.setdefault("failures", [])
+    if not out.get("qos_same"):
+        failures.insert(0, "endpoint QoS differs")
+    section("verdict")
+    for failure in failures:
+        print(f"  FAIL: {failure}")
+    if not failures:
+        print("  PASS")
     if args.json:
         with open(args.json, "w") as f:
             json.dump(out, f, indent=1)
         print(f"\nwrote {args.json}")
-    return 0 if out.get("qos_same") else 1
+    return 1 if failures else 0
+
+
+def check(out, ok: bool, failure: str) -> None:
+    """Record a scenario check; `finish` fails the run on any of them."""
+    if not ok:
+        out.setdefault("failures", []).append(failure)
 
 
 def print_latch_log(label, run, limit=12) -> None:
@@ -406,14 +424,16 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
     lead comes out with nothing commanded and the stick is pushed while it
     is out. `txpull`: as `pull`, but only the LubanCat TX -> STM32 RX lead
     is out, so the feedback keeps coming and the board reports
-    COMMAND_TIMEOUT. Either way it is still pushed when the lead is back,
-    released at 9.0 s and pushed again from 9.5 s. The C++ chain has no
-    latch and resumes the pushed command as soon as frames get through
-    again; mower_base must stay at 0/0 until the release and follow the
-    stick again after it.
+    COMMAND_TIMEOUT. `txstart`: as `pullpush`, but that lead alone, and
+    already out when the driver started. Either way it is still pushed
+    when the lead is back, released at 9.0 s and pushed again from 9.5 s.
+    The C++ chain has no latch and resumes the pushed command as soon as
+    frames get through again; mower_base must stay at 0/0 until the
+    release and follow the stick again after it.
     """
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    leads = "LubanCat TX lead" if scenario == "txpull" else "lead"
+    tx_only = scenario in ("txpull", "txstart")
+    leads = "LubanCat TX lead" if tx_only else "lead"
     section("cable %s (%s out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
             "pushed 9.5 s)" % ((scenario, leads) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
     out["pull"] = {"scenario": scenario}
@@ -435,7 +455,7 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
         timeouts = [x for x in out_status if x[1] & 0x02]
         fb_out = [h for h, _ in fb if mute[0] <= h < mute[1]]
         print(f"  {label}: before the pull {sorted({(l, r) for _, l, r in before})}")
-        if scenario == "txpull":
+        if tx_only:
             print(f"     lead out: {len(fb_out)} feedback frames still sent, "
                   f"{len(timeouts)}/{len(out_status)} 0x81 with COMMAND_TIMEOUT"
                   + (f", first at {timeouts[0][0]:.3f} s, command_age_ms up to "
@@ -458,6 +478,21 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "mute_log": run.get("mute_log"),
             "latch_log": run.get("latch_log"),
         }
+        if label == "A":
+            check(out, bool(moving_after),
+                  f"{scenario}: the C++ chain did not follow the pushed stick after the re-seat, "
+                  "so the run did not reproduce the fault")
+            continue
+        check(out, bool(held), f"{scenario}: no 0x01 reached the fake after the re-seat")
+        check(out, not moving_after,
+              f"{scenario}: mower_base sent {len(moving_after)} non-zero 0x01 after the re-seat "
+              "with the stick still pushed (a lurch)")
+        check(out, bool(released),
+              f"{scenario}: mower_base did not follow the stick after the release")
+        if tx_only:
+            check(out, bool(fb_out) and bool(timeouts),
+                  f"{scenario}: the fake did not keep sending feedback with COMMAND_TIMEOUT "
+                  "while the lead was out")
 
 
 def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
@@ -484,6 +519,15 @@ def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "live_nonzero": len(moving),
             "after_release_nonzero": len(after),
         }
+        if label == "A":
+            check(out, bool(moving),
+                  "live: the C++ chain did not follow the live stream, so the run did not "
+                  "reproduce a restart under it")
+            continue
+        check(out, bool(live), "live: no 0x01 reached the fake while the stream was live")
+        check(out, not moving,
+              f"live: mower_base sent {len(moving)} non-zero 0x01 while the old stream was live")
+        check(out, bool(after), "live: mower_base did not follow the stick after the release")
 
 
 def autotune_report(run_a, frames_a, run_b, frames_b, out) -> None:
@@ -534,6 +578,15 @@ def autotune_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "levels_after_save": levels_after,
             "latch_log": run.get("latch_log"),
         }
+        saved = "saving" in states and "done" in states[states.index("saving"):]
+        check(out, saved, f"autotune {label}: the first run did not save (states {states})")
+        check(out, bool(states) and states[-1] == "idle" and "done" in states[:-1],
+              f"autotune {label}: the second run did not end idle after the save (states {states})")
+        check(out, not {"failed", "aborted"} & set(states) and at.get("error") is None,
+              f"autotune {label}: failed or aborted (error {at.get('error')})")
+        check(out, bool(after),
+              f"autotune {label}: no non-zero 0x01 after the flash save: the second run's steps "
+              "never reached the wheels")
 
 
 if __name__ == "__main__":

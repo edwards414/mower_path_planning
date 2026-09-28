@@ -27,6 +27,15 @@ goes deaf and keeps sending, its 0x81 reporting COMMAND_TIMEOUT with a
 growing age. The feedback never stops, so only mower_base's command-path
 trigger can catch it; the C++ chain lurches on the re-seat.
 
+`--scenario txstart --deaf-file F`: that lead is already out when the
+driver starts (`base_ab.sh` creates F before it), the way a restart during
+a pull or a loose connector at boot looks: the fake has never been reached
+and reports 0x02 ("no command yet") throughout. Nothing is commanded until
+5.0 s — long enough for idle streams to re-arm by silence — then the stick
+is pushed with the lead still out, the lead is back at 7.0 s with the stick
+held (PULLPUSH_SCRIPT). mower_base must hold until the release; the C++
+chain lurches on the re-seat.
+
 `--scenario live`: a live 0.30 m/s stream at nav2's 20 Hz that is already
 running when the driver starts (`base_ab.sh` starts this harness first), as
 after a restart under nav2 or teleop. No discovery wait: the stream starts
@@ -115,6 +124,10 @@ PULLPUSH_SCRIPT = [
 ]
 PULLPUSH_MUTE = (4.0, 7.0)
 
+# The LubanCat TX lead out from before the driver started until 7.0 s,
+# with PULLPUSH_SCRIPT: idle, pushed from 5.0 s, held through the re-seat.
+TXSTART_MUTE = (0.0, 7.0)
+
 # A live stream from t = 0, before the driver exists (base_ab.sh starts the
 # driver LIVE_DRIVER_START_S later), released at 12.0 s, pushed again.
 LIVE_SCRIPT = [
@@ -139,6 +152,7 @@ SCENARIOS = {
     "pull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS, "mute"),
     "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS, "mute"),
     "txpull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS, "deaf"),
+    "txstart": (PULLPUSH_SCRIPT, TXSTART_MUTE, CMD_RATE_HZ, PULL_SECONDS, "deaf"),
     "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS, None),
     "autotune": (AUTOTUNE_SCRIPT, None, CMD_RATE_HZ, AUTOTUNE_SECONDS, None),
 }
@@ -498,7 +512,7 @@ def main() -> int:
     ap.add_argument("--mute-file", default="",
                     help="the file fake_base.py --mute-file watches (pull, pullpush)")
     ap.add_argument("--deaf-file", default="",
-                    help="the file fake_base.py --deaf-file watches (txpull)")
+                    help="the file fake_base.py --deaf-file watches (txpull, txstart)")
     args = ap.parse_args()
     if args.seconds is None:
         args.seconds = SCENARIOS[args.scenario][3]
