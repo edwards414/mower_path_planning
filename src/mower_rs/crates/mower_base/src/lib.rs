@@ -42,7 +42,8 @@
 //! runs on CLOCK_MONOTONIC, as ros2_control's steady trigger clock does. The
 //! system clock is used for message header stamps and for ageing an incoming
 //! cmd_vel by its own stamp, nothing else, so a wall-clock step (NTP, an RTC
-//! that is a year off) cannot pulse the wheels or stretch a dead-man.
+//! that is a year off) cannot pulse the wheels or stretch a dead-man. Both
+//! are read through one [`Clocks`] value, and nowhere else.
 //!
 //! Fail-closed
 //! -----------
@@ -114,6 +115,37 @@ fn mono_ns() -> TimeNs {
         (Instant::now(), steady)
     });
     ns + at.elapsed().as_nanos() as i64
+}
+
+/// The two clocks the driver reads, and the only place it reads them: the
+/// control clock for everything [`BaseCycle`] times, ROS time for header
+/// stamps and for the age of an incoming cmd_vel ([`accept_cmd_vel`]).
+pub trait Clocks: Send + Sync {
+    /// CLOCK_MONOTONIC in production.
+    fn control_ns(&self) -> TimeNs;
+    /// The system clock in production (`use_sim_time` is never on here).
+    fn ros_ns(&self) -> TimeNs;
+}
+
+/// What the robot runs.
+pub struct SystemClocks;
+
+impl Clocks for SystemClocks {
+    fn control_ns(&self) -> TimeNs {
+        mono_ns()
+    }
+    fn ros_ns(&self) -> TimeNs {
+        ros_now_ns()
+    }
+}
+
+/// The cmd_vel subscription callback: diff_drive_controller's stale check
+/// against ROS time, and the accepted command carried onto the control
+/// clock ([`receive_command`]).
+pub fn accept_cmd_vel(msg: &TwistStamped, clocks: &dyn Clocks, cmd_vel_timeout: f64) -> Received {
+    let header_stamp = msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
+    let twist = Twist::new(msg.twist.linear.x, msg.twist.angular.z);
+    receive_command(twist, header_stamp, clocks.ros_ns(), clocks.control_ns(), cmd_vel_timeout)
 }
 
 /// Whether each command topic has a publisher, as the spin thread last read
@@ -190,6 +222,7 @@ struct Driver {
     settings: Settings,
     pubs: Publishers,
     slots: Shared,
+    clocks: Arc<dyn Clocks>,
     graph: Arc<GraphSeen>,
     logger: String,
     stop: Arc<AtomicBool>,
@@ -207,7 +240,7 @@ impl Driver {
             .map_err(|e| format!("serial open failed ({}): {e}", self.settings.device))?;
         r2r::log_info!(&self.logger, "opened {}", self.settings.device);
 
-        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), mono_ns())?;
+        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), self.clocks.control_ns())?;
         port.write_all(&activation.bytes)
             .map_err(|e| format!("serial write error (activation): {e}"))?;
 
@@ -228,8 +261,8 @@ impl Driver {
 
         while !self.stop.load(Ordering::Relaxed) {
             // ---- read(): drain the port, VMIN = 0 ------------------------
-            let time = mono_ns();
-            let stamp = ros_now_ns();
+            let time = self.clocks.control_ns();
+            let stamp = self.clocks.ros_ns();
             loop {
                 let available = match port.bytes_to_read() {
                     Ok(n) => n as usize,
@@ -788,19 +821,17 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let slots: Shared = Arc::new(Mutex::new(Slots::default()));
 
     // ---- subscriptions ---------------------------------------------------
+    let clocks: Arc<dyn Clocks> = Arc::new(SystemClocks);
     let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
     {
         let slots = slots.clone();
         let logger = logger.clone();
+        let clocks = clocks.clone();
         let cmd_vel_timeout = diff_drive.cmd_vel_timeout;
         tokio::spawn(async move {
             let mut warned_zero_stamp = false;
             while let Some(msg) = cmd_vel.next().await {
-                let header_stamp =
-                    msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
-                let twist = Twist::new(msg.twist.linear.x, msg.twist.angular.z);
-                match receive_command(twist, header_stamp, ros_now_ns(), mono_ns(), cmd_vel_timeout)
-                {
+                match accept_cmd_vel(&msg, &*clocks, cmd_vel_timeout) {
                     Received::Accepted { command, zero_stamp } => {
                         if zero_stamp && !warned_zero_stamp {
                             warned_zero_stamp = true;
@@ -985,6 +1016,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             firmware_info: firmware_pub,
         },
         slots,
+        clocks,
         graph: graph.clone(),
         logger: logger.clone(),
         stop: stop.clone(),
@@ -1087,6 +1119,70 @@ mod tests {
         off.limiter().unwrap().limit(&mut b, 0.0, 0.0, 0.04);
         assert_eq!(a, b);
         assert_eq!(a, 0.9);
+    }
+
+    const MS: i64 = 1_000_000;
+    /// A day of uptime on the control clock, 2026 on the ROS clock: far
+    /// enough apart that feeding one where the other belongs cannot pass.
+    const CONTROL: TimeNs = 86_400_000 * MS;
+    const ROS: TimeNs = 1_790_000_000_000 * MS;
+
+    struct Fixed(TimeNs, TimeNs);
+    impl Clocks for Fixed {
+        fn control_ns(&self) -> TimeNs {
+            self.0
+        }
+        fn ros_ns(&self) -> TimeNs {
+            self.1
+        }
+    }
+
+    fn twist_stamped(stamp_ns: TimeNs, linear_x: f64) -> TwistStamped {
+        let mut msg = TwistStamped::default();
+        msg.header.stamp = stamp(stamp_ns);
+        msg.twist.linear.x = linear_x;
+        msg
+    }
+
+    fn accepted(r: Received) -> Command {
+        match r {
+            Received::Accepted { command, .. } => command,
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    /// The subscription ages a message on ROS time and hands the cycle a
+    /// control-clock stamp, whatever the wall clock just did.
+    #[test]
+    fn the_cmd_vel_callback_ages_on_ros_time_and_stamps_on_the_control_clock() {
+        let clocks = Fixed(CONTROL, ROS);
+        let c = accepted(accept_cmd_vel(&twist_stamped(ROS - 100 * MS, 0.3), &clocks, 0.25));
+        assert_eq!(c.stamp_ns, CONTROL - 100 * MS);
+        assert_eq!(c.twist, Twist::new(0.3, 0.0));
+        // zero stamp: now
+        assert_eq!(accepted(accept_cmd_vel(&twist_stamped(0, 0.3), &clocks, 0.25)).stamp_ns, CONTROL);
+        // stamped just before the wall clock stepped back 5 s: arrives 5 s
+        // "from the future", still ages from now
+        let c = accepted(accept_cmd_vel(&twist_stamped(ROS + 5_000 * MS, 0.3), &clocks, 0.25));
+        assert_eq!(c.stamp_ns, CONTROL);
+        // stamped just before a 10 s forward step: 10 s old, ignored
+        assert!(matches!(
+            accept_cmd_vel(&twist_stamped(ROS - 10_000 * MS, 0.3), &clocks, 0.25),
+            Received::Stale { .. }
+        ));
+    }
+
+    /// `SystemClocks` is CLOCK_MONOTONIC (rcl's steady clock) for control
+    /// and the system clock for ROS time.
+    #[test]
+    fn the_system_clocks_are_monotonic_and_wall() {
+        let steady = r2r::Clock::create(r2r::ClockType::SteadyTime)
+            .and_then(|mut c| c.get_now())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap();
+        let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
+        assert!((SystemClocks.control_ns() - steady).abs() < 50 * MS);
+        assert!((SystemClocks.ros_ns() - wall).abs() < 50 * MS);
     }
 
     #[test]
