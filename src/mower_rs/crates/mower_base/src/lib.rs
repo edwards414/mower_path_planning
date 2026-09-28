@@ -490,6 +490,18 @@ pub fn production_diff_drive() -> DiffDriveParams {
     }
 }
 
+/// `/odom` as `odom_throttle` discovers it on the robot, which is what the
+/// QoS of its `/odom_slow` is derived from (`throttle::output_qos`).
+/// `diff_drive_controller` creates `/odom` with `rclcpp::SystemDefaultsQoS()`,
+/// which the robot's rmw_cyclonedds_cpp announces as reliable + volatile, keep
+/// last 1, so the throttle publishes reliable + volatile, keep last 10. Not
+/// this node's latched `/odom`: that is FastDDS's reading of the same system
+/// defaults, and a copy derived from it would hand a late transient-local
+/// joiner (a bag recorder) up to 10 stale samples no throttle ever did.
+fn throttled_odom_qos() -> QosProfile {
+    QosProfile::default().keep_last(1).reliable().volatile()
+}
+
 fn covariance6(node: &r2r::Node, name: &str, default: [f64; 6]) -> [f64; 6] {
     let value = match node.params.lock().unwrap().get(name).map(|p| p.value.clone()) {
         Some(r2r::ParameterValue::DoubleArray(v)) => v,
@@ -618,15 +630,19 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     //   /mower_base/firmware_info, led   transient local + reliable, depth 1
     //   pid                              reliable, depth 4
     //   wheel_override, servo, blade     best effort, depth 1
-    //   /odom_slow                       what topic_tools derives from /odom:
-    //                                    reliable + transient local, keep
-    //                                    last 10 (throttle::output_qos)
+    //   /odom_slow                       what odom_throttle publishes on the
+    //                                    robot: reliable + volatile, keep
+    //                                    last 10 (`throttled_odom_qos`)
     let latched = QosProfile::default().keep_last(1).transient_local().reliable();
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
 
     let odom_pub = node.create_publisher::<Odometry>(&odom_topic, latched.clone())?;
-    let odom_slow =
-        SlowCopy::<Odometry>::create(&mut node, &odom_slow_topic, odom_slow_rate_hz, &latched)?;
+    let odom_slow = SlowCopy::<Odometry>::create(
+        &mut node,
+        &odom_slow_topic,
+        odom_slow_rate_hz,
+        &throttled_odom_qos(),
+    );
     let joint_pub = node.create_publisher::<JointState>(&joint_states_topic, latched.clone())?;
     let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, latched.clone())?;
     let telemetry_pub = if telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0 {
@@ -901,6 +917,21 @@ mod tests {
         off.limiter().unwrap().limit(&mut b, 0.0, 0.0, 0.04);
         assert_eq!(a, b);
         assert_eq!(a, 0.9);
+    }
+
+    /// /odom_slow keeps what odom_throttle publishes it with on the robot
+    /// (rmw_cyclonedds_cpp, topic_tools 1.3.4 over diff_drive_controller's
+    /// SystemDefaultsQoS /odom): reliable + volatile, keep last 10 -- not a
+    /// transient-local copy of this node's latched /odom.
+    #[test]
+    fn odom_slow_is_as_volatile_as_the_throttle_it_replaces() {
+        use mower_rs_common::throttle::output_qos;
+        use r2r::qos::{DurabilityPolicy, HistoryPolicy, ReliabilityPolicy};
+        let slow = output_qos(&throttled_odom_qos());
+        assert_eq!(slow.history, HistoryPolicy::KeepLast);
+        assert_eq!(slow.depth, 10);
+        assert_eq!(slow.reliability, ReliabilityPolicy::Reliable);
+        assert_eq!(slow.durability, DurabilityPolicy::Volatile);
     }
 
     #[test]

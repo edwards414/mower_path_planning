@@ -220,9 +220,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
     // ---- outputs ------------------------------------------------------------
     let odom_pub = node.create_publisher::<ROdometry>(&t.out, output_qos())?;
     // The throttle's own QoS, derived from this publisher's: keep last 10,
-    // reliable, volatile (throttle::output_qos).
+    // reliable, volatile (throttle::output_qos). ekf_node's QoS(10) is explicit,
+    // so it reads the same under every RMW.
     let mut odom_slow =
-        SlowCopy::<ROdometry>::create(&mut node, &t.out_slow, t.out_slow_rate_hz, &output_qos())?;
+        SlowCopy::<ROdometry>::create(&mut node, &t.out_slow, t.out_slow_rate_hz, &output_qos());
     let tf_pub = node.create_publisher::<TFMessage>("/tf", tf_qos())?;
 
     paramsrv::advertise(&mut node, &m.node_name, parameters(&config, kind, &t))?;

@@ -128,7 +128,7 @@ serial thread and the fail-closed path.
 | pub | `/odom` | `nav_msgs/Odometry` | reliable + **transient local**, depth 1 | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
 | pub | `/tf` | `tf2_msgs/TFMessage` | reliable + **transient local**, depth 1 | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
 | pub | `/joint_states` | `sensor_msgs/JointState` | reliable + **transient local**, depth 1 | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them |
-| pub | `/odom_slow` | `nav_msgs/Odometry` | reliable + **transient local**, depth **10** | 5 Hz at most (`odom_slow_rate_hz`); see [the slow copies](#the-slow-copies-instead-of-topic_tools-throttle) | `mission.launch.py`'s `odom_throttle` (`topic_tools throttle messages /odom 5.0 /odom_slow`), which does not start with `rust_base:=true`. `odom_slow_topic: ""` turns it off |
+| pub | `/odom_slow` | `nav_msgs/Odometry` | reliable + **volatile**, depth **10**: what `odom_throttle` publishes on the robot, not derived from the `/odom` row above | 5 Hz at most (`odom_slow_rate_hz`); see [the slow copies](#the-slow-copies-instead-of-topic_tools-throttle) | `mission.launch.py`'s `odom_throttle` (`topic_tools throttle messages /odom 5.0 /odom_slow`), which does not start with `rust_base:=true`. `odom_slow_topic: ""` turns it off |
 | pub | `/mower_base/telemetry` | `std_msgs/String` (JSON) | best effort, depth 1 | one per new 0x85, gated at `0.8 / telemetry_rate_hz` (20 Hz) -> ~15-17 Hz against a 50 ms frame and a 40 ms loop | `MowerSystem::publish_telemetry_if_due` |
 | pub | `/mower_base/firmware_info` | `std_msgs/String` (JSON) | transient local, reliable, depth 1 | once per distinct 0x87 (latched) | `MowerSystem::on_firmware_info` |
 | sub | `/mower_base/led_command` | `std_msgs/String` | transient local, reliable, depth 1 | on change, re-asserted every 5 s | `led_topic` |
@@ -633,11 +633,16 @@ published on the source) and the throttle is not started:
 
 The defaults are the throttles' arguments (the topic, 5.0); an empty topic
 turns a copy off, and is the default on `ekf_filter_node_odom` because nothing
-throttles `/odometry/local`. `robot.launch.py` hands `rust_base` and
-`rust_localize` to `mission.launch.py` as well as to `mower.launch.py`; with
-both false (the default) `mission.launch.py` starts exactly the processes it
-did before. Launching the two files separately means giving both the same
-value, or a copy has two publishers (twice the rate) or none.
+throttles `/odometry/local`. A rate that is not a positive number or a topic
+name rcl refuses (`/odom_slow/`, a space) is logged and also turns the copy
+off: a typo in the yaml costs the 5 Hz status copy, never the module and its
+fast topic (`/odom` and the wheels, or `map -> odom`).
+
+`robot.launch.py` hands `rust_base` and `rust_localize` to
+`mission.launch.py` as well as to `mower.launch.py`; with both false (the
+default) `mission.launch.py` starts exactly the processes it did before.
+Launching the two files separately means giving both the same value, or a
+copy has two publishers (twice the rate) or none.
 
 What is reproduced, from topic_tools 1.3.4 (the image's
 `ros-jazzy-topic-tools`, `src/throttle_node.cpp`, `src/tool_base_node.cpp`):
@@ -660,14 +665,23 @@ What is reproduced, from topic_tools 1.3.4 (the image's
   practice the source starts later than that and its first message goes.
 * **A clock stepped backwards** (NTP) restarts the period at the new time and
   drops that message, with the same warning.
-* **QoS**, which the throttle derives from the source publisher it discovers:
-  keep last **10**, the source's reliability and durability, automatic
-  liveliness. So `/odom_slow` is reliable + transient local (from `/odom`'s
-  latched QoS) and `/odometry/global_slow` reliable + volatile. Every
-  subscriber of either (`robot_status`, the rclpy status nodes,
-  `mower_adapter` / `flutter_adapter_node`, `mower_record` /
-  `path_record_node`, all `QoS(10)` reliable volatile) matches both; the app
-  subscribes to neither.
+* **QoS**, which the throttle derives from the source publisher it
+  *discovers*: keep last **10**, the source's reliability and durability,
+  automatic liveliness. What it discovers depends on the RMW.
+  `diff_drive_controller` creates `/odom` with `rclcpp::SystemDefaultsQoS()`,
+  which the robot's rmw_cyclonedds_cpp announces as reliable + volatile,
+  keep last 1, and FastDDS (the test image) as reliable + transient local.
+  So on the robot `odom_throttle` publishes `/odom_slow` reliable +
+  **volatile**, keep last 10 (probed in `mower-runtime-main:local`), and
+  that is what `mower_base` sets explicitly: not derived from its own
+  latched `/odom`, since a transient-local copy would hand a late
+  transient-local joiner (a bag recorder) up to 10 stale samples that no
+  throttle ever did. `robot_localization`'s `/odometry/global` is an explicit
+  `rclcpp::QoS(10)`, reliable + volatile under every RMW, and so is
+  `/odometry/global_slow`. Every subscriber of either (`robot_status`, the
+  rclpy status nodes, `mower_adapter` / `flutter_adapter_node`,
+  `mower_record` / `path_record_node`, all `QoS(10)` reliable volatile)
+  matches both; the app subscribes to neither.
 
 Not reproduced: `lazy` (false in both launch entries, so the throttle also
 published with no subscriber), the `bytes` mode, the `qos_overrides.*`
@@ -692,7 +706,7 @@ source next to the module's copy (`tools/slow_copy_check.py`, 30 s,
 |---|---|---|---|
 | `/odom` (25.003 Hz) | 750 | `/odom_slow` 135, 4.50 Hz, all 135 byte-identical to an `/odom` message | 134, 4.47 Hz, all identical |
 | `/odometry/global` (20.001 Hz) | 601 | `/odometry/global_slow` 130, 4.32 Hz, all 130 identical | 130, 4.32 Hz, all identical |
-| publisher QoS | — | reliable, transient local / volatile, automatic | the same |
+| publisher QoS | — | reliable + volatile on both, keep last 10, automatic (set, not derived) | `/odometry/global_slow_cpp` the same; `/odom_slow_cpp` transient local, derived from `mower_base`'s latched `/odom` under this image's FastDDS. The robot's throttle over `diff_drive_controller` under Cyclone publishes reliable + volatile, keep last 10 |
 
 The two copies forward the same message for only 56-65 (`/odom`) and 72-106
 (`/odometry/global`) of their ~130 over two runs: where the fifth-or-sixth
@@ -700,6 +714,11 @@ decision falls depends on each one's own arrival times.
 The standalone binaries give the same picture (`mower_base` with
 `mower_rsd.yaml` as `base_params_file`: 4.48 vs 4.45 Hz; `mower_localize`
 with its built-in defaults: 4.32 vs 4.32 Hz).
+
+With slow-copy topics rcl refuses (`odom_slow_topic: /odom_slow/`,
+`odometry_slow_topic: odometry/global slow`) both modules log
+`RCL_RET_TOPIC_NAME_INVALID`, publish no copy, and keep `/odom` at 25.0 Hz
+and `/odometry/global` at 20.0 Hz.
 
 ## mower_agent
 

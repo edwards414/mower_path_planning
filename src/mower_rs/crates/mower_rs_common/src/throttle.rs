@@ -32,7 +32,13 @@
 //! * **A clock that goes backwards** restarts the period at the new time and
 //!   drops that message ("Detected jump back in time").
 //! * **QoS** ([`output_qos`]): `rclcpp::QoS(10)` with the source publisher's
-//!   reliability and durability and automatic liveliness.
+//!   reliability and durability and automatic liveliness, as the throttle
+//!   *discovers* them on the graph. For a source created with
+//!   `rclcpp::SystemDefaultsQoS()` that depends on the RMW: the robot's
+//!   rmw_cyclonedds_cpp announces it reliable + volatile, keep last 1, where
+//!   FastDDS (the test image) announces transient local. So a caller passes
+//!   the source as the robot's throttle sees it, which need not be the QoS
+//!   of its own source publisher (mower_base's `/odom`).
 //!
 //! Not reproduced: `lazy` (off in both launch entries, so topic_tools
 //! publishes whether or not anyone listens, as this does), the `bytes` mode,
@@ -133,28 +139,40 @@ pub struct SlowCopy<T: WrappedTypesupport + 'static> {
 }
 
 impl<T: WrappedTypesupport + 'static> SlowCopy<T> {
-    /// `None` when `topic` is empty (the switch that turns the copy off) or
-    /// the rate is not usable (logged). `source_qos` is the QoS the module
-    /// publishes the source topic with.
+    /// `None` when `topic` is empty (the switch that turns the copy off), the
+    /// rate is not usable or the publisher cannot be created, e.g. for a
+    /// topic name rcl refuses (both logged). Never an error: a typo in the
+    /// yaml must cost the slow copy, not the module's fast topic with it.
+    /// `source_qos` is the source as the throttle this replaces discovers it
+    /// on the robot (see the module doc, "QoS").
     pub fn create(
         node: &mut r2r::Node,
         topic: &str,
         msgs_per_sec: f64,
         source_qos: &QosProfile,
-    ) -> Result<Option<Self>, r2r::Error> {
+    ) -> Option<Self> {
         let logger = node.logger().to_string();
         if topic.is_empty() {
-            return Ok(None);
+            return None;
         }
         let Some(gate) = MessageThrottle::new(msgs_per_sec, system_now_ns()) else {
             r2r::log_warn!(
                 &logger,
                 "{topic}: rate {msgs_per_sec} is not a positive number; not publishing it"
             );
-            return Ok(None);
+            return None;
         };
-        let publisher = node.create_publisher::<T>(topic, output_qos(source_qos))?;
-        Ok(Some(SlowCopy { publisher, gate, topic: topic.to_string(), logger }))
+        let publisher = match node.create_publisher::<T>(topic, output_qos(source_qos)) {
+            Ok(publisher) => publisher,
+            Err(e) => {
+                r2r::log_error!(
+                    &logger,
+                    "{topic}: cannot create the publisher ({e:?}); not publishing it"
+                );
+                return None;
+            }
+        };
+        Some(SlowCopy { publisher, gate, topic: topic.to_string(), logger })
     }
 
     /// Offer the message the module has just published on the source topic.
@@ -290,7 +308,8 @@ mod tests {
 
     #[test]
     fn the_output_qos_is_topic_tools_qos_10_with_the_source_policies() {
-        // mower_base's /odom: reliable + transient local, depth 1
+        // a latched source (FastDDS's reading of SystemDefaultsQoS):
+        // reliable + transient local, depth 1
         let latched = QosProfile::default().keep_last(1).transient_local().reliable();
         assert_eq!(
             output_qos(&latched),
@@ -315,5 +334,28 @@ mod tests {
             output_qos(&QosProfile::sensor_data()).reliability,
             r2r::qos::ReliabilityPolicy::BestEffort
         );
+    }
+
+    /// A slow-copy topic rcl refuses disables the copy instead of failing
+    /// the module that publishes the fast topic. Needs a sourced ROS
+    /// environment (as every r2r test binary does to link).
+    #[test]
+    fn a_topic_rcl_refuses_turns_the_copy_off() {
+        use r2r::nav_msgs::msg::Odometry;
+        let ctx = r2r::Context::create().expect("rcl context");
+        let mut node = r2r::Node::create(ctx, "slow_copy_test", "").expect("node");
+        let qos = QosProfile::default().keep_last(10).reliable().volatile();
+        for bad in ["/odom_slow/", "odometry/global slow", "/odom//slow"] {
+            // an rcl error on its own, the thing create() must not pass on
+            assert!(node.create_publisher::<Odometry>(bad, qos.clone()).is_err(), "{bad}");
+            assert!(SlowCopy::<Odometry>::create(&mut node, bad, 5.0, &qos).is_none(), "{bad}");
+        }
+        assert!(SlowCopy::<Odometry>::create(&mut node, "", 5.0, &qos).is_none());
+        assert!(SlowCopy::<Odometry>::create(&mut node, "/odom_slow", 0.0, &qos).is_none());
+        let mut ok = SlowCopy::<Odometry>::create(&mut node, "/odom_slow", 5.0, &qos)
+            .expect("a valid topic and rate");
+        ok.offer(&Odometry::default());
+        let relative = SlowCopy::<Odometry>::create(&mut node, "odometry/global_slow", 5.0, &qos);
+        assert!(relative.is_some());
     }
 }
