@@ -52,6 +52,15 @@
 //! `respawn_delay=2.0`; inside `mower_rsd` the supervisor restarts the
 //! module alone after 2 s. Either way the firmware's own 300 ms command
 //! timeout has already stopped the wheels.
+//!
+//! The restarted module comes up with the arm latch set
+//! ([`BaseCycle::disarmed`]): it holds the wheels until cmd_vel shows a stop
+//! edge (a zero command, or nothing for `cmd_vel_timeout`), so it never
+//! picks up a live nav2 or teleop command on its own. The C++ chain got the
+//! same result by never coming back after an error. The latch also trips
+//! when 0x85 feedback that had been arriving stops for longer than
+//! `feedback_timeout_s` — on the robot's native UART a pulled lead is not a
+//! read or write error, so that is how this driver notices it.
 
 pub mod requests;
 
@@ -60,7 +69,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use mower_base_core::cycle::{BaseCycle, BaseConfig, JointStates, LedRequest};
+use mower_base_core::cycle::{
+    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, StopEdge, Stream,
+};
 use mower_base_core::diff_drive::{
     receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
 };
@@ -221,6 +232,9 @@ impl Driver {
             // ---- update() + write() -------------------------------------
             let cmd = self.slots.lock().expect("slots").cmd_vel.take();
             let (tx, odom, joints) = base.tick(cmd, time, stamp);
+            for event in base.take_events() {
+                self.log_event(event);
+            }
             if let Some(tx) = tx {
                 if !tx.is_empty() {
                     if let Err(e) = port.write_all(&tx.bytes) {
@@ -274,6 +288,68 @@ impl Driver {
         // wheels in that case.
         let _ = port.write_all(&stop.bytes);
         Err(message)
+    }
+
+    /// The transitions the C++ chain logged (same texts where it had one),
+    /// plus the arm latch.
+    fn log_event(&self, event: Event) {
+        let l = &self.logger;
+        let timeout_s = self.cfg.diff_drive.cmd_vel_timeout;
+        match event {
+            Event::Disarmed(DisarmReason::Activation) => r2r::log_info!(
+                l,
+                "arm latch: wheels held until cmd_vel stops (a zero command, or none for \
+                 {timeout_s:.2} s); wheel_override likewise"
+            ),
+            Event::Disarmed(DisarmReason::FeedbackLost) => r2r::log_warn!(
+                l,
+                "arm latch: wheel feedback lost, braking; wheels held until cmd_vel stops \
+                 (a zero command, or none for {timeout_s:.2} s); wheel_override likewise"
+            ),
+            Event::Armed { stream, reason, by, after_s } => {
+                let stream = match stream {
+                    Stream::CmdVel => "cmd_vel",
+                    Stream::WheelOverride => "wheel_override",
+                };
+                let reason = match reason {
+                    DisarmReason::Activation => "activation",
+                    DisarmReason::FeedbackLost => "feedback loss",
+                };
+                let by = match by {
+                    StopEdge::Stop => "an explicit stop".to_string(),
+                    StopEdge::Silence => format!("{timeout_s:.2} s of silence"),
+                };
+                r2r::log_info!(
+                    l,
+                    "arm latch: {stream} re-armed by {by}, {after_s:.2} s after the {reason}"
+                );
+            }
+            Event::FeedbackLost { age_s } => {
+                r2r::log_warn!(l, "no wheel feedback for {:.2} s", age_s)
+            }
+            Event::FeedbackResumed => r2r::log_info!(l, "feedback resumed"),
+            Event::NoFeedbackSinceActivation { age_s } => r2r::log_warn!(
+                l,
+                "no wheel feedback at all {age_s:.2} s after activation; not latching on a \
+                 link that never delivered feedback (check the STM32 UART)"
+            ),
+            Event::DriverAlarm => r2r::log_warn!(l, "driver alarm flag set"),
+            Event::Override { active: true } => {
+                r2r::log_info!(l, "wheel override active (controller command bypassed)")
+            }
+            Event::Override { active: false } => {
+                r2r::log_info!(l, "wheel override expired, back to controller command")
+            }
+            Event::Blade { running: true, permille } => {
+                r2r::log_info!(l, "blade running at {} permille (dead-man held)", permille)
+            }
+            Event::Blade { running: false, .. } => r2r::log_info!(l, "blade stop"),
+            Event::CmdVelTimedOut { linear_x, angular_z } => r2r::log_warn!(
+                l,
+                "Velocity command timed out. Braking. (last command {linear_x:.3} m/s, \
+                 {angular_z:.3} rad/s)"
+            ),
+        }
     }
 
     fn on_shutdown_request(&self, reason: u8) {
@@ -586,6 +662,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         led_resend_period_s: params::f64(&node, "led_resend_period_s", 5.0),
         override_max_ttl_ms: params::i64(&node, "override_max_ttl_ms", 1000),
         blade_max_ttl_ms: params::i64(&node, "blade_max_ttl_ms", 1000),
+        // Not a parameter: the latch only ever comes off in the parity tests.
+        arm_latch: true,
         diff_drive: diff_drive.clone(),
     };
     let settings = Settings {

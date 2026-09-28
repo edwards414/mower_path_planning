@@ -427,6 +427,18 @@ impl DiffDrive {
         // else: NaNs in the message, reference interfaces left alone.
     }
 
+    /// Brake the way a cmd_vel timeout brakes (reference 0, then through
+    /// the limiter), for [`crate::cycle::BaseCycle`]'s arm latch. A NaN
+    /// reference ("no command since activation") is left NaN, so the
+    /// wheels stay at their activation zero and /odom starts exactly when
+    /// upstream would start it.
+    pub fn hold_zero(&mut self) {
+        if self.ref_linear.is_finite() && self.ref_angular.is_finite() {
+            self.ref_linear = 0.0;
+            self.ref_angular = 0.0;
+        }
+    }
+
     /// `update_and_write_commands()`. `period_s` is the control period the
     /// caller measured (what ros2_control passes in); `stamp` is the ROS
     /// time the /odom sample is stamped with.

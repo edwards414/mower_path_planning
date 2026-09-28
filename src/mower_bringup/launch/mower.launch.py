@@ -221,8 +221,11 @@ def generate_launch_description():
 
     # The same 25 Hz cycle as one r2r node. A serial failure ends the
     # process fail-closed (the firmware's own 300 ms command timeout has
-    # already stopped the wheels) and launch brings it back after 2 s, which
-    # is what the controller_manager's ERROR return did by deactivating.
+    # already stopped the wheels) and launch brings it back after 2 s. The
+    # C++ chain never came back after an ERROR (the controllers stayed
+    # deactivated), so the restarted node holds the wheels at zero until
+    # cmd_vel shows a stop edge (mower_base's arm latch) and cannot pick up
+    # a live nav2 or teleop command on its own.
     mower_base_node = Node(
         package='mower_rs',
         executable='mower_base',

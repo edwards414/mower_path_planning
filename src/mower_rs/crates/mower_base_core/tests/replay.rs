@@ -62,9 +62,10 @@ fn replay_synthetic_recording() {
     let tick_period = expect["tick_period_ns"].as_i64().unwrap();
 
     // on_configure + on_activate at t0 (`previous_publish_timestamp_` is seeded
-    // there): stop the wheels and the blade, then ask for 0x87.
-    let (mut base, activation) =
-        BaseCycle::new(BaseConfig::default(), t0).expect("mower config is valid");
+    // there): stop the wheels and the blade, then ask for 0x87. The C++ chain
+    // has no arm latch, and this recording starts driving at once.
+    let cfg = BaseConfig { arm_latch: false, ..BaseConfig::default() };
+    let (mut base, activation) = BaseCycle::new(cfg, t0).expect("mower config is valid");
     assert_eq!(
         hex(&activation.bytes),
         expect["activation_tx"].as_str().unwrap(),
@@ -216,6 +217,7 @@ fn fault_latches_and_stops() {
 
     base.clear_fault(120_000_000);
     assert!(!base.faulted());
+    assert!(base.disarmed().is_some(), "clearing a fault is a re-activation");
 }
 
 /// The cmd_vel timeout does not drop the command, it ramps it down at
@@ -225,7 +227,8 @@ fn cmd_vel_timeout_decelerates_rather_than_dropping() {
     let (mut base, _) = BaseCycle::new(BaseConfig::default(), 0).unwrap();
     let dt = 40_000_000i64;
     let mut t = 0i64;
-    // drive up to the limit
+    // a zero first, to arm the latch; then drive up to the limit
+    base.tick(cmd(0.0, 0.0, t), t, t);
     for _ in 0..60 {
         t += dt;
         base.tick(cmd(0.55, 0.0, t), t, t);

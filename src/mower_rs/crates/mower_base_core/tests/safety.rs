@@ -1,0 +1,367 @@
+//! The behaviour `mower_base` adds on top of the C++ chain, or keeps apart
+//! from it: the arm latch, the control clock vs. ROS time, and the cmd_vel
+//! stamp handling at the cycle level.
+//!
+//! Everything runs with the production controller parameters
+//! (`mower_controller/controllers/diff_drive_controller.yaml`: open loop,
+//! 0.25 s timeout, -25 / -50 deceleration), which is what the robot runs.
+
+use mower_base_core::cycle::{
+    BaseConfig, BaseCycle, DisarmReason, Event, StopEdge, Stream, TxFrame,
+};
+use mower_base_core::diff_drive::{Command, DiffDriveParams, LimitParams, OdomSample, Twist};
+use mower_base_core::protocol::{
+    build_frame, MOTOR_STATUS, STATUS_FLAG_DRIVER_ALARM, WHEEL_FEEDBACK_STATUS,
+};
+
+const MS: i64 = 1_000_000;
+const DT: i64 = 40 * MS;
+/// A day of uptime: the control clock is CLOCK_MONOTONIC, never 0.
+const T0: i64 = 86_400_000 * MS;
+/// ROS time is epoch-based and unrelated to the control clock.
+const ROS0: i64 = 1_790_000_000_000_000_000;
+
+fn production() -> BaseConfig {
+    let axis = |v: f64, a: f64, d: f64| LimitParams {
+        has_velocity_limits: true,
+        has_acceleration_limits: true,
+        has_jerk_limits: true,
+        min_velocity: -v,
+        max_velocity: v,
+        max_acceleration: a,
+        max_acceleration_reverse: -a,
+        max_deceleration: -d,
+        max_deceleration_reverse: d,
+        min_jerk: f64::NAN,
+        max_jerk: f64::NAN,
+    };
+    BaseConfig {
+        diff_drive: DiffDriveParams {
+            wheel_separation: 0.35,
+            wheel_radius: 0.09,
+            cmd_vel_timeout: 0.25,
+            open_loop: true,
+            enable_odom_tf: false,
+            base_frame_id: "base_footprint".to_string(),
+            pose_covariance_diagonal: [0.0; 6],
+            twist_covariance_diagonal: [0.0; 6],
+            linear: axis(0.5, 1.0, 25.0),
+            angular: axis(1.0, 2.0, 50.0),
+            ..DiffDriveParams::mower()
+        },
+        ..BaseConfig::default()
+    }
+}
+
+/// `(left, right)` permille of the 0x01 in a cycle's bytes.
+fn wheels(tx: &TxFrame) -> (i16, i16) {
+    let b = &tx.bytes;
+    let mut o = 0;
+    while o + 6 <= b.len() {
+        let len = b[o + 5] as usize;
+        if b[o + 3] == 0x01 {
+            let p = &b[o + 6..o + 6 + len];
+            return (i16::from_le_bytes([p[0], p[1]]), i16::from_le_bytes([p[2], p[3]]));
+        }
+        o += 6 + len + 2;
+    }
+    panic!("no 0x01 in {:?}", tx.frames);
+}
+
+fn feedback(counts: i32) -> Vec<u8> {
+    let mut p = [0u8; 24];
+    p[12..16].copy_from_slice(&counts.to_le_bytes());
+    p[16..20].copy_from_slice(&counts.to_le_bytes());
+    build_frame(WHEEL_FEEDBACK_STATUS, 0, &p)
+}
+
+/// A base plus a clock, so a test reads as a script.
+struct Rig {
+    base: BaseCycle,
+    t: i64,
+    events: Vec<Event>,
+    last_odom: Option<OdomSample>,
+}
+
+impl Rig {
+    fn new(cfg: BaseConfig) -> Self {
+        let (base, _) = BaseCycle::new(cfg, T0).unwrap();
+        Rig { base, t: T0, events: Vec::new(), last_odom: None }
+    }
+    /// One cycle 40 ms later with `cmd` (fresh), optionally after a 0x85.
+    fn step(&mut self, cmd: Option<(f64, f64)>, with_feedback: bool) -> (i16, i16) {
+        self.t += DT;
+        if with_feedback {
+            self.base.on_rx(&feedback(0), self.t);
+        }
+        let cmd = cmd.map(|(l, a)| Command { twist: Twist::new(l, a), stamp_ns: self.t });
+        let (tx, odom, _) = self.base.tick(cmd, self.t, self.t - T0 + ROS0);
+        if odom.is_some() {
+            self.last_odom = odom;
+        }
+        self.events.extend(self.base.take_events());
+        wheels(&tx.unwrap())
+    }
+    fn run(&mut self, n: usize, cmd: Option<(f64, f64)>, with_feedback: bool) -> Vec<(i16, i16)> {
+        (0..n).map(|_| self.step(cmd, with_feedback)).collect()
+    }
+    fn armed(&self, stream: Stream) -> Option<StopEdge> {
+        self.events.iter().rev().find_map(|e| match e {
+            Event::Armed { stream: s, by, .. } if *s == stream => Some(*by),
+            _ => None,
+        })
+    }
+}
+
+fn all_zero(frames: &[(i16, i16)]) -> bool {
+    frames.iter().all(|w| *w == (0, 0))
+}
+
+// ---- the arm latch -------------------------------------------------------
+
+/// A module restart under a live command: the new cycle must not follow it
+/// until the stream shows a stop edge — here an explicit zero.
+#[test]
+fn activation_holds_a_live_command_until_a_zero() {
+    let mut rig = Rig::new(production());
+    assert_eq!(rig.base.disarmed(), Some(DisarmReason::Activation));
+    assert_eq!(rig.base.take_events(), vec![Event::Disarmed(DisarmReason::Activation)]);
+
+    // nav2 / teleop still streaming 0.4 m/s, 2 s long: nothing moves
+    let held = rig.run(50, Some((0.4, 0.2)), true);
+    assert!(all_zero(&held), "{held:?}");
+    assert!(rig.base.holds(Stream::CmdVel));
+    assert_eq!(rig.armed(Stream::CmdVel), None);
+    // the odometry agrees with the wheels: no invented motion
+    let o = rig.last_odom.clone().expect("/odom runs while held");
+    assert_eq!((o.x, o.y, o.linear_x), (0.0, 0.0, 0.0));
+
+    // the stop edge, then a new command moves the wheels at the normal ramp
+    rig.step(Some((0.0, 0.0)), true);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Stop));
+    assert!(!rig.base.holds(Stream::CmdVel));
+    let moving = rig.run(25, Some((0.4, 0.0)), true);
+    assert_eq!(moving[0], (73, 73), "first cycle: 1 m/s^2 * 40 ms = 0.04 m/s");
+    assert!(moving.last().unwrap().0 > 600);
+
+    // B6: the pose moved by what was commanded since activation, not by
+    // the command times the clock reading
+    let x = rig.last_odom.unwrap().x;
+    assert!(x > 0.0 && x < 0.4, "open-loop pose after 1 s of ramp: {x} m");
+}
+
+/// Silence for longer than cmd_vel_timeout is the other stop edge.
+#[test]
+fn activation_rearms_after_silence() {
+    let mut rig = Rig::new(production());
+    let frames = rig.run(6, None, true); // 240 ms
+    assert!(all_zero(&frames));
+    assert!(rig.base.holds(Stream::CmdVel), "240 ms is not yet > 250 ms");
+    rig.step(None, true); // 280 ms
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
+    assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
+    assert_eq!(rig.base.disarmed(), None);
+    let moving = rig.run(3, Some((0.3, 0.0)), true);
+    assert_eq!(moving[0], (73, 73));
+}
+
+/// A zero followed by a new command in a later cycle re-arms at the zero; a
+/// non-zero after a gap shorter than the timeout does not count as silence.
+#[test]
+fn a_gap_shorter_than_the_timeout_is_not_a_stop_edge() {
+    let mut rig = Rig::new(production());
+    rig.run(3, Some((0.4, 0.0)), true);
+    rig.run(4, None, true); // 160 ms of nothing
+    let held = rig.run(10, Some((0.4, 0.0)), true);
+    assert!(all_zero(&held), "{held:?}");
+    assert!(rig.base.holds(Stream::CmdVel));
+}
+
+/// Feedback that was there and stops: the wheels are braked and stay held,
+/// even after the feedback comes back, until the stream shows a stop edge.
+#[test]
+fn feedback_loss_after_presence_disarms() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), true);
+    let moving = rig.run(40, Some((0.4, 0.0)), true);
+    assert!(moving.last().unwrap().0 > 600);
+    rig.events.clear();
+
+    // UART lead pulled: 0x85 stops, the stick is still held
+    let lost = rig.run(20, Some((0.4, 0.0)), false);
+    // 0.5 s timeout: cycles 1..=12 are at most 480 ms without a frame
+    assert!(lost[..12].iter().all(|w| w.0 > 600), "{lost:?}");
+    assert_eq!(lost[12], (0, 0), "braked on the cycle the loss is seen (-25 m/s^2)");
+    assert!(all_zero(&lost[12..]));
+    assert!(matches!(rig.events[0], Event::FeedbackLost { age_s } if (age_s - 0.52).abs() < 1e-9));
+    assert_eq!(rig.events[1], Event::Disarmed(DisarmReason::FeedbackLost));
+
+    // lead re-seated with the stick still held: no lurch
+    let back = rig.run(20, Some((0.4, 0.0)), true);
+    assert!(all_zero(&back), "{back:?}");
+    assert!(rig.events.contains(&Event::FeedbackResumed));
+    assert!(rig.base.holds(Stream::CmdVel));
+
+    // release, push again
+    rig.step(Some((0.0, 0.0)), true);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Stop));
+    let again = rig.run(5, Some((0.4, 0.0)), true);
+    assert_eq!(again[0], (73, 73));
+}
+
+/// A board that never sends 0x85 must still drive (not bricked), and says so
+/// once in the log.
+#[test]
+fn feedback_never_seen_does_not_disarm() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), false);
+    let frames = rig.run(75, Some((0.4, 0.0)), false); // 3 s without a frame
+    assert!(frames.last().unwrap().0 > 600, "{:?}", frames.last());
+    assert!(!rig.base.holds(Stream::CmdVel));
+    let reports: Vec<_> = rig
+        .events
+        .iter()
+        .filter(|e| matches!(e, Event::NoFeedbackSinceActivation { .. }))
+        .collect();
+    assert_eq!(reports.len(), 1, "{:?}", rig.events);
+    assert!(!rig.events.contains(&Event::Disarmed(DisarmReason::FeedbackLost)));
+}
+
+/// pid_autotune's raw permille bypasses the controller, so it has its own
+/// half of the latch: not applied while held, dropped on a disarm, and
+/// re-armed only by its own stop edge.
+#[test]
+fn wheel_override_obeys_the_latch() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), true); // cmd_vel armed; the override is not
+
+    // an override stream that was running before the restart
+    let mut held = Vec::new();
+    for _ in 0..20 {
+        rig.base.request_wheel_override(400, -400, 300, rig.t);
+        held.push(rig.step(None, true));
+    }
+    assert!(all_zero(&held), "{held:?}");
+    assert!(rig.base.holds(Stream::WheelOverride));
+
+    // the stream stops; 250 ms later it is armed, and a new request applies
+    rig.run(7, None, true);
+    assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
+    rig.base.request_wheel_override(400, -400, 300, rig.t);
+    assert_eq!(rig.step(None, true), (400, -400));
+    assert!(rig.events.contains(&Event::Override { active: true }));
+
+    // feedback lost mid-override: dropped at once, and a still-streaming
+    // override is not applied again
+    let mut lost = Vec::new();
+    for _ in 0..20 {
+        rig.base.request_wheel_override(400, -400, 300, rig.t);
+        lost.push(rig.step(None, false));
+    }
+    let first_zero = lost.iter().position(|w| *w == (0, 0)).unwrap();
+    assert!(all_zero(&lost[first_zero..]), "{lost:?}");
+    assert!(rig.base.holds(Stream::WheelOverride));
+
+    // an explicit cancel (ttl 0) is a stop edge too
+    rig.base.request_wheel_override(0, 0, 0, rig.t);
+    rig.step(None, true);
+    assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Stop));
+    rig.base.request_wheel_override(-200, 200, 300, rig.t);
+    assert_eq!(rig.step(None, true), (-200, 200));
+}
+
+/// Parity mode: with the latch off the cycle follows a live command at once,
+/// like the C++ chain.
+#[test]
+fn the_latch_can_be_turned_off_for_the_parity_tests() {
+    let mut rig = Rig::new(BaseConfig { arm_latch: false, ..production() });
+    assert_eq!(rig.base.disarmed(), None);
+    assert_eq!(rig.step(Some((0.4, 0.0)), true), (73, 73));
+    let lost = rig.run(40, Some((0.4, 0.0)), false);
+    assert!(lost.last().unwrap().0 > 600, "no latch on feedback loss either");
+}
+
+// ---- clocks ----------------------------------------------------------------
+
+/// Everything the cycle times runs on the control clock: stepping ROS time
+/// back 5 s and then forward 10 s changes the stamps and nothing else.
+#[test]
+fn a_wall_clock_step_changes_nothing() {
+    let run = |step_ros: bool| {
+        let (mut base, _) = BaseCycle::new(production(), T0).unwrap();
+        let mut out = Vec::new();
+        for k in 1..=150i64 {
+            let t = T0 + k * DT;
+            let mut ros = ROS0 + k * DT;
+            if step_ros && k > 50 {
+                ros -= 5_000 * MS;
+            }
+            if step_ros && k > 100 {
+                ros += 10_000 * MS;
+            }
+            if k % 2 == 0 {
+                base.on_rx(&feedback((k * 10) as i32), t);
+            }
+            if k == 20 {
+                base.request_blade(600, 1000, t);
+                base.request_wheel_override(300, 300, 1000, t);
+            }
+            let cmd = match k {
+                1 => Some(Twist::new(0.0, 0.0)),
+                2..=40 | 60..=90 => Some(Twist::new(0.4, 0.3)),
+                _ => None,
+            }
+            .map(|twist| Command { twist, stamp_ns: t });
+            let (tx, odom, joints) = base.tick(cmd, t, ros);
+            if let Some(o) = &odom {
+                assert_eq!(o.stamp_ns, ros, "odom carries ROS time");
+            }
+            assert_eq!(joints.as_ref().unwrap().stamp_ns, ros);
+            let telemetry = base.telemetry().to_json(mower_base_core::seconds(t), base.blade_active());
+            out.push((tx.unwrap().bytes, odom.map(|o| (o.x, o.y, o.yaw)), telemetry));
+        }
+        out
+    };
+    let steady = run(false);
+    let stepped = run(true);
+    for (k, (a, b)) in steady.iter().zip(&stepped).enumerate() {
+        assert_eq!(a, b, "cycle {} differs", k + 1);
+    }
+}
+
+// ---- the log events ------------------------------------------------------
+
+#[test]
+fn the_cpp_log_transitions_are_reported() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), true);
+    rig.run(10, Some((0.3, 0.0)), true);
+    rig.events.clear();
+
+    // a moving command times out: reported once, not every second after
+    rig.run(30, None, true);
+    let timeouts = rig.events.iter().filter(|e| matches!(e, Event::CmdVelTimedOut { .. })).count();
+    assert_eq!(timeouts, 1, "{:?}", rig.events);
+    // a zero that times out brakes nothing and says nothing
+    rig.step(Some((0.0, 0.0)), true);
+    rig.events.clear();
+    rig.run(30, None, true);
+    assert!(!rig.events.iter().any(|e| matches!(e, Event::CmdVelTimedOut { .. })));
+
+    // blade dead-man edges
+    rig.base.request_blade(600, 200, rig.t);
+    rig.run(10, None, true);
+    assert!(rig.events.contains(&Event::Blade { running: true, permille: 600 }));
+    assert!(rig.events.contains(&Event::Blade { running: false, permille: 600 }));
+
+    // driver alarm, at most every 2 s
+    rig.events.clear();
+    let mut alarm = [0u8; 12];
+    alarm[10] = STATUS_FLAG_DRIVER_ALARM;
+    for _ in 0..75 {
+        rig.base.on_rx(&build_frame(MOTOR_STATUS, 0, &alarm), rig.t + DT);
+        rig.step(None, true);
+    }
+    let alarms = rig.events.iter().filter(|e| **e == Event::DriverAlarm).count();
+    assert_eq!(alarms, 2, "3 s of alarm frames at 25 Hz");
+}
