@@ -124,10 +124,10 @@ serial thread and the fail-closed path.
 
 | direction | topic | type | QoS | rate | comes from |
 |---|---|---|---|---|---|
-| sub | `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | **best effort**, depth 1 | whatever twist_mux + the final guard produce | `diff_controller`'s `~/cmd_vel`, remapped in `controller_test.launch.py`. Jazzy's controller is TwistStamped-only; the `use_stamped_vel: true` in the yaml is a no-op left over from Iron |
-| pub | `/odom` | `nav_msgs/Odometry` | reliable + **transient local**, depth 1 | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
-| pub | `/tf` | `tf2_msgs/TFMessage` | reliable + **transient local**, depth 1 | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
-| pub | `/joint_states` | `sensor_msgs/JointState` | reliable + **transient local**, depth 1 | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them |
+| sub | `/drivetrain_guarded_cmd_vel` | `geometry_msgs/TwistStamped` | `SystemDefaultsQoS` | whatever twist_mux + the final guard produce | `diff_controller`'s `~/cmd_vel`, remapped in `controller_test.launch.py`. Jazzy's controller is TwistStamped-only; the `use_stamped_vel: true` in the yaml is a no-op left over from Iron. `header.stamp` handled as upstream: 0 means now, a message already `cmd_vel_timeout` old is ignored, the timeout runs from the stamp |
+| pub | `/odom` | `nav_msgs/Odometry` | `SystemDefaultsQoS` | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
+| pub | `/tf` | `tf2_msgs/TFMessage` | `SystemDefaultsQoS` | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
+| pub | `/joint_states` | `sensor_msgs/JointState` | `SystemDefaultsQoS` | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them, `frame_id` `base_link` (its `frame_id` parameter's default) |
 | pub | `/mower_base/telemetry` | `std_msgs/String` (JSON) | best effort, depth 1 | one per new 0x85, gated at `0.8 / telemetry_rate_hz` (20 Hz) -> ~15-17 Hz against a 50 ms frame and a 40 ms loop | `MowerSystem::publish_telemetry_if_due` |
 | pub | `/mower_base/firmware_info` | `std_msgs/String` (JSON) | transient local, reliable, depth 1 | once per distinct 0x87 (latched) | `MowerSystem::on_firmware_info` |
 | sub | `/mower_base/led_command` | `std_msgs/String` | transient local, reliable, depth 1 | on change, re-asserted every 5 s | `led_topic` |
@@ -136,13 +136,49 @@ serial thread and the fail-closed path.
 | sub | `/mower_base/servo_command` | `std_msgs/String` | best effort, depth 1 | one 0x07 per message | `servo_topic` |
 | sub | `/mower_base/blade_command` | `std_msgs/String` | best effort, depth 1 | dead-man, refreshed every cycle, one explicit 0 on expiry | `blade_topic` |
 
-None of the four is `rclcpp::SystemDefaultsQoS()`, which is what the
-upstream sources read like: the durability and reliability above were read
-off the *running* graph (the endpoint info the differential test records).
-`diff_drive_controller` and `joint_state_broadcaster` latch their state
-topics, and `diff_controller`'s command subscription is best effort — a
-reliable subscription there would silently refuse a best-effort publisher,
-so it is not a harmless difference.
+`SystemDefaultsQoS` is what the upstream controllers ask for, and this node
+asks for the same (`QosProfile::system_default()`), because it is not a
+fixed profile: each RMW resolves it. Under `rmw_cyclonedds_cpp`, which the
+robot runs, it is reliable + volatile, keep last 1, on both sides; under
+Fast DDS the writers come out TRANSIENT_LOCAL and the readers BEST_EFFORT.
+An earlier version of this node hard-coded the Fast DDS reading (the dev
+images have no RMW set), which on the robot would have made the cmd_vel
+reader best effort where the C++ one is reliable. `tools/base_compare.py`
+now fails unless every endpoint of every topic this node owns resolves the
+same as the C++ chain's; run it under the robot's RMW (`tools/base_ab.sh`).
+
+### What it adds: the arm latch, and a monotonic control clock
+
+Two deliberate differences from the C++ chain, both for the restart this
+node gets and the chain never had:
+
+* **The arm latch.** After every (re)activation, and when 0x85 feedback
+  that had been arriving stops for longer than `feedback_timeout_s`, the
+  cmd_vel reference is held at zero (the limiter brakes it as a cmd_vel
+  timeout would) until cmd_vel shows a stop edge: a finite 0/0, or nothing
+  for longer than `cmd_vel_timeout`. `wheel_override` gets the same rule on
+  its own stream: not applied, a running override dropped, until a 0/0 or
+  ttl-0 request or the same silence. The C++ chain deactivated its
+  controllers for good on a runtime error; this node is restarted after 2 s
+  and would otherwise resume a live nav2 or teleop command by itself. On the
+  robot's native UART a pulled lead is no read or write error at all, only
+  missing 0x85, so the feedback half of the latch is what turns a re-seated
+  lead into "stopped until released" instead of a lurch. Feedback that never
+  arrived since activation only logs a warning — a board that does not send
+  0x85 is not bricked. Disarm and re-arm are logged (`arm latch: ...`).
+* **The control clock is CLOCK_MONOTONIC**, as ros2_control's steady trigger
+  clock is: the loop period, the command age, the feedback age, the blade,
+  override and LED deadlines, the telemetry throttle and the telemetry `t`
+  (seconds of uptime, as the C++ printed). The system clock only stamps
+  message headers and ages a cmd_vel by its own stamp, so a wall-clock step
+  cannot pulse the wheels through the limiter or stretch a dead-man.
+
+The transitions the C++ logged are logged with the same text: `no wheel
+feedback for %.2f s` / `feedback resumed`, `driver alarm flag set` (2 s
+throttle), the wheel override and blade dead-man edges, and `Velocity
+command timed out. Braking.` (once per timeout of a non-zero command, not
+every second). A blade or override request that is not JSON is a stop / a
+cancel, with a warning.
 
 Frames on the wire, unchanged: 0x01 every cycle with the firmware's own
 300 ms `command_timeout_ms`, 0x02/0x03/0x04/0x07 as requested, 0x05 to ack a
@@ -183,14 +219,21 @@ are written out, in `mower_bringup/config/mower_rsd.yaml`.
 ### Verification
 
 The serial port cannot be opened twice, so the two implementations are run
-one after the other against a fake STM32 on a `socat` pty pair:
+one after the other against a fake STM32 on a pty. `tools/base_ab.sh` runs
+one side inside the runtime image — the robot's RMW (CycloneDDS with
+`/etc/mower/cyclonedds.xml`), which matters, because `SystemDefaultsQoS`
+resolves differently under Fast DDS:
 
 ```bash
-socat -d pty,raw,echo=0,link=/tmp/base_host pty,raw,echo=0,link=/tmp/base_stm &
-tools/fake_base.py --port /tmp/base_stm --log /tmp/fake.jsonl --seconds 60
-#  ... start ros2_control (device:=/tmp/base_host) or mower_base, then:
-tools/base_harness.py --out /tmp/out_a/run.json --label a
-tools/base_compare.py --a /tmp/out_a --b /tmp/out_b
+run() { docker run --rm -u 0 --cap-add NET_ADMIN --cap-add SYS_NICE -e ROS_DOMAIN_ID=61 \
+          -v "$PWD":/repo -v /tmp/ab:/out --entrypoint bash \
+          mower_path_planning:ros-free-test /repo/src/mower_rs/tools/base_ab.sh "$@"; }
+run A /out/a                                     # ros2_control chain
+run B /out/b /repo/path/to/new/mower_base        # mower_base (default: the image's)
+python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b   # exit 1 on a QoS difference
+run A /out/a_pull "" --scenario pull             # the cable pull, both sides
+run B /out/b_pull /repo/path/to/new/mower_base --scenario pull
+python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a_pull --b /tmp/ab/b_pull
 ```
 
 `fake_base.py` answers 0x85 at the firmware's 50 ms period from a
@@ -205,8 +248,9 @@ waits for every endpoint to match before it starts the clock — without that
 the run whose driver started later loses its first seconds of `/odom` and
 the two trajectories are offset by the test, not by the code.
 
-Result of a 32 s run on an arm64 Jazzy container (2026-09-23; the Rust node
-is a **debug** build here, the release one is faster):
+Result of a 32 s run on an arm64 Jazzy container (2026-09-23, **Fast DDS**,
+before the pre-flight fixes; the Rust node is a **debug** build here, the
+release one is faster):
 
 | | `ros2_control` | `mower_base` |
 |---|---|---|
@@ -228,6 +272,28 @@ command script at different instants, not a difference in the arithmetic:
 `mower_base_core`'s oracle vectors already pin the limiter, the odometry and
 a 200-cycle controller run to 1e-12 against the original C++. Repeats of the
 whole run land between 8.6e-4 and 1.9e-3 m, in either direction.
+
+Re-run 2026-09-28 after the pre-flight fixes, in the runtime image under
+CycloneDDS (`base_ab.sh`, release build), on a host that another job kept
+at a load of ~40:
+
+* **QoS: all eleven topics, every endpoint, identical** — reliability,
+  durability, history, depth, liveliness. `/odom`, `/tf`, `/joint_states`
+  and the cmd_vel reader resolve to reliable + volatile, keep last 1.
+* 0x02/0x03/0x04/0x06/0x07 payloads identical, telemetry keys 84 = 84,
+  `/joint_states` `frame_id` `base_link` on both, telemetry `t` on the same
+  (uptime) clock, the override burst and the safety zero within a cycle.
+  The latch never engaged in this script: it arms by silence 0.28 s after
+  activation, long before the harness starts.
+* The odometry was 0.12 m apart after 2.9 m, and that was the load: at
+  6.55 s the C++ run logged `Velocity command timed out. Braking.` after a
+  0.18 s stall of the harness and re-ramped from zero; the Rust run had no
+  such stall. Take the 2026-09-23 numbers above for the arithmetic.
+* `--scenario pull` (stick held at 0.30 m/s, lead out 4-6 s): after the
+  re-seat the C++ chain sent 71/71 frames at 549 permille from the first
+  frame (6.04 s) — the lurch; `mower_base` sent 74/74 at 0/0 with the stick
+  still held, and moved again only after the release (`arm latch: cmd_vel
+  re-armed by an explicit stop`).
 
 ### Capturing a real serial recording on the robot
 
