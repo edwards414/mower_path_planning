@@ -623,7 +623,11 @@ impl Ctx {
         self.wait_pid(&old, seq0, false, 1.5, false).await?;
         self.record(true);
         self.set(Some("open_loop"), Some(0.10), Some(&format!("open loop: 0 -> {:.0} % -> {:.0} % duty", low as f64 / 10.0, high as f64 / 10.0)));
-        self.hold(0, 0.6).await?;
+        // 1 s at rest, not 0.6: after the previous run's PID flash save
+        // mower_base holds wheel_override until it has carried zeros for its
+        // release window (latch_release_s, 0.5 s), and 0.6 s left the first
+        // step 80 ms of margin — one late zero and the step never ran.
+        self.hold(0, 1.0).await?;
         let t_low = Instant::now();
         self.hold(low, hold).await?;
         let t_high = Instant::now();

@@ -518,8 +518,9 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
             check(out, bool(fb_out) and bool(timeouts),
                   f"{scenario}: the fake did not keep sending feedback with COMMAND_TIMEOUT "
                   "while the lead was out")
-        if scenario == "guardzero" and run.get("latch_log"):
-            check(out, any("not held for" in line for line in run["latch_log"]),
+        if scenario == "guardzero":
+            # an empty log (driver.log missing) must fail too, not pass unseen
+            check(out, any("not held for" in line for line in run.get("latch_log") or []),
                   "guardzero: mower_base did not log the stop it did not take for a release")
 
 

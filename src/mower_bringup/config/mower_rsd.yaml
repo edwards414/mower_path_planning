@@ -53,7 +53,8 @@ mower_base:
     # receiving our commands, an STM32 restart) cmd_vel, wheel_override and a
     # held blade each re-arm only once their stream has carried no non-zero
     # command for this long: zeros and silence both count, silence alone
-    # needs the longer of this and cmd_vel_timeout (0.25 s). One zero followed
+    # needs the longer of twice this and cmd_vel_timeout (0.25 s), and a gap
+    # in the driver's own loop starts the window again. One zero followed
     # by the stick again is not a release: on 2026-09-29 a 0.3 s stall during a
     # USB hub reset made velocity_command_guard's watchdog send a zero, the
     # image before this took it for the operator letting go, and the stick that

@@ -53,7 +53,8 @@ ros-free-test 映像的 CycloneDDS 下重跑（`tools/base_ab.sh`）：11 個 to
 同一批修正加了 arm latch、單調時鐘、cmd_vel stamp 規則，細節見 `src/mower_rs/README.md` 的 mower_base 一節。
 2026-09-29 第二次上機（ecdd4a8）找到 latch 的洞：拔 pin 8 連帶讓 USB hub 重置、機器人端卡 0.3 s，
 `velocity_command_guard` 補的一個 0 被當成放開，還推著的搖桿就讓輪子轉了。`fix/rf-latch-release-window`
-改成停止要持續 `latch_release_s`（0.5 s）才解鎖（0 和靜默合併計算，靜默單獨也要 0.5 s），
+改成停止要持續 `latch_release_s`（0.5 s）才解鎖（0 和靜默合併計算；只有靜默則要 1.0 s，
+因為機器人 ROS 那一側卡住時，對 mower_base 的迴圈來說也是靜默；mower_base 自己的迴圈停頓則重新計時），
 override 與割刀同規則；容器 `--scenario guardzero` 重現這個順序。
 
 兩個踩到的事實，寫在這裡免得再查一次：
@@ -134,7 +135,7 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
   `mower_base` 送的 0/0；三種都會先出現 `STM32 receiving commands again`（板子回報收得到
   我們的 0x01 了），**放開滿 0.5 s**（`latch_release_s`：這段時間內 cmd_vel 只有 0 或完全沒有，
   兩種可以混著算）後出現 `arm latch: cmd_vel re-armed by an explicit stop held for 0.50 s`
-  （或 `silence (nothing for > 0.50 s)`），再推才會走。放開不到 0.5 s 又推，**不算放開**，
+  （只有靜默時是 `silence (nothing for > 1.00 s)`），再推才會走。放開不到 0.5 s 又推，**不算放開**，
   鎖不會解開，日誌寫一次 `arm latch: cmd_vel stop not held for 0.50 s (non-zero after …), still held`。
   C++ 那條鏈沒有這個鎖，插回去當下就照搖桿走。
   **拔 pin 8 在這台機器上也會讓 USB hub 重置**（2026-09-29 實測：IMU、相機 01:33:36–46 重新列舉），

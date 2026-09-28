@@ -93,12 +93,14 @@ pub struct BaseConfig {
     /// How long a held stream must carry no non-zero command before it
     /// re-arms (the release window). Explicit stops and silence both count
     /// and combine: the window runs from the first stop after the newest
-    /// non-zero command, and silence alone needs the longer of this and the
-    /// stream's own timeout. A stop that a non-zero cuts short re-arms
-    /// nothing: on 2026-09-29 a hub reset stalled the robot side for 0.3 s,
-    /// `velocity_command_guard`'s watchdog zero reached the driver as a
-    /// stop, and the stick that was still held drove the wheels 0.25 s
-    /// later. 0 = the first stop re-arms (the rule before this parameter).
+    /// non-zero command, and silence alone needs the longer of twice this
+    /// ([`silence_window_ns`]) and the stream's own timeout. A stop that a
+    /// non-zero cuts short re-arms nothing: on 2026-09-29 a hub reset
+    /// stalled the robot side for 0.3 s, `velocity_command_guard`'s watchdog
+    /// zero reached the driver as a stop, and the stick that was still held
+    /// drove the wheels 0.25 s later. A gap in this driver's own loop starts
+    /// every held stream's window again ([`Event::LoopStalled`]). 0 = the
+    /// first stop re-arms (the rule before this parameter).
     pub latch_release_s: f64,
     pub diff_drive: DiffDriveParams,
 }
@@ -284,11 +286,12 @@ pub enum StopEdge {
     /// with ttl 0 — and nothing but stops (or nothing at all) for
     /// `latch_release_s` from the first one.
     Stop,
-    /// Nothing on the stream for longer than `latch_release_s` and than its
-    /// own timeout (`cmd_vel_timeout`; for wheel_override also the newest
-    /// request's ttl), counted only while it can deliver (see
-    /// [`BaseCycle::set_publishers`]); for the blade, no refresh within the
-    /// ttl of the last request, nor within `latch_release_s`.
+    /// Nothing on the stream for longer than twice `latch_release_s` and
+    /// than its own timeout (`cmd_vel_timeout`; for wheel_override also the
+    /// newest request's ttl), counted only while it can deliver (see
+    /// [`BaseCycle::set_publishers`]) and not across a gap in this driver's
+    /// loop; for the blade, no refresh within the ttl of the last request,
+    /// nor within twice `latch_release_s`.
     Silence,
 }
 
@@ -325,6 +328,13 @@ pub enum Event {
     /// window that rest re-armed the stream, and the non-zero drove it
     /// (the 2026-09-29 guard-zero case). Once per disarm and stream.
     ReleaseNotHeld { stream: Stream, by: StopEdge, window_s: f64, after_s: f64 },
+    /// This driver's own loop did not run for `gap_s` s (more than two
+    /// control periods) while a stream was held: nothing could be seen in
+    /// the gap, so every held stream's release window starts again.
+    /// Without it a stall of the whole robot longer than the window was
+    /// the operator's silence, and the still-held stick drove the wheels on
+    /// the first cycle after it.
+    LoopStalled { gap_s: f64 },
     /// "no wheel feedback for %.2f s" — once per loss.
     FeedbackLost { age_s: f64 },
     /// "feedback resumed"
@@ -387,9 +397,32 @@ struct Release {
     rest: Option<Rest>,
     /// `Event::ReleaseNotHeld` went out for this hold.
     reported: bool,
+    /// Silence is not counted from before this: the end of the newest gap
+    /// in the driver's own loop ([`Release::restart`]).
+    floor_ns: TimeNs,
+}
+
+/// Silence is weaker evidence of a release than an explicit stop: the app
+/// and nav2 both send a zero when they let go, while a robot-side stall of
+/// the ROS side (the guards, the executor) looks like silence to this
+/// driver's loop, which keeps running. So silence alone needs twice the
+/// release window before it re-arms a stream.
+fn silence_window_ns(release_ns: i64) -> i64 {
+    release_ns.saturating_mul(2)
 }
 
 impl Release {
+    /// The driver's own loop stalled: nothing could be seen in the gap, so
+    /// neither a stop in progress nor silence counts across it. Both start
+    /// again at `now`.
+    fn restart(&mut self, now: TimeNs) {
+        if self.stop_since.is_some() {
+            self.stop_since = Some(now);
+        }
+        self.floor_ns = now;
+        self.rest = None;
+    }
+
     /// A message on the held stream at `now`. A stop starts the window, or
     /// continues it; anything else restarts it, and if it cuts short a
     /// rest that would have re-armed the stream before the window existed,
@@ -462,7 +495,7 @@ impl Hold {
         if timeout_ns <= 0 || (last_ns.is_none() && publisher_since_ns.is_none()) {
             return None;
         }
-        let mut from = self.since_ns;
+        let mut from = self.since_ns.max(self.release.floor_ns);
         if let Some(t) = last_ns {
             from = from.max(t);
         }
@@ -472,7 +505,7 @@ impl Hold {
         (now - from > timeout_ns).then_some(Rest {
             by: StopEdge::Silence,
             since_ns: from,
-            window_ns: timeout_ns.max(release_ns),
+            window_ns: timeout_ns.max(silence_window_ns(release_ns)),
         })
     }
 }
@@ -557,8 +590,8 @@ impl BladeHold {
         };
         (now >= until).then_some(Rest {
             by: StopEdge::Silence,
-            since_ns: at,
-            window_ns: (until - at).max(release_ns),
+            since_ns: at.max(self.release.floor_ns),
+            window_ns: (until - at).max(silence_window_ns(release_ns)),
         })
     }
 }
@@ -1102,6 +1135,26 @@ impl BaseCycle {
         (self.cfg.latch_release_s.max(0.0) * 1e9) as i64
     }
 
+    /// A gap of `gap_ns` in this loop: every held stream's release window
+    /// starts again at `now` ([`Release::restart`], [`Event::LoopStalled`]).
+    fn restart_releases(&mut self, now: TimeNs, gap_ns: i64) {
+        let mut held = false;
+        for release in [
+            self.cmd_hold.as_mut().map(|h| &mut h.release),
+            self.override_hold.as_mut().map(|h| &mut h.release),
+            self.blade_hold.as_mut().map(|h| &mut h.release),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            release.restart(now);
+            held = true;
+        }
+        if held {
+            self.events.push(Event::LoopStalled { gap_s: seconds(gap_ns) });
+        }
+    }
+
     /// Re-arm each stream whose stop edge has been sustained for the
     /// release window; remember the rest of the others, so a non-zero that
     /// cuts it short can be reported ([`Event::ReleaseNotHeld`]). Only
@@ -1464,7 +1517,13 @@ impl BaseCycle {
         self.telemetry.feedback_age_s = self.feedback_age_s;
 
         let period_s = match self.last_tick_ns {
-            Some(prev) => seconds(now) - seconds(prev),
+            Some(prev) => {
+                let nominal_ns = (1e9 / self.cfg.update_rate_hz) as i64;
+                if now - prev > 2 * nominal_ns {
+                    self.restart_releases(now, now - prev);
+                }
+                seconds(now) - seconds(prev)
+            }
             None => 1.0 / self.cfg.update_rate_hz,
         };
         self.last_tick_ns = Some(now);

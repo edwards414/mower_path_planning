@@ -271,12 +271,15 @@ restart this node gets and the chain never had:
   for the window. Explicit zeros and silence count together: the window
   runs from the first stop after the newest non-zero command, through more
   zeros or nothing at all, and a non-zero inside it restarts it at the next
-  stop; silence alone needs the longer of the window and the stream's own
-  timeout (`cmd_vel_timeout` 0.25 s, so 0.5 s: a stall of 0.25-0.5 s is not
-  a release either), still counted only while the stream can deliver (the
-  discovery rule below). The blade's dead-man gets the same window: a 0
+  stop; silence alone needs the longer of twice the window and the
+  stream's own timeout (`cmd_vel_timeout` 0.25 s, so 1.0 s), still counted
+  only while the stream can deliver (the discovery rule below). Silence is
+  the weaker evidence: the app and nav2 both send a zero when they let go,
+  while a stall of the ROS side (the guards, the executor) is silence to
+  this driver's loop, which keeps running, so a stall of up to 1.0 s is not
+  a release either. The blade's dead-man gets the same window: a 0
   followed by a refresh within 0.5 s is not a let-go, whoever sent the 0,
-  and a lapsed ttl shorter than 0.5 s is not either; it never re-arms
+  and a lapsed ttl is only a let-go once the refresh is 1.0 s old; it never re-arms
   earlier than it did without the window. The first time per disarm that a
   rest the old rule would have taken (a stop, or silence past the stream's
   timeout, on a cycle where the link would let it re-arm) is cut short by a
@@ -285,10 +288,24 @@ restart this node gets and the chain never had:
   `wheel_override ...`, `blade_command ...`). What it costs: a release now
   takes effect 0.5 s after the stick is let go, on a latch that is holding
   (normal driving is never latched); at activation the idle streams re-arm
-  by silence at `publisher_settle_s` + 0.5 s after their publisher
+  by silence at `publisher_settle_s` + 1.0 s after their publisher
   appears, or 0.5 s into the zeros an app at rest sends; after an outage
-  at rest they re-arm once the board receives again and 0.5 s have passed
+  at rest they re-arm once the board receives again and 1.0 s have passed
   since the disarm. `latch_release_s: 0` restores the old rule.
+  A gap in this driver's own loop (more than two control periods, 80 ms at
+  25 Hz: the whole robot stalled) starts every held stream's window again
+  at the end of the gap, and says so: `arm latch: the control loop did not
+  run for 0.74 s; ...`. The review of d354537 found that without it a stall
+  longer than the silence window re-armed on the first cycle after it, and
+  the stick that was still held drove the wheels. Known limit, left to the
+  guards: a zero that `manual_velocity_guard` or `velocity_command_guard`
+  forces is still a zero here. If the app's messages keep arriving stale
+  (the echoed `/manual_command_clock` older than the guard's max age, as on
+  a slow relay link), the manual guard publishes a zero for each at 10 Hz
+  while the stick is held, 0.5 s of them re-arm the stream, and the first
+  message that then passes drives. The fix is for the guards to mark the
+  zeros they force (or not to send them while the latch holds), not a
+  longer window here.
   Two rules keep "silence" honest. A restarted node's reader hears nothing
   from a live writer until DDS discovery has matched the two (2.7 s has been
   seen under load), so silence only counts once the topic has had a

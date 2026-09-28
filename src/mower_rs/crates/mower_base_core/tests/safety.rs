@@ -25,6 +25,9 @@ const DT: i64 = 40 * MS;
 /// 14th cycle counting the one that saw its first stop (13 * 40 ms = 0.52 s
 /// after it; 0.48 s is not yet the window).
 const RELEASE_CYCLES: usize = 14;
+/// Silence alone re-arms 1.04 s after it starts: twice the release window,
+/// and the first 40 ms cycle past it (the rule is strictly longer than).
+const SILENCE_CYCLES: usize = 26;
 /// A day of uptime: the control clock is CLOCK_MONOTONIC, never 0.
 const T0: i64 = 86_400_000 * MS;
 /// ROS time is epoch-based and unrelated to the control clock.
@@ -168,7 +171,9 @@ impl Rig {
             .iter()
             .filter_map(|e| match e {
                 Event::ReleaseNotHeld { stream, by, window_s, after_s } => {
-                    assert!((window_s - 0.5).abs() < 1e-6, "{e:?}");
+                    // the release window for a stop, twice it for silence
+                    let want = if *by == StopEdge::Stop { 0.5 } else { 1.0 };
+                    assert!((window_s - want).abs() < 1e-6, "{e:?}");
                     Some((*stream, *by, *after_s))
                 }
                 _ => None,
@@ -231,10 +236,10 @@ fn activation_holds_a_live_command_until_a_zero() {
 #[test]
 fn activation_rearms_after_silence() {
     let mut rig = Rig::new(production());
-    let frames = rig.run(63, None, true); // 2.52 s
+    let frames = rig.run(76, None, true); // 3.04 s
     assert!(all_zero(&frames));
-    assert!(rig.base.holds(Stream::CmdVel), "2.52 - 2.04 s is not yet > 0.50 s");
-    rig.step(None, true); // 2.56 s
+    assert!(rig.base.holds(Stream::CmdVel), "3.04 - 2.04 s is not yet > 1.00 s");
+    rig.step(None, true); // 3.08 s
     assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
     assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
     assert_eq!(rig.base.disarmed(), None);
@@ -289,10 +294,10 @@ fn no_publisher_and_no_message_is_not_silence() {
     assert!(rig.base.holds(Stream::CmdVel) && rig.base.holds(Stream::WheelOverride));
 
     // one non-zero message from a writer the graph has not caught up with,
-    // then nothing: re-armed 0.5 s after it (the release window, longer
-    // than the 0.25 s cmd_vel_timeout)
+    // then nothing: re-armed 1.0 s after it (silence needs twice the
+    // release window, longer than the 0.25 s cmd_vel_timeout)
     rig.step(Some((0.3, 0.0)), true);
-    let quiet = rig.run(12, None, true);
+    let quiet = rig.run(25, None, true);
     assert!(all_zero(&quiet));
     assert!(rig.base.holds(Stream::CmdVel));
     rig.step(None, true);
@@ -318,8 +323,8 @@ fn a_gap_shorter_than_the_timeout_is_not_a_stop_edge() {
 fn feedback_loss_after_presence_disarms() {
     let mut rig = Rig::new(production());
     rig.release(true);
-    // (the idle override stream re-arms by silence at 2.56 s)
-    let moving = rig.run(55, Some((0.4, 0.0)), true);
+    // (the idle override stream re-arms by silence at 3.08 s)
+    let moving = rig.run(65, Some((0.4, 0.0)), true);
     assert!(moving.last().unwrap().0 > 600);
     assert_eq!(rig.base.disarmed(), None);
     rig.events.clear();
@@ -355,7 +360,7 @@ fn feedback_loss_after_presence_disarms() {
 fn a_command_given_during_the_outage_waits_for_a_stop() {
     let mut rig = Rig::new(production());
     rig.step(Some((0.0, 0.0)), true);
-    rig.run(70, None, true); // the override stream too, by silence
+    rig.run(80, None, true); // the override stream too, by silence (3.08 s)
     assert_eq!(rig.base.disarmed(), None);
     rig.events.clear();
 
@@ -412,7 +417,7 @@ fn an_idle_outage_rearms_when_the_lead_is_back() {
     let mut rig = Rig::new(production());
     rig.step(Some((0.0, 0.0)), true);
     rig.run(10, None, true);
-    rig.run(60, None, false); // 2.4 s out, idle
+    rig.run(75, None, false); // 3.0 s out, idle (silence counts from 2.04 s)
     assert!(rig.base.holds(Stream::CmdVel));
     rig.events.clear();
     rig.step(None, true);
@@ -956,7 +961,7 @@ fn a_board_restart_is_seen_in_command_valid() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
+    rig.drive_n(&mut board, 70, None);
     assert_eq!(rig.base.disarmed(), None);
     rig.events.clear();
 
@@ -966,8 +971,8 @@ fn a_board_restart_is_seen_in_command_valid() {
     assert_eq!(rig.resets(), vec![ResetSignature::CommandValidCleared { flags: TIMEOUT }]);
     assert_eq!(rig.base.disarmed(), Some(DisarmReason::BoardReset));
     // at rest: re-armed by silence once the board receives again (80 ms
-    // later) and the release window since the disarm is up
-    rig.drive_n(&mut board, RELEASE_CYCLES, None);
+    // later) and the silence window since the disarm is up
+    rig.drive_n(&mut board, SILENCE_CYCLES, None);
     assert_eq!(rig.board_receiving().len(), 1, "{:?}", rig.events);
     assert_eq!(rig.base.disarmed(), None, "{:?}", rig.events);
 
@@ -1154,7 +1159,7 @@ fn a_partial_reseat_is_caught_by_the_command_path() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
+    rig.drive_n(&mut board, 70, None);
     assert_eq!(rig.base.disarmed(), None);
     rig.events.clear();
 
@@ -1207,15 +1212,15 @@ fn a_partial_reseat_is_caught_by_the_command_path() {
 /// them, so the streams re-arm at most about 90 ms after the feedback
 /// returned, and nothing but the feedback loss and its recovery is logged.
 /// (Silence counts from the disarm, 0.52 s into the outage: an outage
-/// shorter than that plus the release window, about 1 s, re-arms when the
-/// window is up instead.)
+/// shorter than that plus the silence window, twice the release window,
+/// about 1.5 s, re-arms when the window is up instead.)
 #[test]
 fn both_leads_back_at_rest_rearm_as_soon_as_the_board_receives() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
-    for gap_cycles in [30usize, 40, 75] {
+    rig.drive_n(&mut board, 70, None);
+    for gap_cycles in [45usize, 55, 75] {
         rig.events.clear();
         board.rx_lead = false;
         board.tx_lead = false;
@@ -1269,7 +1274,7 @@ fn a_pid_flash_save_does_not_strand_the_autotune() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
+    rig.drive_n(&mut board, 70, None);
     assert_eq!(rig.base.disarmed(), None);
 
     for (erase_ms, deaf_after_ms, tripped) in
@@ -1277,7 +1282,7 @@ fn a_pid_flash_save_does_not_strand_the_autotune() {
     {
         rig.events.clear();
         // run_inner: open loop 0 -> 40 % -> 70 %, then the closed-loop verify
-        assert!(all_zero(&rig.hold(&mut board, 0, 0.6)));
+        assert!(all_zero(&rig.hold(&mut board, 0, 1.0)));
         assert_eq!(*rig.hold(&mut board, 400, 2.5).last().unwrap(), (400, 400));
         assert_eq!(*rig.hold(&mut board, 700, 2.5).last().unwrap(), (700, 700));
         assert_eq!(board.applied.last().map(|a| (a.1, a.2)), Some((700, 700)));
@@ -1311,16 +1316,20 @@ fn a_pid_flash_save_does_not_strand_the_autotune() {
         assert!(rig.events.contains(&Event::Disarmed(tripped)), "{:?}", rig.events);
         assert_eq!(rig.board_receiving().len(), 1, "back after the erase: {:?}", rig.events);
         // run()'s finally: override_wheels(0, 0, 0), then nothing. The
-        // idle streams have been silent since the disarm, and re-arm by
-        // that once the board is back and the window is up; the cancel
-        // would, 0.52 s after it, at the latest.
+        // cancel re-arms the override 0.52 s after it at the latest; the
+        // idle cmd_vel stream has been silent since the disarm and re-arms
+        // by that once the board is back and the silence window (twice the
+        // release window) is up.
         rig.base.request_wheel_override(0, 0, 0, rig.t);
         rig.drive_n(&mut board, RELEASE_CYCLES - 1, None);
+        assert!(!rig.base.holds(Stream::WheelOverride), "erase {erase_ms} ms: {:?}", rig.events);
+        rig.drive_n(&mut board, SILENCE_CYCLES, None);
         assert_eq!(rig.base.disarmed(), None, "erase {erase_ms} ms: {:?}", rig.events);
     }
 
-    // the next run: its steps reach the wheels
-    rig.hold(&mut board, 0, 0.6);
+    // the next run (pid_autotune rests 1 s before its first step): its
+    // steps reach the wheels
+    rig.hold(&mut board, 0, 1.0);
     assert_eq!(*rig.hold(&mut board, 400, 1.0).last().unwrap(), (400, 400));
     assert_eq!(board.applied.last().map(|a| (a.1, a.2)), Some((400, 400)));
 }
@@ -1472,7 +1481,7 @@ fn a_partial_reseat_with_the_second_lead_soon_after_gets_zeros() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
+    rig.drive_n(&mut board, 70, None);
     assert_eq!(rig.base.disarmed(), None);
     rig.events.clear();
 
@@ -1533,7 +1542,7 @@ fn a_held_blade_needs_a_fresh_press_after_a_link_loss() {
     let mut rig = Rig::new(production());
     let mut board = Board::new(T0);
     rig.arm(&mut board);
-    rig.drive_n(&mut board, 60, None);
+    rig.drive_n(&mut board, 70, None);
     assert_eq!(rig.base.disarmed(), None);
     assert!(!rig.base.holds(Stream::Blade), "not held at activation");
 
@@ -1556,8 +1565,9 @@ fn a_held_blade_needs_a_fresh_press_after_a_link_loss() {
     assert!(rig.base.holds(Stream::Blade));
     assert_eq!(rig.base.disarmed(), Some(DisarmReason::BoardNotReceiving));
 
-    // let go: re-armed once the last refresh's 500 ms have run out
-    let released = press(&mut rig, &mut board, 15, false);
+    // let go: re-armed once the last refresh's 500 ms have run out and it
+    // is older than the silence window (twice the release window)
+    let released = press(&mut rig, &mut board, 27, false);
     assert!(quiet(&released));
     assert_eq!(rig.armed(Stream::Blade), Some(StopEdge::Silence));
     assert_eq!(rig.base.disarmed(), None);
@@ -1715,12 +1725,66 @@ fn a_stall_shorter_than_the_release_window_is_not_a_release() {
     assert_eq!((stream, by), (Stream::CmdVel, StopEdge::Silence));
     assert!((after_s - 0.32).abs() < 1e-6, "{after_s}");
 
-    // a real stop of the stream: more than 0.5 s of nothing
-    rig.run(12, None, true);
-    assert!(rig.base.holds(Stream::CmdVel), "0.48 s");
+    // 0.80 s of nothing, then the stick: longer than the release window,
+    // but silence alone needs twice it (a stall of the ROS side, the guards
+    // and the executor, is silence to this loop, which keeps running)
+    let mut longer = rig.run(20, None, true);
+    longer.extend(rig.run(10, Some((0.4, 0.0)), true));
+    assert!(all_zero(&longer), "{longer:?}");
+    assert!(rig.base.holds(Stream::CmdVel));
+
+    // a real stop of the stream: more than 1.0 s of nothing
+    rig.run(25, None, true);
+    assert!(rig.base.holds(Stream::CmdVel), "1.00 s");
     rig.step(None, true);
     assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
     assert_eq!(rig.step(Some((0.4, 0.0)), true), (73, 73));
+}
+
+/// Review finding: a stall of this driver's own loop (the whole robot
+/// stopped, as the 2026-09-29 hub reset did for 0.3 s) is not the
+/// operator's silence. The stick is held after a pin-8 re-seat, the loop
+/// does not run for 0.7 s or 1.5 s, and what the stick sent meanwhile is
+/// lost. Without the restart, the first cycle after a gap longer than the
+/// silence window re-armed, and the next message drove the wheels.
+#[test]
+fn a_stall_of_the_driver_loop_is_not_silence() {
+    let mut rig = Rig::new(production());
+    let mut board = Board::new(T0);
+    rig.arm(&mut board);
+    rig.teleop(&mut board, Some(0.4), 2.0);
+    board.rx_lead = false;
+    rig.teleop(&mut board, Some(0.4), 1.1);
+    assert_eq!(rig.base.disarmed(), Some(DisarmReason::BoardNotReceiving));
+    board.rx_lead = true;
+    assert!(all_zero(&rig.teleop(&mut board, Some(0.4), 1.0)));
+    rig.events.clear();
+
+    for gap_ms in [700, 1500] {
+        rig.t += gap_ms * MS;
+        let after = rig.teleop(&mut board, Some(0.4), 2.0);
+        assert!(all_zero(&after), "gap {gap_ms} ms: {after:?}");
+        assert!(rig.base.holds(Stream::CmdVel), "gap {gap_ms} ms: {:?}", rig.events);
+        assert_eq!(rig.armed(Stream::CmdVel), None, "gap {gap_ms} ms: {:?}", rig.events);
+    }
+    let stalls: Vec<f64> = rig
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::LoopStalled { gap_s } => Some(*gap_s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stalls.len(), 2, "{:?}", rig.events);
+    assert!((stalls[0] - 0.74).abs() < 1e-6 && (stalls[1] - 1.54).abs() < 1e-6, "{stalls:?}");
+
+    // released: one zero, then nothing
+    rig.drive(&mut board, Some((0.0, 0.0)));
+    rig.drive_n(&mut board, RELEASE_CYCLES - 2, None);
+    assert!(rig.base.holds(Stream::CmdVel));
+    rig.drive(&mut board, None);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Stop));
+    assert_eq!(rig.drive(&mut board, Some((0.4, 0.0))), (73, 73));
 }
 
 /// A real release is often one zero and then nothing: that re-arms once
@@ -1763,7 +1827,7 @@ fn a_real_release_is_one_zero_then_silence() {
 fn a_cancel_cut_short_does_not_rearm_the_override() {
     let mut rig = Rig::new(production());
     rig.release(true);
-    rig.run(60, None, true);
+    rig.run(70, None, true);
     assert_eq!(rig.base.disarmed(), None);
     let mut board = Board::new(rig.t);
     assert_eq!(*rig.hold(&mut board, 400, 1.0).last().unwrap(), (400, 400));
@@ -1865,9 +1929,10 @@ fn a_blade_stop_cut_short_is_not_a_release() {
         assert_eq!(rig.not_held().len(), 1, "once per disarm");
 
         // let go after the last refresh (three cycles ago, 200 ms ttl): the
-        // ttl runs out, the window 0.52 s after the refresh re-arms it
-        press(&mut rig, &mut board, 9, None, 1);
-        assert!(rig.base.holds(Stream::Blade), "0.48 s: {:?}", rig.events);
+        // ttl runs out, and 1.04 s after the refresh (silence needs twice
+        // the release window) it re-arms
+        press(&mut rig, &mut board, 22, None, 1);
+        assert!(rig.base.holds(Stream::Blade), "1.00 s: {:?}", rig.events);
         press(&mut rig, &mut board, 1, None, 1);
         assert_eq!(rig.armed(Stream::Blade), Some(StopEdge::Silence));
         rig.base.request_blade(600, 500, rig.t);
@@ -1916,7 +1981,9 @@ fn run_through_a_step(
         if k == 20 {
             base.request_blade(600, 1000, t);
         }
-        if k == 70 {
+        // after the idle override stream re-armed by silence (3.08 s), and
+        // live across the forward step at cycle 101
+        if k == 80 {
             base.request_wheel_override(300, 300, 1000, t);
         }
         let command = cmd(k).and_then(|twist| {
@@ -1960,7 +2027,7 @@ fn a_wall_clock_step_under_a_live_command_changes_nothing() {
     // and the run did what it says: moving through both steps, the override
     // applied, stopped at the end
     assert!(wheels(&TxFrame { bytes: steady[99].0.clone(), frames: vec![] }).0 > 0);
-    assert_eq!(wheels(&TxFrame { bytes: steady[70].0.clone(), frames: vec![] }), (300, 300));
+    assert_eq!(wheels(&TxFrame { bytes: steady[80].0.clone(), frames: vec![] }), (300, 300));
     assert_eq!(wheels(&TxFrame { bytes: steady[149].0.clone(), frames: vec![] }), (0, 0));
 }
 

@@ -62,8 +62,9 @@ Units and safety behaviour are documented on `cycle` itself; the short version:
   cmd_vel reference is held at zero and `wheel_override` is not applied,
   each until its own stream shows a stop edge sustained for
   `latch_release_s` (0.5 s): no non-zero command in that window, explicit
-  stops and silence counted together, silence alone for at least
-  `cmd_vel_timeout` too; one zero followed by the stick again is not a
+  stops and silence counted together, silence alone for twice the window
+  (and at least `cmd_vel_timeout`), none of it across a gap in the driver's
+  own loop; one zero followed by the stick again is not a
   release (the 2026-09-29 guard-zero finding) — and, after one of the three
   losses, the link is back both ways (feedback arriving, and a fresh 0x81
   showing the board receiving again; at activation too, once the board has

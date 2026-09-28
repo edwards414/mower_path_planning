@@ -387,7 +387,7 @@ impl Driver {
                 format!(
                     "cmd_vel has carried no non-zero command for {release_s:.2} s (zero \
                      commands, or none for {:.2} s{silence_from})",
-                    timeout_s.max(release_s)
+                    timeout_s.max(2.0 * release_s)
                 )
             } else {
                 format!("cmd_vel has carried only zero commands for {release_s:.2} s")
@@ -463,15 +463,17 @@ impl Driver {
                     (StopEdge::Stop, _) => format!("an explicit stop held for {release_s:.2} s"),
                     (StopEdge::Silence, "blade_command") => format!(
                         "its dead-man running out (no refresh within its ttl, nor for \
-                         {release_s:.2} s)"
+                         {:.2} s)",
+                        2.0 * release_s
                     ),
                     (StopEdge::Silence, "wheel_override") => format!(
                         "silence (nothing for > {:.2} s nor within the last request's ttl)",
-                        timeout_s.max(release_s)
+                        timeout_s.max(2.0 * release_s)
                     ),
-                    (StopEdge::Silence, _) => {
-                        format!("silence (nothing for > {:.2} s)", timeout_s.max(release_s))
-                    }
+                    (StopEdge::Silence, _) => format!(
+                        "silence (nothing for > {:.2} s)",
+                        timeout_s.max(2.0 * release_s)
+                    ),
                 };
                 r2r::log_info!(
                     l,
@@ -487,6 +489,11 @@ impl Driver {
                     StopEdge::Stop => "stop",
                     StopEdge::Silence => "silence",
                 }
+            ),
+            Event::LoopStalled { gap_s } => r2r::log_warn!(
+                l,
+                "arm latch: the control loop did not run for {gap_s:.2} s; nothing held counts \
+                 as released across the gap, each held stream's release window starts again"
             ),
             Event::FeedbackLost { age_s } => {
                 r2r::log_warn!(l, "no wheel feedback for {:.2} s", age_s)
@@ -860,7 +867,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         // Not a parameter: the latch only ever comes off in the parity tests.
         arm_latch: true,
         publisher_settle_s: params::f64(&node, "publisher_settle_s", 2.0),
-        latch_release_s: params::f64(&node, "latch_release_s", 0.5).max(0.0),
+        latch_release_s: {
+            let v = params::f64(&node, "latch_release_s", 0.5);
+            if v.is_finite() && v >= 0.0 {
+                v
+            } else {
+                r2r::log_warn!(&logger, "latch_release_s {v} is not a duration; using 0.5");
+                0.5
+            }
+        },
         diff_drive: diff_drive.clone(),
     };
     let settings = Settings {
