@@ -38,15 +38,17 @@
 //!   or write failure): the cycle latches, stops commanding and emits the
 //!   stop burst, which is what `on_deactivate` does on the real stack.
 //! * The **arm latch** (not in the C++; `BaseConfig::arm_latch`): after every
-//!   activation, and when 0x85 feedback that had been arriving stops for
-//!   longer than `feedback_timeout_s`, the cmd_vel reference is held at zero
-//!   and `wheel_override` is not applied, each until its own stream shows a
-//!   stop edge — see [`BaseCycle::disarmed`]. The C++ chain latched off for
-//!   good after a runtime error; this driver is restarted after 2 s instead,
-//!   and without the latch it would resume a live nav2 or teleop command on
-//!   its own, and so would a re-seated UART lead. Silence only counts as a
-//!   stop edge once the stream can deliver ([`BaseCycle::set_publishers`]),
-//!   and nothing re-arms while the feedback is still lost.
+//!   activation, when 0x85 feedback that had been arriving stops for longer
+//!   than `feedback_timeout_s`, when the board's 0x81 says our 0x01 frames
+//!   stopped reaching it, and when the board restarted, the cmd_vel
+//!   reference is held at zero and `wheel_override` is not applied, each
+//!   until its own stream shows a stop edge — see [`BaseCycle::disarmed`].
+//!   The C++ chain latched off for good after a runtime error; this driver is
+//!   restarted after 2 s instead, and without the latch it would resume a
+//!   live nav2 or teleop command on its own, and so would a re-seated UART
+//!   lead. Silence only counts as a stop edge once the stream can deliver
+//!   ([`BaseCycle::set_publishers`]), and nothing re-arms while the feedback
+//!   is still lost or before the board shows it receives commands again.
 
 use crate::diff_drive::{Command, DiffDrive, DiffDriveParams, OdomSample, WheelCommand};
 use crate::protocol::{self as proto, FrameParser, PidConfig};
@@ -73,9 +75,11 @@ pub struct BaseConfig {
     pub override_max_ttl_ms: i64,
     /// `kBladeMaxTtlMs`.
     pub blade_max_ttl_ms: i64,
-    /// Hold the wheels after (re)activation and feedback loss until the
-    /// command streams show a stop edge. Off only to reproduce the C++
-    /// chain, which has no such latch, in the parity tests.
+    /// Hold the wheels after (re)activation, feedback loss, a command path
+    /// the board reports dead and a board restart, until the command
+    /// streams show a stop edge. Off only to reproduce the C++ chain, which
+    /// has no such latch, in the parity tests: everything the latch adds,
+    /// the 0x81 checks included, is then skipped.
     pub arm_latch: bool,
     /// Silence on a held stream is only counted from this long after its
     /// publisher first appears ([`BaseCycle::set_publishers`]). Seeing the
@@ -184,9 +188,65 @@ pub enum DisarmReason {
     /// [`BaseCycle::new`] / [`BaseCycle::clear_fault`].
     Activation,
     /// 0x85 feedback had been arriving and then stopped for longer than
-    /// `feedback_timeout_s`.
+    /// `feedback_timeout_s` (both leads out, or the board silent).
     FeedbackLost,
+    /// The board's 0x81 reported COMMAND_TIMEOUT on
+    /// [`TIMEOUT_REPORTS_TO_DISARM`] fresh frames in a row while this driver
+    /// was writing a 0x01 every cycle, after it had shown the board
+    /// receiving them: our frames are not arriving although its feedback
+    /// is (the LubanCat TX -> STM32 RX lead alone).
+    BoardNotReceiving,
+    /// The STM32 restarted ([`ResetSignature`]).
+    BoardReset,
 }
+
+/// How a restart of the STM32 was recognised. Both are things only the
+/// firmware's boot path does (`MowerMotor_Init`, `WheelController_Init`).
+///
+/// Not used, because they are not reliable signatures: the frame `seq` (the
+/// 0x81/0x85 header carries the last *accepted* 0x01 seq, which is ours, so
+/// the new boot echoes our counter as soon as one frame lands, and is 0
+/// both after a restart and once in every 256 of our frames), and the 0x87
+/// firmware info (sent at boot, but also every 1 s and on request, and
+/// identical before and after a restart).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetSignature {
+    /// A fresh 0x81 without COMMAND_VALID after one that had it.
+    /// `g_motor_command.valid` is set by every accepted 0x01 and cleared
+    /// only in `MowerMotor_Init`, so the bit cannot drop without a restart.
+    /// (The board reports `flags` 0x02 for "no command yet", with
+    /// `command_age_ms` 65535: `timeout = !valid || age > timeout`. The
+    /// protocol table listed 0x00 until this change.)
+    /// Seen only when no 0x01 lands before the new boot's first 0x81.
+    CommandValidCleared { flags: u8 },
+    /// Both encoder totals of a fresh 0x85 back near zero
+    /// ([`ENCODER_RESTART_NEAR_ZERO_S`] of full speed), by a jump that
+    /// neither wheel can make in the time since the previous 0x85 (twice
+    /// `max_rpm` over that time plus two status periods). The totals count
+    /// from 0 at `WheelController_Init` and are never reset otherwise; a
+    /// restart after less than about a wheel turn since the board booted
+    /// is not seen this way.
+    EncoderTotalsRestarted { left: i32, right: i32, prev_left: i32, prev_right: i32 },
+}
+
+/// Fresh 0x81 frames in a row that must report COMMAND_TIMEOUT before the
+/// latch calls the command path lost. One would already be genuine (the
+/// frame is CRC-checked, and only frames decoded since the last cycle
+/// count), but by then the board has zeroed its output for less than one
+/// status period: a dropout that heals before the second report cost the
+/// wheels at most 50 ms of drive, which is a stutter, not a lurch, and
+/// is not worth stranding a nav2 goal on. A pulled lead produces a report
+/// every 50 ms until it is back.
+pub const TIMEOUT_REPORTS_TO_DISARM: u8 = 2;
+
+/// `MOTOR_DEFAULT_COMMAND_TIMEOUT_MS`: what the board applies to a 0x01
+/// whose `command_timeout_ms` is 0.
+const FIRMWARE_DEFAULT_COMMAND_TIMEOUT_MS: u16 = 200;
+
+/// A fresh 0x85 whose totals are both within this many seconds of full
+/// speed of zero is "near zero" for [`ResetSignature::EncoderTotalsRestarted`].
+/// The new boot's first 0x85 goes out 60 ms after `WheelController_Init`.
+pub const ENCODER_RESTART_NEAR_ZERO_S: f64 = 0.25;
 
 /// The two motion streams the arm latch holds, each on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +272,17 @@ pub enum StopEdge {
 pub enum Event {
     /// The latch now holds both streams.
     Disarmed(DisarmReason),
+    /// With `Disarmed(BoardNotReceiving)`, once per loss: the board has had
+    /// no 0x01 for `command_age_ms` (its own view, saturating at 65535)
+    /// although one goes out every cycle.
+    BoardNotReceiving { command_age_ms: u16 },
+    /// With `Disarmed(BoardReset)`: the STM32 restarted.
+    BoardReset(ResetSignature),
+    /// After a `BoardNotReceiving` or `BoardReset`: a fresh 0x81 shows the
+    /// board receiving again (COMMAND_TIMEOUT clear, `command_age_ms`
+    /// within two control periods), `after_s` s after the loss. The streams
+    /// still need their stop edges.
+    BoardReceiving { command_age_ms: u16, after_s: f64 },
     /// `stream` showed a stop edge `after_s` s after the disarm: it moves the
     /// wheels again.
     Armed { stream: Stream, reason: DisarmReason, by: StopEdge, after_s: f64 },
@@ -288,6 +359,37 @@ impl Hold {
     }
 }
 
+/// What the board's 0x81 says about the command path: the part of the arm
+/// latch that watches the LubanCat TX -> STM32 RX direction, which the 0x85
+/// feedback cannot show.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct CommandPath {
+    /// A fresh 0x81 has shown the board receiving (COMMAND_VALID set,
+    /// COMMAND_TIMEOUT clear) since the activation or the last detected
+    /// restart. Until then a timeout is the board's memory of the time no
+    /// driver ran, and a missing COMMAND_VALID is a board no 0x01 reached
+    /// yet: neither means anything.
+    receiving_seen: bool,
+    /// Consecutive fresh 0x81 reporting COMMAND_TIMEOUT while the writer
+    /// was alive ([`BaseCycle::writer_alive`]).
+    timeout_streak: u8,
+    /// Lost at this control time; nothing re-arms until a fresh 0x81 shows
+    /// the board receiving again.
+    lost_since: Option<TimeNs>,
+    /// A restart was detected and the board has not shown it receiving
+    /// since: a second signature of the same restart (the new boot's first
+    /// 0x81 and first 0x85 both carry one) is not a second restart.
+    reset_seen: bool,
+    /// Timeout reports before this control time do not count: set when
+    /// lost feedback comes back, to the writer's settle time
+    /// ([`BaseCycle::writer_alive`]) from then. A re-seat of the LubanCat
+    /// TX lead together with the other one ends both outages at once, and
+    /// the board's reports until our first frame lands are about the old
+    /// one; if only the STM32 TX lead came back, the reports go on and
+    /// count from here.
+    reports_count_from_ns: TimeNs,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct DeadMan {
     /// Absolute deadline; `None` = nothing held.
@@ -326,6 +428,12 @@ pub struct BaseCycle {
     no_feedback_reported: bool,
     driver_alarm_logged_ns: Option<TimeNs>,
     events: Vec<Event>,
+    /// The board's view of our 0x01 frames (arm latch only).
+    path: CommandPath,
+    /// control-clock time of the last cycle that produced a 0x01, and since
+    /// when those cycles have come without a gap the board could time out on
+    last_write_ns: TimeNs,
+    writer_since_ns: TimeNs,
 
     telemetry: Telemetry,
     /// `telemetry_pending_`: a new 0x85 arrived since the last publish.
@@ -379,6 +487,10 @@ impl BaseCycle {
             no_feedback_reported: false,
             driver_alarm_logged_ns: None,
             events: Vec::new(),
+            path: CommandPath::default(),
+            // the activation burst below is a 0x01
+            last_write_ns: now,
+            writer_since_ns: now,
             telemetry: Telemetry::default(),
             telemetry_pending: false,
             firmware_info: None,
@@ -453,10 +565,27 @@ impl BaseCycle {
     }
     /// The arm latch: `Some(reason)` while either motion stream is held.
     ///
-    /// Both streams are disarmed on every activation and when feedback that
-    /// had been arriving is lost for longer than `feedback_timeout_s`. While
-    /// cmd_vel is held the controller reference is forced to zero (braking
-    /// through the limiter, exactly like a cmd_vel timeout); while
+    /// Both streams are disarmed on every activation, and by three losses
+    /// that between them cover every lead of the UART and the board itself:
+    ///
+    /// * [`DisarmReason::FeedbackLost`] — 0x85 feedback that had been
+    ///   arriving is missing for longer than `feedback_timeout_s`: both
+    ///   leads out, or the STM32 TX -> LubanCat RX lead alone, or a board
+    ///   that went quiet (a restart spends 0.5 s in the bootloader).
+    /// * [`DisarmReason::BoardNotReceiving`] — the feedback keeps coming but
+    ///   [`TIMEOUT_REPORTS_TO_DISARM`] fresh 0x81 in a row report
+    ///   COMMAND_TIMEOUT while this driver wrote a 0x01 every cycle, after
+    ///   one had shown the board receiving: the LubanCat TX -> STM32 RX lead
+    ///   alone. The firmware's own timeout has already stopped the wheels;
+    ///   the latch is what keeps them stopped when the lead is back. Reports
+    ///   do not count while the feedback is lost, nor for 1.5 board timeouts
+    ///   (450 ms) after it returns (the feedback loss holds the wheels for
+    ///   that outage), nor for as long after a stall of this loop.
+    /// * [`DisarmReason::BoardReset`] — the STM32 restarted
+    ///   ([`ResetSignature`]).
+    ///
+    /// While cmd_vel is held the controller reference is forced to zero
+    /// (braking through the limiter, exactly like a cmd_vel timeout); while
     /// wheel_override is held its requests are not applied, and an override
     /// that was running is dropped at the disarm. Each stream is re-armed
     /// by its own stop edge *after* the disarm: an explicit stop (cmd_vel
@@ -466,10 +595,14 @@ impl BaseCycle {
     /// explicit stops count.
     ///
     /// Nothing re-arms while feedback that had been arriving is still
-    /// missing: a command given with the lead out would otherwise ramp up
-    /// against wheels that cannot move and reach them as a step the moment
-    /// the lead is back. On the cycle it returns, the newest message
-    /// decides: at rest (a stop, or silence) re-arms, moving stays held.
+    /// missing, nor after a `BoardNotReceiving` / `BoardReset` until a fresh
+    /// 0x81 shows the board receiving again (COMMAND_TIMEOUT clear and
+    /// `command_age_ms` within two control periods; the 0x01 it is getting
+    /// then are this driver's zeros): a command given with a lead out would
+    /// otherwise ramp up against wheels that cannot move and reach them as
+    /// a step the moment the lead is back. On the cycle the link returns,
+    /// the newest message decides: at rest (a stop, or silence) re-arms,
+    /// moving stays held.
     pub fn disarmed(&self) -> Option<DisarmReason> {
         self.cmd_hold.or(self.override_hold).map(|h| h.reason)
     }
@@ -514,6 +647,7 @@ impl BaseCycle {
         self.feedback_valid = false;
         self.feedback_stale = false;
         self.no_feedback_reported = false;
+        self.path = CommandPath::default();
         self.activated_ns = now;
         self.ddc.activate(now);
         self.disarm(DisarmReason::Activation, now);
@@ -552,6 +686,143 @@ impl BaseCycle {
             present,
             after_activation_s: seconds(now - self.activated_ns),
         });
+    }
+
+    /// The timeout the board applies to our 0x01 frames, in ns.
+    fn board_timeout_ns(&self) -> i64 {
+        let ms = match self.cfg.command_timeout_ms {
+            0 => FIRMWARE_DEFAULT_COMMAND_TIMEOUT_MS,
+            ms => ms,
+        };
+        ms as i64 * 1_000_000
+    }
+
+    /// Note that this cycle hands the port a 0x01.
+    fn note_write(&mut self, now: TimeNs) {
+        if now - self.last_write_ns > self.board_timeout_ns() / 2 {
+            self.writer_since_ns = now;
+        }
+        self.last_write_ns = now;
+    }
+
+    /// Whether a COMMAND_TIMEOUT the board reports now can only mean that
+    /// our frames are not arriving: this driver has produced a 0x01 at
+    /// least every half board timeout, for longer than the board timeout
+    /// plus that half again. Every window the board can time out on then
+    /// holds two of our frames, even for a report that sat in the port for
+    /// a while before this read. After a stall of this loop the board timed
+    /// out for a reason of ours, and its reports do not count until the
+    /// writing has been steady that long again.
+    fn writer_alive(&self, now: TimeNs) -> bool {
+        let timeout = self.board_timeout_ns();
+        now - self.last_write_ns <= timeout / 2
+            && now - self.writer_since_ns > timeout + timeout / 2
+    }
+
+    /// The longest `command_age_ms` that shows commands arriving again:
+    /// two control periods.
+    fn receiving_age_ns(&self) -> i64 {
+        (2.0e9 / self.cfg.update_rate_hz) as i64
+    }
+
+    /// A fresh 0x81: watch the command path (arm latch only).
+    fn on_motor_status(&mut self, ms: proto::MotorStatus, now: TimeNs) {
+        if !self.cfg.arm_latch {
+            return;
+        }
+        let valid = ms.flags & proto::STATUS_FLAG_COMMAND_VALID != 0;
+        let timed_out = ms.flags & proto::STATUS_FLAG_COMMAND_TIMEOUT != 0;
+        if !valid {
+            if self.path.receiving_seen {
+                self.board_reset(ResetSignature::CommandValidCleared { flags: ms.flags }, now);
+            }
+            return;
+        }
+        if timed_out {
+            if !self.path.receiving_seen {
+                return;
+            }
+            // Not while the feedback is lost or has only just come back:
+            // then the reports describe the outage the feedback loss has
+            // already latched (both leads out: the board heard nothing
+            // either), and the first ones after a re-seat of both leads
+            // still predate our first frame landing.
+            if !self.writer_alive(now)
+                || self.feedback_stale
+                || now < self.path.reports_count_from_ns
+            {
+                self.path.timeout_streak = 0;
+                return;
+            }
+            self.path.timeout_streak = self.path.timeout_streak.saturating_add(1);
+            if self.path.timeout_streak >= TIMEOUT_REPORTS_TO_DISARM
+                && self.path.lost_since.is_none()
+            {
+                self.path.lost_since = Some(now);
+                self.events.push(Event::BoardNotReceiving { command_age_ms: ms.command_age_ms });
+                self.disarm(DisarmReason::BoardNotReceiving, now);
+            }
+            return;
+        }
+        self.path.timeout_streak = 0;
+        self.path.receiving_seen = true;
+        self.path.reset_seen = false;
+        if let Some(since) = self.path.lost_since {
+            if ms.command_age_ms as i64 * 1_000_000 <= self.receiving_age_ns() {
+                self.path.lost_since = None;
+                self.events.push(Event::BoardReceiving {
+                    command_age_ms: ms.command_age_ms,
+                    after_s: seconds(now - since),
+                });
+            }
+        }
+    }
+
+    fn board_reset(&mut self, signature: ResetSignature, now: TimeNs) {
+        if self.path.reset_seen {
+            return;
+        }
+        self.events.push(Event::BoardReset(signature));
+        self.path = CommandPath {
+            receiving_seen: false,
+            timeout_streak: 0,
+            lost_since: Some(now),
+            reset_seen: true,
+            reports_count_from_ns: 0,
+        };
+        self.disarm(DisarmReason::BoardReset, now);
+    }
+
+    /// [`ResetSignature::EncoderTotalsRestarted`] for a fresh 0x85 `fb`
+    /// received at `now`, against the previous one: both totals within
+    /// [`ENCODER_RESTART_NEAR_ZERO_S`] of full speed of zero, and one of
+    /// them moved further than twice full speed covers in the time between
+    /// the two frames plus two status periods. Full speed is `max_rpm`, the
+    /// most the firmware commands; twice that is margin for a wheel pushed
+    /// or rolling downhill, and the two periods cover frames lost in
+    /// between that this read cannot know about. The difference is the
+    /// wrapped one the odometry uses, so the int32 wrap never looks like a
+    /// jump.
+    fn encoder_restart(&self, fb: &proto::WheelFeedback, now: TimeNs) -> Option<ResetSignature> {
+        if !(self.left.have_counts && self.right.have_counts) {
+            return None;
+        }
+        let per_s = self.cfg.max_rpm / 60.0 * self.cfg.counts_per_rev;
+        let near = per_s * ENCODER_RESTART_NEAR_ZERO_S;
+        let reach = 2.0 * per_s * (seconds(now - self.last_feedback_ns).max(0.0) + 0.1);
+        let moved = |w: &Wheel, total: i32| {
+            ((total as u32).wrapping_sub(w.last_total_counts as u32) as i32).unsigned_abs() as f64
+        };
+        let jumped = moved(&self.left, fb.left_total_counts) > reach
+            || moved(&self.right, fb.right_total_counts) > reach;
+        let at_zero = (fb.left_total_counts.unsigned_abs() as f64) <= near
+            && (fb.right_total_counts.unsigned_abs() as f64) <= near;
+        (jumped && at_zero).then_some(ResetSignature::EncoderTotalsRestarted {
+            left: fb.left_total_counts,
+            right: fb.right_total_counts,
+            prev_left: self.left.last_total_counts,
+            prev_right: self.right.last_total_counts,
+        })
     }
 
     /// Re-arm each stream that has shown its stop edge.
@@ -705,6 +976,11 @@ impl BaseCycle {
                 let Some(fb) = proto::decode_wheel_feedback(seq, payload) else {
                     return;
                 };
+                if self.cfg.arm_latch {
+                    if let Some(signature) = self.encoder_restart(&fb, now) {
+                        self.board_reset(signature, now);
+                    }
+                }
                 let rad_per_count = TWO_PI / self.cfg.counts_per_rev;
                 integrate(&mut self.left, fb.left_total_counts, fb.left_measured_rpm, rad_per_count);
                 integrate(
@@ -718,6 +994,8 @@ impl BaseCycle {
                 self.feedback_valid = true;
                 if self.feedback_stale {
                     self.events.push(Event::FeedbackResumed);
+                    let settle = self.board_timeout_ns() + self.board_timeout_ns() / 2;
+                    self.path.reports_count_from_ns = now + settle;
                 }
                 self.feedback_stale = false;
                 self.telemetry_pending = true;
@@ -725,6 +1003,7 @@ impl BaseCycle {
             proto::MOTOR_STATUS => {
                 if let Some(ms) = proto::decode_motor_status(payload) {
                     self.telemetry.motor = Some(ms);
+                    self.on_motor_status(ms, now);
                     if ms.flags & proto::STATUS_FLAG_DRIVER_ALARM != 0
                         && self
                             .driver_alarm_logged_ns
@@ -855,6 +1134,9 @@ impl BaseCycle {
             velocities: [self.left.vel, self.right.vel],
         });
 
+        // every path below writes a 0x01
+        self.note_write(now);
+
         if self.faulted {
             // fail closed: no controller update, no odometry, just stop.
             let mut tx = std::mem::take(&mut self.pending_tx);
@@ -885,9 +1167,9 @@ impl BaseCycle {
                 });
             }
         }
-        // Not while feedback that had been arriving is still missing: see
-        // `disarmed`.
-        if !self.feedback_stale {
+        // Not while feedback that had been arriving is still missing, nor
+        // before the board shows it receives again: see `disarmed`.
+        if !self.feedback_stale && self.path.lost_since.is_none() {
             self.try_rearm(now);
         }
         if self.cmd_hold.is_some() {

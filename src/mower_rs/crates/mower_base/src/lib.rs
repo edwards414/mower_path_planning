@@ -63,11 +63,14 @@
 //! nothing until DDS discovery has matched it with the writer, so the spin
 //! thread reads the command topics' publishers off the graph and the cycle
 //! only counts silence once a publisher has been there for
-//! `publisher_settle_s` ([`BaseCycle::set_publishers`]). The latch also
-//! trips when 0x85 feedback that had been arriving stops for longer than
-//! `feedback_timeout_s` — on the robot's native UART a pulled lead is not a
-//! read or write error, so that is how this driver notices it — and does
-//! not re-arm until the feedback is back.
+//! `publisher_settle_s` ([`BaseCycle::set_publishers`]). On the robot's
+//! native UART a pulled lead is not a read or write error, so the latch
+//! also trips on what the board says: 0x85 feedback that had been arriving
+//! stops for longer than `feedback_timeout_s` (both leads, or the STM32 TX
+//! one), the 0x81 motor status reports COMMAND_TIMEOUT twice in a row while
+//! this loop writes a 0x01 every cycle (the LubanCat TX lead alone), or the
+//! board restarted. It re-arms only once the feedback is back and the board
+//! shows it receiving again.
 
 pub mod requests;
 
@@ -77,7 +80,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use mower_base_core::cycle::{
-    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, StopEdge, Stream,
+    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, ResetSignature, StopEdge,
+    Stream,
 };
 use mower_base_core::diff_drive::{
     receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
@@ -389,11 +393,51 @@ impl Driver {
                  back and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
                  wheel_override likewise"
             ),
+            Event::Disarmed(DisarmReason::BoardNotReceiving) => r2r::log_warn!(
+                l,
+                "arm latch: the STM32 is not receiving our commands, braking; wheels held \
+                 until it receives again and cmd_vel stops (a zero command, or none for \
+                 {timeout_s:.2} s); wheel_override likewise"
+            ),
+            Event::Disarmed(DisarmReason::BoardReset) => r2r::log_warn!(
+                l,
+                "arm latch: the STM32 restarted, braking; wheels held until it receives again \
+                 and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
+                 wheel_override likewise"
+            ),
+            Event::BoardNotReceiving { command_age_ms } => r2r::log_warn!(
+                l,
+                "STM32 reports COMMAND_TIMEOUT: no 0x01 for {command_age_ms} ms{} although one \
+                 goes out every cycle, while its feedback still arrives (LubanCat TX -> STM32 \
+                 RX lead, 40-pin pin 8 -> PA10?)",
+                if command_age_ms == u16::MAX { " or more" } else { "" }
+            ),
+            Event::BoardReset(ResetSignature::CommandValidCleared { flags }) => r2r::log_warn!(
+                l,
+                "STM32 restart: 0x81 COMMAND_VALID cleared (flags 0x{flags:02x}) after it was set"
+            ),
+            Event::BoardReset(ResetSignature::EncoderTotalsRestarted {
+                left,
+                right,
+                prev_left,
+                prev_right,
+            }) => r2r::log_warn!(
+                l,
+                "STM32 restart: encoder totals back to {left}/{right} from \
+                 {prev_left}/{prev_right}"
+            ),
+            Event::BoardReceiving { command_age_ms, after_s } => r2r::log_info!(
+                l,
+                "STM32 receiving commands again (command_age_ms {command_age_ms}), {after_s:.2} s \
+                 after the loss; each stream re-arms at its own stop edge"
+            ),
             Event::Armed { stream, reason, by, after_s } => {
                 let stream = stream_name(stream);
                 let reason = match reason {
                     DisarmReason::Activation => "activation",
                     DisarmReason::FeedbackLost => "feedback loss",
+                    DisarmReason::BoardNotReceiving => "command path loss",
+                    DisarmReason::BoardReset => "STM32 restart",
                 };
                 let by = match by {
                     StopEdge::Stop => "an explicit stop".to_string(),
