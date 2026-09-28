@@ -12,6 +12,7 @@ use std::time::Duration;
 use futures::stream::StreamExt;
 use mower_localize_core::config::{self, EkfConfig};
 use mower_localize_core::prepare::{RosFilterCore, SensorConfig};
+use mower_rs_common::throttle::SlowCopy;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::nav_msgs::msg::Odometry as ROdometry;
 use r2r::sensor_msgs::msg::Imu as RImu;
@@ -42,6 +43,15 @@ struct Topics {
     odom1: Option<String>,
     imu0: String,
     out: String,
+    /// The slow copy of `out` that mission.launch.py's `global_odom_throttle`
+    /// (`topic_tools throttle messages /odometry/global 5.0
+    /// /odometry/global_slow`) makes when the C++ map filter runs, and does
+    /// not start when this module runs (`rust_localize`). `flutter_adapter`
+    /// and `path_record_node` read it as `robot_pose_source_topic`. Empty
+    /// turns it off, which is the odom instance's default: nothing throttles
+    /// `/odometry/local`.
+    out_slow: String,
+    out_slow_rate_hz: f64,
 }
 
 fn topics(node: &r2r::Node, kind: Kind) -> Topics {
@@ -60,6 +70,15 @@ fn topics(node: &r2r::Node, kind: Kind) -> Topics {
                 Kind::Map => "odometry/global",
             },
         ),
+        out_slow: params::string(
+            node,
+            "odometry_slow_topic",
+            match kind {
+                Kind::Odom => "",
+                Kind::Map => "odometry/global_slow",
+            },
+        ),
+        out_slow_rate_hz: params::f64(node, "odometry_slow_rate_hz", 5.0),
     }
 }
 
@@ -124,6 +143,8 @@ fn parameters(config: &EkfConfig, kind: Kind, t: &Topics) -> Vec<paramsrv::Param
         paramsrv::string("odom0", &t.odom0),
         paramsrv::string("imu0", &t.imu0),
         paramsrv::string("odometry_topic", &t.out),
+        paramsrv::string("odometry_slow_topic", &t.out_slow),
+        paramsrv::double("odometry_slow_rate_hz", t.out_slow_rate_hz),
         paramsrv::integer("odom0_queue_size", 10),
         paramsrv::integer("imu0_queue_size", 10),
         paramsrv::double_array("process_noise_covariance", noise),
@@ -198,6 +219,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
 
     // ---- outputs ------------------------------------------------------------
     let odom_pub = node.create_publisher::<ROdometry>(&t.out, output_qos())?;
+    // The throttle's own QoS, derived from this publisher's: keep last 10,
+    // reliable, volatile (throttle::output_qos).
+    let mut odom_slow =
+        SlowCopy::<ROdometry>::create(&mut node, &t.out_slow, t.out_slow_rate_hz, &output_qos())?;
     let tf_pub = node.create_publisher::<TFMessage>("/tf", tf_qos())?;
 
     paramsrv::advertise(&mut node, &m.node_name, parameters(&config, kind, &t))?;
@@ -216,13 +241,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
 
     r2r::log_info!(
         &logger,
-        "{} (mower_rs): {} Hz, world_frame {}, odom0 {}, imu0 {}, publishing {}",
+        "{} (mower_rs): {} Hz, world_frame {}, odom0 {}, imu0 {}, publishing {}{}",
         m.node_name,
         config.frequency,
         config.world_frame,
         t.odom0,
         t.imu0,
-        t.out
+        t.out,
+        if odom_slow.is_some() {
+            format!(" and {} at {} Hz", t.out_slow, t.out_slow_rate_hz)
+        } else {
+            String::new()
+        }
     );
 
     // `periodicUpdate` on the yaml's frequency. Skip, not Burst: after a
@@ -286,8 +316,16 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx, kind: Kind) -> ModuleResult {
                 }
             }
         }
-        if let Err(e) = odom_pub.publish(&conv::odometry_out(&odom)) {
-            r2r::log_warn!(&logger, "{} publish failed: {e:?}", t.out);
+        let out = conv::odometry_out(&odom);
+        match odom_pub.publish(&out) {
+            // The throttle only ever saw what reached `out`; the copy is this
+            // same message, stamp and all.
+            Ok(()) => {
+                if let Some(slow) = odom_slow.as_mut() {
+                    slow.offer(&out);
+                }
+            }
+            Err(e) => r2r::log_warn!(&logger, "{} publish failed: {e:?}", t.out),
         }
     }
 
@@ -337,6 +375,8 @@ mod tests {
             odom1: Some("odometry/gps".into()),
             imu0: "imu/data".into(),
             out: "odometry/global".into(),
+            out_slow: "odometry/global_slow".into(),
+            out_slow_rate_hz: 5.0,
         };
         let params = parameters(&cfg, Kind::Map, &t);
         let find = |n: &str| params.iter().find(|p| p.name == n).expect(n);
@@ -345,12 +385,16 @@ mod tests {
         assert_eq!(find("odom1").value.string_value, "odometry/gps");
         assert_eq!(find("process_noise_covariance").value.double_array_value.len(), 225);
         assert!(!find("print_diagnostics").value.bool_value);
+        assert_eq!(find("odometry_slow_topic").value.string_value, "odometry/global_slow");
+        assert_eq!(find("odometry_slow_rate_hz").value.double_value, 5.0);
         // The odom instance has no second odometry input.
         let t_odom = Topics {
             odom0: "odom".into(),
             odom1: None,
             imu0: "imu/data".into(),
             out: "odometry/local".into(),
+            out_slow: String::new(),
+            out_slow_rate_hz: 5.0,
         };
         let odom_params = parameters(&config::ekf_odom_config(), Kind::Odom, &t_odom);
         assert!(odom_params.iter().all(|p| p.name != "odom1"));

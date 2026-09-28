@@ -27,7 +27,7 @@
 # half (open_loop, enable_odom_tf false, base_footprint, 0.35 / 0.09 m,
 # cmd_vel_timeout 0.25) and the real_robot.xacro <hardware> block for the
 # serial half (58 rpm, 8896 counts/rev, 300 ms command timeout). Only the two
-# values that differ per machine are written out.
+# values that differ per machine are written out, plus the slow /odom copy.
 mower_base:
   ros__parameters:
     # udev name from deploy/udev/99-mower.rules; the same path the
@@ -36,6 +36,14 @@ mower_base:
     # No systemd inside the container: the host watches ~/.mower/host.request
     # (deploy/host/mower-host-request.service).
     shutdown_command: /usr/local/bin/mower-host-request poweroff
+    # The 5 Hz copy of /odom the status nodes read (robot_status's
+    # heartbeat_source_topic and odom_topic, or the rclpy heartbeat /
+    # robot_info / telemetry nodes), published here instead of by
+    # mission.launch.py's odom_throttle, which does not start with
+    # rust_base:=true. Same rule as `topic_tools throttle messages /odom 5.0
+    # /odom_slow`; an empty topic turns it off.
+    odom_slow_topic: /odom_slow
+    odom_slow_rate_hz: 5.0
 
 # --- status (rust_status) ----------------------------------------------------
 robot_status:
@@ -91,6 +99,12 @@ ekf_filter_node_map:
     odom1: /odometry/gps
     imu0: /imu/data
     odometry_topic: /odometry/global
+    # The 5 Hz copy flutter_adapter and path_record_node read
+    # (robot_pose_source_topic), published here instead of by
+    # mission.launch.py's global_odom_throttle, which does not start with
+    # rust_localize:=true. An empty topic turns it off.
+    odometry_slow_topic: /odometry/global_slow
+    odometry_slow_rate_hz: 5.0
 navsat_transform:
   ros__parameters:
     # robot.launch.py refuses any other value for gps_fix_topic.
