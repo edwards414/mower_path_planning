@@ -2,7 +2,7 @@
 # Test switch for the ROS-free branch image on the robot (procedure: README.md
 # next to this file).
 #
-#   switch.sh <IMAGE_TAG> <NAV_COMPOSITION> <RUST_DAEMON> <branch-compose-file> [KEY=VAL ...]
+#   [SWITCH_EXPECT_SHA=<sha>] switch.sh <IMAGE_TAG> <NAV_COMPOSITION> <RUST_DAEMON> <branch-compose-file> [KEY=VAL ...]
 #   switch.sh restore   the pre-test .env and compose back, verified, then the backups go
 #   switch.sh status    what the running container was started with and which
 #                       base / localization processes it runs; changes nothing
@@ -15,7 +15,15 @@
 # silently ignores .env keys it does not reference. After `up` the container's
 # launch arguments are checked and the script waits until the expected base
 # and localization processes are the ones running (docker top; never the ros2
-# CLI on the robot, it causes controller overruns). Any mismatch exits 1.
+# CLI on the robot, it causes controller overruns), with the same PIDs for
+# SWITCH_STABLE_S and no base/localization restart in the log. Any mismatch
+# exits 1; from `compose up` on, a failure or an interrupt also stops
+# lawan_node (fail-closed).
+#
+# RUST_BASE / RUST_LOCALIZE / RUST_DAEMON need SWITCH_EXPECT_SHA=<the commit
+# the image was built from>, checked against the image's MOWER_GIT_SHA before
+# anything is changed, and RUST_BASE refuses a driver binary without the
+# feedback-loss arm latch: an old test image must not pass for the reviewed one.
 #
 # The test config outlives a reboot or power-off (mower.service brings up
 # whatever .env and the compose say) until `restore` runs, so keep this script
@@ -25,6 +33,10 @@ set -euo pipefail
 MOWER_DIR=${MOWER_DIR:-/opt/mower}
 REPO=ghcr.io/edwards414/mower_path_planning
 WAIT_S=${SWITCH_WAIT_S:-180}
+# ...then the drivers must keep their PIDs, with no restart logged, this long.
+STABLE_S=${SWITCH_STABLE_S:-30}
+POLL_S=${SWITCH_POLL_S:-5}
+EXPECT_SHA=${SWITCH_EXPECT_SHA:-}
 ENV_BAK=.env.bak-rosfree-test
 CF_BAK=docker-compose.yaml.bak-rosfree-test
 # Present exactly while a test is active; lists the .env keys the test wrote.
@@ -33,9 +45,18 @@ MARKER=ROSFREE_TEST_ACTIVE
 PASSTHROUGH=('nav_composition:=${NAV_COMPOSITION' 'rust_daemon:=${RUST_DAEMON'
              'rust_base:=${RUST_BASE' 'rust_localize:=${RUST_LOCALIZE')
 DRIVERS='ros2_control_node|mower_base|mower_localize|mower_rsd|ekf_node|navsat_transform_node'
+# A launch respawn, or a mower_rsd base/localize module failing ("[mower_rsd]
+# base/mower_base: <why>; restarting in 2.0 s") and coming back in the same PID.
+RESTART_RE="\\[mower_rsd\\] (restarting (base|localize)/|(base|localize)/[^ :]*: )|process has died.*($DRIVERS)"
+RS_BIN=/mower_ws/install/mower_rs/lib/mower_rs
+# mower_base's disarm on 0x85 loss (fix/rf-base-preflight 27bbfaa). Without it
+# re-seating the STM32 lead resumes whatever command is live.
+LATCH_TEXT='arm latch: wheel feedback lost'
 
 die() { echo "SWITCH_FAIL: $*" >&2; exit 1; }
 usage() { sed -n '5,8p' "$0" >&2; exit 2; }
+env_of() { sed -n "s/^$1=//p" <<<"$2" | tail -1; }
+or_none() { local v; v=$(cat); echo "${v:-$1}"; }
 md5() { sudo md5sum "$1" | cut -d' ' -f1; }
 truthy() { case "${1,,}" in true|1|yes|on) return 0 ;; *) return 1 ;; esac; }
 bool() { [[ $2 == true || $2 == false ]] || die "$1 must be exactly true or false, got '$2'"; }
@@ -52,8 +73,9 @@ refuse_broken() {
     [ -e "$f" ] && echo "  present: $f" >&2 || echo "  missing: $f" >&2
   done
   die "backups and $MARKER do not match up. Backups without the marker are" \
-      "leftovers of the old switch.sh, which never deleted them, and may hold a" \
-      "stale .env (an old ROSBRIDGE_ADDRESS). Compare with" \
+      "leftovers of the old switch.sh, which never deleted them, or of a switch" \
+      "killed while taking them, and may hold a stale .env (an old" \
+      "ROSBRIDGE_ADDRESS). Compare with" \
       "'sudo diff $MOWER_DIR/$ENV_BAK $MOWER_DIR/.env' and clean up by hand."
 }
 
@@ -61,31 +83,33 @@ compose_up() {
   local out
   if ! out=$(sudo docker compose up -d lawan_node 2>&1); then
     echo "$out" >&2
-    die "docker compose up failed; the old container may still be running"
+    die "docker compose up failed"
   fi
   echo "$out" | tail -3
 }
 
-# The running lawan_node container: id, image, state and launch command.
+# The lawan_node container (a stopped one too): id, image, state, launch
+# command, and the env it runs with.
 inspect_container() {
-  CID=$({ sudo docker compose ps -q lawan_node 2>/dev/null || true; } | head -1)
+  CID=$({ sudo docker compose ps -a -q lawan_node 2>/dev/null || true; } | head -1)
   [ -n "$CID" ] || die "no lawan_node container"
   IMAGE=$(sudo docker inspect -f '{{.Config.Image}}' "$CID")
   CMD=$(sudo docker inspect -f '{{join .Config.Cmd " "}}' "$CID")
   STATE=$(sudo docker inspect -f '{{.State.Status}} since {{.State.StartedAt}}' "$CID")
-  FW_SYNC=$(sudo docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CID" |
-            sed -n 's/^MOWER_FIRMWARE_SYNC=//p')
+  CENV=$(sudo docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CID")
 }
 # A launch argument's value as the container got it; empty when not passed.
 cmd_arg() { { grep -o "\(^\| \)$1:=[^ ]*" <<<"$CMD" || true; } | tail -1 | sed 's/.*:=//'; }
 show_effective() {
   local k
   echo "== container ${CID:0:12} $IMAGE ($STATE)"
+  echo "== build: MOWER_VERSION=$(env_of MOWER_VERSION "$CENV" | or_none '<unset>')" \
+    "MOWER_GIT_SHA=$(env_of MOWER_GIT_SHA "$CENV" | or_none '<unset>')"
   printf '== launch arguments:'
   for k in nav_composition rust_base rust_localize rust_daemon; do
-    printf ' %s=%s' "$k" "$(cmd_arg $k | sed 's/^$/<not passed>/')"
+    printf ' %s=%s' "$k" "$(cmd_arg $k | or_none '<not passed>')"
   done
-  echo " MOWER_FIRMWARE_SYNC=${FW_SYNC:-<unset>}"
+  echo " MOWER_FIRMWARE_SYNC=$(env_of MOWER_FIRMWARE_SYNC "$CENV" | or_none '<unset>')"
   echo "== .env: $(sudo grep -E '^(IMAGE_TAG|NAV_COMPOSITION|RUST_BASE|RUST_LOCALIZE|RUST_DAEMON|MOWER_FIRMWARE_SYNC)=' .env | tr '\n' ' ')"
 }
 
@@ -129,30 +153,47 @@ show_procs() {
   awk -v re="^($DRIVERS)\$" '$2 ~ re' <<<"$1" | sed 's/^/  /'
   echo "  (nav2 component_container_isolated: $(awk '$2 == "component_container_isolated"' <<<"$1" | wc -l))"
 }
-# Wait until the expected drivers are the ones running, and still the same
-# PIDs one poll later: a driver that launch keeps respawning is not a pass.
+log_restarts() { { sudo docker logs "$CID" 2>&1 || true; } | { grep -E "$RESTART_RE" || true; }; }
+# Wait until the expected drivers are the ones running, then require the same
+# PIDs for STABLE_S and no restart in the log, checked on every poll: a driver
+# that dies or is respawned once it was up, or a mower_rsd module that fails
+# and restarts inside the same PID, fails the switch at once. $4 = warn
+# (restore) waits out a flapping driver and only reports logged restarts:
+# main's config is what it is, and the files are already back.
 wait_for_drivers() {
-  local base=$1 loc=$2 daemon=$3 deadline=$((SECONDS + WAIT_S)) snap problems pids prev='' restarts
+  local base=$1 loc=$2 daemon=$3 mode=${4:-strict} deadline=$((SECONDS + WAIT_S + STABLE_S))
+  local snap problems pids prev='' since=0 restarts
   while :; do
     snap=$(procs)
     problems=$(proc_problems "$snap" "$base" "$loc" "$daemon")
     pids=$(awk -v re="^($DRIVERS)\$" '$2 ~ re { print $1, $2 }' <<<"$snap" | sort)
-    if [ -z "$problems" ]; then
-      [ -n "$prev" ] && [ "$pids" = "$prev" ] && break
-      prev=$pids
-    else
-      prev=''
+    restarts=$(log_restarts)
+    if [ "$mode" = strict ] && [ -n "$restarts" ]; then
+      show_procs "$snap"
+      die "$(wc -l <<<"$restarts") base/localization restart(s) in the container log, last:" \
+        "$(tail -1 <<<"$restarts")"
+    fi
+    if [ "$mode" = strict ] && [ -n "$prev" ] && { [ -n "$problems" ] || [ "$pids" != "$prev" ]; }; then
+      show_procs "$snap"
+      die "a driver died or restarted after it was up: $(tr '\n' ';' <<<"$problems")" \
+        "$(diff <(echo "$prev") <(echo "$pids") | sed -n 's/^< /gone /p; s/^> /new /p' | tr '\n' ';')"
+    fi
+    if [ -n "$problems" ]; then prev=''
+    elif [ "$pids" != "$prev" ]; then prev=$pids since=$SECONDS
+    elif [ $((SECONDS - since)) -ge "$STABLE_S" ]; then break
     fi
     if [ $SECONDS -ge $deadline ]; then
       show_procs "$snap"
-      die "after ${WAIT_S}s: $(tr '\n' ';' <<<"${problems:-drivers still restarting}")"
+      die "after $((WAIT_S + STABLE_S))s: $(tr '\n' ';' <<<"${problems:-drivers not stable for ${STABLE_S}s}")"
     fi
-    sleep 5
+    sleep "$POLL_S"
   done
   show_procs "$snap"
-  restarts=$(sudo docker logs "$CID" 2>&1 | grep -cE \
-    "\[mower_rsd\] restarting (base|localize)/|process has died.*($DRIVERS)" || true)
-  [ "$restarts" -eq 0 ] || die "$restarts base/localization restart(s) in the container log"
+  echo "== same driver PIDs for ${STABLE_S}s"
+  if [ -n "$restarts" ]; then
+    echo "WARNING: $(wc -l <<<"$restarts") base/localization restart(s) in the container log:" >&2
+    tail -3 <<<"$restarts" | sed 's/^/  /' >&2
+  fi
 }
 
 # ---- status -----------------------------------------------------------------
@@ -162,6 +203,9 @@ if [ "${1:-}" = status ]; then
   inspect_container
   show_effective
   show_procs "$(procs)"
+  restarts=$(log_restarts)
+  echo "== base/localization restarts in this container's log: $(grep -c . <<<"$restarts" || true)"
+  tail -3 <<<"$restarts" | sed '/^$/d; s/^/  /'
   exit 0
 fi
 
@@ -191,7 +235,7 @@ if [ "${1:-}" = restore ]; then
       die "container still has $k:=$v after the restore"
     fi
   done
-  wait_for_drivers "$(cmd_arg rust_base)" "$(cmd_arg rust_localize)" "$(cmd_arg rust_daemon)"
+  wait_for_drivers "$(cmd_arg rust_base)" "$(cmd_arg rust_localize)" "$(cmd_arg rust_daemon)" warn
   sudo rm -f "$ENV_BAK" "$CF_BAK" "$MARKER"
   echo "pre-test .env and docker-compose.yaml back (md5 verified), backups removed"
   echo RESTORE_OK
@@ -230,9 +274,68 @@ for kv in "$@"; do
   SET[$k]=$v
 done
 
+[ -z "$EXPECT_SHA" ] || [[ $EXPECT_SHA =~ ^[0-9a-f]{7,40}$ ]] ||
+  die "SWITCH_EXPECT_SHA must be 7 to 40 lowercase hex digits, got '$EXPECT_SHA'"
+
+# A failure says what state it left: PHASE prep = nothing touched, backup =
+# the first backups being taken, nothing live touched (they are removed
+# again), applied = the test config is (partly) in place, the old container
+# still runs, up = from `compose up` on, whatever runs is unverified (it is
+# stopped).
+PHASE=prep tmp=''
+on_exit() {
+  local rc=$?
+  rm -f "$tmp"
+  [ "$rc" -ne 0 ] || return 0
+  case $PHASE in
+    prep) echo "this run changed nothing" >&2 ;;
+    backup)
+      sudo rm -f "$ENV_BAK" "$CF_BAK" "$MARKER"
+      echo "this run changed nothing" >&2 ;;
+    applied)
+      echo "TEST CONFIG (PARTLY) APPLIED, no test container verified: run '$0 restore' now" >&2 ;;
+    up)
+      if sudo docker compose stop lawan_node >/dev/null 2>&1; then
+        echo "lawan_node STOPPED (fail-closed: nothing drives the wheels). Run '$0 restore'" \
+          "now; until then 'sudo docker logs ${CID:-<container>}' still has this run's log" >&2
+      else
+        echo "could not stop lawan_node: run '$0 restore' now" >&2
+      fi ;;
+  esac
+}
+trap on_exit EXIT
+# Ctrl-C, a kill or a dropped ssh mid-switch is a failure too, not a clean exit
+# 0. PIPE: after `ssh robot 'switch.sh ...'` loses its client, the first write
+# would otherwise kill the shell untrapped, leaving the unverified container up.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 141' PIPE
+
 cd "$MOWER_DIR"
 sudo docker image inspect "$REPO:$TAG" >/dev/null 2>&1 ||
   die "image $REPO:$TAG is not on this machine (docker load, then docker tag; README.md)"
+# Which build this is, before anything changes: the tag alone says nothing
+# (rosfree-test has named more than one build).
+IENV=$(sudo docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$REPO:$TAG")
+ISHA=$(env_of MOWER_GIT_SHA "$IENV")
+echo "== image $REPO:$TAG: MOWER_VERSION=$(env_of MOWER_VERSION "$IENV" | or_none '<unset>')" \
+  "MOWER_GIT_SHA=${ISHA:-<unset>}"
+if [ "${SET[RUST_BASE]}" = true ] || [ "${SET[RUST_LOCALIZE]}" = true ] || [ "$RD" = true ]; then
+  [ -n "$EXPECT_SHA" ] || die "RUST_BASE / RUST_LOCALIZE / RUST_DAEMON need SWITCH_EXPECT_SHA=<the" \
+    "commit the image was built from, containing the pre-flight fixes> (README.md)"
+fi
+if [ -n "$EXPECT_SHA" ] && [[ $ISHA != "$EXPECT_SHA"* ]]; then
+  die "$REPO:$TAG was built from ${ISHA:-<no MOWER_GIT_SHA>}, not $EXPECT_SHA"
+fi
+if [ "${SET[RUST_BASE]}" = true ]; then
+  bin=$RS_BIN/$([ "$RD" = true ] && echo mower_rsd || echo mower_base)
+  # --entrypoint: only grep runs, never the image's firmware-sync.
+  sudo docker run --rm --network none --entrypoint grep "$REPO:$TAG" -qaF "$LATCH_TEXT" "$bin" ||
+    die "$bin in $REPO:$TAG has no feedback-loss arm latch ('$LATCH_TEXT'):" \
+      "built without fix/rf-base-preflight"
+fi
+
 state=$(test_state)
 [ "$state" != broken ] || refuse_broken
 if [ "$state" = active ]; then
@@ -245,13 +348,24 @@ if [ "$state" = active ]; then
   done
   [ -z "$drift" ] || die ".env was edited during the test (${drift# }); make the same edit in" \
     "$MOWER_DIR/$ENV_BAK (restore puts that file back), or restore first"
-else
-  sudo cp -p .env "$ENV_BAK"
-  sudo cp -p docker-compose.yaml "$CF_BAK"
 fi
 
+# The test's keys, one per line after a comment; the drift check skips them.
+write_marker() { printf '%s\n' "# $(date -Is) tag=$TAG" "$@" | sudo tee "$MARKER" >/dev/null; }
+if [ "$state" = none ]; then
+  PHASE=backup
+  sudo cp -p .env "$ENV_BAK"
+  sudo cp -p docker-compose.yaml "$CF_BAK"
+  write_marker "${ORDER[@]}"
+else
+  PHASE=applied
+  # Keys of the previous switch too, until the new .env is in place.
+  mapfile -t prev_keys < <(sudo sed 1d "$MARKER")
+  write_marker "${prev_keys[@]}" "${ORDER[@]}"
+fi
+PHASE=applied
+
 tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
 # shellcheck disable=SC2024  # $tmp is ours; only the read needs root
 sudo cat "$ENV_BAK" >"$tmp"
 for k in "${ORDER[@]}"; do
@@ -261,13 +375,15 @@ done
 echo "== .env against the pre-test backup:"
 diff <(sudo cat "$ENV_BAK") "$tmp" | grep '^[<>]' | sed 's/^/  /' || true
 sudo cp "$tmp" .env
-sudo cp "$CF" docker-compose.yaml
-printf '%s\n' "# $(date -Is) tag=$TAG" "${ORDER[@]}" | sudo tee "$MARKER" >/dev/null
+# Equal when the installed compose already is the branch one (or the same file).
+sudo cmp -s "$CF" docker-compose.yaml || sudo cp "$CF" docker-compose.yaml
+write_marker "${ORDER[@]}"
 if command -v systemctl >/dev/null && systemctl is-active --quiet mower-update.timer; then
   echo "WARNING: mower-update.timer is active; stop it for the test (README.md)" >&2
 fi
 echo "TEST CONFIG ACTIVE: it survives a reboot until '$0 restore'"
 
+PHASE=up
 compose_up
 inspect_container
 show_effective
@@ -277,4 +393,5 @@ for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON; do
   [ "$v" = "${SET[$k]}" ] || die "container got ${k,,}:=${v:-<not passed>}, asked for ${SET[$k]}"
 done
 wait_for_drivers "${SET[RUST_BASE]}" "${SET[RUST_LOCALIZE]}" "$RD"
+PHASE=verified
 echo SWITCH_OK
