@@ -115,6 +115,19 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 流程（工具 README 有完整指令）：停 `mower-update.timer` → `docker load` 本機建的映像
 → `switch.sh` → 等 90–100 秒 → `measure.sh` → `probe_app.py --baseline` → `switch.sh restore`。
 
+**GPS 導航那一段之前先跑 `datum_check.py`**（`src/mower_rs/tools/`，預設唯讀，ssh 指令在檔頭）。
+開 `RUST_BASE` 之後 `/odom` 會比 IMU 先到 map EKF，EKF 的 yaw 從 0 開始、3 秒 delay 結束時還沒收斂，
+navsat 鎖的 datum 就歪 10–15 度 —— **C++ 和 Rust 一樣**（容器實測 C++ 14.9°、Rust 15.2°），不是移植的 bug，
+但整段 GPS 軌跡會繞原點轉那個角度，車一直偏離條帶。印出 `DATUM_ROTATED` 就加 `--fix`
+（`/datum` 設在同一個原點、只拿掉旋轉；容器裡兩個 stack 都修到 0.00°），然後重啟 adapter
+（兩個 adapter 都只鎖一次 `/adapter/map_datum`，app 衛星底圖的方位不會自己更新），再載場地 / 開任務。
+
+根治還沒做，要決定：map EKF 加 `initial_estimate_covariance`、yaw（第 6 個）給 1.0、其餘 1e-9，
+第一筆 IMU yaw 就會把航向拉到位。容器同一個啟動情境 datum 誤差從 14.9–15.5° 降到 C++ 0.37°、Rust 0.34°，
+兩邊讀同一份 yaml 所以仍然一致；但它會改到現在 C++ 路徑的行為，而且 Rust 對這個 key 印
+「oracle 沒涵蓋」警告。映像含 `fix/rf-localize-preflight` 之後不用重建就能試：複製 `dual_ekf_navsat_params.yaml` 到 `~/.mower`，
+compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個 stack 都吃這個參數）。
+
 ### 2. Phase D–E 的 Go/No-Go（計畫第 7 節）
 
 **光為了 CPU 不值得做。** A–C 之後整機約 15 %，D–E 再多省約 10 個百分點，
