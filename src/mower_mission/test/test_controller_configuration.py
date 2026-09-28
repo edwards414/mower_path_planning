@@ -311,6 +311,24 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
         assert "'rust_daemon'" in text, launch.name
 
 
+def test_rust_daemon_recorder_uses_the_launch_directories():
+    """With rust_daemon the recorder must save where the separate mower_record
+    does (zone_record_dir / sites_dir = the ~/.mower bind mount), not at the
+    yaml's relative save_dir, which resolves against the container WORKDIR
+    and loses every zone with the container. The override is node-scoped (a
+    launch_ros dict would go to every node under /**) and listed after the
+    yaml so it wins."""
+    robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    block = robot_launch.split("if 'record' in modules:", 1)[1].split(
+        'remaps =', 1)[0]
+    assert "_node_params_file('path_record_node', {" in block
+    assert "'save_dir': LaunchConfiguration('zone_record_dir')" in block
+    assert "'sites_dir': LaunchConfiguration('sites_dir')" in block
+    assert 'parameters.append(' in block
+    assert "yaml.safe_dump({node: {'ros__parameters': params}}, f)" \
+        in robot_launch
+
+
 def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     """rust_localize:=true swaps the two robot_localization ekf_node processes
     and navsat_transform_node for one mower_rs mower_localize process with the

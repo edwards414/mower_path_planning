@@ -1,6 +1,7 @@
 """Launch the real mower stack and its app-facing mission services once."""
 
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -12,6 +13,8 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+import yaml
 
 
 def _enforce_production_safety(context):
@@ -88,6 +91,19 @@ def _truthy(value):
     return value.strip().lower() in {'true', '1', 'yes', 'on'}
 
 
+def _node_params_file(node, params):
+    """Write a --params-file that sets `params` on one node of mower_rsd.
+
+    launch_ros writes a dict under `/**`, which would hand the values to every
+    node in the process.
+    """
+    with tempfile.NamedTemporaryFile(
+            'w', prefix=f'mower_rsd_{node}_', suffix='.yaml',
+            delete=False) as f:
+        yaml.safe_dump({node: {'ros__parameters': params}}, f)
+    return f.name
+
+
 def _rust_daemon_node(context):
     """The single mower_rsd process, or nothing."""
     if not _truthy(LaunchConfiguration('rust_daemon').perform(context)):
@@ -122,6 +138,16 @@ def _rust_daemon_node(context):
     if 'gps' in modules:
         parameters.append(
             LaunchConfiguration('gps_params_file').perform(context))
+    if 'record' in modules:
+        # The same directories the separate mower_record gets from
+        # mission.launch.py -- on the robot the ~/.mower bind mount. The yaml's
+        # relative save_dir would resolve against the container's WORKDIR
+        # (/mower_ws): no saved zones listed, new ones lost with the container.
+        # Listed after the yaml, so it wins.
+        parameters.append(_node_params_file('path_record_node', {
+            'save_dir': LaunchConfiguration('zone_record_dir').perform(context),
+            'sites_dir': LaunchConfiguration('sites_dir').perform(context),
+        }))
     remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
     if remaps:
         arguments.append('--ros-args')
