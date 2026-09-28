@@ -232,9 +232,6 @@ impl Driver {
             // ---- update() + write() -------------------------------------
             let cmd = self.slots.lock().expect("slots").cmd_vel.take();
             let (tx, odom, joints) = base.tick(cmd, time, stamp);
-            for event in base.take_events() {
-                self.log_event(event);
-            }
             if let Some(tx) = tx {
                 if !tx.is_empty() {
                     if let Err(e) = port.write_all(&tx.bytes) {
@@ -247,6 +244,10 @@ impl Driver {
             }
             if let Some(odom) = odom {
                 self.publish_odom(&odom);
+            }
+            // After the write: a braking frame never waits for a log line.
+            for event in base.take_events() {
+                self.log_event(event);
             }
 
             // ---- sleep to the next 25 Hz slot ---------------------------
