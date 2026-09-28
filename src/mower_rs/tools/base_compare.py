@@ -17,15 +17,19 @@ RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: SystemDefaultsQoS resolves
 differently per RMW), or if a scenario's check below fails.
 
 Runs recorded with `base_harness.py --scenario pull` / `pullpush` / `txpull`
-/ `txstart` get the cable-pull report instead of the parity sections: what
-each chain commanded after the lead came back with the stick still pushed
-(`txpull`: only the LubanCat TX lead was out, the feedback never stopped;
-`txstart`: that lead was already out when the driver started). `--scenario
+/ `txstart` / `guardzero` get the cable-pull report instead of the parity
+sections: what each chain commanded after the lead came back with the stick
+still pushed (`txpull`: only the LubanCat TX lead was out, the feedback never
+stopped; `txstart`: that lead was already out when the driver started;
+`guardzero`: as txpull, then one zero injected into the still-held stream
+after the recovery, which mower_base must not take for a release). `--scenario
 live` gets the restart report: what reached the wheels while a stream that
 was running before the driver started was still live. `mower_base` must
 send 0/0 in all of them until the release and follow the stick after it;
 the C++ chain has no latch and follows at once — if it does not, the run
-did not reproduce the fault and proves nothing, which fails too.
+did not reproduce the fault and proves nothing, which fails too. The release
+and the push after it are read from the run (`release`; 9.0 / 9.5 s for runs
+recorded before the scripts carried it).
 `--scenario autotune` gets the pid_autotune report: the run's states, the
 flash save's stall, and whether the second run's steps reached the wheels
 after it; both sides must save (`done`), end the second run `idle` without
@@ -189,7 +193,7 @@ def main() -> int:
           + ("all SAME" if out["qos_same"] else f"DIFFERENT {differ}, no endpoint {missing}"))
 
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    if scenario in ("pull", "pullpush", "txpull", "txstart"):
+    if scenario in ("pull", "pullpush", "txpull", "txstart", "guardzero"):
         pull_report(run_a, frames_a, run_b, frames_b, out)
         return finish(args, out)
     if scenario == "live":
@@ -425,18 +429,23 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
     is out. `txpull`: as `pull`, but only the LubanCat TX -> STM32 RX lead
     is out, so the feedback keeps coming and the board reports
     COMMAND_TIMEOUT. `txstart`: as `pullpush`, but that lead alone, and
-    already out when the driver started. Either way it is still pushed
-    when the lead is back, released at 9.0 s and pushed again from 9.5 s.
-    The C++ chain has no latch and resumes the pushed command as soon as
-    frames get through again; mower_base must stay at 0/0 until the
-    release and follow the stick again after it.
+    already out when the driver started. `guardzero`: as `txpull` at 10 Hz,
+    and after the recovery one zero in the held stream with a stall around
+    it (the 2026-09-29 robot run). Either way it is still pushed when the
+    lead is back, released at `release[0]` and pushed again from
+    `release[1]`. The C++ chain has no latch and resumes the pushed command
+    as soon as frames get through again; mower_base must stay at 0/0 until
+    the release and follow the stick again after it.
     """
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    tx_only = scenario in ("txpull", "txstart")
+    tx_only = scenario in ("txpull", "txstart", "guardzero")
     leads = "LubanCat TX lead" if tx_only else "lead"
-    section("cable %s (%s out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
-            "pushed 9.5 s)" % ((scenario, leads) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
-    out["pull"] = {"scenario": scenario}
+    rel = run_b.get("release") or run_a.get("release") or (9.0, 9.5)
+    section("cable %s (%s out %.1f-%.1f s, stick pushed at the re-seat, released %.1f s, "
+            "pushed %.1f s)" % ((scenario, leads)
+                                + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))
+                                + tuple(rel)))
+    out["pull"] = {"scenario": scenario, "release": list(rel)}
     for label, run, frames in (("A", run_a, frames_a), ("B", run_b, frames_b)):
         mute = run.get("mute") or (4.0, 6.0)
         seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
@@ -445,10 +454,10 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
         fb = [(f["h"], f["fields"]["left_measured_rpm"])
               for f in frames if f["dir"] == "tx" and f["type"] == 0x85]
         before = [x for x in seen if mute[0] - 0.5 <= x[0] < mute[0]]
-        held = [x for x in seen if mute[1] <= x[0] < 9.0]
+        held = [x for x in seen if mute[1] <= x[0] < rel[0]]
         moving_after = [x for x in held if x[1] or x[2]]
-        released = [x for x in seen if 9.6 <= x[0] < 11.5 and (x[1] or x[2])]
-        rpm_held = max((abs(r) for h, r in fb if mute[1] + 0.3 <= h < 9.0), default=0.0)
+        released = [x for x in seen if rel[1] + 0.1 <= x[0] < rel[1] + 2.0 and (x[1] or x[2])]
+        rpm_held = max((abs(r) for h, r in fb if mute[1] + 0.3 <= h < rel[0]), default=0.0)
         status = [(f["h"], f["fields"]["flags"], f["fields"]["command_age_ms"])
                   for f in frames if f["dir"] == "tx" and f["type"] == 0x81 and f["fields"]]
         out_status = [x for x in status if mute[0] <= x[0] < mute[1]]
@@ -465,6 +474,16 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
               + f"; wheel speed up to {rpm_held:.1f} rpm")
         print(f"     after release + push: {len(released)} non-zero frames"
               + (f", first at {released[0][0]:.3f} s" if released else ""))
+        zeros = [c for c in run.get("cmd_log", []) if c.get("inject")]
+        after_zero = []
+        if scenario == "guardzero":
+            z = zeros[0]["t"] if zeros else None
+            quiet = [c["t"] for c in run.get("cmd_log", []) if z is not None and c["t"] < z]
+            after_zero = [x for x in seen if z is not None and z < x[0] < rel[0] and (x[1] or x[2])]
+            print(f"     injected zero at {z if z is None else round(z, 3)} s "
+                  f"({(z - quiet[-1]) if quiet else float('nan'):.3f} s after the stick's last "
+                  f"message); non-zero frames after it until the release: {len(after_zero)}"
+                  + (f", first at {after_zero[0][0]:.3f} s: {after_zero[0][1:]}" if after_zero else ""))
         print_latch_log(label, run)
         out["pull"][label] = {
             "held_frames": len(held),
@@ -478,10 +497,16 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "mute_log": run.get("mute_log"),
             "latch_log": run.get("latch_log"),
         }
+        out["pull"][label]["after_zero_nonzero"] = len(after_zero)
+        if scenario == "guardzero":
+            check(out, len(zeros) == 1, f"guardzero {label}: {len(zeros)} injected zeros, not one")
         if label == "A":
             check(out, bool(moving_after),
                   f"{scenario}: the C++ chain did not follow the pushed stick after the re-seat, "
                   "so the run did not reproduce the fault")
+            if scenario == "guardzero":
+                check(out, bool(after_zero),
+                      "guardzero: the C++ chain did not follow the stick after the injected zero")
             continue
         check(out, bool(held), f"{scenario}: no 0x01 reached the fake after the re-seat")
         check(out, not moving_after,
@@ -493,20 +518,26 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
             check(out, bool(fb_out) and bool(timeouts),
                   f"{scenario}: the fake did not keep sending feedback with COMMAND_TIMEOUT "
                   "while the lead was out")
+        if scenario == "guardzero" and run.get("latch_log"):
+            check(out, any("not held for" in line for line in run["latch_log"]),
+                  "guardzero: mower_base did not log the stop it did not take for a release")
 
 
 def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
     """A restart under a live stream: 0.30 m/s from before the driver
-    started until the release at 12.0 s, pushed again from 12.5 s."""
-    section("live stream before the driver (0.30 m/s until 12.0 s, released, pushed 12.5 s)")
-    out["live"] = {}
+    started until the release (12.0 s), pushed again after it (13.0 s; 12.5 s
+    in runs recorded before the scripts carried `release`)."""
+    rel = run_b.get("release") or run_a.get("release") or (12.0, 12.5)
+    section("live stream before the driver (0.30 m/s until %.1f s, released, pushed %.1f s)"
+            % tuple(rel))
+    out["live"] = {"release": list(rel)}
     for label, frames in (("A", frames_a), ("B", frames_b)):
         seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
                 for f in frames
                 if f["dir"] == "rx" and f["type"] == WHEEL_SPEED_COMMAND and f["fields"]]
-        live = [x for x in seen if x[0] < 12.0]
+        live = [x for x in seen if x[0] < rel[0]]
         moving = [x for x in live if x[1] or x[2]]
-        after = [x for x in seen if 12.6 <= x[0] < 14.5 and (x[1] or x[2])]
+        after = [x for x in seen if rel[1] + 0.1 <= x[0] < rel[1] + 2.0 and (x[1] or x[2])]
         first = seen[0][0] if seen else None
         print(f"  {label}: first 0x01 at {first if first is None else round(first, 3)} s; "
               f"{len(live)} frames while the stream was live, {len(moving)} non-zero"

@@ -51,6 +51,10 @@ CPU 19.2 % → 6.5 %（容器，debug build）。
 （branch `fix/rf-base-preflight`）已改成跟 upstream 一樣要 `SystemDefaultsQoS`，並在
 ros-free-test 映像的 CycloneDDS 下重跑（`tools/base_ab.sh`）：11 個 topic 每個端點 QoS 全同。
 同一批修正加了 arm latch、單調時鐘、cmd_vel stamp 規則，細節見 `src/mower_rs/README.md` 的 mower_base 一節。
+2026-09-29 第二次上機（ecdd4a8）找到 latch 的洞：拔 pin 8 連帶讓 USB hub 重置、機器人端卡 0.3 s，
+`velocity_command_guard` 補的一個 0 被當成放開，還推著的搖桿就讓輪子轉了。`fix/rf-latch-release-window`
+改成停止要持續 `latch_release_s`（0.5 s）才解鎖（0 和靜默合併計算，靜默單獨也要 0.5 s），
+override 與割刀同規則；容器 `--scenario guardzero` 重現這個順序。
 
 兩個踩到的事實，寫在這裡免得再查一次：
 真機實際載入的控制器設定是 `mower_controller/controllers/diff_drive_controller.yaml`，
@@ -114,7 +118,7 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 兩個都是安全關鍵：`mower_base` 直接驅動輪子，nav2 靠 `mower_localize` 發的 `map→odom` 導航。
 第一次開啟一定要監督試車：搖桿、放開即停、一段導航；底盤另外要測斷線與重啟（見下）。
 
-底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` + `fix/rf-base-cmdtimeout` 之後的行為）：
+底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` + `fix/rf-base-cmdtimeout` + `fix/rf-latch-release-window` 之後的行為）：
 
 - **拔串口線測不到重啟**：`/dev/stmcom` 是板載 UART ttyS3，線拔掉讀寫都不會出錯，
   `mower_base` 不會 fail、不會重啟。它測的是韌體 300 ms 逾時讓輪子停，以及 `mower_base`
@@ -128,8 +132,21 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 
   共同的判準：**插回去（或板子回來）時搖桿繼續推著，輪子要保持不動**——板子收到的是
   `mower_base` 送的 0/0；三種都會先出現 `STM32 receiving commands again`（板子回報收得到
-  我們的 0x01 了），放開（或 0.25 s 沒有 cmd_vel）後出現 `arm latch: cmd_vel re-armed`，再推才會走。
+  我們的 0x01 了），**放開滿 0.5 s**（`latch_release_s`：這段時間內 cmd_vel 只有 0 或完全沒有，
+  兩種可以混著算）後出現 `arm latch: cmd_vel re-armed by an explicit stop held for 0.50 s`
+  （或 `silence (nothing for > 0.50 s)`），再推才會走。放開不到 0.5 s 又推，**不算放開**，
+  鎖不會解開，日誌寫一次 `arm latch: cmd_vel stop not held for 0.50 s (non-zero after …), still held`。
   C++ 那條鏈沒有這個鎖，插回去當下就照搖桿走。
+  **拔 pin 8 在這台機器上也會讓 USB hub 重置**（2026-09-29 實測：IMU、相機 01:33:36–46 重新列舉），
+  hub 重置期間機器人端會卡約 0.3 s：`velocity_command_guard` 會記 `Drivetrain command receipt
+  timeout; forced velocity to zero`（`manual_velocity_guard` 晚 35 ms 同一行，接著幾行
+  `Rejected drivetrain command: velocity timestamp is stale`），Mac 那邊送的搖桿其實沒停。
+  ecdd4a8 那一版把 guard 補的那一個 0 當成「放開」而解鎖（`re-armed by an explicit stop, 4.48 s
+  after the command path loss`），0.25 s 後還推著的搖桿就讓輪子轉起來（73 → 366 permille）。
+  新版要連續 0.5 s 沒有非零指令才解鎖，所以這時日誌應該是上面那行 `stop not held … still held`，
+  輪子不動；**看到 `re-armed` 之後輪子自己轉起來就是失敗**，立刻放開、記下時間。
+  測的時候也要看 IMU／相機有沒有跟著斷（`dmesg | grep -i usb` 或 hub reset 的紀錄），
+  拔線測試同時也是一次 hub 重置測試。
   重開那一列要是只看到 feedback lost／resumed、receiving commands again、re-armed，
   沒有 `STM32 restart`，是**正常的**，不是觸發壞了：重開的 bootloader 0.5 s 已經先讓回授遺失鎖住，
   新開機收到的只會是 0/0。想看到 `STM32 restart: encoder totals ...` 就先讓輪子轉幾秒再按 reset。
@@ -141,8 +158,8 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
   或開機時接頭沒插好）：板子從來沒收到過我們的指令，啟動約 0.5 s 後就要出現
   `not receiving our commands`（全新開機的板子 `command_age_ms` 是 65535，日誌寫
   `65535 ms or more`），之後閒置 2 s 以上也**不能**自己解鎖；推搖桿、推著插回去，輪子要不動。
-  啟動後板子第一次回報收得到我們的 0x01 之前，搖桿送 0 也不會解鎖（線是好的話只差一兩個週期），
-  所以就算在啟動 0.5 s 內放開、推、插回去，插回去時板子收到的也是 0/0。
+  啟動後板子第一次回報收得到我們的 0x01 之前，搖桿送 0 也不會解鎖（線是好的話只差一兩個週期；
+  而且放開本身也要滿 0.5 s），所以就算在啟動 0.5 s 內放開、推、插回去，插回去時板子收到的也是 0/0。
   另一種順序也要測：**靜止時拔線 → 拔著的時候推搖桿 → 推著插回去**，輪子一樣要不動，
   放開再推才走（線還沒插回去、板子還沒回報收得到之前鎖不會解開，所以不會在線外把速度爬上去、
   插回去一步到位）。
@@ -152,18 +169,19 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
   指出是哪條線（不會再多一次 disarm）。兩條一起插回去時日誌是回授那兩行加
   `receiving commands again`，不會多出 `not receiving our commands`；靜止時大約兩三個週期（≤ 120 ms）就解鎖。
   **割刀也一樣**：按住割刀（App 每 0.2 s 重送 dead-man）時拔線，韌體逾時先讓刀停；
-  插回去時就算還按著，刀也**不能**自己轉起來，要放開（或送 0）之後再按才轉。日誌在
+  插回去時就算還按著，刀也**不能**自己轉起來，要放開（或送 0）滿 0.5 s 之後再按才轉；
+  送一個 0 又馬上重送（0.5 s 內）不算放開。日誌在
   disarm 那行最後寫 `a running blade stops and stays off until its dead-man is let go`，
   放開後出現 `arm latch: blade_command re-armed by ...`。
   PID 自動調參按 apply 寫 flash 時 STM32 會卡約 1 s，日誌會出現一次 `wheel feedback lost`
-  （或 COMMAND_TIMEOUT）接著 `receiving commands again`——正常，調參的收尾 0/0 就解鎖，
-  下一次調參照常能轉。
+  （或 COMMAND_TIMEOUT）接著 `receiving commands again`——正常，閒置的 override 串流在 disarm 後
+  0.5 s（或調參收尾的 0/0 之後 0.5 s）就解鎖；下一次調參一開始先送 0.6 s 的 0/0，照常能轉。
 - **重啟路徑**：`kill -9` 獨立的 `mower_base` 程序（`RUST_DAEMON=false`），launch 2 秒後重生；
-  重生後即使 nav2／搖桿還在送非零指令，輪子也要不動，直到出現停止邊緣
+  重生後即使 nav2／搖桿還在送非零指令，輪子也要不動，直到出現持續 0.5 s 的停止
   （`arm latch: cmd_vel re-armed by ...`）。DDS discovery 還沒配對好之前收不到東西，
   那段安靜**不算**停止：要等 `cmd_vel: publisher in the graph ... after activation`
-  之後再 2 s（`publisher_settle_s`）才開始算 0.25 s 的靜默，所以閒置重生後大約 2.3 s
-  才自己解鎖；送一個 0/0 會立刻解鎖。
+  之後再 2 s（`publisher_settle_s`）才開始算 0.5 s 的靜默，所以閒置重生後大約 2.8 s
+  才自己解鎖；一直送 0/0（搖桿放著）的話 0.5 s 後解鎖。
 - **B、C 一定要用分支的 `deploy/docker-compose.yaml`**，不能用 `switch.sh ... keep`：
   機器上還原後的 compose 是 main 的，沒有 `rust_base`／`rust_localize`，
   `RUST_BASE=true` 會被默默忽略，試車測到的其實是 ros2_control。開車前先

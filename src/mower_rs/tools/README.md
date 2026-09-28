@@ -85,6 +85,8 @@ docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree
   -caF 'not receiving our commands' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the TX-lead trigger
 docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
   -caF 'dead-man is let go' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the review fixes (blade, board gate)
+docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+  -caF 'non-zero after' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the release window (guard zero)
 docker save ghcr.io/edwards414/mower_path_planning:rosfree-test | gzip -1 > /tmp/rosfree-test.tar.gz
 scp /tmp/rosfree-test.tar.gz cat@<robot>:/tmp/
 ssh cat@<robot> 'gunzip -c /tmp/rosfree-test.tar.gz | sudo docker load && rm /tmp/rosfree-test.tar.gz'
@@ -180,9 +182,17 @@ feedback loss, and `STM32 restart: ...` only if the wheels had turned more
 than about 1.3 revolutions since the board's previous boot or no 0x01
 reached the new boot before its first status (its absence is not a
 failure). After the re-seat the log shows `STM32 receiving commands again`
-(all three) and the wheels stay put until cmd_vel stops (`arm latch:
-cmd_vel re-armed by ...`); a blade held through the pull stays off until
-it is let go. Read it with `sudo docker logs mower-lawan_node-1 2>&1 | grep
+(all three) and the wheels stay put until cmd_vel has been released for
+0.5 s (`arm latch: cmd_vel re-armed by ...`); a blade held through the pull
+stays off until it has been let go for as long. On this robot pulling pin 8
+also resets the USB hub (2026-09-29: IMU and camera re-enumerated), which
+stalls the robot side for ~0.3 s: `velocity_command_guard` then logs
+`Drivetrain command receipt timeout; forced velocity to zero` and feeds the
+driver one zero. The image before `fix/rf-latch-release-window` took that
+zero for the release and the still-held stick drove the wheels 0.25 s
+later; now the log shows `arm latch: cmd_vel stop not held for 0.50 s
+(non-zero after ...), still held` and the wheels stay put. Wheels that start
+by themselves after a `re-armed` line are a failure. Read it with `sudo docker logs mower-lawan_node-1 2>&1 | grep
 -E 'arm latch|STM32'`. Still re-seat only
 with the sticks released and navigation idle: the latch is what is being
 tested, not something to rely on yet. To test

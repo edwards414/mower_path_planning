@@ -15,7 +15,7 @@
 //! opened by two processes at once: record ros2_control on the robot, replay
 //! it into the Rust driver offline.
 
-use mower_base_core::cycle::{BaseConfig, BaseCycle, LedRequest};
+use mower_base_core::cycle::{BaseConfig, BaseCycle, LedRequest, Stream};
 use mower_base_core::diff_drive::{Command, Twist};
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::record::{self, Direction};
@@ -227,8 +227,14 @@ fn cmd_vel_timeout_decelerates_rather_than_dropping() {
     let (mut base, _) = BaseCycle::new(BaseConfig::default(), 0).unwrap();
     let dt = 40_000_000i64;
     let mut t = 0i64;
-    // a zero first, to arm the latch; then drive up to the limit
+    // zeros for the release window first, to arm the latch; then drive up
+    // to the limit
     base.tick(cmd(0.0, 0.0, t), t, t);
+    while base.holds(Stream::CmdVel) {
+        t += dt;
+        base.tick(cmd(0.0, 0.0, t), t, t);
+        assert!(t <= 520_000_000, "zeros for 0.5 s re-arm cmd_vel");
+    }
     for _ in 0..60 {
         t += dt;
         base.tick(cmd(0.55, 0.0, t), t, t);

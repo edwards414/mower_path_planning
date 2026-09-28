@@ -56,9 +56,10 @@
 //! timeout has already stopped the wheels.
 //!
 //! The restarted module comes up with the arm latch set
-//! ([`BaseCycle::disarmed`]): it holds the wheels until cmd_vel shows a stop
-//! edge (a zero command, or nothing for `cmd_vel_timeout`), so it never
-//! picks up a live nav2 or teleop command on its own. The C++ chain got the
+//! ([`BaseCycle::disarmed`]): it holds the wheels until cmd_vel shows a
+//! sustained stop edge (no non-zero command for `latch_release_s`: zero
+//! commands, or nothing for that and `cmd_vel_timeout`), so it never picks
+//! up a live nav2 or teleop command on its own. The C++ chain got the
 //! same result by never coming back after an error. A new reader hears
 //! nothing until DDS discovery has matched it with the writer, so the spin
 //! thread reads the command topics' publishers off the graph and the cycle
@@ -379,6 +380,20 @@ impl Driver {
         let l = &self.logger;
         let timeout_s = self.cfg.diff_drive.cmd_vel_timeout;
         let settle_s = self.cfg.publisher_settle_s;
+        let release_s = self.cfg.latch_release_s;
+        // what "cmd_vel stops" means to the latch
+        let rest = |silence_from: &str| {
+            if timeout_s > 0.0 {
+                format!(
+                    "cmd_vel has carried no non-zero command for {release_s:.2} s (zero \
+                     commands, or none for {:.2} s{silence_from})",
+                    timeout_s.max(release_s)
+                )
+            } else {
+                format!("cmd_vel has carried only zero commands for {release_s:.2} s")
+            }
+        };
+        let matched = format!(" once its publisher has been matched for {settle_s:.1} s");
         let stream_name = |stream| match stream {
             Stream::CmdVel => "cmd_vel",
             Stream::WheelOverride => "wheel_override",
@@ -389,26 +404,26 @@ impl Driver {
             Event::Disarmed(DisarmReason::Activation) => r2r::log_info!(
                 l,
                 "arm latch: wheels held until the STM32 shows it receives our commands and \
-                 cmd_vel stops (a zero command, or none for {timeout_s:.2} s once its publisher \
-                 has been matched for {settle_s:.1} s); wheel_override likewise"
+                 {}; wheel_override likewise",
+                rest(&matched)
             ),
             Event::Disarmed(DisarmReason::FeedbackLost) => r2r::log_warn!(
                 l,
                 "arm latch: wheel feedback lost, braking; wheels held until the feedback is \
-                 back, the STM32 receives again and cmd_vel stops (a zero command, or none for \
-                 {timeout_s:.2} s); wheel_override likewise; {blade}"
+                 back, the STM32 receives again and {}; wheel_override likewise; {blade}",
+                rest("")
             ),
             Event::Disarmed(DisarmReason::BoardNotReceiving) => r2r::log_warn!(
                 l,
                 "arm latch: the STM32 is not receiving our commands, braking; wheels held \
-                 until it receives again and cmd_vel stops (a zero command, or none for \
-                 {timeout_s:.2} s); wheel_override likewise; {blade}"
+                 until it receives again and {}; wheel_override likewise; {blade}",
+                rest("")
             ),
             Event::Disarmed(DisarmReason::BoardReset) => r2r::log_warn!(
                 l,
                 "arm latch: the STM32 restarted, braking; wheels held until it receives again \
-                 and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
-                 wheel_override likewise; {blade}"
+                 and {}; wheel_override likewise; {blade}",
+                rest("")
             ),
             Event::BoardNotReceiving { command_age_ms } => r2r::log_warn!(
                 l,
@@ -445,17 +460,34 @@ impl Driver {
                     DisarmReason::BoardReset => "STM32 restart",
                 };
                 let by = match (by, stream) {
-                    (StopEdge::Stop, _) => "an explicit stop".to_string(),
-                    (StopEdge::Silence, "blade_command") => {
-                        "its dead-man running out (no refresh within its ttl)".to_string()
+                    (StopEdge::Stop, _) => format!("an explicit stop held for {release_s:.2} s"),
+                    (StopEdge::Silence, "blade_command") => format!(
+                        "its dead-man running out (no refresh within its ttl, nor for \
+                         {release_s:.2} s)"
+                    ),
+                    (StopEdge::Silence, "wheel_override") => format!(
+                        "silence (nothing for > {:.2} s nor within the last request's ttl)",
+                        timeout_s.max(release_s)
+                    ),
+                    (StopEdge::Silence, _) => {
+                        format!("silence (nothing for > {:.2} s)", timeout_s.max(release_s))
                     }
-                    (StopEdge::Silence, _) => format!("silence (nothing for > {timeout_s:.2} s)"),
                 };
                 r2r::log_info!(
                     l,
                     "arm latch: {stream} re-armed by {by}, {after_s:.2} s after the {reason}"
                 );
             }
+            Event::ReleaseNotHeld { stream, by, window_s, after_s } => r2r::log_info!(
+                l,
+                "arm latch: {} {} not held for {window_s:.2} s (non-zero after {after_s:.2} s), \
+                 still held",
+                stream_name(stream),
+                match by {
+                    StopEdge::Stop => "stop",
+                    StopEdge::Silence => "silence",
+                }
+            ),
             Event::FeedbackLost { age_s } => {
                 r2r::log_warn!(l, "no wheel feedback for {:.2} s", age_s)
             }
@@ -828,6 +860,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         // Not a parameter: the latch only ever comes off in the parity tests.
         arm_latch: true,
         publisher_settle_s: params::f64(&node, "publisher_settle_s", 2.0),
+        latch_release_s: params::f64(&node, "latch_release_s", 0.5).max(0.0),
         diff_drive: diff_drive.clone(),
     };
     let settings = Settings {

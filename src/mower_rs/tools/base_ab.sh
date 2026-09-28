@@ -14,6 +14,7 @@
 #   ... base_ab.sh B /out/b_pp "" --scenario pullpush          # pushed during the pull
 #   ... base_ab.sh B /out/b_tx "" --scenario txpull            # LubanCat TX lead only
 #   ... base_ab.sh B /out/b_ts "" --scenario txstart           # ... out before the start
+#   ... base_ab.sh B /out/b_gz "" --scenario guardzero         # txpull + one guard zero
 #   ... base_ab.sh B /out/b_live "" --scenario live            # restart under a live stream
 #   ... base_ab.sh B /out/b_at "" --scenario autotune          # pid_autotune + flash save
 #   python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b

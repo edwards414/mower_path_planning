@@ -30,7 +30,8 @@
 # half (open_loop, enable_odom_tf false, base_footprint, 0.35 / 0.09 m,
 # cmd_vel_timeout 0.25) and the real_robot.xacro <hardware> block for the
 # serial half (58 rpm, 8896 counts/rev, 300 ms command timeout). Only the two
-# values that differ per machine are written out, plus the slow /odom copy.
+# values that differ per machine are written out, plus the slow /odom copy and
+# the arm latch's release window.
 mower_base:
   ros__parameters:
     # udev name from deploy/udev/99-mower.rules; the same path the
@@ -47,6 +48,18 @@ mower_base:
     # /odom_slow`; an empty topic turns it off.
     odom_slow_topic: /odom_slow
     odom_slow_rate_hz: 5.0
+    # The arm latch's release window (src/mower_rs/README.md, "the arm
+    # latch"). After a disarm (activation, wheel feedback lost, the STM32 not
+    # receiving our commands, an STM32 restart) cmd_vel, wheel_override and a
+    # held blade each re-arm only once their stream has carried no non-zero
+    # command for this long: zeros and silence both count, silence alone
+    # needs the longer of this and cmd_vel_timeout (0.25 s). One zero followed
+    # by the stick again is not a release: on 2026-09-29 a 0.3 s stall during a
+    # USB hub reset made velocity_command_guard's watchdog send a zero, the
+    # image before this took it for the operator letting go, and the stick that
+    # was still held drove the wheels 0.25 s later. 0 = the first stop re-arms
+    # (that image's rule).
+    latch_release_s: 0.5
 
 # --- status (rust_status) ----------------------------------------------------
 robot_status:

@@ -42,6 +42,24 @@ after a restart under nav2 or teleop. No discovery wait: the stream starts
 at once. The driver hears nothing until DDS has matched it with this writer,
 and that quiet stretch must not re-arm it (LIVE_SCRIPT).
 
+`--scenario guardzero --deaf-file F`: the 2026-09-29 robot run. The
+teleop stream at the app's 10 Hz, held through a pull of the LubanCat TX
+lead alone (as txpull); after the recovery, with the stick still held, the
+stream stalls for 0.1-0.2 s, one (0, 0) arrives — velocity_command_guard's
+receipt-watchdog zero during a USB hub reset — then nothing for 0.25 s (its
+stale-stamp rejections), then the stick again (GUARDZERO_SCRIPT). The C++
+chain follows the stick throughout; mower_base must stay at 0/0 until the
+release, which it did not before the release window: it took the zero for
+the operator letting go.
+
+Every script releases the stick for 1.0 s: mower_base re-arms once a stream
+has carried no non-zero command for `latch_release_s` (0.5 s), and a release
+of exactly that long races the push that follows it. The scripts that start
+with the driver already running publish zeros (the stick at rest) during the
+first 1.5 s, which re-arms the activation latch well before the ramp; silence
+alone would only re-arm it `publisher_settle_s` + 0.5 s after the harness's
+publisher appeared, about when the ramp starts.
+
 `--scenario autotune`: no cmd_vel at all; drives `mower_pid_autotune`
 (which `base_ab.sh` starts beside the driver) through a whole run to
 "review", "apply" (the flash save, which `fake_base.py` stalls for like the
@@ -81,7 +99,7 @@ from tf2_msgs.msg import TFMessage
 # (t_from, t_to, (lin_from, lin_to), (ang_from, ang_to)) — `None` = publish
 # nothing at all, which is what exercises the timeout.
 CMD_SCRIPT = [
-    (0.0, 1.5, None, None),                    # settle: firmware info, feedback
+    (0.0, 1.5, (0.0, 0.0), (0.0, 0.0)),        # settle, stick at rest (arms the latch)
     (1.5, 5.5, (0.0, 0.40), (0.0, 0.0)),       # accelerate
     (5.5, 7.5, (0.40, 0.40), (0.0, 0.40)),     # cruise, start turning
     (7.5, 9.5, (0.40, 0.40), (0.40, 0.0)),     # stop turning
@@ -96,46 +114,73 @@ CMD_SCRIPT = [
 CMD_RATE_HZ = 200.0
 RUN_SECONDS = 32.0
 
+# The stick is released at RELEASE[0] and pushed again at RELEASE[1] in the
+# pull scenarios (the live one has its own), 1.0 s apart: twice the release
+# window, so the push cannot race it.
+RELEASE = (9.0, 10.0)
+
 # The cable-pull scenario: the lead is out from MUTE[0] to MUTE[1] while the
-# stick stays at 0.30 m/s, released at 9.0 s and pushed again at 9.5 s.
+# stick stays at 0.30 m/s, released at 9.0 s and pushed again at 10.0 s.
 PULL_SCRIPT = [
-    (0.0, 1.5, None, None),
+    (0.0, 1.5, (0.0, 0.0), (0.0, 0.0)),        # at rest (arms the latch)
     (1.5, 3.5, (0.0, 0.30), (0.0, 0.0)),
     (3.5, 9.0, (0.30, 0.30), (0.0, 0.0)),      # held through the pull
-    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
-    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
-    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
-    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+    (9.0, 10.0, (0.0, 0.0), (0.0, 0.0)),       # released
+    (10.0, 12.0, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (12.0, 13.0, (0.30, 0.0), (0.0, 0.0)),
+    (13.0, 14.0, (0.0, 0.0), (0.0, 0.0)),
 ]
 PULL_MUTE = (4.0, 6.0)
 PULL_SECONDS = 14.0
 
 # The lead comes out at 4.0 s with nothing commanded (silence), the stick is
 # pushed from 5.0 s while it is still out, the lead is back at 7.0 s with the
-# stick still pushed, released at 9.0 s and pushed again from 9.5 s.
+# stick still pushed, released at 9.0 s and pushed again from 10.0 s.
 PULLPUSH_SCRIPT = [
     (0.0, 5.0, None, None),
     (5.0, 6.0, (0.0, 0.30), (0.0, 0.0)),       # pushed with the lead out
     (6.0, 9.0, (0.30, 0.30), (0.0, 0.0)),      # still pushed after the re-seat
-    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
-    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
-    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
-    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+    (9.0, 10.0, (0.0, 0.0), (0.0, 0.0)),       # released
+    (10.0, 12.0, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (12.0, 13.0, (0.30, 0.0), (0.0, 0.0)),
+    (13.0, 14.0, (0.0, 0.0), (0.0, 0.0)),
 ]
 PULLPUSH_MUTE = (4.0, 7.0)
+
+# The robot's 2026-09-29 sequence, at the app's 10 Hz: the LubanCat TX lead
+# out 4.0-6.0 s with the stick held (GUARDZERO_MUTE = PULL_MUTE), still held
+# after the recovery; at 7.70 s the stream stalls, at 7.80 s one (0, 0)
+# arrives (GUARDZERO_INJECT, the guard's watchdog zero; the silence before
+# it stays under cmd_vel_timeout, as on the robot, where the driver logged
+# the re-arm as an explicit stop), nothing until 8.05 s, then the stick
+# again until the release.
+GUARDZERO_SCRIPT = [
+    (0.0, 1.5, (0.0, 0.0), (0.0, 0.0)),        # at rest (arms the latch)
+    (1.5, 3.5, (0.0, 0.30), (0.0, 0.0)),
+    (3.5, 7.7, (0.30, 0.30), (0.0, 0.0)),      # held through the pull and after
+    (7.7, 8.05, None, None),                   # the stall; the guard's zero at 7.80
+    (8.05, 9.0, (0.30, 0.30), (0.0, 0.0)),     # the stick again, still held
+    (9.0, 10.0, (0.0, 0.0), (0.0, 0.0)),       # released
+    (10.0, 12.0, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (12.0, 13.0, (0.30, 0.0), (0.0, 0.0)),
+    (13.0, 14.0, (0.0, 0.0), (0.0, 0.0)),
+]
+GUARDZERO_INJECT = [(7.80, (0.0, 0.0))]
+GUARDZERO_RATE_HZ = 10.0
 
 # The LubanCat TX lead out from before the driver started until 7.0 s,
 # with PULLPUSH_SCRIPT: idle, pushed from 5.0 s, held through the re-seat.
 TXSTART_MUTE = (0.0, 7.0)
 
 # A live stream from t = 0, before the driver exists (base_ab.sh starts the
-# driver LIVE_DRIVER_START_S later), released at 12.0 s, pushed again.
+# driver LIVE_DRIVER_START_S later), released at 12.0 s, pushed again at 13.0 s.
+LIVE_RELEASE = (12.0, 13.0)
 LIVE_SCRIPT = [
     (0.0, 12.0, (0.30, 0.30), (0.0, 0.0)),
-    (12.0, 12.5, (0.0, 0.0), (0.0, 0.0)),      # released
-    (12.5, 14.5, (0.0, 0.30), (0.0, 0.0)),     # pushed again
-    (14.5, 15.5, (0.30, 0.0), (0.0, 0.0)),
-    (15.5, 17.0, (0.0, 0.0), (0.0, 0.0)),
+    (12.0, 13.0, (0.0, 0.0), (0.0, 0.0)),      # released
+    (13.0, 15.0, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (15.0, 16.0, (0.30, 0.0), (0.0, 0.0)),
+    (16.0, 17.0, (0.0, 0.0), (0.0, 0.0)),
 ]
 LIVE_RATE_HZ = 20.0
 LIVE_SECONDS = 17.0
@@ -153,6 +198,7 @@ SCENARIOS = {
     "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS, "mute"),
     "txpull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS, "deaf"),
     "txstart": (PULLPUSH_SCRIPT, TXSTART_MUTE, CMD_RATE_HZ, PULL_SECONDS, "deaf"),
+    "guardzero": (GUARDZERO_SCRIPT, PULL_MUTE, GUARDZERO_RATE_HZ, PULL_SECONDS, "deaf"),
     "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS, None),
     "autotune": (AUTOTUNE_SCRIPT, None, CMD_RATE_HZ, AUTOTUNE_SECONDS, None),
 }
@@ -204,6 +250,8 @@ class Harness(Node):
         self.scenario = scenario
         self.script, self.mute, rate_hz, _, self.cut = SCENARIOS[scenario]
         self.side_script = SIDE_SCRIPT if scenario == "default" else []
+        # single commands published once, off the script's rate (on_side_tick)
+        self.inject = list(GUARDZERO_INJECT) if scenario == "guardzero" else []
         # the file fake_base.py watches for this scenario's lead(s)
         self.mute_file = cut_file
         self.t0 = time.monotonic()
@@ -212,6 +260,8 @@ class Harness(Node):
             "scenario": scenario,
             "mute": list(self.mute) if self.mute else None,
             "cut": self.cut,
+            # when the stick is released and pushed again, for base_compare
+            "release": list(LIVE_RELEASE if scenario == "live" else RELEASE),
             # CLOCK_MONOTONIC is shared across processes on Linux, so this
             # is what lines the harness up with fake_base.py's log.
             "t0_monotonic": self.t0,
@@ -304,23 +354,29 @@ class Harness(Node):
         if command is None:
             return
         lin, ang = command
+        self.publish_cmd(t, lin, ang)
+        if self.streaming_file:
+            open(self.streaming_file, "w").close()
+            self.streaming_file = ""
+
+    def publish_cmd(self, t: float, lin: float, ang: float, **extra) -> None:
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_footprint"
         msg.twist.linear.x = lin
         msg.twist.angular.z = ang
         self.cmd_pub.publish(msg)
-        if self.streaming_file:
-            open(self.streaming_file, "w").close()
-            self.streaming_file = ""
         self.rec["cmd_log"].append(
-            {"t": round(t, 6), "stamp": stamp_s(msg.header), "lin": lin, "ang": ang}
+            {"t": round(t, 6), "stamp": stamp_s(msg.header), "lin": lin, "ang": ang, **extra}
         )
 
     def on_side_tick(self) -> None:
         if not self.started:
             return
         t = self.rel()
+        while self.inject and self.inject[0][0] <= t:
+            _, (lin, ang) = self.inject.pop(0)
+            self.publish_cmd(t, lin, ang, inject=True)
         for i, (lo, hi, rate, topic, payload) in enumerate(self.side_script):
             if not (lo <= t < hi):
                 continue
@@ -512,7 +568,7 @@ def main() -> int:
     ap.add_argument("--mute-file", default="",
                     help="the file fake_base.py --mute-file watches (pull, pullpush)")
     ap.add_argument("--deaf-file", default="",
-                    help="the file fake_base.py --deaf-file watches (txpull, txstart)")
+                    help="the file fake_base.py --deaf-file watches (txpull, txstart, guardzero)")
     args = ap.parse_args()
     if args.seconds is None:
         args.seconds = SCENARIOS[args.scenario][3]

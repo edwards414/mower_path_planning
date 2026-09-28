@@ -156,10 +156,13 @@ restart this node gets and the chain never had:
 
 * **The arm latch.** After every (re)activation, and on each of the losses
   below, the cmd_vel reference is held at zero (the limiter brakes it as a
-  cmd_vel timeout would) until cmd_vel shows a stop edge: a finite 0/0, or
-  nothing for longer than `cmd_vel_timeout`. `wheel_override` gets the same
-  rule on its own stream: not applied, a running override dropped, until a
-  0/0 or ttl-0 request or the same silence. The C++ chain deactivated its
+  cmd_vel timeout would) until cmd_vel shows a stop edge that is
+  **sustained**: the stream carries no non-zero command for
+  `latch_release_s` (0.5 s) — finite 0/0 commands, nothing at all, or
+  both — see "the release window" below. `wheel_override` gets the same
+  rule on its own stream: not applied, a running override dropped, until
+  0/0 or ttl-0 requests or silence have lasted the window (its silence
+  also has to outlast the newest request's ttl). The C++ chain deactivated its
   controllers for good on a runtime error; this node is restarted after 2 s
   and would otherwise resume a live nav2 or teleop command by itself. On the
   robot's native UART a pulled lead is no read or write error at all, so
@@ -235,16 +238,57 @@ restart this node gets and the chain never had:
   and a zero cmd_vel inside that window would otherwise re-arm behind it,
   so that a push and a contact before 0.5 s still reached the wheels as a
   step. A working lead shows up on the first status after our first
-  frame, one or two cycles. On the cycle the link returns, a stream at
-  rest re-arms and a pushed one stays held. Feedback that never arrived since activation only logs a warning —
-  a board that does not send 0x85 is not bricked.
+  frame, one or two cycles. On the cycle the link returns, a stream that
+  has been at rest for the release window re-arms, one at rest for less
+  re-arms once the window is up (unless it moves first), and a pushed one
+  stays held. Feedback that never arrived since activation only logs a
+  warning — a board that does not send 0x85 is not bricked.
   The blade is held too, on the three losses (not at activation): a
   running blade gets one explicit 0 at the disarm (the firmware's own
   timeout has stopped it if the lead is out), and `blade_command` requests
   are not applied until its dead-man has been let go — an explicit stop, or
-  no refresh within the ttl of the last one — after the link is back. The
-  app refreshes a held blade every 0.2 s; without this, a blade held
-  through a pulled lead would restart on the re-seat.
+  no refresh within the ttl of the last one, either for the release window
+  — after the link is back. The app refreshes a held blade every 0.2 s;
+  without this, a blade held through a pulled lead would restart on the
+  re-seat.
+
+  **The release window** (`latch_release_s`, 0.5 s, in
+  `mower_bringup/config/mower_rsd.yaml`). Found on the robot on 2026-09-29
+  (image ecdd4a8, wheels off the ground, the app's teleop stream held
+  forward by a script at 10 Hz): pin 8 pulled at 38.5 s, disarmed by the
+  command path loss; the board received again at 39.6 s and the wheels
+  stayed stopped under the held stick — correct so far. Pulling the jumper
+  had also reset the USB hub (IMU and camera re-enumerated), and during
+  that the robot side stalled for ~0.3 s: at 43.05 s `velocity_command_guard`
+  logged `Drivetrain command receipt timeout; forced velocity to zero` (the
+  manual guard the same 35 ms later, then `velocity timestamp is stale`
+  rejections), although the sender on the Mac never paused. At 43.07 s
+  `mower_base` logged `cmd_vel re-armed by an explicit stop, 4.48 s after
+  the command path loss` — the guard's synthesized zero taken for the
+  operator's release — and 0.25 s later the still-held stick drove the
+  wheels, 73 -> 366 permille. A single stop is therefore no longer a
+  release: a stream re-arms only once it has carried no non-zero command
+  for the window. Explicit zeros and silence count together: the window
+  runs from the first stop after the newest non-zero command, through more
+  zeros or nothing at all, and a non-zero inside it restarts it at the next
+  stop; silence alone needs the longer of the window and the stream's own
+  timeout (`cmd_vel_timeout` 0.25 s, so 0.5 s: a stall of 0.25-0.5 s is not
+  a release either), still counted only while the stream can deliver (the
+  discovery rule below). The blade's dead-man gets the same window: a 0
+  followed by a refresh within 0.5 s is not a let-go, whoever sent the 0,
+  and a lapsed ttl shorter than 0.5 s is not either; it never re-arms
+  earlier than it did without the window. The first time per disarm that a
+  rest the old rule would have taken (a stop, or silence past the stream's
+  timeout, on a cycle where the link would let it re-arm) is cut short by a
+  non-zero, the log says so at INFO: `arm latch: cmd_vel stop not held for
+  0.50 s (non-zero after 0.24 s), still held` (or `silence not held`,
+  `wheel_override ...`, `blade_command ...`). What it costs: a release now
+  takes effect 0.5 s after the stick is let go, on a latch that is holding
+  (normal driving is never latched); at activation the idle streams re-arm
+  by silence at `publisher_settle_s` + 0.5 s after their publisher
+  appears, or 0.5 s into the zeros an app at rest sends; after an outage
+  at rest they re-arm once the board receives again and 0.5 s have passed
+  since the disarm. `latch_release_s: 0` restores the old rule.
   Two rules keep "silence" honest. A restarted node's reader hears nothing
   from a live writer until DDS discovery has matched the two (2.7 s has been
   seen under load), so silence only counts once the topic has had a
@@ -255,8 +299,11 @@ restart this node gets and the chain never had:
   frames, no commands taken), which trips the feedback loss (or, for a
   shorter erase, the command path loss); by then the run's steps are over,
   the board shows our frames arriving on the first status after the stall,
-  and the run's closing cancel (0/0, ttl 0) is the override stream's stop
-  edge, so the next run drives the wheels as usual. `arm_latch: false` (the
+  and the idle override stream re-arms by its silence since the disarm once
+  that is 0.5 s old, or 0.5 s after the run's closing cancel (0/0, ttl 0) at
+  the latest. The next run starts with 0.6 s of 0/0 overrides
+  (`hold(0, 0.6)`) before its first step, longer than the window, so it
+  drives the wheels as usual even when started at once. `arm_latch: false` (the
   parity tests only) turns off all of it, the 0x81 checks and the blade
   included.
 * **The control clock is CLOCK_MONOTONIC**, as ros2_control's steady trigger

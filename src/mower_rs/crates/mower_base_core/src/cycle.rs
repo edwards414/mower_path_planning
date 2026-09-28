@@ -42,9 +42,10 @@
 //!   than `feedback_timeout_s`, when the board's 0x81 says our 0x01 frames
 //!   are not reaching it, and when the board restarted, the cmd_vel
 //!   reference is held at zero and `wheel_override` is not applied, each
-//!   until its own stream shows a stop edge — see [`BaseCycle::disarmed`];
-//!   on the three link losses a running blade is stopped and held until its
-//!   dead-man is let go. The C++ chain latched off for good after a runtime
+//!   until its own stream shows a stop edge that is sustained for
+//!   `latch_release_s` (no non-zero command in that window) — see
+//!   [`BaseCycle::disarmed`]; on the three link losses a running blade is
+//!   stopped and held until its dead-man is let go, for the same window. The C++ chain latched off for good after a runtime
 //!   error; this driver is restarted after 2 s instead, and without the latch
 //!   it would resume a live nav2 or teleop command on its own, and so would a
 //!   re-seated UART lead. Silence only counts as a stop edge once the stream
@@ -89,6 +90,16 @@ pub struct BaseConfig {
     /// yet (discovery runs both ways, and the RK3568 under load has been
     /// seen to take seconds), and until it has, "no message" is not silence.
     pub publisher_settle_s: f64,
+    /// How long a held stream must carry no non-zero command before it
+    /// re-arms (the release window). Explicit stops and silence both count
+    /// and combine: the window runs from the first stop after the newest
+    /// non-zero command, and silence alone needs the longer of this and the
+    /// stream's own timeout. A stop that a non-zero cuts short re-arms
+    /// nothing: on 2026-09-29 a hub reset stalled the robot side for 0.3 s,
+    /// `velocity_command_guard`'s watchdog zero reached the driver as a
+    /// stop, and the stick that was still held drove the wheels 0.25 s
+    /// later. 0 = the first stop re-arms (the rule before this parameter).
+    pub latch_release_s: f64,
     pub diff_drive: DiffDriveParams,
 }
 
@@ -107,6 +118,7 @@ impl Default for BaseConfig {
             blade_max_ttl_ms: 1000,
             arm_latch: true,
             publisher_settle_s: 2.0,
+            latch_release_s: 0.5,
             diff_drive: DiffDriveParams::mower(),
         }
     }
@@ -262,16 +274,21 @@ pub enum Stream {
     Blade,
 }
 
-/// Which stop edge re-armed a stream.
+/// Which stop edge re-armed a stream. Either one must be *sustained*: the
+/// stream carries no non-zero command for `latch_release_s`
+/// ([`BaseConfig::latch_release_s`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopEdge {
     /// An explicit stop: a finite cmd_vel with linear.x and angular.z both
     /// 0, a wheel_override of 0/0 or with ttl 0, a blade_command of 0 or
-    /// with ttl 0.
+    /// with ttl 0 — and nothing but stops (or nothing at all) for
+    /// `latch_release_s` from the first one.
     Stop,
-    /// Nothing on the stream for longer than `cmd_vel_timeout`, counted
-    /// only while it can deliver (see [`BaseCycle::set_publishers`]); for
-    /// the blade, no refresh within the ttl of the last request.
+    /// Nothing on the stream for longer than `latch_release_s` and than its
+    /// own timeout (`cmd_vel_timeout`; for wheel_override also the newest
+    /// request's ttl), counted only while it can deliver (see
+    /// [`BaseCycle::set_publishers`]); for the blade, no refresh within the
+    /// ttl of the last request, nor within `latch_release_s`.
     Silence,
 }
 
@@ -300,6 +317,14 @@ pub enum Event {
     /// wheels (or the blade) again. For the blade only when it was running
     /// at the disarm or was requested while held.
     Armed { stream: Stream, reason: DisarmReason, by: StopEdge, after_s: f64 },
+    /// A held stream came to rest on a cycle that could have re-armed it
+    /// (the link was back) — `by` an explicit stop, or silence past its own
+    /// timeout (cmd_vel_timeout, the override's or the blade's ttl) — and
+    /// carried a non-zero command again `after_s` s later, inside the
+    /// `window_s` it had to hold for: still held. Without the release
+    /// window that rest re-armed the stream, and the non-zero drove it
+    /// (the 2026-09-29 guard-zero case). Once per disarm and stream.
+    ReleaseNotHeld { stream: Stream, by: StopEdge, window_s: f64, after_s: f64 },
     /// "no wheel feedback for %.2f s" — once per loss.
     FeedbackLost { age_s: f64 },
     /// "feedback resumed"
@@ -327,19 +352,93 @@ pub enum Event {
 /// `C++ RCLCPP_WARN_THROTTLE(..., 2000, "driver alarm flag set")`.
 const DRIVER_ALARM_LOG_PERIOD_NS: TimeNs = 2_000_000_000;
 
-/// One stream's half of the arm latch; `Some` = held.
+/// A held stream at rest: since when, by which edge, and for how long it
+/// must stay that way before it re-arms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Rest {
+    by: StopEdge,
+    since_ns: TimeNs,
+    /// the release window for a stop; for silence the longer of that and
+    /// the stream's own timeout
+    window_ns: i64,
+}
+
+impl Rest {
+    /// Held long enough: a stop for the whole window (a window of 0 is the
+    /// stop itself), silence for longer than it.
+    fn sustained(&self, now: TimeNs) -> bool {
+        match self.by {
+            StopEdge::Stop => now - self.since_ns >= self.window_ns,
+            StopEdge::Silence => now - self.since_ns > self.window_ns,
+        }
+    }
+}
+
+/// The part of a stream's hold that makes its stop edge sustained
+/// ([`BaseConfig::latch_release_s`]); the same for all three streams.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Release {
+    /// The first explicit stop after the newest non-zero message since the
+    /// disarm; `None` while the newest message is not a stop (or there has
+    /// been none).
+    stop_since: Option<TimeNs>,
+    /// The rest seen on the newest cycle that could re-arm (the link back)
+    /// but was not yet sustained: what a non-zero is reported against.
+    rest: Option<Rest>,
+    /// `Event::ReleaseNotHeld` went out for this hold.
+    reported: bool,
+}
+
+impl Release {
+    /// A message on the held stream at `now`. A stop starts the window, or
+    /// continues it; anything else restarts it, and if it cuts short a
+    /// rest that would have re-armed the stream before the window existed,
+    /// returns the (once per hold) event that says so.
+    fn message(&mut self, stop: bool, now: TimeNs, stream: Stream) -> Option<Event> {
+        if stop {
+            self.stop_since.get_or_insert(now);
+            return None;
+        }
+        self.stop_since = None;
+        let rest = self.rest.take()?;
+        if std::mem::replace(&mut self.reported, true) {
+            return None;
+        }
+        Some(Event::ReleaseNotHeld {
+            stream,
+            by: rest.by,
+            window_s: seconds(rest.window_ns),
+            after_s: seconds(now - rest.since_ns),
+        })
+    }
+
+    /// The explicit stop the stream is at rest by, if it is.
+    fn stopped(&self, release_ns: i64) -> Option<Rest> {
+        self.stop_since.map(|t| Rest { by: StopEdge::Stop, since_ns: t, window_ns: release_ns })
+    }
+}
+
+/// One motion stream's half of the arm latch; `Some` = held.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Hold {
     reason: DisarmReason,
     since_ns: TimeNs,
-    /// the newest message on the stream since `since_ns` was a stop
-    stopped: bool,
+    release: Release,
 }
 
 impl Hold {
-    /// The stop edge, if the stream has shown one: the newest message since
-    /// the disarm was a stop, or nothing has arrived for longer than
-    /// `window_ns` while the stream could deliver.
+    fn new(reason: DisarmReason, now: TimeNs) -> Self {
+        Hold { reason, since_ns: now, release: Release::default() }
+    }
+
+    /// Whether the stream is at rest, and since when: the newest message
+    /// since the disarm is a stop (from the first of the stops since the
+    /// last non-zero), or nothing has arrived for longer than `timeout_ns`
+    /// (the stream's own: its command would have timed out) while the
+    /// stream could deliver. It re-arms once the rest is sustained
+    /// ([`Rest::sustained`]): `release_ns` for a stop, the longer of the
+    /// two for silence, so a stall shorter than the release window never
+    /// passes for a release.
     ///
     /// "Could deliver" is what keeps DDS discovery from passing for a stop:
     /// a restarted node's reader gets nothing from a live nav2 or teleop
@@ -347,19 +446,20 @@ impl Hold {
     /// silence runs from the latest of the disarm, the newest message and
     /// `settle_ns` after the current publisher first appeared, and not at
     /// all while there has been neither a message nor a publisher. A
-    /// `window_ns` of 0 accepts only explicit stops.
-    fn edge(
+    /// `timeout_ns` of 0 accepts only explicit stops.
+    fn rest(
         &self,
         last_ns: Option<TimeNs>,
         publisher_since_ns: Option<TimeNs>,
         now: TimeNs,
-        window_ns: i64,
+        release_ns: i64,
+        timeout_ns: i64,
         settle_ns: i64,
-    ) -> Option<StopEdge> {
-        if self.stopped {
-            return Some(StopEdge::Stop);
+    ) -> Option<Rest> {
+        if let Some(stop) = self.release.stopped(release_ns) {
+            return Some(stop);
         }
-        if window_ns <= 0 || (last_ns.is_none() && publisher_since_ns.is_none()) {
+        if timeout_ns <= 0 || (last_ns.is_none() && publisher_since_ns.is_none()) {
             return None;
         }
         let mut from = self.since_ns;
@@ -369,7 +469,11 @@ impl Hold {
         if let Some(t) = publisher_since_ns {
             from = from.max(t + settle_ns);
         }
-        (now - from > window_ns).then_some(StopEdge::Silence)
+        (now - from > timeout_ns).then_some(Rest {
+            by: StopEdge::Silence,
+            since_ns: from,
+            window_ns: timeout_ns.max(release_ns),
+        })
     }
 }
 
@@ -415,25 +519,56 @@ struct CommandPath {
 }
 
 /// The blade's half of the arm latch: `Some` = held.
+///
+/// Its stop edge is its own dead-man being let go, and the release window
+/// applies to it as to the wheels: an explicit stop re-arms once nothing
+/// but stops has followed it for `latch_release_s` (a single 0 followed by
+/// a refresh is not a release, whoever sent the 0), and the dead-man only
+/// runs out at the longer of the newest refresh's ttl and
+/// `latch_release_s`. Neither ever re-arms it earlier than the rule without
+/// the window did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct BladeHold {
     reason: DisarmReason,
     since_ns: TimeNs,
-    /// Where the operator's dead-man would run out: a running blade's
-    /// deadline at the disarm, then `now + ttl` of every request, `now` for
-    /// a stop. The blade re-arms once it has run out.
-    held_until_ns: TimeNs,
-    /// the newest request since the disarm was a stop
-    stopped: bool,
+    /// The operator's dead-man: the newest non-zero request since the
+    /// disarm (or, for a blade running at the disarm, its last refresh) and
+    /// where its ttl runs out. `None`: nothing was held at the disarm and
+    /// nothing has been requested since, so there is nothing to wait for.
+    refreshed: Option<(TimeNs, TimeNs)>,
+    release: Release,
     /// The blade was running at the disarm or has been requested since:
     /// only then is its re-arm worth a log line.
     engaged: bool,
+}
+
+impl BladeHold {
+    /// Whether the dead-man has been let go, and since when: the newest
+    /// request is a stop (from the first stop since the last refresh), or
+    /// the newest refresh's ttl has run out (sustained once it is also
+    /// `release_ns` old); when there was never anything to let go, a rest
+    /// that is sustained at once.
+    fn rest(&self, now: TimeNs, release_ns: i64) -> Option<Rest> {
+        if let Some(stop) = self.release.stopped(release_ns) {
+            return Some(stop);
+        }
+        let Some((at, until)) = self.refreshed else {
+            return Some(Rest { by: StopEdge::Silence, since_ns: self.since_ns, window_ns: -1 });
+        };
+        (now >= until).then_some(Rest {
+            by: StopEdge::Silence,
+            since_ns: at,
+            window_ns: (until - at).max(release_ns),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct DeadMan {
     /// Absolute deadline; `None` = nothing held.
     until_ns: Option<TimeNs>,
+    /// when the request that set `until_ns` arrived
+    requested_ns: TimeNs,
     value: i16,
     active: bool,
 }
@@ -461,8 +596,9 @@ pub struct BaseCycle {
     activated_ns: TimeNs,
     /// control-clock time of the last cycle that picked up a cmd_vel
     last_cmd_ns: Option<TimeNs>,
-    /// control-clock time of the last wheel_override request
+    /// control-clock time of the last wheel_override request, and its ttl
     last_override_ns: Option<TimeNs>,
+    last_override_ttl_ns: i64,
     /// since when each stream has had a publisher ([`BaseCycle::set_publishers`])
     cmd_publisher_since: Option<TimeNs>,
     override_publisher_since: Option<TimeNs>,
@@ -524,6 +660,7 @@ impl BaseCycle {
             activated_ns: now,
             last_cmd_ns: None,
             last_override_ns: None,
+            last_override_ttl_ns: 0,
             cmd_publisher_since: None,
             override_publisher_since: None,
             no_feedback_reported: false,
@@ -636,15 +773,28 @@ impl BaseCycle {
     /// (braking through the limiter, exactly like a cmd_vel timeout); while
     /// wheel_override is held its requests are not applied, and an override
     /// that was running is dropped at the disarm. Each stream is re-armed
-    /// by its own stop edge *after* the disarm: an explicit stop (cmd_vel
-    /// 0/0; override 0/0 or ttl 0) as the newest message, or no message for
-    /// longer than `cmd_vel_timeout` while the stream could deliver one
-    /// ([`BaseCycle::set_publishers`]). With `cmd_vel_timeout` 0 only the
+    /// by its own stop edge *after* the disarm, and only once that edge is
+    /// sustained: the stream carries no non-zero command for
+    /// `latch_release_s` ([`BaseConfig::latch_release_s`], 0.5 s). Explicit
+    /// stops (cmd_vel 0/0; override 0/0 or ttl 0) and silence both count and
+    /// combine — the window runs from the first stop after the newest
+    /// non-zero message, through more stops or nothing at all — and silence
+    /// alone needs the longer of the window and the stream's own timeout
+    /// (`cmd_vel_timeout`; for the override also the newest request's ttl),
+    /// counted only while the stream could deliver
+    /// ([`BaseCycle::set_publishers`]). A non-zero inside the window
+    /// restarts it: a single zero followed by the stick again is not a
+    /// release, whoever sent the zero (on the robot it was
+    /// `velocity_command_guard`'s watchdog during a 0.3 s stall), nor is a
+    /// stall shorter than the window; the first time a rest that the rule
+    /// without the window would have taken is cut short, it is reported
+    /// ([`Event::ReleaseNotHeld`]). With `cmd_vel_timeout` 0 only the
     /// explicit stops count. The blade is held on the three losses only: a
     /// running blade gets its one explicit 0 at the disarm, and requests
-    /// are not applied until its dead-man has been let go (a stop, or no
-    /// refresh within the ttl of the last one) — a blade held through a
-    /// pulled lead does not restart on the re-seat.
+    /// are not applied until its dead-man has been let go for the window (a
+    /// stop, or no refresh within the ttl of the last one, nor for the
+    /// window) — a blade held through a pulled lead does not restart on the
+    /// re-seat, nor on a refresh right after a single 0.
     ///
     /// After a loss nothing re-arms while feedback that had been arriving is
     /// still missing, nor until a fresh 0x81 shows the board receiving again
@@ -659,8 +809,10 @@ impl BaseCycle {
     /// 450 ms does not re-arm behind a lead that was already out. A command
     /// given with a lead out would otherwise ramp up against wheels that
     /// cannot move and reach them as a step the moment the lead is back. On
-    /// the cycle the link returns, the newest message decides: at rest (a
-    /// stop, or silence) re-arms, moving stays held.
+    /// the cycle the link returns, a stream that has been at rest for the
+    /// window (stops and silence since the disarm) re-arms; one at rest for
+    /// less re-arms when the window is up, if nothing non-zero comes first;
+    /// a moving one stays held.
     pub fn disarmed(&self) -> Option<DisarmReason> {
         self.cmd_hold
             .or(self.override_hold)
@@ -721,26 +873,31 @@ impl BaseCycle {
         if !self.cfg.arm_latch {
             return;
         }
-        let hold = Hold { reason, since_ns: now, stopped: false };
-        self.cmd_hold = Some(hold);
-        self.override_hold = Some(hold);
+        self.cmd_hold = Some(Hold::new(reason, now));
+        self.override_hold = Some(Hold::new(reason, now));
         // An override running from before must not come back on re-arm.
         self.wheel_override.until_ns = None;
         if reason != DisarmReason::Activation {
             // A running blade stops now (its one explicit 0 goes out with
-            // this cycle) and stays off until its dead-man is let go.
+            // this cycle) and stays off until its dead-man is let go. A
+            // blade already held stays held as it was (nothing it asked for
+            // since has been applied, so it is not running).
             let running = self.blade.until_ns.filter(|until| *until > now);
-            let held_until = [running, self.blade_hold.map(|h| h.held_until_ns)]
-                .into_iter()
-                .flatten()
-                .fold(now, TimeNs::max);
-            let engaged = running.is_some() || self.blade_hold.is_some_and(|h| h.engaged);
+            let (refreshed, release, engaged) = match self.blade_hold {
+                Some(prior) => (prior.refreshed, prior.release, prior.engaged),
+                None => (
+                    running.map(|until| (self.blade.requested_ns, until)),
+                    Release::default(),
+                    running.is_some(),
+                ),
+            };
             self.blade.until_ns = None;
             self.blade_hold = Some(BladeHold {
                 reason,
                 since_ns: now,
-                held_until_ns: held_until,
-                stopped: false,
+                refreshed,
+                // what was cut short is reported against the new hold
+                release: Release { rest: None, reported: false, ..release },
                 engaged,
             });
         }
@@ -940,17 +1097,29 @@ impl BaseCycle {
         })
     }
 
-    /// Re-arm each stream that has shown its stop edge.
+    /// The release window ([`BaseConfig::latch_release_s`]) in ns.
+    fn release_ns(&self) -> i64 {
+        (self.cfg.latch_release_s.max(0.0) * 1e9) as i64
+    }
+
+    /// Re-arm each stream whose stop edge has been sustained for the
+    /// release window; remember the rest of the others, so a non-zero that
+    /// cuts it short can be reported ([`Event::ReleaseNotHeld`]). Only
+    /// called on cycles where the link would let a stream re-arm.
     fn try_rearm(&mut self, now: TimeNs) {
-        let window = self.ddc.cmd_vel_timeout_ns();
+        let timeout = self.ddc.cmd_vel_timeout_ns();
+        let release = self.release_ns();
         let settle = (self.cfg.publisher_settle_s.max(0.0) * 1e9) as i64;
-        if let Some(hold) = self.cmd_hold {
+        if let Some(mut hold) = self.cmd_hold {
+            let rest =
+                hold.rest(self.last_cmd_ns, self.cmd_publisher_since, now, release, timeout, settle);
             // Silence also needs the controller to have timed the stored
             // command out, so re-arming can never hand the limiter a stale
             // non-zero reference (belt and braces: the stored stamp is never
             // later than its pickup, see `receive_command`).
-            let edge = hold
-                .edge(self.last_cmd_ns, self.cmd_publisher_since, now, window, settle)
+            let edge = rest
+                .filter(|r| r.sustained(now))
+                .map(|r| r.by)
                 .filter(|e| *e == StopEdge::Stop || self.ddc.command_timed_out());
             if let Some(by) = edge {
                 self.cmd_hold = None;
@@ -960,12 +1129,25 @@ impl BaseCycle {
                     by,
                     after_s: seconds(now - hold.since_ns),
                 });
+            } else {
+                hold.release.rest = rest;
+                self.cmd_hold = Some(hold);
             }
         }
-        if let Some(hold) = self.override_hold {
-            if let Some(by) =
-                hold.edge(self.last_override_ns, self.override_publisher_since, now, window, settle)
-            {
+        if let Some(mut hold) = self.override_hold {
+            // The override's own timeout is its ttl: a writer that refreshes
+            // within it is still holding the wheels (and cmd_vel_timeout 0
+            // keeps meaning explicit stops only, as for cmd_vel).
+            let own = if timeout > 0 { timeout.max(self.last_override_ttl_ns) } else { 0 };
+            let rest = hold.rest(
+                self.last_override_ns,
+                self.override_publisher_since,
+                now,
+                release,
+                own,
+                settle,
+            );
+            if let Some(by) = rest.filter(|r| r.sustained(now)).map(|r| r.by) {
                 self.override_hold = None;
                 self.events.push(Event::Armed {
                     stream: Stream::WheelOverride,
@@ -973,17 +1155,26 @@ impl BaseCycle {
                     by,
                     after_s: seconds(now - hold.since_ns),
                 });
+            } else {
+                hold.release.rest = rest;
+                self.override_hold = Some(hold);
             }
         }
-        if let Some(hold) = self.blade_hold.filter(|h| now >= h.held_until_ns) {
-            self.blade_hold = None;
-            if hold.engaged {
-                self.events.push(Event::Armed {
-                    stream: Stream::Blade,
-                    reason: hold.reason,
-                    by: if hold.stopped { StopEdge::Stop } else { StopEdge::Silence },
-                    after_s: seconds(now - hold.since_ns),
-                });
+        if let Some(mut hold) = self.blade_hold {
+            let rest = hold.rest(now, release);
+            if let Some(by) = rest.filter(|r| r.sustained(now)).map(|r| r.by) {
+                self.blade_hold = None;
+                if hold.engaged {
+                    self.events.push(Event::Armed {
+                        stream: Stream::Blade,
+                        reason: hold.reason,
+                        by,
+                        after_s: seconds(now - hold.since_ns),
+                    });
+                }
+            } else {
+                hold.release.rest = rest;
+                self.blade_hold = Some(hold);
             }
         }
     }
@@ -1036,8 +1227,12 @@ impl BaseCycle {
         let l = left_permille.clamp(-1000, 1000) as i16;
         let r = right_permille.clamp(-1000, 1000) as i16;
         self.last_override_ns = Some(now);
+        self.last_override_ttl_ns = ttl * 1_000_000;
         if let Some(hold) = self.override_hold.as_mut() {
-            hold.stopped = ttl == 0 || (l == 0 && r == 0);
+            let stop = ttl == 0 || (l == 0 && r == 0);
+            if let Some(event) = hold.release.message(stop, now, Stream::WheelOverride) {
+                self.events.push(event);
+            }
             return;
         }
         self.wheel_override.until_ns = Some(now + ttl * 1_000_000);
@@ -1055,11 +1250,17 @@ impl BaseCycle {
         let p = permille.clamp(0, 1000) as i16;
         if let Some(hold) = self.blade_hold.as_mut() {
             hold.engaged = true;
-            hold.stopped = p == 0 || ttl == 0;
-            hold.held_until_ns = if hold.stopped { now } else { now + ttl * 1_000_000 };
+            let stop = p == 0 || ttl == 0;
+            if !stop {
+                hold.refreshed = Some((now, now + ttl * 1_000_000));
+            }
+            if let Some(event) = hold.release.message(stop, now, Stream::Blade) {
+                self.events.push(event);
+            }
             return;
         }
         self.blade.value = p;
+        self.blade.requested_ns = now;
         self.blade.until_ns = if p > 0 {
             Some(now + ttl * 1_000_000)
         } else {
@@ -1293,7 +1494,10 @@ impl BaseCycle {
             self.last_cmd_ns = Some(now);
             if let Some(hold) = self.cmd_hold.as_mut() {
                 let t = cmd.twist;
-                hold.stopped = t.linear_x == 0.0 && t.angular_z == 0.0;
+                let stop = t.linear_x == 0.0 && t.angular_z == 0.0;
+                if let Some(event) = hold.release.message(stop, now, Stream::CmdVel) {
+                    self.events.push(event);
+                }
             }
         }
         let was_timed_out = self.ddc.command_timed_out();

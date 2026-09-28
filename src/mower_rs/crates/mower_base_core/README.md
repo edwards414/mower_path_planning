@@ -60,12 +60,16 @@ Units and safety behaviour are documented on `cycle` itself; the short version:
   already out at activation), and when the board restarted (COMMAND_VALID
   cleared, or both encoder totals back at zero by an impossible jump), the
   cmd_vel reference is held at zero and `wheel_override` is not applied,
-  each until its own stream shows a stop edge — an explicit stop, or
-  nothing for longer than `cmd_vel_timeout` — and, after one of the three
+  each until its own stream shows a stop edge sustained for
+  `latch_release_s` (0.5 s): no non-zero command in that window, explicit
+  stops and silence counted together, silence alone for at least
+  `cmd_vel_timeout` too; one zero followed by the stick again is not a
+  release (the 2026-09-29 guard-zero finding) — and, after one of the three
   losses, the link is back both ways (feedback arriving, and a fresh 0x81
   showing the board receiving again; at activation too, once the board has
   sent a 0x81). The three losses also stop a running
-  blade and hold it until its dead-man is let go. Feedback that was *never*
+  blade and hold it until its dead-man has been let go for the same window.
+  Feedback that was *never*
   seen does not trip it. `BaseCycle::disarmed()` has the details; the C++
   chain simply never came back after an error. With the latch off none of
   it runs, the 0x81 checks and the blade included, which keeps the replay
@@ -88,7 +92,7 @@ cargo test -p mower_base_core
 | `tests/protocol_vectors.rs` | `vectors/protocol_oracle.json` | 9 CRC, 39 encode (byte-identical), 17 byte-stream parses, 29 decode (field-identical, incl. every wrong-length rejection) |
 | `tests/diff_drive_vectors.rs` | `vectors/diff_drive_oracle.json` | rolling mean, 90 × 4 speed-limiter calls, 4 × 60 odometry steps, `updateFromVelocity` / `updateOpenLoop`, and a 200-cycle controller run — all to 1e-12; plus the cmd_vel subscription's stamp rules (zero stamp, stale, ageing from the stamp) and the open-loop odometry seed at activation |
 | `tests/replay.rs` | `vectors/replay_synthetic.*` | a 300-cycle recording replayed through `BaseCycle` (latch off: the C++ has none): every tx byte identical, odometry to 1e-12 |
-| `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule; against a model of the firmware's command timeout and status batch: the TX-only pull with the stick held, zeros on the re-seat, re-arm only after the board is back *and* a stop edge, the C++ lurch with the latch off, a restart seen in the encoder totals / in COMMAND_VALID / after a real bootloader silence, both leads re-seated together (only the feedback loss, not the board's stale timeout reports; re-armed within three cycles) and only the STM32 TX one (the feedback alone re-arms nothing; pin 8 back 280 ms or 1 s later gets zeros), pin 8 already out at activation (0x03 and 0x02; also a zero, a push and the contact all inside the first 450 ms), nothing at activation, on one or a stale or garbled timeout report or after a stall of the loop, pid_autotune through a flash save, a blade held through a pull not restarting until let go), a wall-clock step that changes nothing but the stamps, the log events |
+| `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule; against a model of the firmware's command timeout and status batch: the TX-only pull with the stick held, zeros on the re-seat, re-arm only after the board is back *and* a stop edge, the C++ lurch with the latch off, a restart seen in the encoder totals / in COMMAND_VALID / after a real bootloader silence, both leads re-seated together (only the feedback loss, not the board's stale timeout reports; re-armed within three cycles) and only the STM32 TX one (the feedback alone re-arms nothing; pin 8 back 280 ms or 1 s later gets zeros), pin 8 already out at activation (0x03 and 0x02; also a zero, a push and the contact all inside the first 450 ms), nothing at activation, on one or a stale or garbled timeout report or after a stall of the loop, pid_autotune through a flash save, a blade held through a pull not restarting until let go; the release window: the robot's guard zero after a command path loss held and reported once (and, with the window off, the robot's 73 -> 366 permille ramp), a 0.28 s stall of the stream not a release, one zero then silence re-armed 0.52 s later, an override cancel and a blade 0 cut short by the stream), a wall-clock step that changes nothing but the stamps, the log events |
 
 ### Regenerating the vectors
 
