@@ -8,7 +8,7 @@ the bottom drive an A/B measurement on the real robot.
 |---|---|
 | `shadow_compare.py` | separate mower_rs binaries vs one `mower_rsd` process, every topic compared (Phase A5) |
 | `fake_base.py`, `base_harness.py`, `base_compare.py` | a fake STM32 on a socat pty, then the `ros2_control` chain vs `mower_base` against it (Phase B) |
-| `localize_compare.py` | `dual_ekf_navsat.launch.py` vs `mower_localize` on one synthetic sensor stream (Phase C) |
+| `localize_compare.py` | `dual_ekf_navsat.launch.py` vs `mower_localize` on one synthetic sensor stream (Phase C); `--yaw0 --imu-start --launch` replays the robot's start-up (heading far from east, `/odom` before the IMU, stack started with the stream) so navsat's `delay` is exercised |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline |
 | `switch.sh`, `measure.sh` | flip `IMAGE_TAG` / `NAV_COMPOSITION` / `RUST_DAEMON` / any `KEY=VAL` on the robot and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 

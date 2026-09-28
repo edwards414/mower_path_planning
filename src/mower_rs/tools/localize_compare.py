@@ -15,6 +15,28 @@ against ``mower_localize``, and the two recordings are compared::
     localize_compare.py --record --seconds 30 --out /tmp/rust.json
     localize_compare.py --diff /tmp/cpp.json /tmp/rust.json
 
+``--yaw0``, ``--imu-start`` and ``--launch`` reproduce the robot's start-up
+instead: the robot faces ``--yaw0`` (so the IMU heading is far from the yaw 0
+a filter initialised from ``/odom`` starts at), ``/odom`` flows before the
+first IMU sample, and the stack under test is launched at the moment the
+stream starts, so navsat_transform's ``delay`` and the map EKF's heading
+convergence overlap as they do after ``switch.sh`` recreates the container.
+The datum then depends on *when* it locks, so ``--datum-tolerance-deg``
+compares the ``map -> utm`` heading in degrees. The C++ stack against itself
+differs by 2-3 degrees here (the map EKF's heading is still converging when
+the delay ends, and the IMU is 10 Hz); locking without the delay was ~70
+degrees further off::
+
+    localize_compare.py --record --seconds 14 --yaw0 1.5 --imu-start 1.5 \
+        --rest 14 --imu-yaw-var 0.1225 --out /tmp/cpp.json \
+        --launch 'ros2 launch mower_nav2 dual_ekf_navsat.launch.py'
+    localize_compare.py --diff /tmp/cpp.json /tmp/rust.json --datum-tolerance-deg 5
+
+A recording lists where the harness itself fell behind (``stalls``); a
+start-up run whose datum locked inside such a gap measured the gap. On a
+loaded machine either stack can also go quiet for ~2 s mid-run, which the rate
+check reports: compare the C++ stack against itself before blaming the port.
+
 Stamps are generated as ``t0 + k*dt`` from the harness's own start time, and
 recorded relative to ``t0``, so the two runs produce the same *relative*
 timeline even though they happen at different wall-clock times: the filters
@@ -28,6 +50,9 @@ construction and are reported separately rather than compared.
 import argparse
 import json
 import math
+import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -104,6 +129,8 @@ class Trajectory:
     STEP = 0.001
     REST = 2.0
     RAMP = 1.0
+    # The robot's heading in ENU at t = 0; the odometry frame starts at 0.
+    YAW0 = 0.0
 
     @classmethod
     def twist(cls, t):
@@ -139,12 +166,21 @@ class Trajectory:
         i = min(max(int(round(t / self.STEP)), 0), len(self.x) - 1)
         return self.x[i], self.y[i], self.yaw[i]
 
+    def enu(self, t):
+        """The same pose in the world (ENU) frame the IMU and GPS see."""
+        x, y, yaw = self.pose(t)
+        c, s = math.cos(self.YAW0), math.sin(self.YAW0)
+        return c * x - s * y, s * x + c * y, yaw + self.YAW0
+
 
 class Harness(Node):
-    def __init__(self, seconds, sensor_offsets=True):
+    def __init__(self, seconds, sensor_offsets=True, imu_start=0.0,
+                 imu_yaw_var=0.02):
         super().__init__('localize_compare')
         self.seconds = seconds
         self.sensor_offsets = sensor_offsets
+        self.imu_start = imu_start
+        self.imu_yaw_var = imu_yaw_var
         self.traj = Trajectory(seconds + 2.0)
         self.t0_ns = self.get_clock().now().nanoseconds
         self.started = time.monotonic()
@@ -296,14 +332,15 @@ class Harness(Node):
         return m
 
     def _imu_msg(self, t, stamp_ns):
-        _, _, yaw = self.traj.pose(t)
+        _, _, yaw = self.traj.enu(t)
         _, wz = self.traj.twist(t)
         ax, ay = self.traj.accel(t)
         m = Imu()
         m.header.stamp.sec, m.header.stamp.nanosec = stamp(stamp_ns)
         m.header.frame_id = 'imu_link'
         m.orientation = quat_from_yaw(yaw)
-        m.orientation_covariance = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.02]
+        m.orientation_covariance = [
+            0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, self.imu_yaw_var]
         m.angular_velocity.z = wz
         m.angular_velocity_covariance = [
             0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.002]
@@ -317,7 +354,7 @@ class Harness(Node):
         return m
 
     def _fix_msg(self, t, stamp_ns):
-        x, y, _ = self.traj.pose(t)
+        x, y, _ = self.traj.enu(t)
         m = NavSatFix()
         m.header.stamp.sec, m.header.stamp.nanosec = stamp(stamp_ns)
         m.header.frame_id = 'gps_link'
@@ -335,8 +372,14 @@ class Harness(Node):
         """Publish the stream in real time, with the stamps of a perfect
         sensor set plus the injected pathologies."""
         odom_dt, imu_dt, fix_dt = 1 / ODOM_HZ, 1 / IMU_HZ, 1 / FIX_HZ
-        next_odom = next_imu = next_fix = 0.0
+        next_odom = next_fix = 0.0
+        next_imu = self.imu_start
         injected = {'stale': 0, 'out_of_order': 0, 'duplicate': 0}
+        # Where this loop fell behind by more than 0.2 s: [stream time, s].
+        # A loaded machine stalls it for seconds at a time; the stack then
+        # sees no input, and a start-up run whose datum locks inside such a
+        # gap measures the gap, not the stack.
+        stalls = []
         k_odom = 0
         while True:
             elapsed = time.monotonic() - self.started
@@ -344,6 +387,9 @@ class Harness(Node):
                 break
             if elapsed >= next_odom:
                 t = next_odom
+                behind = elapsed - t
+                if behind > 0.2 and (not stalls or t - stalls[-1][0] > 1.0):
+                    stalls.append([round(t, 3), round(behind, 3)])
                 ns = self.t0_ns + int(round(t * NS))
                 # 1. a stale stamp every 5 s: 0.6 s in the past, which the
                 #    filter must reject outright.
@@ -376,6 +422,7 @@ class Harness(Node):
             if sleep > 0:
                 time.sleep(min(sleep, 0.001))
         self.injected = injected
+        self.stalls = stalls
         # Let what is still in flight arrive before the service questions.
         time.sleep(1.0)
 
@@ -428,7 +475,38 @@ def _max_abs(a, b):
     return max(abs(x - y) for x, y in zip(a, b)) if a and b else 0.0
 
 
-def compare(left, right, tolerance):
+def _yaw_deg(q):
+    x, y, z, w = q
+    return math.degrees(math.atan2(2.0 * (w * z + x * y),
+                                   1.0 - 2.0 * (y * y + z * z)))
+
+
+def _meridian_convergence_deg(lat, lon):
+    """UTM grid convergence at a point, spherical approximation (plenty for
+    reading a datum heading error in degrees)."""
+    zone = int((lon + 180.0) // 6.0) + 1
+    central = zone * 6.0 - 183.0
+    return math.degrees(math.atan(math.tan(math.radians(lon - central)) *
+                                  math.sin(math.radians(lat))))
+
+
+def datum_heading_error_deg(record):
+    """How far the ``map -> utm`` rotation is from the one a converged map EKF
+    gives. navsat_transform builds it from (map EKF yaw) - (IMU yaw + meridian
+    convergence), so with the two headings equal it is minus the convergence;
+    whatever is left is the map EKF's heading error at the moment of the lock,
+    and every GPS position after it is rotated by that much."""
+    utm = record['records'].get('tf_static:map->utm') or []
+    if not utm:
+        return None
+    ideal = -_meridian_convergence_deg(LAT0, LON0)
+    # [0] is the datum navsat locked by itself; a later entry is the one the
+    # /datum service question at the end sets by hand.
+    err = _yaw_deg(utm[0]['q']) - ideal
+    return round((err + 180.0) % 360.0 - 180.0, 3)
+
+
+def compare(left, right, tolerance, datum_tolerance_deg=None):
     """What must be identical, and what can only be reported.
 
     Identical, and therefore what ``ok`` is about: the set of topics, their
@@ -442,6 +520,12 @@ def compare(left, right, tolerance):
     because a tick that finds an empty queue predicts forward and re-stamps.
     Run the C++ stack against itself to see that floor before reading the
     Rust-against-C++ numbers as a difference between the implementations.
+
+    With ``datum_tolerance_deg`` (the start-up runs, where the datum locks
+    while the map EKF's heading is still converging and so depends on the
+    lock time) the ``map -> utm`` transform is compared by its heading, and
+    the ``/toLL`` / ``/fromLL`` answers, which go through that datum, are
+    reported only; the ones after the ``/datum`` question stay exact.
     """
     report = {'topics': {}, 'ok': True}
     for key in sorted(set(left['records']) | set(right['records'])):
@@ -463,11 +547,28 @@ def compare(left, right, tolerance):
             # e.g. the unstamped cartesian static transform
             lval = left['records'].get(key, [])
             rval = right['records'].get(key, [])
+            # map -> utm is broadcast twice: [0] when navsat locks its own
+            # datum, [-1] after the /datum question sets one by hand. The
+            # first depends on the map EKF's heading at the lock; the second
+            # does not, so it must match in every run.
             if lval and rval:
-                entry['max_err'] = max(_max_abs(lval[-1]['p'], rval[-1]['p']),
-                                       _max_abs(lval[-1]['q'], rval[-1]['q']))
-                entry['matched'] = 1
-                if entry['max_err'] > tolerance:
+                pairs = [(lval[0], rval[0])]
+                if len(lval) > 1 and len(rval) > 1:
+                    pairs.append((lval[-1], rval[-1]))
+                errs = [max(_max_abs(a['p'], b['p']), _max_abs(a['q'], b['q']))
+                        for a, b in pairs]
+                entry['max_err'] = max(errs)
+                entry['max_err_each'] = errs
+                entry['matched'] = len(pairs)
+                entry['yaw_deg'] = [[round(_yaw_deg(a['q']), 3),
+                                     round(_yaw_deg(b['q']), 3)] for a, b in pairs]
+                if datum_tolerance_deg is not None:
+                    auto = entry['yaw_deg'][0]
+                    if abs(auto[0] - auto[1]) > datum_tolerance_deg:
+                        report['ok'] = False
+                    if len(errs) > 1 and errs[1] > tolerance:
+                        report['ok'] = False
+                elif entry['max_err'] > tolerance:
                     report['ok'] = False
             report['topics'][key] = entry
             continue
@@ -524,13 +625,23 @@ def compare(left, right, tolerance):
             worst = max(worst, _max_abs(a, b))
         else:
             svc[name] = {'max_err': worst, 'n': len(la)}
-            if len(la) != len(ra) or worst > 1e-6:
+            if len(la) != len(ra):
+                report['ok'] = False
+            elif datum_tolerance_deg is not None and name != 'toLL_after_datum':
+                # through the datum navsat locked by itself; the hand-set one
+                # after /datum does not depend on the lock time
+                svc[name]['datum_dependent'] = True
+            elif worst > 1e-6:
                 report['ok'] = False
     svc['datum'] = [left['services'].get('datum'), right['services'].get('datum')]
     if svc['datum'][0] != 'ok' or svc['datum'][1] != 'ok':
         report['ok'] = False
     report['services'] = svc
     report['injected'] = [left.get('injected'), right.get('injected')]
+    report['stalls'] = [left.get('stalls'), right.get('stalls')]
+    report['datum_heading_error_deg'] = [datum_heading_error_deg(left),
+                                         datum_heading_error_deg(right)]
+    report['setup'] = [left.get('setup'), right.get('setup')]
     return report
 
 
@@ -541,7 +652,20 @@ def main():
     ap.add_argument('--out')
     ap.add_argument('--diff', nargs=2)
     ap.add_argument('--tolerance', type=float, default=1e-6)
+    ap.add_argument('--datum-tolerance-deg', type=float,
+                    help='compare map->utm by heading, services report-only')
     ap.add_argument('--no-sensor-offsets', action='store_true')
+    ap.add_argument('--yaw0', type=float, default=0.0,
+                    help='the robot heading in ENU at the start (rad)')
+    ap.add_argument('--imu-start', type=float, default=0.0,
+                    help='seconds of /odom before the first IMU sample')
+    ap.add_argument('--imu-yaw-var', type=float, default=0.02,
+                    help='IMU yaw variance (mower_imu reports 0.35**2)')
+    ap.add_argument('--rest', type=float, default=Trajectory.REST,
+                    help='seconds standing still before driving off')
+    ap.add_argument('--launch',
+                    help='start this command (the stack under test) when '
+                         'the stream starts, and stop it at the end')
     args = ap.parse_args()
 
     if args.diff:
@@ -549,15 +673,18 @@ def main():
             left = json.load(f)
         with open(args.diff[1]) as f:
             right = json.load(f)
-        report = compare(left, right, args.tolerance)
+        report = compare(left, right, args.tolerance, args.datum_tolerance_deg)
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report['ok'] else 1
 
     if not args.record or not args.out:
         ap.error('--record --out FILE, or --diff A B')
 
+    Trajectory.YAW0 = args.yaw0
+    Trajectory.REST = args.rest
     rclpy.init()
-    node = Harness(args.seconds, sensor_offsets=not args.no_sensor_offsets)
+    node = Harness(args.seconds, sensor_offsets=not args.no_sensor_offsets,
+                   imu_start=args.imu_start, imu_yaw_var=args.imu_yaw_var)
     # One executor thread owns every callback: a single-threaded spin_once in
     # the publishing loop could not keep up with ~140 messages a second and
     # silently lost two thirds of the stack's output.
@@ -569,20 +696,41 @@ def main():
     # and let the latched /tf_static reach it.
     time.sleep(2.0)
     node.started = time.monotonic()
-    node.play()
-    services = node.ask_services()
+    stack = None
+    if args.launch:
+        # Its own session, so the whole launch tree can be stopped at once.
+        stack = subprocess.Popen(args.launch, shell=True,
+                                 start_new_session=True)
+    try:
+        node.play()
+        services = node.ask_services()
+    finally:
+        if stack is not None:
+            os.killpg(stack.pid, signal.SIGINT)
+            try:
+                stack.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                os.killpg(stack.pid, signal.SIGKILL)
+                stack.wait()
     doc = {
         'seconds': args.seconds,
         'records': node.records,
         'first_seen': node.first_seen,
         'services': services,
         'injected': node.injected,
+        'stalls': node.stalls,
+        'setup': {'yaw0': args.yaw0, 'imu_start': args.imu_start,
+                  'imu_yaw_var': args.imu_yaw_var, 'rest': args.rest,
+                  'launch': args.launch},
     }
     with open(args.out, 'w') as f:
         json.dump(doc, f)
     counts = {k: len(v) for k, v in node.records.items()}
     print(json.dumps({'counts': counts, 'first_seen': node.first_seen,
-                      'injected': node.injected}, indent=2, sort_keys=True))
+                      'injected': node.injected,
+                      'stalls': node.stalls,
+                      'datum_heading_error_deg': datum_heading_error_deg(doc)},
+                     indent=2, sort_keys=True))
     executor.shutdown()
     node.destroy_node()
     rclpy.shutdown()
