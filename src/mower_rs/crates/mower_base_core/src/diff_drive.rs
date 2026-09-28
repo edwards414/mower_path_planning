@@ -1,10 +1,19 @@
 //! One `diff_drive_controller` update cycle, without ROS.
 //!
 //! Port of `ros2_controllers/diff_drive_controller/src/diff_drive_controller.cpp`
-//! (jazzy): `update_reference_from_subscribers()` (the cmd_vel timeout) and
-//! `update_and_write_commands()` (speed limits, odometry feed, publish gating,
-//! wheel velocity commands), parameterised from
-//! `src/mower_hardware/config/mower_controllers.yaml`.
+//! (jazzy, 4.42.1): the cmd_vel subscription callback ([`receive_command`]:
+//! zero stamps, stale messages), `update_reference_from_subscribers()` (the
+//! cmd_vel timeout) and `update_and_write_commands()` (speed limits,
+//! odometry feed, publish gating, wheel velocity commands), parameterised
+//! from `src/mower_hardware/config/mower_controllers.yaml`.
+//!
+//! Two clocks, kept apart the way ros2_control keeps them apart:
+//!
+//! * `now` is the **control clock** (monotonic): command age, the limiter
+//!   period, odometry integration and the publish gate. controller_manager
+//!   4.48 runs the loop and measures the period on `RCL_STEADY_TIME`.
+//! * `stamp` is ROS time, used only for the header of what goes out, and
+//!   (in [`receive_command`]) to age a message by its `header.stamp`.
 
 use crate::limiter::RateLimiter;
 use crate::odometry::Odometry;
@@ -177,6 +186,58 @@ impl Twist {
     }
 }
 
+/// A `TwistStamped` the cmd_vel subscription accepted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Command {
+    pub twist: Twist,
+    /// `header.stamp`, moved onto the control clock: the control-clock time
+    /// of arrival minus the age the message already had on the ROS clock.
+    /// The command ages from here, as upstream ages it from the stamp.
+    pub stamp_ns: TimeNs,
+}
+
+/// What the cmd_vel subscription callback does with one message.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Received {
+    /// Goes into the command box. `zero_stamp`: the header stamp was 0 and
+    /// was replaced by "now" (upstream warns about that once).
+    Accepted { command: Command, zero_stamp: bool },
+    /// Dropped: `now - header.stamp >= cmd_vel_timeout`, the upstream
+    /// "Ignoring the received message ... older than the current time".
+    Stale { stamp_ns: TimeNs, age_s: f64 },
+}
+
+/// The cmd_vel subscription callback of diff_drive_controller 4.42.1
+/// (`on_configure`'s lambda): a zero `header.stamp` becomes `now()`, and a
+/// message whose `now() - header.stamp` is not below `cmd_vel_timeout` is
+/// ignored (unless the timeout is 0, which disables it). Both sides of that
+/// comparison are ROS time, as upstream, and it is `rclcpp::Duration`
+/// integer nanoseconds.
+///
+/// `ros_now_ns` is the ROS clock now, `control_now_ns` the control clock at
+/// the same moment; the accepted command's stamp is carried over onto the
+/// control clock so that a later ROS clock step cannot change its age.
+pub fn receive_command(
+    twist: Twist,
+    header_stamp_ns: TimeNs,
+    ros_now_ns: TimeNs,
+    control_now_ns: TimeNs,
+    cmd_vel_timeout: f64,
+) -> Received {
+    let zero_stamp = header_stamp_ns == 0;
+    let stamp = if zero_stamp { ros_now_ns } else { header_stamp_ns };
+    let age_ns = ros_now_ns - stamp;
+    let timeout_ns = duration_from_seconds_ns(cmd_vel_timeout);
+    if timeout_ns == 0 || age_ns < timeout_ns {
+        Received::Accepted {
+            command: Command { twist, stamp_ns: control_now_ns - age_ns },
+            zero_stamp,
+        }
+    } else {
+        Received::Stale { stamp_ns: stamp, age_s: seconds(age_ns) }
+    }
+}
+
 /// Wheel velocity commands, rad/s at the wheel.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct WheelCommand {
@@ -234,7 +295,10 @@ pub struct DiffDrive {
     ref_angular: f64,
     /// `command_msg_`: last received command and its stamp.
     cmd: Twist,
+    /// on the control clock, see [`Command::stamp_ns`]
     cmd_stamp_ns: TimeNs,
+    /// `cmd_vel_timeout_`, an `rclcpp::Duration`: truncated to integer ns.
+    cmd_vel_timeout_ns: i64,
     command_timed_out: bool,
     previous_publish_ns: TimeNs,
     publish_period_ns: i64,
@@ -243,8 +307,9 @@ pub struct DiffDrive {
 }
 
 impl DiffDrive {
-    /// `on_configure` + `on_activate`. `now` is what `previous_publish_timestamp_`
-    /// and the NaN command's stamp are seeded with.
+    /// `on_configure` + `on_activate`. `now` (control clock) is what
+    /// `previous_publish_timestamp_` and the NaN command's stamp are seeded
+    /// with; see [`DiffDrive::activate`].
     pub fn new(params: DiffDriveParams, now: TimeNs) -> Result<Self, String> {
         let limiter_linear = params.linear.limiter()?;
         let limiter_angular = params.angular.limiter()?;
@@ -258,6 +323,7 @@ impl DiffDrive {
         odometry.set_velocity_rolling_window_size(params.velocity_rolling_window_size);
 
         let publish_period_ns = duration_from_seconds_ns(1.0 / params.publish_rate);
+        let cmd_vel_timeout_ns = duration_from_seconds_ns(params.cmd_vel_timeout);
 
         let mut pose_covariance = [0.0f64; 36];
         let mut twist_covariance = [0.0f64; 36];
@@ -267,24 +333,54 @@ impl DiffDrive {
             twist_covariance[diagonal_index] = params.twist_covariance_diagonal[index];
         }
 
-        Ok(Self {
+        let mut me = Self {
             params,
             limiter_linear,
             limiter_angular,
             odometry,
-            // reset_buffers(): zeros, "not NaN, to catch early accelerations"
             prev_front: [0.0, 0.0],
             prev_back: [0.0, 0.0],
             ref_linear: f64::NAN,
             ref_angular: f64::NAN,
             cmd: Twist::new(f64::NAN, f64::NAN),
             cmd_stamp_ns: now,
+            cmd_vel_timeout_ns,
             command_timed_out: false,
             previous_publish_ns: now,
             publish_period_ns,
             pose_covariance,
             twist_covariance,
-        })
+        };
+        me.activate(now);
+        Ok(me)
+    }
+
+    /// The per-activation state: `reset_buffers()` plus the publish gate,
+    /// seeded at `now` (control clock).
+    ///
+    /// One deliberate difference from upstream: in open loop the odometry
+    /// clock is seeded here too. Upstream never calls `odometry_.init()`, so
+    /// its first open-loop step integrates the command over `now - 0`, the
+    /// whole clock reading. At boot that is harmless because the first
+    /// finite reference is 0 (the guard's startup zero, or the cmd_vel
+    /// timeout), but this driver is re-created on every module restart, and
+    /// a restart under a live command would jump the /odom pose by ~1e8 m.
+    /// In closed loop the pose comes from the wheel positions and a missing
+    /// init only costs the first rolling-mean velocity sample, so that path
+    /// is left bit-for-bit upstream (the replay vectors pin it).
+    pub fn activate(&mut self, now: TimeNs) {
+        // reset_buffers(): zeros, "not NaN, to catch early accelerations"
+        self.prev_front = [0.0, 0.0];
+        self.prev_back = [0.0, 0.0];
+        self.ref_linear = f64::NAN;
+        self.ref_angular = f64::NAN;
+        self.cmd = Twist::new(f64::NAN, f64::NAN);
+        self.cmd_stamp_ns = now;
+        self.command_timed_out = false;
+        self.previous_publish_ns = now;
+        if self.params.open_loop {
+            self.odometry.init(now);
+        }
     }
 
     pub fn params(&self) -> &DiffDriveParams {
@@ -296,22 +392,30 @@ impl DiffDrive {
     pub fn command_timed_out(&self) -> bool {
         self.command_timed_out
     }
+    /// `command_msg_.twist`: the last accepted command (NaN before the first).
+    pub fn last_command(&self) -> Twist {
+        self.cmd
+    }
+    /// `cmd_vel_timeout` in integer ns; 0 = the timeout is disabled.
+    pub fn cmd_vel_timeout_ns(&self) -> i64 {
+        self.cmd_vel_timeout_ns
+    }
 
     /// `update_reference_from_subscribers()`.
     ///
-    /// `cmd` is a command that arrived this cycle (its stamp is `now`;
-    /// the controller drops anything older than `cmd_vel_timeout` at the
-    /// subscription, so a stamp in the past never reaches here).
-    /// `None` means nothing new arrived and the stored command ages.
-    pub fn update_reference(&mut self, now: TimeNs, cmd: Option<Twist>) {
+    /// `cmd` is the newest command [`receive_command`] accepted since the
+    /// last cycle (the realtime box holds one); `None` means nothing new
+    /// arrived and the stored command ages. The age is measured from the
+    /// command's stamp, not from when this cycle picked it up.
+    pub fn update_reference(&mut self, now: TimeNs, cmd: Option<Command>) {
         if let Some(c) = cmd {
-            self.cmd = c;
-            self.cmd_stamp_ns = now;
+            self.cmd = c.twist;
+            self.cmd_stamp_ns = c.stamp_ns;
         }
-        let age_of_last_command = seconds(now) - seconds(self.cmd_stamp_ns);
-        let cmd_vel_timeout_disabled = self.params.cmd_vel_timeout == 0.0;
+        let age_of_last_command = now - self.cmd_stamp_ns;
+        let cmd_vel_timeout_disabled = self.cmd_vel_timeout_ns == 0;
         // Brake if cmd_vel has timed out, overriding the stored command.
-        if !cmd_vel_timeout_disabled && age_of_last_command > self.params.cmd_vel_timeout {
+        if !cmd_vel_timeout_disabled && age_of_last_command > self.cmd_vel_timeout_ns {
             self.ref_linear = 0.0;
             self.ref_angular = 0.0;
             self.command_timed_out = true;
@@ -324,10 +428,12 @@ impl DiffDrive {
     }
 
     /// `update_and_write_commands()`. `period_s` is the control period the
-    /// caller measured (what ros2_control passes in).
+    /// caller measured (what ros2_control passes in); `stamp` is the ROS
+    /// time the /odom sample is stamped with.
     pub fn update_and_write(
         &mut self,
         now: TimeNs,
+        stamp: TimeNs,
         period_s: f64,
         left_feedback: f64,
         right_feedback: f64,
@@ -387,7 +493,7 @@ impl DiffDrive {
         let odom = should_publish.then(|| {
             let yaw = self.odometry.heading();
             OdomSample {
-                stamp_ns: now,
+                stamp_ns: stamp,
                 frame_id: self.params.odom_frame_id.clone(),
                 child_frame_id: self.params.base_frame_id.clone(),
                 x: self.odometry.x(),

@@ -20,8 +20,13 @@
 //! * [`telemetry`] — the `/mower_base/telemetry` JSON, byte-for-byte the
 //!   `snprintf` in `MowerSystem::telemetry_json`.
 //!
-//! Time is an `i64` monotonic nanosecond count throughout; `rclcpp::Time` is
-//! the same thing, and `seconds()` is `ns as f64 / 1e9` in both.
+//! Time is an `i64` nanosecond count; `rclcpp::Time` is the same thing, and
+//! `seconds()` is `ns as f64 / 1e9` in both. There are two clocks and they
+//! are never mixed: the **control clock** (monotonic, CLOCK_MONOTONIC on the
+//! robot, which is what controller_manager 4.48 drives ros2_control with)
+//! for every period, age, deadline and throttle, and **ROS time** only for
+//! the header stamps of published messages and for ageing an incoming
+//! cmd_vel by its own `header.stamp` ([`diff_drive::receive_command`]).
 
 pub mod cycle;
 pub mod diff_drive;
@@ -31,7 +36,7 @@ pub mod protocol;
 pub mod record;
 pub mod telemetry;
 
-/// Monotonic nanoseconds. Matches `rclcpp::Time::nanoseconds()`.
+/// Nanoseconds on one of the two clocks. Matches `rclcpp::Time::nanoseconds()`.
 pub type TimeNs = i64;
 
 /// `rclcpp::Time::seconds()`: the nanosecond count divided by 1e9 in double.

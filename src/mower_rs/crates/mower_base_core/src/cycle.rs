@@ -6,9 +6,14 @@
 //! whole base is two calls:
 //!
 //! ```text
-//!   on_rx(bytes, now)                      <- whatever the serial read returned
-//!   tick(cmd_vel, now) -> (tx, odom, js)   <- one 25 Hz control cycle
+//!   on_rx(bytes, now)                             <- whatever the serial read returned
+//!   tick(cmd_vel, now, stamp) -> (tx, odom, js)   <- one 25 Hz control cycle
 //! ```
+//!
+//! `now` is the control clock (monotonic, what ros2_control's steady trigger
+//! clock is): every period, age, deadline and throttle is measured on it, so
+//! a wall-clock step changes nothing. `stamp` is ROS time and only ever ends
+//! up in the header of a published message.
 //!
 //! Unit conventions, all from `mower_system.cpp`:
 //!
@@ -33,7 +38,7 @@
 //!   or write failure): the cycle latches, stops commanding and emits the
 //!   stop burst, which is what `on_deactivate` does on the real stack.
 
-use crate::diff_drive::{DiffDrive, DiffDriveParams, OdomSample, Twist, WheelCommand};
+use crate::diff_drive::{Command, DiffDrive, DiffDriveParams, OdomSample, WheelCommand};
 use crate::protocol::{self as proto, FrameParser, PidConfig};
 use crate::{seconds, TimeNs, TWO_PI};
 
@@ -307,14 +312,16 @@ impl BaseCycle {
         self.right.cmd_velocity = 0.0;
     }
 
-    /// The port was reopened. Wheel positions are kept (the encoder counter on
-    /// the STM32 is free-running), but the count baseline is dropped so a
-    /// reconnect does not integrate the gap.
-    pub fn clear_fault(&mut self) {
+    /// The port was reopened at `now`: a re-activation. Wheel positions are
+    /// kept (the encoder counter on the STM32 is free-running), but the count
+    /// baseline is dropped so a reconnect does not integrate the gap.
+    pub fn clear_fault(&mut self, now: TimeNs) {
         self.faulted = false;
         self.left.have_counts = false;
         self.right.have_counts = false;
         self.feedback_valid = false;
+        self.feedback_stale = false;
+        self.ddc.activate(now);
     }
 
     fn next_seq(&mut self) -> u8 {
@@ -511,19 +518,21 @@ impl BaseCycle {
 
     // ---- one control cycle ----------------------------------------------
 
-    /// One `read() -> update() -> write()` cycle at `now`.
+    /// One `read() -> update() -> write()` cycle at `now` (control clock).
     ///
-    /// `cmd_vel` is a `/cmd_vel` message that arrived since the last tick
-    /// (stamped `now`); `None` means none did, and the stored command ages
-    /// towards `cmd_vel_timeout`.
+    /// `cmd_vel` is the newest command the subscription accepted since the
+    /// last tick ([`crate::diff_drive::receive_command`]); `None` means none
+    /// did, and the stored command ages towards `cmd_vel_timeout`. `stamp`
+    /// (ROS time) goes into the /odom and joint-state headers.
     ///
     /// Returns the bytes to write, the `/odom` sample when the publish rate
     /// lets one through, and the joint states (always, matching
     /// `joint_state_broadcaster`, which publishes every update).
     pub fn tick(
         &mut self,
-        cmd_vel: Option<Twist>,
+        cmd_vel: Option<Command>,
         now: TimeNs,
+        stamp: TimeNs,
     ) -> (Option<TxFrame>, Option<OdomSample>, Option<JointStates>) {
         // tail of read(): stale feedback zeroes the reported velocities
         if self.feedback_valid {
@@ -543,7 +552,7 @@ impl BaseCycle {
         self.last_tick_ns = Some(now);
 
         let joints = Some(JointStates {
-            stamp_ns: now,
+            stamp_ns: stamp,
             names: ["left_wheel_joint", "right_wheel_joint"],
             positions: [self.left.pos, self.right.pos],
             velocities: [self.left.vel, self.right.vel],
@@ -560,7 +569,7 @@ impl BaseCycle {
 
         // controller update
         self.ddc.update_reference(now, cmd_vel);
-        let out = self.ddc.update_and_write(now, period_s, self.left.pos, self.right.pos);
+        let out = self.ddc.update_and_write(now, stamp, period_s, self.left.pos, self.right.pos);
         if let Some(WheelCommand { left, right }) = out.wheel {
             self.left.cmd_velocity = left;
             self.right.cmd_velocity = right;

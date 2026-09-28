@@ -27,10 +27,22 @@
 //!   a lock that a `.await` can hold across.
 //! * The tokio side only spins the node so the subscriptions run. Each
 //!   subscription writes its request into a mutex-guarded slot that the
-//!   serial thread empties once per cycle — never a channel, because a
-//!   channel that the serial thread does not drain fast enough would deliver
-//!   a stale `cmd_vel` late instead of dropping it, which is precisely what
-//!   `realtime_tools::RealtimeThreadSafeBox` avoids in the C++ controller.
+//!   serial thread empties once per cycle, the way
+//!   `realtime_tools::RealtimeThreadSafeBox` hands the C++ controller one
+//!   command. r2r's subscription stream in front of the slot is itself a
+//!   10-deep channel, so a stalled executor *can* hand over old commands
+//!   late; the cmd_vel forwarder therefore does what upstream's callback
+//!   does and drops any message whose `header.stamp` is already
+//!   `cmd_vel_timeout` old ([`mower_base_core::diff_drive::receive_command`]).
+//!
+//! Clocks
+//! ------
+//! Everything the cycle times (period, command age, feedback age, the blade,
+//! override and LED deadlines, the telemetry throttle and its `t` field)
+//! runs on CLOCK_MONOTONIC, as ros2_control's steady trigger clock does. The
+//! system clock is used for message header stamps and for ageing an incoming
+//! cmd_vel by its own stamp, nothing else, so a wall-clock step (NTP, an RTC
+//! that is a year off) cannot pulse the wheels or stretch a dead-man.
 //!
 //! Fail-closed
 //! -----------
@@ -44,12 +56,14 @@
 pub mod requests;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use mower_base_core::cycle::{BaseCycle, BaseConfig, JointStates, LedRequest};
-use mower_base_core::diff_drive::{DiffDriveParams, LimitParams, OdomSample, Twist};
+use mower_base_core::diff_drive::{
+    receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
+};
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::TimeNs;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
@@ -61,14 +75,29 @@ use r2r::std_msgs::msg::String as StringMsg;
 use r2r::tf2_msgs::msg::TFMessage;
 use r2r::QosProfile;
 
-/// `rclcpp::Time` in the default (system) clock, as nanoseconds. The C++ loop
-/// is driven by the same clock, and `BaseCycle` only ever takes differences,
-/// so this is both the control clock and the message stamp.
-fn now_ns() -> TimeNs {
+/// ROS time (`rclcpp::Node::now()` without sim time: the system clock), as
+/// nanoseconds. Only for header stamps and for ageing a cmd_vel by its stamp.
+fn ros_now_ns() -> TimeNs {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
+}
+
+/// The control clock: CLOCK_MONOTONIC nanoseconds, which is `RCL_STEADY_TIME`,
+/// the clock controller_manager 4.48 drives ros2_control with (so the
+/// telemetry `t` keeps the C++ meaning, seconds of uptime). Read once from
+/// rcl and carried forward with `Instant`, which is CLOCK_MONOTONIC too.
+fn mono_ns() -> TimeNs {
+    static ANCHOR: OnceLock<(Instant, TimeNs)> = OnceLock::new();
+    let (at, ns) = ANCHOR.get_or_init(|| {
+        let steady = r2r::Clock::create(r2r::ClockType::SteadyTime)
+            .and_then(|mut c| c.get_now())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+        (Instant::now(), steady)
+    });
+    ns + at.elapsed().as_nanos() as i64
 }
 
 fn stamp(ns: TimeNs) -> Time {
@@ -80,7 +109,7 @@ fn stamp(ns: TimeNs) -> Time {
 /// 40 ms window replaces the first, exactly as the C++ atomics do.
 #[derive(Default)]
 struct Slots {
-    cmd_vel: Option<Twist>,
+    cmd_vel: Option<Command>,
     led: Option<LedRequest>,
     pid: Option<PidConfig>,
     /// `(left_permille, right_permille, ttl_ms)`
@@ -134,7 +163,7 @@ impl Driver {
             .map_err(|e| format!("serial open failed ({}): {e}", self.settings.device))?;
         r2r::log_info!(&self.logger, "opened {}", self.settings.device);
 
-        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), now_ns())?;
+        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), mono_ns())?;
         port.write_all(&activation.bytes)
             .map_err(|e| format!("serial write error (activation): {e}"))?;
 
@@ -155,7 +184,8 @@ impl Driver {
 
         while !self.stop.load(Ordering::Relaxed) {
             // ---- read(): drain the port, VMIN = 0 ------------------------
-            let time = now_ns();
+            let time = mono_ns();
+            let stamp = ros_now_ns();
             loop {
                 let available = match port.bytes_to_read() {
                     Ok(n) => n as usize,
@@ -190,7 +220,7 @@ impl Driver {
 
             // ---- update() + write() -------------------------------------
             let cmd = self.slots.lock().expect("slots").cmd_vel.take();
-            let (tx, odom, joints) = base.tick(cmd, time);
+            let (tx, odom, joints) = base.tick(cmd, time, stamp);
             if let Some(tx) = tx {
                 if !tx.is_empty() {
                     if let Err(e) = port.write_all(&tx.bytes) {
@@ -270,7 +300,7 @@ impl Driver {
 
     /// Move whatever the subscriptions left into the cycle. The ttl deadlines
     /// are computed here, on the control clock, which is where `write()`
-    /// computes them in the C++.
+    /// computes them in the C++ (on the steady clock there too).
     fn apply_requests(&self, base: &mut BaseCycle, now: TimeNs) {
         let taken = {
             let mut slots = self.slots.lock().expect("slots");
@@ -625,12 +655,39 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, best_effort_1.clone())?;
     {
         let slots = slots.clone();
+        let logger = logger.clone();
+        let cmd_vel_timeout = diff_drive.cmd_vel_timeout;
         tokio::spawn(async move {
+            let mut warned_zero_stamp = false;
             while let Some(msg) = cmd_vel.next().await {
-                // Only the newest command survives to the next cycle: the
-                // C++ controller reads one realtime box, not a queue.
-                slots.lock().expect("slots").cmd_vel =
-                    Some(Twist::new(msg.twist.linear.x, msg.twist.angular.z));
+                let header_stamp =
+                    msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
+                let twist = Twist::new(msg.twist.linear.x, msg.twist.angular.z);
+                match receive_command(twist, header_stamp, ros_now_ns(), mono_ns(), cmd_vel_timeout)
+                {
+                    Received::Accepted { command, zero_stamp } => {
+                        if zero_stamp && !warned_zero_stamp {
+                            warned_zero_stamp = true;
+                            r2r::log_warn!(
+                                &logger,
+                                "Received TwistStamped with zero timestamp, setting it to \
+                                 current time, this message will only be shown once"
+                            );
+                        }
+                        // Only the newest command survives to the next cycle:
+                        // the C++ controller reads one realtime box, not a queue.
+                        slots.lock().expect("slots").cmd_vel = Some(command);
+                    }
+                    Received::Stale { stamp_ns, age_s } => r2r::log_warn!(
+                        &logger,
+                        "Ignoring the received message (timestamp {:.10}) because it is older \
+                         than the current time by {:.10} seconds, which exceeds the allowed \
+                         timeout ({:.4})",
+                        mower_base_core::seconds(stamp_ns),
+                        age_s,
+                        cmd_vel_timeout
+                    ),
+                }
             }
         });
     }
