@@ -6,9 +6,14 @@
 //! whole base is two calls:
 //!
 //! ```text
-//!   on_rx(bytes, now)                      <- whatever the serial read returned
-//!   tick(cmd_vel, now) -> (tx, odom, js)   <- one 25 Hz control cycle
+//!   on_rx(bytes, now)                             <- whatever the serial read returned
+//!   tick(cmd_vel, now, stamp) -> (tx, odom, js)   <- one 25 Hz control cycle
 //! ```
+//!
+//! `now` is the control clock (monotonic, what ros2_control's steady trigger
+//! clock is): every period, age, deadline and throttle is measured on it, so
+//! a wall-clock step changes nothing. `stamp` is ROS time and only ever ends
+//! up in the header of a published message.
 //!
 //! Unit conventions, all from `mower_system.cpp`:
 //!
@@ -32,8 +37,18 @@
 //! * [`BaseCycle::fault`] models the `return_type::ERROR` paths (serial read
 //!   or write failure): the cycle latches, stops commanding and emits the
 //!   stop burst, which is what `on_deactivate` does on the real stack.
+//! * The **arm latch** (not in the C++; `BaseConfig::arm_latch`): after every
+//!   activation, and when 0x85 feedback that had been arriving stops for
+//!   longer than `feedback_timeout_s`, the cmd_vel reference is held at zero
+//!   and `wheel_override` is not applied, each until its own stream shows a
+//!   stop edge — see [`BaseCycle::disarmed`]. The C++ chain latched off for
+//!   good after a runtime error; this driver is restarted after 2 s instead,
+//!   and without the latch it would resume a live nav2 or teleop command on
+//!   its own, and so would a re-seated UART lead. Silence only counts as a
+//!   stop edge once the stream can deliver ([`BaseCycle::set_publishers`]),
+//!   and nothing re-arms while the feedback is still lost.
 
-use crate::diff_drive::{DiffDrive, DiffDriveParams, OdomSample, Twist, WheelCommand};
+use crate::diff_drive::{Command, DiffDrive, DiffDriveParams, OdomSample, WheelCommand};
 use crate::protocol::{self as proto, FrameParser, PidConfig};
 use crate::{seconds, TimeNs, TWO_PI};
 
@@ -58,6 +73,16 @@ pub struct BaseConfig {
     pub override_max_ttl_ms: i64,
     /// `kBladeMaxTtlMs`.
     pub blade_max_ttl_ms: i64,
+    /// Hold the wheels after (re)activation and feedback loss until the
+    /// command streams show a stop edge. Off only to reproduce the C++
+    /// chain, which has no such latch, in the parity tests.
+    pub arm_latch: bool,
+    /// Silence on a held stream is only counted from this long after its
+    /// publisher first appears ([`BaseCycle::set_publishers`]). Seeing the
+    /// writer in the graph does not mean the writer has matched this reader
+    /// yet (discovery runs both ways, and the RK3568 under load has been
+    /// seen to take seconds), and until it has, "no message" is not silence.
+    pub publisher_settle_s: f64,
     pub diff_drive: DiffDriveParams,
 }
 
@@ -74,6 +99,8 @@ impl Default for BaseConfig {
             led_resend_period_s: 5.0,
             override_max_ttl_ms: 1000,
             blade_max_ttl_ms: 1000,
+            arm_latch: true,
+            publisher_settle_s: 2.0,
             diff_drive: DiffDriveParams::mower(),
         }
     }
@@ -151,6 +178,116 @@ pub struct LedRequest {
     pub serial: u8,
 }
 
+/// Why the arm latch holds the wheels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisarmReason {
+    /// [`BaseCycle::new`] / [`BaseCycle::clear_fault`].
+    Activation,
+    /// 0x85 feedback had been arriving and then stopped for longer than
+    /// `feedback_timeout_s`.
+    FeedbackLost,
+}
+
+/// The two motion streams the arm latch holds, each on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    CmdVel,
+    WheelOverride,
+}
+
+/// Which stop edge re-armed a stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopEdge {
+    /// An explicit stop: a finite cmd_vel with linear.x and angular.z both
+    /// 0, or a wheel_override of 0/0 or with ttl 0.
+    Stop,
+    /// Nothing on the stream for longer than `cmd_vel_timeout`, counted
+    /// only while it can deliver (see [`BaseCycle::set_publishers`]).
+    Silence,
+}
+
+/// Something the driver should log; drained with [`BaseCycle::take_events`].
+/// The texts the C++ logged for the same transitions are in the comments.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Event {
+    /// The latch now holds both streams.
+    Disarmed(DisarmReason),
+    /// `stream` showed a stop edge `after_s` s after the disarm: it moves the
+    /// wheels again.
+    Armed { stream: Stream, reason: DisarmReason, by: StopEdge, after_s: f64 },
+    /// "no wheel feedback for %.2f s" — once per loss.
+    FeedbackLost { age_s: f64 },
+    /// "feedback resumed"
+    FeedbackResumed,
+    /// Not one 0x85 in `feedback_timeout_s` since activation. Once, and
+    /// deliberately *not* latched: a board that never sends feedback is not
+    /// a board that stopped sending it.
+    NoFeedbackSinceActivation { age_s: f64 },
+    /// "driver alarm flag set" (0x81 flags), at most every 2 s.
+    DriverAlarm,
+    /// "wheel override active (controller command bypassed)" /
+    /// "wheel override expired, back to controller command"
+    Override { active: bool },
+    /// "blade running at %d permille (dead-man held)" / "blade stop"
+    Blade { running: bool, permille: i16 },
+    /// diff_drive_controller's "Velocity command timed out. Braking.",
+    /// once per timeout and only when it brakes a non-zero command
+    /// (upstream repeats it every second, idle or not).
+    CmdVelTimedOut { linear_x: f64, angular_z: f64 },
+    /// `stream` gained its first publisher or lost its last one, as
+    /// reported by [`BaseCycle::set_publishers`].
+    Publishers { stream: Stream, present: bool, after_activation_s: f64 },
+}
+
+/// `C++ RCLCPP_WARN_THROTTLE(..., 2000, "driver alarm flag set")`.
+const DRIVER_ALARM_LOG_PERIOD_NS: TimeNs = 2_000_000_000;
+
+/// One stream's half of the arm latch; `Some` = held.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hold {
+    reason: DisarmReason,
+    since_ns: TimeNs,
+    /// the newest message on the stream since `since_ns` was a stop
+    stopped: bool,
+}
+
+impl Hold {
+    /// The stop edge, if the stream has shown one: the newest message since
+    /// the disarm was a stop, or nothing has arrived for longer than
+    /// `window_ns` while the stream could deliver.
+    ///
+    /// "Could deliver" is what keeps DDS discovery from passing for a stop:
+    /// a restarted node's reader gets nothing from a live nav2 or teleop
+    /// writer until both sides have matched, and that is not silence. So
+    /// silence runs from the latest of the disarm, the newest message and
+    /// `settle_ns` after the current publisher first appeared, and not at
+    /// all while there has been neither a message nor a publisher. A
+    /// `window_ns` of 0 accepts only explicit stops.
+    fn edge(
+        &self,
+        last_ns: Option<TimeNs>,
+        publisher_since_ns: Option<TimeNs>,
+        now: TimeNs,
+        window_ns: i64,
+        settle_ns: i64,
+    ) -> Option<StopEdge> {
+        if self.stopped {
+            return Some(StopEdge::Stop);
+        }
+        if window_ns <= 0 || (last_ns.is_none() && publisher_since_ns.is_none()) {
+            return None;
+        }
+        let mut from = self.since_ns;
+        if let Some(t) = last_ns {
+            from = from.max(t);
+        }
+        if let Some(t) = publisher_since_ns {
+            from = from.max(t + settle_ns);
+        }
+        (now - from > window_ns).then_some(StopEdge::Silence)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct DeadMan {
     /// Absolute deadline; `None` = nothing held.
@@ -174,6 +311,21 @@ pub struct BaseCycle {
     feedback_stale: bool,
     last_tick_ns: Option<TimeNs>,
     faulted: bool,
+
+    /// The arm latch, per stream.
+    cmd_hold: Option<Hold>,
+    override_hold: Option<Hold>,
+    activated_ns: TimeNs,
+    /// control-clock time of the last cycle that picked up a cmd_vel
+    last_cmd_ns: Option<TimeNs>,
+    /// control-clock time of the last wheel_override request
+    last_override_ns: Option<TimeNs>,
+    /// since when each stream has had a publisher ([`BaseCycle::set_publishers`])
+    cmd_publisher_since: Option<TimeNs>,
+    override_publisher_since: Option<TimeNs>,
+    no_feedback_reported: bool,
+    driver_alarm_logged_ns: Option<TimeNs>,
+    events: Vec<Event>,
 
     telemetry: Telemetry,
     /// `telemetry_pending_`: a new 0x85 arrived since the last publish.
@@ -217,6 +369,16 @@ impl BaseCycle {
             feedback_stale: false,
             last_tick_ns: None,
             faulted: false,
+            cmd_hold: None,
+            override_hold: None,
+            activated_ns: now,
+            last_cmd_ns: None,
+            last_override_ns: None,
+            cmd_publisher_since: None,
+            override_publisher_since: None,
+            no_feedback_reported: false,
+            driver_alarm_logged_ns: None,
+            events: Vec::new(),
             telemetry: Telemetry::default(),
             telemetry_pending: false,
             firmware_info: None,
@@ -233,6 +395,7 @@ impl BaseCycle {
             led_sent_ns: None,
             pid_request: None,
         };
+        me.disarm(DisarmReason::Activation, now);
         let mut tx = me.stop_burst();
         tx.push(proto::build_info_request(me.next_seq()));
         Ok((me, tx))
@@ -288,6 +451,39 @@ impl BaseCycle {
     pub fn faulted(&self) -> bool {
         self.faulted
     }
+    /// The arm latch: `Some(reason)` while either motion stream is held.
+    ///
+    /// Both streams are disarmed on every activation and when feedback that
+    /// had been arriving is lost for longer than `feedback_timeout_s`. While
+    /// cmd_vel is held the controller reference is forced to zero (braking
+    /// through the limiter, exactly like a cmd_vel timeout); while
+    /// wheel_override is held its requests are not applied, and an override
+    /// that was running is dropped at the disarm. Each stream is re-armed
+    /// by its own stop edge *after* the disarm: an explicit stop (cmd_vel
+    /// 0/0; override 0/0 or ttl 0) as the newest message, or no message for
+    /// longer than `cmd_vel_timeout` while the stream could deliver one
+    /// ([`BaseCycle::set_publishers`]). With `cmd_vel_timeout` 0 only the
+    /// explicit stops count.
+    ///
+    /// Nothing re-arms while feedback that had been arriving is still
+    /// missing: a command given with the lead out would otherwise ramp up
+    /// against wheels that cannot move and reach them as a step the moment
+    /// the lead is back. On the cycle it returns, the newest message
+    /// decides: at rest (a stop, or silence) re-arms, moving stays held.
+    pub fn disarmed(&self) -> Option<DisarmReason> {
+        self.cmd_hold.or(self.override_hold).map(|h| h.reason)
+    }
+    /// Whether `stream` is held by the arm latch right now.
+    pub fn holds(&self, stream: Stream) -> bool {
+        match stream {
+            Stream::CmdVel => self.cmd_hold.is_some(),
+            Stream::WheelOverride => self.override_hold.is_some(),
+        }
+    }
+    /// What happened since the last call, for the driver to log.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
+    }
     pub fn diff_drive(&self) -> &DiffDrive {
         &self.ddc
     }
@@ -307,14 +503,92 @@ impl BaseCycle {
         self.right.cmd_velocity = 0.0;
     }
 
-    /// The port was reopened. Wheel positions are kept (the encoder counter on
-    /// the STM32 is free-running), but the count baseline is dropped so a
-    /// reconnect does not integrate the gap.
-    pub fn clear_fault(&mut self) {
+    /// The port was reopened at `now`: a re-activation. Wheel positions are
+    /// kept (the encoder counter on the STM32 is free-running), but the count
+    /// baseline is dropped so a reconnect does not integrate the gap, and the
+    /// latch holds the wheels until the command streams show a stop edge.
+    pub fn clear_fault(&mut self, now: TimeNs) {
         self.faulted = false;
         self.left.have_counts = false;
         self.right.have_counts = false;
         self.feedback_valid = false;
+        self.feedback_stale = false;
+        self.no_feedback_reported = false;
+        self.activated_ns = now;
+        self.ddc.activate(now);
+        self.disarm(DisarmReason::Activation, now);
+    }
+
+    fn disarm(&mut self, reason: DisarmReason, now: TimeNs) {
+        if !self.cfg.arm_latch {
+            return;
+        }
+        let hold = Hold { reason, since_ns: now, stopped: false };
+        self.cmd_hold = Some(hold);
+        self.override_hold = Some(hold);
+        // An override running from before must not come back on re-arm.
+        self.wheel_override.until_ns = None;
+        self.events.push(Event::Disarmed(reason));
+    }
+
+    /// Whether `stream`'s topic has at least one publisher at `now`, as the
+    /// driver reads it off the ROS graph once per cycle. Until a held stream
+    /// has had a publisher for `publisher_settle_s` (or has delivered a
+    /// message), its silence is not a stop edge: a reader that has not been
+    /// matched yet hears nothing from a writer that is sending. A driver
+    /// that never calls this gets only explicit stops, plus silence after a
+    /// message.
+    pub fn set_publishers(&mut self, stream: Stream, present: bool, now: TimeNs) {
+        let since = match stream {
+            Stream::CmdVel => &mut self.cmd_publisher_since,
+            Stream::WheelOverride => &mut self.override_publisher_since,
+        };
+        if present == since.is_some() {
+            return;
+        }
+        *since = present.then_some(now);
+        self.events.push(Event::Publishers {
+            stream,
+            present,
+            after_activation_s: seconds(now - self.activated_ns),
+        });
+    }
+
+    /// Re-arm each stream that has shown its stop edge.
+    fn try_rearm(&mut self, now: TimeNs) {
+        let window = self.ddc.cmd_vel_timeout_ns();
+        let settle = (self.cfg.publisher_settle_s.max(0.0) * 1e9) as i64;
+        if let Some(hold) = self.cmd_hold {
+            // Silence also needs the controller to have timed the stored
+            // command out, so re-arming can never hand the limiter a stale
+            // non-zero reference (belt and braces: the stored stamp is never
+            // later than its pickup, see `receive_command`).
+            let edge = hold
+                .edge(self.last_cmd_ns, self.cmd_publisher_since, now, window, settle)
+                .filter(|e| *e == StopEdge::Stop || self.ddc.command_timed_out());
+            if let Some(by) = edge {
+                self.cmd_hold = None;
+                self.events.push(Event::Armed {
+                    stream: Stream::CmdVel,
+                    reason: hold.reason,
+                    by,
+                    after_s: seconds(now - hold.since_ns),
+                });
+            }
+        }
+        if let Some(hold) = self.override_hold {
+            if let Some(by) =
+                hold.edge(self.last_override_ns, self.override_publisher_since, now, window, settle)
+            {
+                self.override_hold = None;
+                self.events.push(Event::Armed {
+                    stream: Stream::WheelOverride,
+                    reason: hold.reason,
+                    by,
+                    after_s: seconds(now - hold.since_ns),
+                });
+            }
+        }
     }
 
     fn next_seq(&mut self) -> u8 {
@@ -351,6 +625,9 @@ impl BaseCycle {
 
     /// `/mower_base/wheel_override`: drive raw permille for `ttl_ms`,
     /// bypassing the controller's acceleration limits (PID auto-tune steps).
+    ///
+    /// While the arm latch holds, the request is not applied — it only
+    /// tells the latch whether the override stream is at rest.
     pub fn request_wheel_override(
         &mut self,
         left_permille: i32,
@@ -361,6 +638,11 @@ impl BaseCycle {
         let ttl = ttl_ms.clamp(0, self.cfg.override_max_ttl_ms);
         let l = left_permille.clamp(-1000, 1000) as i16;
         let r = right_permille.clamp(-1000, 1000) as i16;
+        self.last_override_ns = Some(now);
+        if let Some(hold) = self.override_hold.as_mut() {
+            hold.stopped = ttl == 0 || (l == 0 && r == 0);
+            return;
+        }
         self.wheel_override.until_ns = Some(now + ttl * 1_000_000);
         self.wheel_override.value = l;
         self.override_right = r;
@@ -434,12 +716,23 @@ impl BaseCycle {
                 self.telemetry.wheel = Some(fb);
                 self.last_feedback_ns = now;
                 self.feedback_valid = true;
+                if self.feedback_stale {
+                    self.events.push(Event::FeedbackResumed);
+                }
                 self.feedback_stale = false;
                 self.telemetry_pending = true;
             }
             proto::MOTOR_STATUS => {
                 if let Some(ms) = proto::decode_motor_status(payload) {
                     self.telemetry.motor = Some(ms);
+                    if ms.flags & proto::STATUS_FLAG_DRIVER_ALARM != 0
+                        && self
+                            .driver_alarm_logged_ns
+                            .map_or(true, |t| now - t >= DRIVER_ALARM_LOG_PERIOD_NS)
+                    {
+                        self.driver_alarm_logged_ns = Some(now);
+                        self.events.push(Event::DriverAlarm);
+                    }
                 }
             }
             proto::POWER_STATUS => {
@@ -511,19 +804,21 @@ impl BaseCycle {
 
     // ---- one control cycle ----------------------------------------------
 
-    /// One `read() -> update() -> write()` cycle at `now`.
+    /// One `read() -> update() -> write()` cycle at `now` (control clock).
     ///
-    /// `cmd_vel` is a `/cmd_vel` message that arrived since the last tick
-    /// (stamped `now`); `None` means none did, and the stored command ages
-    /// towards `cmd_vel_timeout`.
+    /// `cmd_vel` is the newest command the subscription accepted since the
+    /// last tick ([`crate::diff_drive::receive_command`]); `None` means none
+    /// did, and the stored command ages towards `cmd_vel_timeout`. `stamp`
+    /// (ROS time) goes into the /odom and joint-state headers.
     ///
     /// Returns the bytes to write, the `/odom` sample when the publish rate
     /// lets one through, and the joint states (always, matching
     /// `joint_state_broadcaster`, which publishes every update).
     pub fn tick(
         &mut self,
-        cmd_vel: Option<Twist>,
+        cmd_vel: Option<Command>,
         now: TimeNs,
+        stamp: TimeNs,
     ) -> (Option<TxFrame>, Option<OdomSample>, Option<JointStates>) {
         // tail of read(): stale feedback zeroes the reported velocities
         if self.feedback_valid {
@@ -531,8 +826,19 @@ impl BaseCycle {
             if self.feedback_age_s > self.cfg.feedback_timeout_s {
                 self.left.vel = 0.0;
                 self.right.vel = 0.0;
-                self.feedback_stale = true;
+                if !self.feedback_stale {
+                    self.feedback_stale = true;
+                    self.events.push(Event::FeedbackLost { age_s: self.feedback_age_s });
+                    self.disarm(DisarmReason::FeedbackLost, now);
+                }
             }
+        } else if !self.no_feedback_reported
+            && seconds(now - self.activated_ns) > self.cfg.feedback_timeout_s
+        {
+            self.no_feedback_reported = true;
+            self.events.push(Event::NoFeedbackSinceActivation {
+                age_s: seconds(now - self.activated_ns),
+            });
         }
         self.telemetry.feedback_age_s = self.feedback_age_s;
 
@@ -543,7 +849,7 @@ impl BaseCycle {
         self.last_tick_ns = Some(now);
 
         let joints = Some(JointStates {
-            stamp_ns: now,
+            stamp_ns: stamp,
             names: ["left_wheel_joint", "right_wheel_joint"],
             positions: [self.left.pos, self.right.pos],
             velocities: [self.left.vel, self.right.vel],
@@ -558,9 +864,36 @@ impl BaseCycle {
             return (Some(tx), None, joints);
         }
 
-        // controller update
+        // controller update, with the arm latch between the reference and
+        // the limiter
+        if let Some(cmd) = cmd_vel {
+            self.last_cmd_ns = Some(now);
+            if let Some(hold) = self.cmd_hold.as_mut() {
+                let t = cmd.twist;
+                hold.stopped = t.linear_x == 0.0 && t.angular_z == 0.0;
+            }
+        }
+        let was_timed_out = self.ddc.command_timed_out();
         self.ddc.update_reference(now, cmd_vel);
-        let out = self.ddc.update_and_write(now, period_s, self.left.pos, self.right.pos);
+        if self.ddc.command_timed_out() && !was_timed_out {
+            let last = self.ddc.last_command();
+            let finite = last.linear_x.is_finite() && last.angular_z.is_finite();
+            if finite && (last.linear_x != 0.0 || last.angular_z != 0.0) {
+                self.events.push(Event::CmdVelTimedOut {
+                    linear_x: last.linear_x,
+                    angular_z: last.angular_z,
+                });
+            }
+        }
+        // Not while feedback that had been arriving is still missing: see
+        // `disarmed`.
+        if !self.feedback_stale {
+            self.try_rearm(now);
+        }
+        if self.cmd_hold.is_some() {
+            self.ddc.hold_zero();
+        }
+        let out = self.ddc.update_and_write(now, stamp, period_s, self.left.pos, self.right.pos);
         if let Some(WheelCommand { left, right }) = out.wheel {
             self.left.cmd_velocity = left;
             self.right.cmd_velocity = right;
@@ -607,6 +940,9 @@ impl BaseCycle {
     /// `override_permille`: raw permille while the ttl has not expired.
     fn override_permille(&mut self, now: TimeNs) -> Option<(i16, i16)> {
         let active = matches!(self.wheel_override.until_ns, Some(until) if now < until);
+        if active != self.wheel_override.active {
+            self.events.push(Event::Override { active });
+        }
         self.wheel_override.active = active;
         active.then_some((self.wheel_override.value, self.override_right))
     }
@@ -617,6 +953,9 @@ impl BaseCycle {
         let active = matches!(self.blade.until_ns, Some(until) if now < until);
         let was_active = self.blade.active;
         self.blade.active = active;
+        if active != was_active {
+            self.events.push(Event::Blade { running: active, permille: self.blade.value });
+        }
         if !active && !was_active {
             return None;
         }

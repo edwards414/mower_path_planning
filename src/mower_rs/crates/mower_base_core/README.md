@@ -18,19 +18,26 @@ builds and tests with a plain `cargo test -p mower_base_core` on any machine.
 ## The shape of it
 
 ```rust
-let (mut base, activation_tx) = BaseCycle::new(BaseConfig::default(), now)?;
+let (mut base, activation_tx) = BaseCycle::new(BaseConfig::default(), monotonic_ns())?;
 // ... write activation_tx to the port ...
+// the cmd_vel subscription: receive_command(twist, header_stamp, ros_now, monotonic_ns(),
+//   cmd_vel_timeout) drops stale messages and keeps the newest one
 loop {
     let n = port.read(&mut buf)?;              // VMIN = 0, may return 0
     base.on_rx(&buf[..n], monotonic_ns());
-    let (tx, odom, joints) = base.tick(latest_cmd_vel.take(), monotonic_ns());
+    let (tx, odom, joints) = base.tick(latest_cmd_vel.take(), monotonic_ns(), ros_now());
     if let Some(tx) = tx { port.write_all(&tx.bytes)?; }
+    for event in base.take_events() { /* log it */ }
     // publish odom / joints / tf
 }
 ```
 
 `BaseCycle` is pure: it never reads a clock, never touches IO, and holds no
-`Instant`. That is what makes the replay test below possible.
+`Instant`. That is what makes the replay test below possible. It is given
+two clocks and never mixes them: the monotonic **control clock** for every
+period, age, deadline and throttle (controller_manager 4.48 runs ros2_control
+on `RCL_STEADY_TIME`), and ROS time only for the header stamps of what it
+returns — so a wall-clock step cannot pulse the wheels or stretch a dead-man.
 
 Units and safety behaviour are documented on `cycle` itself; the short version:
 
@@ -45,6 +52,16 @@ Units and safety behaviour are documented on `cycle` itself; the short version:
   velocities and holds the positions.
 * `BaseCycle::fault()` models the `return_type::ERROR` paths: latched, stops
   commanding, emits the `send_stop()` burst every cycle.
+* The **arm latch** (`BaseConfig::arm_latch`, on; not in the C++): after
+  every activation, and when 0x85 feedback that had been arriving stops for
+  longer than `feedback_timeout_s`, the cmd_vel reference is held at zero and
+  `wheel_override` is not applied, each until its own stream shows a stop
+  edge — an explicit stop, or nothing for longer than `cmd_vel_timeout`.
+  Feedback that was *never* seen does not trip it. `BaseCycle::disarmed()`
+  has the details; the C++ chain simply never came back after an error.
+* Transitions worth a log line (the ones `mower_system.cpp` and
+  `diff_drive_controller` logged, plus the latch) come out of
+  `BaseCycle::take_events()`.
 
 ## Tests
 
@@ -58,8 +75,9 @@ cargo test -p mower_base_core
 | test | vectors | checks |
 |---|---|---|
 | `tests/protocol_vectors.rs` | `vectors/protocol_oracle.json` | 9 CRC, 39 encode (byte-identical), 17 byte-stream parses, 29 decode (field-identical, incl. every wrong-length rejection) |
-| `tests/diff_drive_vectors.rs` | `vectors/diff_drive_oracle.json` | rolling mean, 90 × 4 speed-limiter calls, 4 × 60 odometry steps, `updateFromVelocity` / `updateOpenLoop`, and a 200-cycle controller run — all to 1e-12 |
-| `tests/replay.rs` | `vectors/replay_synthetic.*` | a 300-cycle recording replayed through `BaseCycle`: every tx byte identical, odometry to 1e-12 |
+| `tests/diff_drive_vectors.rs` | `vectors/diff_drive_oracle.json` | rolling mean, 90 × 4 speed-limiter calls, 4 × 60 odometry steps, `updateFromVelocity` / `updateOpenLoop`, and a 200-cycle controller run — all to 1e-12; plus the cmd_vel subscription's stamp rules (zero stamp, stale, ageing from the stamp) and the open-loop odometry seed at activation |
+| `tests/replay.rs` | `vectors/replay_synthetic.*` | a 300-cycle recording replayed through `BaseCycle` (latch off: the C++ has none): every tx byte identical, odometry to 1e-12 |
+| `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule), a wall-clock step that changes nothing but the stamps, the log events |
 
 ### Regenerating the vectors
 

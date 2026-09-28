@@ -16,7 +16,7 @@
 //! it into the Rust driver offline.
 
 use mower_base_core::cycle::{BaseConfig, BaseCycle, LedRequest};
-use mower_base_core::diff_drive::Twist;
+use mower_base_core::diff_drive::{Command, Twist};
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::record::{self, Direction};
 use mower_base_core::TWO_PI;
@@ -62,9 +62,10 @@ fn replay_synthetic_recording() {
     let tick_period = expect["tick_period_ns"].as_i64().unwrap();
 
     // on_configure + on_activate at t0 (`previous_publish_timestamp_` is seeded
-    // there): stop the wheels and the blade, then ask for 0x87.
-    let (mut base, activation) =
-        BaseCycle::new(BaseConfig::default(), t0).expect("mower config is valid");
+    // there): stop the wheels and the blade, then ask for 0x87. The C++ chain
+    // has no arm latch, and this recording starts driving at once.
+    let cfg = BaseConfig { arm_latch: false, ..BaseConfig::default() };
+    let (mut base, activation) = BaseCycle::new(cfg, t0).expect("mower config is valid");
     assert_eq!(
         hex(&activation.bytes),
         expect["activation_tx"].as_str().unwrap(),
@@ -127,10 +128,11 @@ fn replay_synthetic_recording() {
             }
         }
 
-        let cmd = want["cmd"]
-            .as_array()
-            .map(|a| Twist::new(num(&a[0]), num(&a[1])));
-        let (got_tx, got_odom, got_joints) = base.tick(cmd, t);
+        let cmd = want["cmd"].as_array().map(|a| Command {
+            twist: Twist::new(num(&a[0]), num(&a[1])),
+            stamp_ns: t,
+        });
+        let (got_tx, got_odom, got_joints) = base.tick(cmd, t, t);
 
         let got_tx = got_tx.expect("every cycle writes at least the wheel command");
         assert_eq!(
@@ -190,17 +192,21 @@ fn replay_synthetic_recording() {
     assert!(!base.firmware_protocol_mismatch());
 }
 
+fn cmd(linear_x: f64, angular_z: f64, t: i64) -> Option<Command> {
+    Some(Command { twist: Twist::new(linear_x, angular_z), stamp_ns: t })
+}
+
 /// Fail-closed: a serial error latches, and every following cycle emits the
 /// stop burst and no odometry until the port is known good again.
 #[test]
 fn fault_latches_and_stops() {
     let (mut base, _) = BaseCycle::new(BaseConfig::default(), 0).unwrap();
-    let (tx, _, _) = base.tick(Some(Twist::new(0.4, 0.0)), 40_000_000);
+    let (tx, _, _) = base.tick(cmd(0.4, 0.0, 40_000_000), 40_000_000, 40_000_000);
     assert!(tx.unwrap().frames.iter().any(|(t, _)| *t == 0x01));
 
     base.fault();
     assert!(base.faulted());
-    let (tx, odom, joints) = base.tick(Some(Twist::new(0.4, 0.0)), 80_000_000);
+    let (tx, odom, joints) = base.tick(cmd(0.4, 0.0, 80_000_000), 80_000_000, 80_000_000);
     let tx = tx.unwrap();
     assert!(odom.is_none(), "a faulted cycle publishes no odometry");
     assert!(joints.is_some());
@@ -209,8 +215,9 @@ fn fault_latches_and_stops() {
     // both payloads are zero permille
     assert_eq!(&tx.bytes[6..10], &[0, 0, 0, 0]);
 
-    base.clear_fault();
+    base.clear_fault(120_000_000);
     assert!(!base.faulted());
+    assert!(base.disarmed().is_some(), "clearing a fault is a re-activation");
 }
 
 /// The cmd_vel timeout does not drop the command, it ramps it down at
@@ -220,10 +227,11 @@ fn cmd_vel_timeout_decelerates_rather_than_dropping() {
     let (mut base, _) = BaseCycle::new(BaseConfig::default(), 0).unwrap();
     let dt = 40_000_000i64;
     let mut t = 0i64;
-    // drive up to the limit
+    // a zero first, to arm the latch; then drive up to the limit
+    base.tick(cmd(0.0, 0.0, t), t, t);
     for _ in 0..60 {
         t += dt;
-        base.tick(Some(Twist::new(0.55, 0.0)), t);
+        base.tick(cmd(0.55, 0.0, t), t, t);
     }
     let moving = base.rad_s_to_permille(base.left().cmd_velocity);
     assert!(moving > 800, "should be near full speed, got {moving}");
@@ -233,7 +241,7 @@ fn cmd_vel_timeout_decelerates_rather_than_dropping() {
     let mut permilles = Vec::new();
     for _ in 0..40 {
         t += dt;
-        base.tick(None, t);
+        base.tick(None, t, t);
         permilles.push(base.rad_s_to_permille(base.left().cmd_velocity));
     }
     assert!(base.diff_drive().command_timed_out());
@@ -266,13 +274,13 @@ fn feedback_timeout_zeroes_velocities_but_holds_positions() {
     };
     base.on_rx(&frame(0, 0), 0);
     base.on_rx(&frame(8896, 5800), 100_000_000); // one full turn, 58.00 rpm
-    base.tick(None, 100_000_000);
+    base.tick(None, 100_000_000, 100_000_000);
     let pos = base.left().pos;
     assert!((pos - TWO_PI).abs() < 1e-12, "one revolution, got {pos}");
     assert!((base.left().vel - 58.0 * TWO_PI / 60.0).abs() < 1e-12);
 
     // 0.6 s later, still nothing
-    base.tick(None, 700_000_000);
+    base.tick(None, 700_000_000, 700_000_000);
     assert_eq!(base.left().vel, 0.0);
     assert_eq!(base.right().vel, 0.0);
     assert_eq!(base.left().pos, pos, "positions are held, not reset");

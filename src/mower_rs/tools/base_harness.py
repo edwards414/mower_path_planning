@@ -10,6 +10,23 @@ side-channel bursts, and records `/odom`, `/joint_states`, `/tf` and
 
     ros2 run ... base_harness.py --out /tmp/run_a.json --label ros2_control
 
+`--scenario pull --mute-file F` runs PULL_SCRIPT instead: the stick is held
+while the harness makes `fake_base.py` go deaf and mute for two seconds (a
+pulled UART lead) and back, then released and pushed again. The C++ chain
+resumes the held command the moment the lead is back; `mower_base` holds
+the wheels until the release (its arm latch).
+
+`--scenario pullpush --mute-file F`: the lead comes out while nothing is
+commanded, the stick is pushed while it is still out, and the lead is
+re-seated with the stick still pushed (PULLPUSH_SCRIPT). `mower_base` must
+not re-arm during the outage, so it stays at 0/0 until the release.
+
+`--scenario live`: a live 0.30 m/s stream at nav2's 20 Hz that is already
+running when the driver starts (`base_ab.sh` starts this harness first), as
+after a restart under nav2 or teleop. No discovery wait: the stream starts
+at once. The driver hears nothing until DDS has matched it with this writer,
+and that quiet stretch must not re-arm it (LIVE_SCRIPT).
+
 Nothing here runs on the robot.
 """
 
@@ -18,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 
 import rclpy
@@ -56,6 +74,55 @@ CMD_SCRIPT = [
 CMD_RATE_HZ = 200.0
 RUN_SECONDS = 32.0
 
+# The cable-pull scenario: the lead is out from MUTE[0] to MUTE[1] while the
+# stick stays at 0.30 m/s, released at 9.0 s and pushed again at 9.5 s.
+PULL_SCRIPT = [
+    (0.0, 1.5, None, None),
+    (1.5, 3.5, (0.0, 0.30), (0.0, 0.0)),
+    (3.5, 9.0, (0.30, 0.30), (0.0, 0.0)),      # held through the pull
+    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
+    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
+    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
+    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+]
+PULL_MUTE = (4.0, 6.0)
+PULL_SECONDS = 14.0
+
+# The lead comes out at 4.0 s with nothing commanded (silence), the stick is
+# pushed from 5.0 s while it is still out, the lead is back at 7.0 s with the
+# stick still pushed, released at 9.0 s and pushed again from 9.5 s.
+PULLPUSH_SCRIPT = [
+    (0.0, 5.0, None, None),
+    (5.0, 6.0, (0.0, 0.30), (0.0, 0.0)),       # pushed with the lead out
+    (6.0, 9.0, (0.30, 0.30), (0.0, 0.0)),      # still pushed after the re-seat
+    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
+    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
+    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
+    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+]
+PULLPUSH_MUTE = (4.0, 7.0)
+
+# A live stream from t = 0, before the driver exists (base_ab.sh starts the
+# driver LIVE_DRIVER_START_S later), released at 12.0 s, pushed again.
+LIVE_SCRIPT = [
+    (0.0, 12.0, (0.30, 0.30), (0.0, 0.0)),
+    (12.0, 12.5, (0.0, 0.0), (0.0, 0.0)),      # released
+    (12.5, 14.5, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (14.5, 15.5, (0.30, 0.0), (0.0, 0.0)),
+    (15.5, 17.0, (0.0, 0.0), (0.0, 0.0)),
+]
+LIVE_RATE_HZ = 20.0
+LIVE_SECONDS = 17.0
+LIVE_DRIVER_START_S = 2.0  # after the first message (base_ab.sh)
+
+SCENARIOS = {
+    # name: (command script, mute window, rate, seconds)
+    "default": (CMD_SCRIPT, None, CMD_RATE_HZ, RUN_SECONDS),
+    "pull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS),
+    "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS),
+    "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS),
+}
+
 # (t_from, t_to, rate_hz, topic, payload)
 SIDE_SCRIPT = [
     (2.0, 2.1, 10.0, "led", '{"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}'),
@@ -68,9 +135,9 @@ SIDE_SCRIPT = [
 ]
 
 
-def command_at(t: float):
+def command_at(t: float, script=CMD_SCRIPT):
     """(linear.x, angular.z) at `t`, or None where the script is silent."""
-    for lo, hi, lin, ang in CMD_SCRIPT:
+    for lo, hi, lin, ang in script:
         if lo <= t < hi:
             if lin is None:
                 return None
@@ -83,17 +150,32 @@ def yaw_of(q) -> float:
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
 
+def name_of(policy) -> str:
+    """`RELIABLE`, not `1`: Jazzy's QoS policies are IntEnums, whose str() is the number."""
+    return getattr(policy, "name", str(policy))
+
+
 def stamp_s(header) -> float:
     return header.stamp.sec + header.stamp.nanosec * 1e-9
 
 
 class Harness(Node):
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, scenario: str = "default", mute_file: str = "",
+                 streaming_file: str = "") -> None:
         super().__init__("base_harness")
+        # touched on the first command published, so base_ab.sh can start
+        # the driver only once the live stream really is running
+        self.streaming_file = streaming_file
         self.label = label
+        self.scenario = scenario
+        self.script, self.mute, rate_hz, _ = SCENARIOS[scenario]
+        self.side_script = SIDE_SCRIPT if scenario == "default" else []
+        self.mute_file = mute_file
         self.t0 = time.monotonic()
         self.rec = {
             "label": label,
+            "scenario": scenario,
+            "mute": list(self.mute) if self.mute else None,
             # CLOCK_MONOTONIC is shared across processes on Linux, so this
             # is what lines the harness up with fake_base.py's log.
             "t0_monotonic": self.t0,
@@ -130,7 +212,7 @@ class Harness(Node):
         # start poses -- which reads as an odometry difference and is not
         # one.
         self.started = False
-        self.create_timer(1.0 / CMD_RATE_HZ, self.on_cmd_tick)
+        self.create_timer(1.0 / rate_hz, self.on_cmd_tick)
         self.create_timer(0.02, self.on_side_tick)
         self._side_sent = {}
 
@@ -176,7 +258,13 @@ class Harness(Node):
         if not self.started:
             return
         t = self.rel()
-        command = command_at(t)
+        if self.mute_file and self.mute:
+            muted = self.mute[0] <= t < self.mute[1]
+            if muted and not os.path.exists(self.mute_file):
+                open(self.mute_file, "w").close()
+            elif not muted and os.path.exists(self.mute_file):
+                os.unlink(self.mute_file)
+        command = command_at(t, self.script)
         if command is None:
             return
         lin, ang = command
@@ -186,6 +274,9 @@ class Harness(Node):
         msg.twist.linear.x = lin
         msg.twist.angular.z = ang
         self.cmd_pub.publish(msg)
+        if self.streaming_file:
+            open(self.streaming_file, "w").close()
+            self.streaming_file = ""
         self.rec["cmd_log"].append(
             {"t": round(t, 6), "stamp": stamp_s(msg.header), "lin": lin, "ang": ang}
         )
@@ -194,7 +285,7 @@ class Harness(Node):
         if not self.started:
             return
         t = self.rel()
-        for i, (lo, hi, rate, topic, payload) in enumerate(SIDE_SCRIPT):
+        for i, (lo, hi, rate, topic, payload) in enumerate(self.side_script):
             if not (lo <= t < hi):
                 continue
             last = self._side_sent.get(i)
@@ -231,6 +322,7 @@ class Harness(Node):
             {
                 "t": round(self.rel(), 6),
                 "stamp": stamp_s(msg.header),
+                "frame_id": msg.header.frame_id,
                 "name": list(msg.name),
                 "position": list(msg.position),
                 "velocity": list(msg.velocity),
@@ -266,6 +358,7 @@ class Harness(Node):
     # -- graph snapshot --------------------------------------------------
     def snapshot_graph(self) -> None:
         info = {}
+        # every topic mower_base owns, both directions
         for topic in [
             "/odom",
             "/joint_states",
@@ -273,20 +366,27 @@ class Harness(Node):
             "/mower_base/telemetry",
             "/mower_base/firmware_info",
             "/drivetrain_guarded_cmd_vel",
+            "/mower_base/led_command",
+            "/mower_base/pid_command",
+            "/mower_base/wheel_override",
+            "/mower_base/servo_command",
+            "/mower_base/blade_command",
         ]:
             entries = []
             for endpoint in self.get_publishers_info_by_topic(topic) + (
                 self.get_subscriptions_info_by_topic(topic)
             ):
+                qos = endpoint.qos_profile
                 entries.append(
                     {
                         "node": endpoint.node_name,
                         "type": endpoint.topic_type,
-                        "kind": str(endpoint.endpoint_type),
-                        "reliability": str(endpoint.qos_profile.reliability),
-                        "durability": str(endpoint.qos_profile.durability),
-                        "depth": endpoint.qos_profile.depth,
-                        "history": str(endpoint.qos_profile.history),
+                        "kind": name_of(endpoint.endpoint_type),
+                        "reliability": name_of(qos.reliability),
+                        "durability": name_of(qos.durability),
+                        "depth": qos.depth,
+                        "history": name_of(qos.history),
+                        "liveliness": name_of(qos.liveliness),
                     }
                 )
             info[topic] = entries
@@ -301,12 +401,23 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", required=True)
-    ap.add_argument("--seconds", type=float, default=RUN_SECONDS)
+    ap.add_argument("--seconds", type=float)
+    ap.add_argument("--scenario", choices=sorted(SCENARIOS), default="default")
+    ap.add_argument("--mute-file", default="",
+                    help="the file fake_base.py --mute-file watches (pull, pullpush)")
     args = ap.parse_args()
+    if args.seconds is None:
+        args.seconds = SCENARIOS[args.scenario][3]
+    if SCENARIOS[args.scenario][1] and not args.mute_file:
+        ap.error(f"--scenario {args.scenario} needs --mute-file")
 
     rclpy.init()
-    node = Harness(args.label)
-    if not node.wait_for_discovery():
+    node = Harness(args.label, args.scenario, args.mute_file,
+                   args.out + ".streaming" if args.scenario == "live" else "")
+    if args.scenario == "live":
+        # the stream is already running when the driver starts: no waiting
+        node.started = True
+    elif not node.wait_for_discovery():
         print(f"[{args.label}] WARNING: not every endpoint matched before the run")
     end = time.monotonic() + args.seconds
     graphed = False
@@ -317,6 +428,8 @@ def main() -> int:
             graphed = True
     if not graphed:
         node.snapshot_graph()
+    if args.mute_file and os.path.exists(args.mute_file):
+        os.unlink(args.mute_file)
     with open(args.out, "w") as f:
         json.dump(node.rec, f)
     print(

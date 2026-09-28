@@ -13,6 +13,16 @@ and writes every frame it sees or sends to a log.
     socat -d -d pty,raw,echo=0,link=/tmp/base_host pty,raw,echo=0,link=/tmp/base_stm &
     ./fake_base.py --port /tmp/base_stm --log /tmp/fake_base.jsonl
 
+or, where there is no socat (the runtime image), let it make the pty:
+
+    ./fake_base.py --pty-link /dev/stmcom --log /tmp/fake_base.jsonl
+
+`--mute-file PATH`: while PATH exists the fake is a pulled UART lead --
+nothing is sent and everything received is dropped (so its own 300 ms
+command timeout stops the wheels), which on the robot's native UART is
+also no error at all on the host side. Used by `base_harness.py
+--scenario pull`.
+
 Log format: one JSON object per line, so the comparison script can diff two
 runs frame by frame.
 
@@ -33,6 +43,7 @@ import os
 import struct
 import sys
 import time
+import tty
 
 SOF0 = 0xA5
 SOF1 = 0x5A
@@ -142,8 +153,22 @@ class FakeBase:
     STATUS_PERIOD_S = 0.050
     COMMAND_TIMEOUT_S = 0.300
 
-    def __init__(self, port: str, log_path: str, max_rpm: float, counts_per_rev: float) -> None:
-        self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    def __init__(self, port: str, log_path: str, max_rpm: float, counts_per_rev: float,
+                 pty_link: str = "", mute_file: str = "") -> None:
+        if pty_link:
+            # socat's `pty,raw,echo=0,link=...`: the driver's end is the
+            # slave, raw from the start so nothing is echoed back, and held
+            # open here so a driver restart does not hang the pty up.
+            self.fd, self._slave = os.openpty()
+            tty.setraw(self._slave)
+            os.set_blocking(self.fd, False)
+            if os.path.lexists(pty_link):
+                os.unlink(pty_link)
+            os.symlink(os.ttyname(self._slave), pty_link)
+        else:
+            self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        self.mute_file = mute_file
+        self.muted = False
         self.log = open(log_path, "w", buffering=1)
         self.t0 = time.monotonic()
         self.log.write(
@@ -186,8 +211,15 @@ class FakeBase:
         return s
 
     def _send(self, frame_type: int, payload: bytes, fields=None) -> None:
+        if self.muted:
+            return
         seq = self._next_seq()
-        os.write(self.fd, build(frame_type, seq, payload))
+        try:
+            os.write(self.fd, build(frame_type, seq, payload))
+        except BlockingIOError:
+            # --pty-link before the driver has opened its end: the pty
+            # buffer is full, and a UART nobody listens to loses the frame.
+            return
         self._log("tx", frame_type, seq, payload, fields)
 
     # -- host -> STM32 ---------------------------------------------------
@@ -326,6 +358,12 @@ class FakeBase:
             except OSError:
                 data = b""
             now = time.monotonic()
+            muted = bool(self.mute_file) and os.path.exists(self.mute_file)
+            if muted != self.muted:
+                self.muted = muted
+                self._log("meta", 0, 0, b"", {"muted": muted})
+            if muted:
+                data = b""
             for frame_type, seq, payload in self.parser.feed(data):
                 self.on_frame(frame_type, seq, payload, now)
             # the firmware's own command timeout
@@ -358,13 +396,20 @@ class FakeBase:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--port", required=True, help="pty the driver is NOT using")
+    ap.add_argument("--port", help="pty the driver is NOT using")
+    ap.add_argument("--pty-link", default="",
+                    help="make the pty pair here instead and link the driver's end to this path")
+    ap.add_argument("--mute-file", default="",
+                    help="while this file exists: send nothing, drop everything received")
     ap.add_argument("--log", required=True, help="JSONL frame log")
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--max-rpm", type=float, default=58.0)
     ap.add_argument("--counts-per-rev", type=float, default=8896.0)
     args = ap.parse_args()
-    FakeBase(args.port, args.log, args.max_rpm, args.counts_per_rev).run(args.seconds)
+    if not args.port and not args.pty_link:
+        ap.error("one of --port / --pty-link is required")
+    FakeBase(args.port, args.log, args.max_rpm, args.counts_per_rev,
+             args.pty_link, args.mute_file).run(args.seconds)
     return 0
 
 

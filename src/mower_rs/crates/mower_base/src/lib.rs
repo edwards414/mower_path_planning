@@ -27,10 +27,23 @@
 //!   a lock that a `.await` can hold across.
 //! * The tokio side only spins the node so the subscriptions run. Each
 //!   subscription writes its request into a mutex-guarded slot that the
-//!   serial thread empties once per cycle — never a channel, because a
-//!   channel that the serial thread does not drain fast enough would deliver
-//!   a stale `cmd_vel` late instead of dropping it, which is precisely what
-//!   `realtime_tools::RealtimeThreadSafeBox` avoids in the C++ controller.
+//!   serial thread empties once per cycle, the way
+//!   `realtime_tools::RealtimeThreadSafeBox` hands the C++ controller one
+//!   command. r2r's subscription stream in front of the slot is itself a
+//!   10-deep channel, so a stalled executor *can* hand over old commands
+//!   late; the cmd_vel forwarder therefore does what upstream's callback
+//!   does and drops any message whose `header.stamp` is already
+//!   `cmd_vel_timeout` old ([`mower_base_core::diff_drive::receive_command`]).
+//!
+//! Clocks
+//! ------
+//! Everything the cycle times (period, command age, feedback age, the blade,
+//! override and LED deadlines, the telemetry throttle and its `t` field)
+//! runs on CLOCK_MONOTONIC, as ros2_control's steady trigger clock does. The
+//! system clock is used for message header stamps and for ageing an incoming
+//! cmd_vel by its own stamp, nothing else, so a wall-clock step (NTP, an RTC
+//! that is a year off) cannot pulse the wheels or stretch a dead-man. Both
+//! are read through one [`Clocks`] value, and nowhere else.
 //!
 //! Fail-closed
 //! -----------
@@ -40,16 +53,34 @@
 //! `respawn_delay=2.0`; inside `mower_rsd` the supervisor restarts the
 //! module alone after 2 s. Either way the firmware's own 300 ms command
 //! timeout has already stopped the wheels.
+//!
+//! The restarted module comes up with the arm latch set
+//! ([`BaseCycle::disarmed`]): it holds the wheels until cmd_vel shows a stop
+//! edge (a zero command, or nothing for `cmd_vel_timeout`), so it never
+//! picks up a live nav2 or teleop command on its own. The C++ chain got the
+//! same result by never coming back after an error. A new reader hears
+//! nothing until DDS discovery has matched it with the writer, so the spin
+//! thread reads the command topics' publishers off the graph and the cycle
+//! only counts silence once a publisher has been there for
+//! `publisher_settle_s` ([`BaseCycle::set_publishers`]). The latch also
+//! trips when 0x85 feedback that had been arriving stops for longer than
+//! `feedback_timeout_s` — on the robot's native UART a pulled lead is not a
+//! read or write error, so that is how this driver notices it — and does
+//! not re-arm until the feedback is back.
 
 pub mod requests;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use mower_base_core::cycle::{BaseCycle, BaseConfig, JointStates, LedRequest};
-use mower_base_core::diff_drive::{DiffDriveParams, LimitParams, OdomSample, Twist};
+use mower_base_core::cycle::{
+    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, StopEdge, Stream,
+};
+use mower_base_core::diff_drive::{
+    receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
+};
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::TimeNs;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
@@ -61,14 +92,87 @@ use r2r::std_msgs::msg::String as StringMsg;
 use r2r::tf2_msgs::msg::TFMessage;
 use r2r::QosProfile;
 
-/// `rclcpp::Time` in the default (system) clock, as nanoseconds. The C++ loop
-/// is driven by the same clock, and `BaseCycle` only ever takes differences,
-/// so this is both the control clock and the message stamp.
-fn now_ns() -> TimeNs {
+/// ROS time (`rclcpp::Node::now()` without sim time: the system clock), as
+/// nanoseconds. Only for header stamps and for ageing a cmd_vel by its stamp.
+fn ros_now_ns() -> TimeNs {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
+}
+
+/// The control clock: CLOCK_MONOTONIC nanoseconds, which is `RCL_STEADY_TIME`,
+/// the clock controller_manager 4.48 drives ros2_control with (so the
+/// telemetry `t` keeps the C++ meaning, seconds of uptime). Read once from
+/// rcl and carried forward with `Instant`, which is CLOCK_MONOTONIC too.
+fn mono_ns() -> TimeNs {
+    static ANCHOR: OnceLock<(Instant, TimeNs)> = OnceLock::new();
+    let (at, ns) = ANCHOR.get_or_init(|| {
+        let steady = r2r::Clock::create(r2r::ClockType::SteadyTime)
+            .and_then(|mut c| c.get_now())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+        (Instant::now(), steady)
+    });
+    ns + at.elapsed().as_nanos() as i64
+}
+
+/// The two clocks the driver reads, and the only place it reads them: the
+/// control clock for everything [`BaseCycle`] times, ROS time for header
+/// stamps and for the age of an incoming cmd_vel ([`accept_cmd_vel`]).
+pub trait Clocks: Send + Sync {
+    /// CLOCK_MONOTONIC in production.
+    fn control_ns(&self) -> TimeNs;
+    /// The system clock in production (`use_sim_time` is never on here).
+    fn ros_ns(&self) -> TimeNs;
+}
+
+/// What the robot runs.
+pub struct SystemClocks;
+
+impl Clocks for SystemClocks {
+    fn control_ns(&self) -> TimeNs {
+        mono_ns()
+    }
+    fn ros_ns(&self) -> TimeNs {
+        ros_now_ns()
+    }
+}
+
+/// The cmd_vel subscription callback: diff_drive_controller's stale check
+/// against ROS time, and the accepted command carried onto the control
+/// clock ([`receive_command`]).
+pub fn accept_cmd_vel(msg: &TwistStamped, clocks: &dyn Clocks, cmd_vel_timeout: f64) -> Received {
+    let header_stamp = msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
+    let twist = Twist::new(msg.twist.linear.x, msg.twist.angular.z);
+    receive_command(twist, header_stamp, clocks.ros_ns(), clocks.control_ns(), cmd_vel_timeout)
+}
+
+/// Whether each command topic has a publisher, as the spin thread last read
+/// it off the ROS graph (the serial thread passes it to
+/// [`BaseCycle::set_publishers`] every cycle).
+#[derive(Default)]
+struct GraphSeen {
+    cmd_vel: AtomicBool,
+    wheel_override: AtomicBool,
+}
+
+impl GraphSeen {
+    /// How often the spin thread asks the graph. Discovery takes longer
+    /// than this, and `publisher_settle_s` covers the rest.
+    const POLL: Duration = Duration::from_millis(100);
+
+    fn poll(&self, node: &r2r::Node, cmd_vel_topic: &str, override_topic: &str) {
+        let has_publisher = |topic: &str| {
+            !topic.is_empty()
+                && node
+                    .get_publishers_info_by_topic(topic, false)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+        };
+        self.cmd_vel.store(has_publisher(cmd_vel_topic), Ordering::Relaxed);
+        self.wheel_override.store(has_publisher(override_topic), Ordering::Relaxed);
+    }
 }
 
 fn stamp(ns: TimeNs) -> Time {
@@ -80,7 +184,7 @@ fn stamp(ns: TimeNs) -> Time {
 /// 40 ms window replaces the first, exactly as the C++ atomics do.
 #[derive(Default)]
 struct Slots {
-    cmd_vel: Option<Twist>,
+    cmd_vel: Option<Command>,
     led: Option<LedRequest>,
     pid: Option<PidConfig>,
     /// `(left_permille, right_permille, ttl_ms)`
@@ -118,6 +222,8 @@ struct Driver {
     settings: Settings,
     pubs: Publishers,
     slots: Shared,
+    clocks: Arc<dyn Clocks>,
+    graph: Arc<GraphSeen>,
     logger: String,
     stop: Arc<AtomicBool>,
     odom_template: Odometry,
@@ -134,7 +240,7 @@ impl Driver {
             .map_err(|e| format!("serial open failed ({}): {e}", self.settings.device))?;
         r2r::log_info!(&self.logger, "opened {}", self.settings.device);
 
-        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), now_ns())?;
+        let (mut base, activation) = BaseCycle::new(self.cfg.clone(), self.clocks.control_ns())?;
         port.write_all(&activation.bytes)
             .map_err(|e| format!("serial write error (activation): {e}"))?;
 
@@ -155,7 +261,8 @@ impl Driver {
 
         while !self.stop.load(Ordering::Relaxed) {
             // ---- read(): drain the port, VMIN = 0 ------------------------
-            let time = now_ns();
+            let time = self.clocks.control_ns();
+            let stamp = self.clocks.ros_ns();
             loop {
                 let available = match port.bytes_to_read() {
                     Ok(n) => n as usize,
@@ -189,8 +296,14 @@ impl Driver {
             self.apply_requests(&mut base, time);
 
             // ---- update() + write() -------------------------------------
+            base.set_publishers(Stream::CmdVel, self.graph.cmd_vel.load(Ordering::Relaxed), time);
+            base.set_publishers(
+                Stream::WheelOverride,
+                self.graph.wheel_override.load(Ordering::Relaxed),
+                time,
+            );
             let cmd = self.slots.lock().expect("slots").cmd_vel.take();
-            let (tx, odom, joints) = base.tick(cmd, time);
+            let (tx, odom, joints) = base.tick(cmd, time, stamp);
             if let Some(tx) = tx {
                 if !tx.is_empty() {
                     if let Err(e) = port.write_all(&tx.bytes) {
@@ -203,6 +316,10 @@ impl Driver {
             }
             if let Some(odom) = odom {
                 self.publish_odom(&odom);
+            }
+            // After the write: a braking frame never waits for a log line.
+            for event in base.take_events() {
+                self.log_event(event);
             }
 
             // ---- sleep to the next 25 Hz slot ---------------------------
@@ -246,6 +363,82 @@ impl Driver {
         Err(message)
     }
 
+    /// The transitions the C++ chain logged (same texts where it had one),
+    /// plus the arm latch.
+    fn log_event(&self, event: Event) {
+        let l = &self.logger;
+        let timeout_s = self.cfg.diff_drive.cmd_vel_timeout;
+        let settle_s = self.cfg.publisher_settle_s;
+        let stream_name = |stream| match stream {
+            Stream::CmdVel => "cmd_vel",
+            Stream::WheelOverride => "wheel_override",
+        };
+        match event {
+            Event::Disarmed(DisarmReason::Activation) => r2r::log_info!(
+                l,
+                "arm latch: wheels held until cmd_vel stops (a zero command, or none for \
+                 {timeout_s:.2} s once its publisher has been matched for {settle_s:.1} s); \
+                 wheel_override likewise"
+            ),
+            Event::Disarmed(DisarmReason::FeedbackLost) => r2r::log_warn!(
+                l,
+                "arm latch: wheel feedback lost, braking; wheels held until the feedback is \
+                 back and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
+                 wheel_override likewise"
+            ),
+            Event::Armed { stream, reason, by, after_s } => {
+                let stream = stream_name(stream);
+                let reason = match reason {
+                    DisarmReason::Activation => "activation",
+                    DisarmReason::FeedbackLost => "feedback loss",
+                };
+                let by = match by {
+                    StopEdge::Stop => "an explicit stop".to_string(),
+                    StopEdge::Silence => format!("silence (nothing for > {timeout_s:.2} s)"),
+                };
+                r2r::log_info!(
+                    l,
+                    "arm latch: {stream} re-armed by {by}, {after_s:.2} s after the {reason}"
+                );
+            }
+            Event::FeedbackLost { age_s } => {
+                r2r::log_warn!(l, "no wheel feedback for {:.2} s", age_s)
+            }
+            Event::FeedbackResumed => r2r::log_info!(l, "feedback resumed"),
+            Event::NoFeedbackSinceActivation { age_s } => r2r::log_warn!(
+                l,
+                "no wheel feedback at all {age_s:.2} s after activation; not latching on a \
+                 link that never delivered feedback (check the STM32 UART)"
+            ),
+            Event::DriverAlarm => r2r::log_warn!(l, "driver alarm flag set"),
+            Event::Override { active: true } => {
+                r2r::log_info!(l, "wheel override active (controller command bypassed)")
+            }
+            Event::Override { active: false } => {
+                r2r::log_info!(l, "wheel override expired, back to controller command")
+            }
+            Event::Blade { running: true, permille } => {
+                r2r::log_info!(l, "blade running at {} permille (dead-man held)", permille)
+            }
+            Event::Blade { running: false, .. } => r2r::log_info!(l, "blade stop"),
+            Event::CmdVelTimedOut { linear_x, angular_z } => r2r::log_warn!(
+                l,
+                "Velocity command timed out. Braking. (last command {linear_x:.3} m/s, \
+                 {angular_z:.3} rad/s)"
+            ),
+            Event::Publishers { stream, present: true, after_activation_s } => r2r::log_info!(
+                l,
+                "{}: publisher in the graph {after_activation_s:.2} s after activation",
+                stream_name(stream)
+            ),
+            Event::Publishers { stream, present: false, after_activation_s } => r2r::log_info!(
+                l,
+                "{}: no publisher any more ({after_activation_s:.2} s after activation)",
+                stream_name(stream)
+            ),
+        }
+    }
+
     fn on_shutdown_request(&self, reason: u8) {
         r2r::log_warn!(
             &self.logger,
@@ -270,7 +463,7 @@ impl Driver {
 
     /// Move whatever the subscriptions left into the cycle. The ttl deadlines
     /// are computed here, on the control clock, which is where `write()`
-    /// computes them in the C++.
+    /// computes them in the C++ (on the steady clock there too).
     fn apply_requests(&self, base: &mut BaseCycle, now: TimeNs) {
         let taken = {
             let mut slots = self.slots.lock().expect("slots");
@@ -556,6 +749,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         led_resend_period_s: params::f64(&node, "led_resend_period_s", 5.0),
         override_max_ttl_ms: params::i64(&node, "override_max_ttl_ms", 1000),
         blade_max_ttl_ms: params::i64(&node, "blade_max_ttl_ms", 1000),
+        // Not a parameter: the latch only ever comes off in the parity tests.
+        arm_latch: true,
+        publisher_settle_s: params::f64(&node, "publisher_settle_s", 2.0),
         diff_drive: diff_drive.clone(),
     };
     let settings = Settings {
@@ -586,28 +782,31 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let servo_topic = params::string(&node, "servo_topic", "/mower_base/servo_command");
     let blade_topic = params::string(&node, "blade_topic", "/mower_base/blade_command");
 
-    // QoS, one for one with what the chain announces on the graph today
-    // (read off `ros2 topic info -v` / the endpoint info in the differential
-    // test, not guessed from the upstream sources):
-    //   /odom, /joint_states, /tf        reliable + TRANSIENT_LOCAL, keep last 1
-    //                                    -- diff_drive_controller and
-    //                                    joint_state_broadcaster both latch,
-    //                                    so a late joiner gets the last state
-    //   cmd_vel (subscription)           reliable-compatible BEST_EFFORT,
-    //                                    which is what diff_controller
-    //                                    subscribes with; a reliable
-    //                                    subscription would refuse a
-    //                                    best-effort publisher
-    //   /mower_base/telemetry            best effort, keep last 1
-    //   /mower_base/firmware_info, led   transient local + reliable, depth 1
-    //   pid                              reliable, depth 4
-    //   wheel_override, servo, blade     best effort, depth 1
+    // QoS, the same profiles the C++ chain asks for, so each RMW resolves
+    // them the same way on both sides:
+    //   /odom, /tf, cmd_vel (subscription)  rclcpp::SystemDefaultsQoS()
+    //                                       (diff_drive_controller 4.42.1)
+    //   /joint_states                       rclcpp::SystemDefaultsQoS()
+    //                                       (joint_state_broadcaster 4.42.1)
+    //   /mower_base/telemetry               best effort, keep last 1
+    //   /mower_base/firmware_info, led      transient local + reliable, depth 1
+    //   pid                                 reliable, depth 4
+    //   wheel_override, servo, blade        best effort, depth 1
+    // (the last four set explicitly in mower_system.cpp). SystemDefaults is
+    // not a fixed profile: rmw_cyclonedds_cpp, what the robot runs, resolves
+    // it to reliable + volatile, keep last 1, and rmw_fastrtps to its own
+    // entity defaults (TRANSIENT_LOCAL writers, BEST_EFFORT readers), which
+    // is what an earlier Fast DDS container run read off the graph and this
+    // node once hard-coded. tools/base_compare.py checks the resolved QoS of
+    // both chains under the robot's RMW.
+    let system_default = QosProfile::system_default();
     let latched = QosProfile::default().keep_last(1).transient_local().reliable();
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
 
-    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, latched.clone())?;
-    let joint_pub = node.create_publisher::<JointState>(&joint_states_topic, latched.clone())?;
-    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, latched.clone())?;
+    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
+    let joint_pub =
+        node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
+    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
     let telemetry_pub = if telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0 {
         None
     } else {
@@ -622,15 +821,40 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let slots: Shared = Arc::new(Mutex::new(Slots::default()));
 
     // ---- subscriptions ---------------------------------------------------
-    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, best_effort_1.clone())?;
+    let clocks: Arc<dyn Clocks> = Arc::new(SystemClocks);
+    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
     {
         let slots = slots.clone();
+        let logger = logger.clone();
+        let clocks = clocks.clone();
+        let cmd_vel_timeout = diff_drive.cmd_vel_timeout;
         tokio::spawn(async move {
+            let mut warned_zero_stamp = false;
             while let Some(msg) = cmd_vel.next().await {
-                // Only the newest command survives to the next cycle: the
-                // C++ controller reads one realtime box, not a queue.
-                slots.lock().expect("slots").cmd_vel =
-                    Some(Twist::new(msg.twist.linear.x, msg.twist.angular.z));
+                match accept_cmd_vel(&msg, &*clocks, cmd_vel_timeout) {
+                    Received::Accepted { command, zero_stamp } => {
+                        if zero_stamp && !warned_zero_stamp {
+                            warned_zero_stamp = true;
+                            r2r::log_warn!(
+                                &logger,
+                                "Received TwistStamped with zero timestamp, setting it to \
+                                 current time, this message will only be shown once"
+                            );
+                        }
+                        // Only the newest command survives to the next cycle:
+                        // the C++ controller reads one realtime box, not a queue.
+                        slots.lock().expect("slots").cmd_vel = Some(command);
+                    }
+                    Received::Stale { stamp_ns, age_s } => r2r::log_warn!(
+                        &logger,
+                        "Ignoring the received message (timestamp {:.10}) because it is older \
+                         than the current time by {:.10} seconds, which exceeds the allowed \
+                         timeout ({:.4})",
+                        mower_base_core::seconds(stamp_ns),
+                        age_s,
+                        cmd_vel_timeout
+                    ),
+                }
             }
         });
     }
@@ -693,11 +917,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     if !override_topic.is_empty() {
         let mut sub = node.subscribe::<StringMsg>(&override_topic, best_effort_1.clone())?;
         let slots = slots.clone();
+        let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                if let Some(req) = requests::wheel_override(&msg.data) {
-                    slots.lock().expect("slots").wheel_override = Some(req);
-                }
+                let req = requests::wheel_override(&msg.data).unwrap_or_else(|cancel| {
+                    r2r::log_warn!(
+                        &logger,
+                        "wheel override request is not JSON, cancelling: {}",
+                        msg.data
+                    );
+                    cancel
+                });
+                slots.lock().expect("slots").wheel_override = Some(req);
             }
         });
     }
@@ -721,11 +952,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     if !blade_topic.is_empty() {
         let mut sub = node.subscribe::<StringMsg>(&blade_topic, best_effort_1.clone())?;
         let slots = slots.clone();
+        let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                if let Some(req) = requests::blade(&msg.data) {
-                    slots.lock().expect("slots").blade = Some(req);
-                }
+                let req = requests::blade(&msg.data).unwrap_or_else(|stop| {
+                    r2r::log_warn!(&logger, "blade request is not JSON, stopping: {}", msg.data);
+                    stop
+                });
+                slots.lock().expect("slots").blade = Some(req);
             }
         });
     }
@@ -742,6 +976,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         odom_template.twist.covariance[6 * i + i] = diff_drive.twist_covariance_diagonal[i];
     }
     let mut joint_template = JointState::default();
+    // joint_state_broadcaster's `frame_id` parameter, default "base_link".
+    joint_template.header.frame_id = params::string(&node, "joint_states_frame_id", "base_link");
     joint_template.name = vec!["left_wheel_joint".to_string(), "right_wheel_joint".to_string()];
     // joint_state_broadcaster fills every array it exports and writes NaN
     // for an interface the hardware does not have; these joints export
@@ -768,6 +1004,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     );
 
     let stop = Arc::new(AtomicBool::new(false));
+    let graph = Arc::new(GraphSeen::default());
     let mut driver = Driver {
         cfg,
         settings,
@@ -779,6 +1016,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             firmware_info: firmware_pub,
         },
         slots,
+        clocks,
+        graph: graph.clone(),
         logger: logger.clone(),
         stop: stop.clone(),
         odom_template,
@@ -790,12 +1029,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         .spawn(move || driver.run())?;
 
     // ---- spin the subscriptions until shutdown ---------------------------
+    // The graph is read here because the node lives here.
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
         tokio::task::spawn_blocking(move || {
+            let mut polled: Option<Instant> = None;
             while running.load(Ordering::Relaxed) {
-                node.spin_once(Duration::from_millis(100));
+                node.spin_once(Duration::from_millis(50));
+                if polled.map_or(true, |t| t.elapsed() >= GraphSeen::POLL) {
+                    polled = Some(Instant::now());
+                    graph.poll(&node, &cmd_vel_topic, &override_topic);
+                }
             }
             drop(node);
         })
@@ -874,6 +1119,70 @@ mod tests {
         off.limiter().unwrap().limit(&mut b, 0.0, 0.0, 0.04);
         assert_eq!(a, b);
         assert_eq!(a, 0.9);
+    }
+
+    const MS: i64 = 1_000_000;
+    /// A day of uptime on the control clock, 2026 on the ROS clock: far
+    /// enough apart that feeding one where the other belongs cannot pass.
+    const CONTROL: TimeNs = 86_400_000 * MS;
+    const ROS: TimeNs = 1_790_000_000_000 * MS;
+
+    struct Fixed(TimeNs, TimeNs);
+    impl Clocks for Fixed {
+        fn control_ns(&self) -> TimeNs {
+            self.0
+        }
+        fn ros_ns(&self) -> TimeNs {
+            self.1
+        }
+    }
+
+    fn twist_stamped(stamp_ns: TimeNs, linear_x: f64) -> TwistStamped {
+        let mut msg = TwistStamped::default();
+        msg.header.stamp = stamp(stamp_ns);
+        msg.twist.linear.x = linear_x;
+        msg
+    }
+
+    fn accepted(r: Received) -> Command {
+        match r {
+            Received::Accepted { command, .. } => command,
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    /// The subscription ages a message on ROS time and hands the cycle a
+    /// control-clock stamp, whatever the wall clock just did.
+    #[test]
+    fn the_cmd_vel_callback_ages_on_ros_time_and_stamps_on_the_control_clock() {
+        let clocks = Fixed(CONTROL, ROS);
+        let c = accepted(accept_cmd_vel(&twist_stamped(ROS - 100 * MS, 0.3), &clocks, 0.25));
+        assert_eq!(c.stamp_ns, CONTROL - 100 * MS);
+        assert_eq!(c.twist, Twist::new(0.3, 0.0));
+        // zero stamp: now
+        assert_eq!(accepted(accept_cmd_vel(&twist_stamped(0, 0.3), &clocks, 0.25)).stamp_ns, CONTROL);
+        // stamped just before the wall clock stepped back 5 s: arrives 5 s
+        // "from the future", still ages from now
+        let c = accepted(accept_cmd_vel(&twist_stamped(ROS + 5_000 * MS, 0.3), &clocks, 0.25));
+        assert_eq!(c.stamp_ns, CONTROL);
+        // stamped just before a 10 s forward step: 10 s old, ignored
+        assert!(matches!(
+            accept_cmd_vel(&twist_stamped(ROS - 10_000 * MS, 0.3), &clocks, 0.25),
+            Received::Stale { .. }
+        ));
+    }
+
+    /// `SystemClocks` is CLOCK_MONOTONIC (rcl's steady clock) for control
+    /// and the system clock for ROS time.
+    #[test]
+    fn the_system_clocks_are_monotonic_and_wall() {
+        let steady = r2r::Clock::create(r2r::ClockType::SteadyTime)
+            .and_then(|mut c| c.get_now())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap();
+        let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
+        assert!((SystemClocks.control_ns() - steady).abs() < 50 * MS);
+        assert!((SystemClocks.ros_ns() - wall).abs() < 50 * MS);
     }
 
     #[test]

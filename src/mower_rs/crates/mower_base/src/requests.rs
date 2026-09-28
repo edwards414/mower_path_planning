@@ -5,8 +5,15 @@
 //! `"key"`, skip to the `:` and run `strtol` / `strtod`. That means a missing
 //! key falls back to the default, a value that is not a number falls back to
 //! the default, and `1.5` read as an integer is `1`. This module reproduces
-//! those rules on top of `serde_json` so a malformed message is still
-//! *ignored* rather than fatal, and every clamp is the C++ clamp.
+//! those rules on top of `serde_json`, and every clamp is the C++ clamp.
+//!
+//! Text that is not JSON: the LED, PID and servo requests are ignored (with
+//! the C++ warning, which they share with a missing key), but a
+//! `wheel_override` is a cancel and a `blade_command` is a stop. The C++
+//! scan reads any key it cannot find as 0, which for these two is the
+//! cancel / the stop; this port does not guess which keys the scan would
+//! still have found in broken text, and a motion request that cannot be
+//! understood must never leave the previous one running.
 
 use mower_base_core::cycle::LedRequest;
 use mower_base_core::protocol::{PidConfig, SERVO_MAX_PULSE_US, SERVO_MIN_PULSE_US};
@@ -110,10 +117,11 @@ pub fn pid(text: &str) -> Option<PidConfig> {
 /// `on_wheel_override` -> `(left_permille, right_permille, ttl_ms)`. The
 /// clamps to +-1000 and to `kOverrideMaxTtlMs` happen in
 /// `BaseCycle::request_wheel_override`, which is where the C++ does them too
-/// (the ttl one) — here only the message is decoded.
-pub fn wheel_override(text: &str) -> Option<(i32, i32, i64)> {
-    let v = parse(text)?;
-    Some((
+/// (the ttl one) — here only the message is decoded. `Err` holds the cancel
+/// (`0, 0, 0`) to apply when the text is not JSON, for the caller to log.
+pub fn wheel_override(text: &str) -> Result<(i32, i32, i64), (i32, i32, i64)> {
+    let v = parse(text).ok_or((0, 0, 0))?;
+    Ok((
         json_int(&v, "left_permille", 0).clamp(-1000, 1000) as i32,
         json_int(&v, "right_permille", 0).clamp(-1000, 1000) as i32,
         json_int(&v, "ttl_ms", 0),
@@ -137,10 +145,11 @@ pub fn servo(text: &str) -> Option<(i64, i64)> {
     Some((pulse, json_int(&v, "hold_ms", 0).clamp(0, 65535)))
 }
 
-/// `on_blade_command` -> `(permille, ttl_ms)`.
-pub fn blade(text: &str) -> Option<(i32, i64)> {
-    let v = parse(text)?;
-    Some((
+/// `on_blade_command` -> `(permille, ttl_ms)`. `Err` holds the stop
+/// (`0, 0`) to apply when the text is not JSON, for the caller to log.
+pub fn blade(text: &str) -> Result<(i32, i64), (i32, i64)> {
+    let v = parse(text).ok_or((0, 0))?;
+    Ok((
         json_int(&v, "permille", 0).clamp(0, 1000) as i32,
         json_int(&v, "ttl_ms", 0),
     ))
@@ -181,9 +190,23 @@ mod tests {
     fn override_clamps_permille_and_keeps_the_ttl_for_the_cycle() {
         assert_eq!(
             wheel_override(r#"{"left_permille":4000,"right_permille":-4000,"ttl_ms":300}"#),
-            Some((1000, -1000, 300))
+            Ok((1000, -1000, 300))
         );
-        assert_eq!(wheel_override("{}"), Some((0, 0, 0)));
+        assert_eq!(wheel_override("{}"), Ok((0, 0, 0)));
+    }
+
+    /// Not JSON: a cancel / a stop, never "ignored" (which would leave the
+    /// previous override or blade request running until its ttl).
+    #[test]
+    fn malformed_motion_requests_stop() {
+        assert_eq!(
+            wheel_override(r#"{"left_permille":400,"right_permille":-400,"ttl_ms":300,}"#),
+            Err((0, 0, 0))
+        );
+        assert_eq!(wheel_override("{left_permille:400}"), Err((0, 0, 0)));
+        assert_eq!(blade(r#"{"permille":0,"ttl_ms":0,}"#), Err((0, 0)));
+        assert_eq!(blade("{permille:600}"), Err((0, 0)));
+        assert_eq!(blade(""), Err((0, 0)));
     }
 
     #[test]
@@ -197,9 +220,9 @@ mod tests {
 
     #[test]
     fn blade_clamps_permille_into_the_forward_range() {
-        assert_eq!(blade(r#"{"permille":300,"ttl_ms":500}"#), Some((300, 500)));
-        assert_eq!(blade(r#"{"permille":-5}"#), Some((0, 0)));
-        assert_eq!(blade(r#"{"permille":5000,"ttl_ms":99999}"#), Some((1000, 99999)));
+        assert_eq!(blade(r#"{"permille":300,"ttl_ms":500}"#), Ok((300, 500)));
+        assert_eq!(blade(r#"{"permille":-5}"#), Ok((0, 0)));
+        assert_eq!(blade(r#"{"permille":5000,"ttl_ms":99999}"#), Ok((1000, 99999)));
     }
 
     #[test]

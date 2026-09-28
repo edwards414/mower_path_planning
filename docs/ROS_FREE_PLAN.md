@@ -140,11 +140,14 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
   （`open_loop: true`、`enable_odom_tf: false`、`base_footprint`、0.35/0.09 m、
   `cmd_vel_timeout: 0.25`），**不是** `mower_hardware/config/mower_controllers.yaml`——
   那是 bench 用的，上述每一項都不同。
-- **QoS 是從跑起來的 graph 量出來的，不是照 upstream 原始碼猜的**：
-  `diff_drive_controller` 的 `/odom`、`/tf` 與 `joint_state_broadcaster` 的 `/joint_states`
-  都是 reliable + **transient_local**（晚到的訂閱者拿得到最後一筆），而 `diff_controller`
-  的 cmd_vel 訂閱是 **best_effort**——若這裡用 reliable，best-effort 的發布者會配不上。
-  `/joint_states` 的 `effort` 是兩個 NaN。
+- **QoS 跟 upstream 要的一樣是 `SystemDefaultsQoS`**（`/odom`、`/tf`、`/joint_states`、
+  cmd_vel 訂閱），由各 RMW 自己解讀：機器上的 CycloneDDS 是 reliable + volatile、keep last 1；
+  Fast DDS 會變成 transient_local 的 writer、best_effort 的 reader。先前版本把 Fast DDS
+  容器裡量到的值寫死，上機後 cmd_vel 會是 best_effort（C++ 是 reliable），已改
+  （`fix/rf-base-preflight`），`base_compare.py` 在 CycloneDDS 下逐端點比對。
+  `/joint_states` 的 `effort` 是兩個 NaN，`frame_id` 是 `base_link`。
+- **比 C++ 多的兩件事**：重啟／回授遺失後的 arm latch（停止邊緣之前輪子保持 0），
+  以及控制時鐘用 CLOCK_MONOTONIC（系統時鐘只用在訊息 stamp）。見 `src/mower_rs/README.md`。
 - **執行緒**：25 Hz 迴圈是專用 std thread（`VMIN=0` 非阻塞讀 → `tick` → 寫 → 自己發佈；
   r2r 的 publish 就是一次 `rcl_publish`，不需要 executor）。tokio 只負責 spin 六個訂閱，
   每個訂閱把請求寫進 mutex slot，迴圈每週期取走一次；**不用 channel**，因為塞住的 channel

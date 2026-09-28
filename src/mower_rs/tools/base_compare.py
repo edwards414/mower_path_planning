@@ -11,7 +11,19 @@ is shared, which is what lets a frame in `fake.jsonl` be placed on the
 harness timeline.
 
 What is compared, and why each tolerance is what it is, is printed with the
-numbers. Nothing here runs on the robot.
+numbers. Exit status 1 if the endpoint QoS of any topic mower_base owns
+differs between the two (run both under the robot's RMW,
+RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: SystemDefaultsQoS resolves
+differently per RMW).
+
+Runs recorded with `base_harness.py --scenario pull` / `pullpush` get the
+cable-pull report instead of the parity sections: what each chain commanded
+after the lead came back with the stick still pushed. `--scenario live` gets
+the restart report: what reached the wheels while a stream that was running
+before the driver started was still live. `mower_base` must send 0/0 in
+both until the release; the C++ chain has no latch and follows at once.
+
+Nothing here runs on the robot.
 """
 
 from __future__ import annotations
@@ -39,17 +51,22 @@ def load(directory: str):
         run = json.load(f)
     frames = []
     t0_fake = None
+    mutes = []
     with open(os.path.join(directory, "fake.jsonl")) as f:
         for line in f:
             rec = json.loads(line)
             if rec["dir"] == "meta":
-                t0_fake = rec["fields"]["t0_monotonic"]
+                if "t0_monotonic" in rec["fields"]:
+                    t0_fake = rec["fields"]["t0_monotonic"]
+                else:
+                    mutes.append(rec)
                 continue
             frames.append(rec)
     # Put every frame on the harness timeline.
     shift = (t0_fake - run["t0_monotonic"]) if t0_fake is not None else 0.0
-    for rec in frames:
+    for rec in frames + mutes:
         rec["h"] = rec["t"] + shift
+    run["mute_log"] = [(m["h"], m["fields"]["muted"]) for m in mutes]
     return run, frames
 
 
@@ -125,12 +142,14 @@ def main() -> int:
 
         def fmt(entries):
             return sorted(
-                "{} {} {}/{}/{}".format(
+                "{} {} {}/{}/{}/{}/{}".format(
                     e["kind"].split(".")[-1],
                     e["type"],
                     e["reliability"].split(".")[-1],
                     e["durability"].split(".")[-1],
+                    e.get("history", "?").split(".")[-1],
                     e["depth"],
+                    e.get("liveliness", "?").split(".")[-1],
                 )
                 for e in entries
                 if e["node"] != "base_harness"
@@ -140,6 +159,19 @@ def main() -> int:
         print(f"{topic}\n    A: {fa}\n    B: {fb}\n    {'SAME' if fa == fb else 'DIFFERENT'}")
         out.setdefault("graph", {})[topic] = {"a": fa, "b": fb, "same": fa == fb}
     out["nodes"] = {"a": run_a.get("nodes"), "b": run_b.get("nodes")}
+    differ = sorted(t for t, v in out.get("graph", {}).items() if not v["same"])
+    missing = sorted(t for t, v in out.get("graph", {}).items() if not v["a"] or not v["b"])
+    out["qos_same"] = not differ and not missing
+    print(f"QoS check: {len(out.get('graph', {}))} topics, "
+          + ("all SAME" if out["qos_same"] else f"DIFFERENT {differ}, no endpoint {missing}"))
+
+    scenario = run_b.get("scenario") or run_a.get("scenario")
+    if scenario in ("pull", "pullpush"):
+        pull_report(run_a, frames_a, run_b, frames_b, out)
+        return finish(args, out)
+    if scenario == "live":
+        live_report(run_a, frames_a, run_b, frames_b, out)
+        return finish(args, out)
 
     # ---- 2. rates -----------------------------------------------------
     section("publish rates in the %.0f-%.0f s window (Hz, count)" % WINDOW)
@@ -206,7 +238,12 @@ def main() -> int:
     section("joint_states")
     for label, run in (("A", run_a), ("B", run_b)):
         first = run["joint_states"][0] if run["joint_states"] else {}
-        print(f"  {label} names={first.get('name')} effort={first.get('effort')}")
+        print(f"  {label} names={first.get('name')} effort={first.get('effort')} "
+              f"frame_id={first.get('frame_id')!r}")
+    out["joint_frame_id"] = {
+        "a": run_a["joint_states"][0].get("frame_id") if run_a["joint_states"] else None,
+        "b": run_b["joint_states"][0].get("frame_id") if run_b["joint_states"] else None,
+    }
     out["joint_names"] = {
         "a": run_a["joint_states"][0]["name"] if run_a["joint_states"] else None,
         "b": run_b["joint_states"][0]["name"] if run_b["joint_states"] else None,
@@ -235,6 +272,12 @@ def main() -> int:
     ka, kb = keys(ta), keys(tb)
     print(f"  keys: {len(ka)} vs {len(kb)}; only in A: {sorted(ka - kb)}; only in B: {sorted(kb - ka)}")
     out["telemetry_keys"] = {"only_a": sorted(ka - kb), "only_b": sorted(kb - ka)}
+    # `t` is the C++ read() time on the steady clock: seconds of uptime, not
+    # epoch seconds. Two runs minutes apart on one host read within an hour.
+    t_a, t_b = ta.get("t"), tb.get("t")
+    same_clock = t_a is not None and t_b is not None and abs(t_a - t_b) < 3600
+    print(f"  t: A {t_a}  B {t_b}  {'same clock' if same_clock else 'DIFFERENT CLOCK'}")
+    out["telemetry_t"] = {"a": t_a, "b": t_b, "same_clock": same_clock}
     fa = run_a["firmware_info"][-1]["data"] if run_a["firmware_info"] else None
     fb = run_b["firmware_info"][-1]["data"] if run_b["firmware_info"] else None
     print(f"  firmware_info A {fa}\n                B {fb}\n  {'SAME' if fa == fb else 'DIFFERENT'}")
@@ -314,11 +357,83 @@ def main() -> int:
         print(f"  {label}: {len(burst)} frames at +-400, {window}")
         out.setdefault("override", {})[label] = {"n": len(burst), "window": window}
 
+    return finish(args, out)
+
+
+def finish(args, out) -> int:
     if args.json:
         with open(args.json, "w") as f:
             json.dump(out, f, indent=1)
         print(f"\nwrote {args.json}")
-    return 0
+    return 0 if out.get("qos_same") else 1
+
+
+def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
+    """The cable-pull scenarios: what reached the wheels once the lead was back.
+
+    `pull`: the stick is held at 0.30 m/s through the pull. `pullpush`: the
+    lead comes out with nothing commanded and the stick is pushed while it
+    is out. Either way it is still pushed when the lead is back, released
+    at 9.0 s and pushed again from 9.5 s. The C++ chain has no latch and
+    resumes the pushed command as soon as frames get through again;
+    mower_base must stay at 0/0 until the release and follow the stick
+    again after it.
+    """
+    scenario = run_b.get("scenario") or run_a.get("scenario")
+    section("cable %s (lead out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
+            "pushed 9.5 s)" % ((scenario,) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
+    out["pull"] = {"scenario": scenario}
+    for label, run, frames in (("A", run_a, frames_a), ("B", run_b, frames_b)):
+        mute = run.get("mute") or (4.0, 6.0)
+        seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
+                for f in frames
+                if f["dir"] == "rx" and f["type"] == WHEEL_SPEED_COMMAND and f["fields"]]
+        fb = [(f["h"], f["fields"]["left_measured_rpm"])
+              for f in frames if f["dir"] == "tx" and f["type"] == 0x85]
+        before = [x for x in seen if mute[0] - 0.5 <= x[0] < mute[0]]
+        held = [x for x in seen if mute[1] <= x[0] < 9.0]
+        moving_after = [x for x in held if x[1] or x[2]]
+        released = [x for x in seen if 9.6 <= x[0] < 11.5 and (x[1] or x[2])]
+        rpm_held = max((abs(r) for h, r in fb if mute[1] + 0.3 <= h < 9.0), default=0.0)
+        print(f"  {label}: before the pull {sorted({(l, r) for _, l, r in before})}")
+        print(f"     lead back, stick held: {len(held)} frames, {len(moving_after)} non-zero"
+              + (f" (first at {moving_after[0][0]:.3f} s: {moving_after[0][1:]})" if moving_after else "")
+              + f"; wheel speed up to {rpm_held:.1f} rpm")
+        print(f"     after release + push: {len(released)} non-zero frames"
+              + (f", first at {released[0][0]:.3f} s" if released else ""))
+        out["pull"][label] = {
+            "held_frames": len(held),
+            "held_nonzero": len(moving_after),
+            "held_max_rpm": rpm_held,
+            "after_release_nonzero": len(released),
+            "mute_log": run.get("mute_log"),
+        }
+
+
+def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
+    """A restart under a live stream: 0.30 m/s from before the driver
+    started until the release at 12.0 s, pushed again from 12.5 s."""
+    section("live stream before the driver (0.30 m/s until 12.0 s, released, pushed 12.5 s)")
+    out["live"] = {}
+    for label, frames in (("A", frames_a), ("B", frames_b)):
+        seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
+                for f in frames
+                if f["dir"] == "rx" and f["type"] == WHEEL_SPEED_COMMAND and f["fields"]]
+        live = [x for x in seen if x[0] < 12.0]
+        moving = [x for x in live if x[1] or x[2]]
+        after = [x for x in seen if 12.6 <= x[0] < 14.5 and (x[1] or x[2])]
+        first = seen[0][0] if seen else None
+        print(f"  {label}: first 0x01 at {first if first is None else round(first, 3)} s; "
+              f"{len(live)} frames while the stream was live, {len(moving)} non-zero"
+              + (f" (first at {moving[0][0]:.3f} s: {moving[0][1:]})" if moving else ""))
+        print(f"     after release + push: {len(after)} non-zero frames"
+              + (f", first at {after[0][0]:.3f} s" if after else ""))
+        out["live"][label] = {
+            "first_frame": first,
+            "live_frames": len(live),
+            "live_nonzero": len(moving),
+            "after_release_nonzero": len(after),
+        }
 
 
 if __name__ == "__main__":

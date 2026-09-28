@@ -46,6 +46,11 @@ control_toolbox 4.11.1 的移植（正好是映像裡 apt 版本）、`BaseCycle
 容器對照結果：6 個 topic 的端點與 QoS 完全相同；`/odom`、`/joint_states` 都 25.00 Hz；
 跑 3 m 後里程計差 1.9 mm；0x01 命令幀中位數差 0–1‰；telemetry JSON 84 個 key 一致。
 CPU 19.2 % → 6.5 %（容器，debug build）。
+**但那次是 Fast DDS**（dev 映像沒設 RMW），機器跑 CycloneDDS，`SystemDefaultsQoS` 解讀不同：
+照那次寫死的 QoS 上機，cmd_vel 會變 best_effort（C++ 是 reliable）。上機前的 pre-flight 修正
+（branch `fix/rf-base-preflight`）已改成跟 upstream 一樣要 `SystemDefaultsQoS`，並在
+ros-free-test 映像的 CycloneDDS 下重跑（`tools/base_ab.sh`）：11 個 topic 每個端點 QoS 全同。
+同一批修正加了 arm latch、單調時鐘、cmd_vel stamp 規則，細節見 `src/mower_rs/README.md` 的 mower_base 一節。
 
 兩個踩到的事實，寫在這裡免得再查一次：
 真機實際載入的控制器設定是 `mower_controller/controllers/diff_drive_controller.yaml`，
@@ -107,7 +112,28 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 ### 1. `RUST_BASE` / `RUST_LOCALIZE` 上機 —— 最優先，且必須有人在場
 
 兩個都是安全關鍵：`mower_base` 直接驅動輪子，nav2 靠 `mower_localize` 發的 `map→odom` 導航。
-第一次開啟一定要監督試車：搖桿、放開即停、一段導航；底盤另外要拔串口線確認 fail-closed + 2 秒重啟。
+第一次開啟一定要監督試車：搖桿、放開即停、一段導航；底盤另外要測斷線與重啟（見下）。
+
+底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` 之後的行為）：
+
+- **拔串口線測不到重啟**：`/dev/stmcom` 是板載 UART ttyS3，線拔掉讀寫都不會出錯，
+  `mower_base` 不會 fail、不會重啟。它測的是兩件事：韌體 300 ms 逾時讓輪子停，
+  以及 `mower_base` 的回授遺失鎖——日誌出現 `no wheel feedback for 0.52 s` 和
+  `arm latch: wheel feedback lost`；**插回去時搖桿繼續推著，輪子要保持不動**，
+  放開（或 0.25 s 沒有 cmd_vel）後出現 `arm latch: cmd_vel re-armed`，再推才會走。
+  C++ 那條鏈沒有這個鎖，插回去當下就照搖桿走。
+  另一種順序也要測：**靜止時拔線 → 拔著的時候推搖桿 → 推著插回去**，輪子一樣要不動，
+  放開再推才走（線還沒插回去之前鎖不會解開，所以不會在線外把速度爬上去、插回去一步到位）。
+- **重啟路徑**：`kill -9` 獨立的 `mower_base` 程序（`RUST_DAEMON=false`），launch 2 秒後重生；
+  重生後即使 nav2／搖桿還在送非零指令，輪子也要不動，直到出現停止邊緣
+  （`arm latch: cmd_vel re-armed by ...`）。DDS discovery 還沒配對好之前收不到東西，
+  那段安靜**不算**停止：要等 `cmd_vel: publisher in the graph ... after activation`
+  之後再 2 s（`publisher_settle_s`）才開始算 0.25 s 的靜默，所以閒置重生後大約 2.3 s
+  才自己解鎖；送一個 0/0 會立刻解鎖。
+- **B、C 一定要用分支的 `deploy/docker-compose.yaml`**，不能用 `switch.sh ... keep`：
+  機器上還原後的 compose 是 main 的，沒有 `rust_base`／`rust_localize`，
+  `RUST_BASE=true` 會被默默忽略，試車測到的其實是 ros2_control。開車前先
+  `docker exec` 看一下跑的是 `mower_base` 還是 `ros2_control_node`。
 
 真機基準是 ros2_control 28 %、定位鏈 23 %，容器裡分別降到 6.5 % 和 4.4 %，
 真機能省多少還沒量。
