@@ -91,8 +91,9 @@ def generate_launch_description():
     cpp_localization = UnlessCondition(rust_localize)
 
     mower_nav2_dir = get_package_share_directory('mower_nav2')
-    rl_params_file = os.path.join(
-        mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml')
+    # Whichever stack runs reads this one file (each node its own section), so
+    # an override reaches the C++ nodes and mower_localize alike.
+    rl_params_file = LaunchConfiguration('localize_params_file')
     remappings = _remappings(gps_fix_topic)
     return LaunchDescription(
         [
@@ -115,6 +116,13 @@ def generate_launch_description():
                 description='The mower_rs modules run inside one mower_rsd '
                             'process started by robot.launch.py, so the '
                             'separate mower_localize binary stays down here',
+            ),
+            DeclareLaunchArgument(
+                'localize_params_file',
+                default_value=os.path.join(
+                    mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml'),
+                description='Parameters of the two EKFs and navsat_transform, '
+                            'for the C++ nodes and mower_localize alike',
             ),
             launch.actions.DeclareLaunchArgument(
                 'output_final_position', default_value='false'

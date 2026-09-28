@@ -357,6 +357,21 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
         assert f'\n{node}:\n  ros__parameters:' not in params, node
         assert f'\n{node}:\n  ros__parameters:' in rl_params, node
     assert "'dual_ekf_navsat_params.yaml'" in robot
+    # one override reaches both stacks: robot.launch.py -> mower.launch.py ->
+    # dual_ekf_navsat.launch.py for the C++ nodes and mower_localize, and
+    # robot.launch.py's own mower_rsd, after mower_rsd.yaml so it wins there
+    assert "rl_params_file = LaunchConfiguration('localize_params_file')" in dual
+    assert dual.count('parameters=[rl_params_file') == 4
+    assert "'localize_params_file',\n" in dual
+    assert "'localize_params_file': LaunchConfiguration(" in mower
+    assert 'declare_localize_params_file,' in mower
+    assert "'localize_params_file': localize_params_file," in robot
+    assert "'localize_params_file',\n" in robot
+    assert (
+        "parameters.append(\n"
+        "            LaunchConfiguration('localize_params_file').perform(context))"
+    ) in robot
+    assert 'localize_params_file:=' in params
     assert "'localize': [" in robot
     assert "'navsat_transform:gps/fix:=' + LaunchConfiguration(" in robot
     for rule in ('ekf_filter_node_odom:odometry/filtered:=odometry/local',

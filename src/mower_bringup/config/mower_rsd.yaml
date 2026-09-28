@@ -18,6 +18,9 @@
 #
 # To try other values without a new image, copy this file into ~/.mower and
 # pass rust_daemon_params_file:=/home/mower/.mower/<file> to robot.launch.py.
+# Not for the localize nodes: their file is passed after this one and wins, so
+# copy mower_nav2/config/dual_ekf_navsat_params.yaml and pass
+# localize_params_file:= instead, which reaches the C++ nodes too.
 
 # --- base (rust_base) --------------------------------------------------------
 # The Rust base driver, which replaces the whole ros2_control chain
@@ -75,9 +78,11 @@ gps:
 # --- localize (rust_localize) ------------------------------------------------
 # No section here. The three nodes of dual_ekf_navsat.launch.py
 # (ekf_filter_node_odom, ekf_filter_node_map, navsat_transform) read
-# mower_nav2/config/dual_ekf_navsat_params.yaml, the same file the C++ nodes
-# read: robot.launch.py passes it after this one, and the topic wiring the C++
-# nodes get from `remappings=` as node-scoped -r rules. mower_localize refuses
+# robot.launch.py's localize_params_file (default
+# mower_nav2/config/dual_ekf_navsat_params.yaml), the same file the C++ nodes
+# read: robot.launch.py passes it after this one, so a section added here would
+# lose on every key that file sets, and the topic wiring the C++ nodes get from
+# `remappings=` as node-scoped -r rules. mower_localize refuses
 # to start on a value it does not implement rather than drop it, and its
 # parameter services report every value in effect.
 

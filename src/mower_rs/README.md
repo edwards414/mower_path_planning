@@ -66,7 +66,8 @@ per-node parameter services are identical.
   shared context and `Node::create` hands each node the section addressed to
   it (or `/**`), which is exactly what happened when each node had its own
   `--ros-args`. Copy the file into `~/.mower` and pass
-  `rust_daemon_params_file:=` to change values without a new image.
+  `rust_daemon_params_file:=` to change values without a new image; the
+  localize nodes are the exception (`localize_params_file:=`, below).
 * **Remapping** uses rcl's node-scoped rules, `-r <node>:<from>:=<to>`, which
   is how the IMU driver's and the two velocity guards' launch `remappings=`
   are reproduced. A bare `-r __node:=x` must never be passed to `mower_rsd`:
@@ -549,7 +550,9 @@ Consumers that must not notice: the two `topic_tools` throttles
 
 **Configuration** is the C++ nodes' own: each node reads its section of
 `mower_nav2/config/dual_ekf_navsat_params.yaml` (both launch paths pass that
-file), resolved by `mower_localize_core::config` the way `loadParams` and the
+file; `localize_params_file:=` on `robot.launch.py` points both stacks at a
+copy under `~/.mower` -- `rust_daemon_params_file` cannot, the localize file
+is passed after it and wins), resolved by `mower_localize_core::config` the way `loadParams` and the
 `NavSatTransform` constructor declare the keys -- upstream defaults for absent
 keys, rclcpp's strict typing, a start-up error for a value the port does not
 implement, a warning for a key robot_localization does not know. The parameter
