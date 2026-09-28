@@ -694,28 +694,31 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let servo_topic = params::string(&node, "servo_topic", "/mower_base/servo_command");
     let blade_topic = params::string(&node, "blade_topic", "/mower_base/blade_command");
 
-    // QoS, one for one with what the chain announces on the graph today
-    // (read off `ros2 topic info -v` / the endpoint info in the differential
-    // test, not guessed from the upstream sources):
-    //   /odom, /joint_states, /tf        reliable + TRANSIENT_LOCAL, keep last 1
-    //                                    -- diff_drive_controller and
-    //                                    joint_state_broadcaster both latch,
-    //                                    so a late joiner gets the last state
-    //   cmd_vel (subscription)           reliable-compatible BEST_EFFORT,
-    //                                    which is what diff_controller
-    //                                    subscribes with; a reliable
-    //                                    subscription would refuse a
-    //                                    best-effort publisher
-    //   /mower_base/telemetry            best effort, keep last 1
-    //   /mower_base/firmware_info, led   transient local + reliable, depth 1
-    //   pid                              reliable, depth 4
-    //   wheel_override, servo, blade     best effort, depth 1
+    // QoS, the same profiles the C++ chain asks for, so each RMW resolves
+    // them the same way on both sides:
+    //   /odom, /tf, cmd_vel (subscription)  rclcpp::SystemDefaultsQoS()
+    //                                       (diff_drive_controller 4.42.1)
+    //   /joint_states                       rclcpp::SystemDefaultsQoS()
+    //                                       (joint_state_broadcaster 4.42.1)
+    //   /mower_base/telemetry               best effort, keep last 1
+    //   /mower_base/firmware_info, led      transient local + reliable, depth 1
+    //   pid                                 reliable, depth 4
+    //   wheel_override, servo, blade        best effort, depth 1
+    // (the last four set explicitly in mower_system.cpp). SystemDefaults is
+    // not a fixed profile: rmw_cyclonedds_cpp, what the robot runs, resolves
+    // it to reliable + volatile, keep last 1, and rmw_fastrtps to its own
+    // entity defaults (TRANSIENT_LOCAL writers, BEST_EFFORT readers), which
+    // is what an earlier Fast DDS container run read off the graph and this
+    // node once hard-coded. tools/base_compare.py checks the resolved QoS of
+    // both chains under the robot's RMW.
+    let system_default = QosProfile::system_default();
     let latched = QosProfile::default().keep_last(1).transient_local().reliable();
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
 
-    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, latched.clone())?;
-    let joint_pub = node.create_publisher::<JointState>(&joint_states_topic, latched.clone())?;
-    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, latched.clone())?;
+    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
+    let joint_pub =
+        node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
+    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
     let telemetry_pub = if telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0 {
         None
     } else {
@@ -730,7 +733,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let slots: Shared = Arc::new(Mutex::new(Slots::default()));
 
     // ---- subscriptions ---------------------------------------------------
-    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, best_effort_1.clone())?;
+    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
     {
         let slots = slots.clone();
         let logger = logger.clone();
