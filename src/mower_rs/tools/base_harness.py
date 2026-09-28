@@ -16,6 +16,17 @@ pulled UART lead) and back, then released and pushed again. The C++ chain
 resumes the held command the moment the lead is back; `mower_base` holds
 the wheels until the release (its arm latch).
 
+`--scenario pullpush --mute-file F`: the lead comes out while nothing is
+commanded, the stick is pushed while it is still out, and the lead is
+re-seated with the stick still pushed (PULLPUSH_SCRIPT). `mower_base` must
+not re-arm during the outage, so it stays at 0/0 until the release.
+
+`--scenario live`: a live 0.30 m/s stream at nav2's 20 Hz that is already
+running when the driver starts (`base_ab.sh` starts this harness first), as
+after a restart under nav2 or teleop. No discovery wait: the stream starts
+at once. The driver hears nothing until DDS has matched it with this writer,
+and that quiet stretch must not re-arm it (LIVE_SCRIPT).
+
 Nothing here runs on the robot.
 """
 
@@ -77,6 +88,41 @@ PULL_SCRIPT = [
 PULL_MUTE = (4.0, 6.0)
 PULL_SECONDS = 14.0
 
+# The lead comes out at 4.0 s with nothing commanded (silence), the stick is
+# pushed from 5.0 s while it is still out, the lead is back at 7.0 s with the
+# stick still pushed, released at 9.0 s and pushed again from 9.5 s.
+PULLPUSH_SCRIPT = [
+    (0.0, 5.0, None, None),
+    (5.0, 6.0, (0.0, 0.30), (0.0, 0.0)),       # pushed with the lead out
+    (6.0, 9.0, (0.30, 0.30), (0.0, 0.0)),      # still pushed after the re-seat
+    (9.0, 9.5, (0.0, 0.0), (0.0, 0.0)),        # released
+    (9.5, 11.5, (0.0, 0.30), (0.0, 0.0)),      # pushed again
+    (11.5, 12.5, (0.30, 0.0), (0.0, 0.0)),
+    (12.5, 14.0, (0.0, 0.0), (0.0, 0.0)),
+]
+PULLPUSH_MUTE = (4.0, 7.0)
+
+# A live stream from t = 0, before the driver exists (base_ab.sh starts the
+# driver LIVE_DRIVER_START_S later), released at 12.0 s, pushed again.
+LIVE_SCRIPT = [
+    (0.0, 12.0, (0.30, 0.30), (0.0, 0.0)),
+    (12.0, 12.5, (0.0, 0.0), (0.0, 0.0)),      # released
+    (12.5, 14.5, (0.0, 0.30), (0.0, 0.0)),     # pushed again
+    (14.5, 15.5, (0.30, 0.0), (0.0, 0.0)),
+    (15.5, 17.0, (0.0, 0.0), (0.0, 0.0)),
+]
+LIVE_RATE_HZ = 20.0
+LIVE_SECONDS = 17.0
+LIVE_DRIVER_START_S = 2.0  # after the first message (base_ab.sh)
+
+SCENARIOS = {
+    # name: (command script, mute window, rate, seconds)
+    "default": (CMD_SCRIPT, None, CMD_RATE_HZ, RUN_SECONDS),
+    "pull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS),
+    "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS),
+    "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS),
+}
+
 # (t_from, t_to, rate_hz, topic, payload)
 SIDE_SCRIPT = [
     (2.0, 2.1, 10.0, "led", '{"mode":6,"r":255,"g":180,"b":0,"period_ms":1600}'),
@@ -114,18 +160,22 @@ def stamp_s(header) -> float:
 
 
 class Harness(Node):
-    def __init__(self, label: str, scenario: str = "default", mute_file: str = "") -> None:
+    def __init__(self, label: str, scenario: str = "default", mute_file: str = "",
+                 streaming_file: str = "") -> None:
         super().__init__("base_harness")
+        # touched on the first command published, so base_ab.sh can start
+        # the driver only once the live stream really is running
+        self.streaming_file = streaming_file
         self.label = label
         self.scenario = scenario
-        self.script = PULL_SCRIPT if scenario == "pull" else CMD_SCRIPT
-        self.side_script = [] if scenario == "pull" else SIDE_SCRIPT
+        self.script, self.mute, rate_hz, _ = SCENARIOS[scenario]
+        self.side_script = SIDE_SCRIPT if scenario == "default" else []
         self.mute_file = mute_file
         self.t0 = time.monotonic()
         self.rec = {
             "label": label,
             "scenario": scenario,
-            "mute": list(PULL_MUTE) if scenario == "pull" else None,
+            "mute": list(self.mute) if self.mute else None,
             # CLOCK_MONOTONIC is shared across processes on Linux, so this
             # is what lines the harness up with fake_base.py's log.
             "t0_monotonic": self.t0,
@@ -162,7 +212,7 @@ class Harness(Node):
         # start poses -- which reads as an odometry difference and is not
         # one.
         self.started = False
-        self.create_timer(1.0 / CMD_RATE_HZ, self.on_cmd_tick)
+        self.create_timer(1.0 / rate_hz, self.on_cmd_tick)
         self.create_timer(0.02, self.on_side_tick)
         self._side_sent = {}
 
@@ -208,8 +258,8 @@ class Harness(Node):
         if not self.started:
             return
         t = self.rel()
-        if self.mute_file and self.scenario == "pull":
-            muted = PULL_MUTE[0] <= t < PULL_MUTE[1]
+        if self.mute_file and self.mute:
+            muted = self.mute[0] <= t < self.mute[1]
             if muted and not os.path.exists(self.mute_file):
                 open(self.mute_file, "w").close()
             elif not muted and os.path.exists(self.mute_file):
@@ -224,6 +274,9 @@ class Harness(Node):
         msg.twist.linear.x = lin
         msg.twist.angular.z = ang
         self.cmd_pub.publish(msg)
+        if self.streaming_file:
+            open(self.streaming_file, "w").close()
+            self.streaming_file = ""
         self.rec["cmd_log"].append(
             {"t": round(t, 6), "stamp": stamp_s(msg.header), "lin": lin, "ang": ang}
         )
@@ -349,18 +402,22 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", required=True)
     ap.add_argument("--seconds", type=float)
-    ap.add_argument("--scenario", choices=["default", "pull"], default="default")
+    ap.add_argument("--scenario", choices=sorted(SCENARIOS), default="default")
     ap.add_argument("--mute-file", default="",
-                    help="the file fake_base.py --mute-file watches (used by --scenario pull)")
+                    help="the file fake_base.py --mute-file watches (pull, pullpush)")
     args = ap.parse_args()
     if args.seconds is None:
-        args.seconds = PULL_SECONDS if args.scenario == "pull" else RUN_SECONDS
-    if args.scenario == "pull" and not args.mute_file:
-        ap.error("--scenario pull needs --mute-file")
+        args.seconds = SCENARIOS[args.scenario][3]
+    if SCENARIOS[args.scenario][1] and not args.mute_file:
+        ap.error(f"--scenario {args.scenario} needs --mute-file")
 
     rclpy.init()
-    node = Harness(args.label, args.scenario, args.mute_file)
-    if not node.wait_for_discovery():
+    node = Harness(args.label, args.scenario, args.mute_file,
+                   args.out + ".streaming" if args.scenario == "live" else "")
+    if args.scenario == "live":
+        # the stream is already running when the driver starts: no waiting
+        node.started = True
+    elif not node.wait_for_discovery():
         print(f"[{args.label}] WARNING: not every endpoint matched before the run")
     end = time.monotonic() + args.seconds
     graphed = False

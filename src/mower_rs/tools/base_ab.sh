@@ -11,7 +11,14 @@
 #     /repo/src/mower_rs/tools/base_ab.sh A /out/a            # ros2_control chain
 #   ... base_ab.sh B /out/b [/path/to/mower_base]              # mower_base
 #   ... base_ab.sh B /out/b_pull "" --scenario pull            # the cable pull
+#   ... base_ab.sh B /out/b_pp "" --scenario pullpush          # pushed during the pull
+#   ... base_ab.sh B /out/b_live "" --scenario live            # restart under a live stream
 #   python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b
+#
+# `--scenario live` starts the harness (and its 0.30 m/s stream) before the
+# driver, the way a restart under nav2 or teleop looks. What decides that
+# case is DDS discovery latency, so run it loaded too: `docker run --cpus=1
+# -e LOAD=8 ...` adds eight busy loops for the length of the run.
 #
 # A fake STM32 (fake_base.py) owns a pty linked at /dev/stmcom, the driver
 # opens it, base_harness.py drives and records. B defaults to the image's
@@ -26,6 +33,12 @@ side=$1
 out=$2
 bin=${3:-}
 shift 3 2>/dev/null || shift $#
+scenario=default
+prev=
+for arg in "$@"; do
+  [ "$prev" = --scenario ] && scenario=$arg
+  prev=$arg
+done
 tools=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$tools/../../.." && pwd)
 
@@ -42,6 +55,11 @@ echo "[base_ab] $side: RMW=$RMW_IMPLEMENTATION CYCLONEDDS_URI=${CYCLONEDDS_URI:-
 
 mkdir -p "$out"
 rm -f "$out/mute"
+load=()
+for _ in $(seq "${LOAD:-0}"); do
+  ( while :; do :; done ) &
+  load+=($!)
+done
 nice -n -5 python3 "$tools/fake_base.py" --pty-link /dev/stmcom --log "$out/fake.jsonl" \
   --seconds 120 --mute-file "$out/mute" &
 fake=$!
@@ -60,18 +78,35 @@ ros2 run robot_state_publisher robot_state_publisher --ros-args \
   --params-file "$out/rsp.yaml" >"$out/rsp.log" 2>&1 &
 rsp=$!
 
-if [ "$side" = A ]; then
-  nice -n -5 ros2 launch mower_controller controller_test.launch.py \
-    publish_robot_state_publisher:=false >"$out/driver.log" 2>&1 &
-else
-  nice -n -5 "${bin:-/mower_ws/install/mower_rs/lib/mower_rs/mower_base}" --ros-args \
-    --params-file "$repo/src/mower_bringup/config/mower_rsd.yaml" >"$out/driver.log" 2>&1 &
-fi
-driver=$!
+start_driver() {
+  if [ "$side" = A ]; then
+    nice -n -5 ros2 launch mower_controller controller_test.launch.py \
+      publish_robot_state_publisher:=false >"$out/driver.log" 2>&1 &
+  else
+    nice -n -5 "${bin:-/mower_ws/install/mower_rs/lib/mower_rs/mower_base}" --ros-args \
+      --params-file "$repo/src/mower_bringup/config/mower_rsd.yaml" >"$out/driver.log" 2>&1 &
+  fi
+  driver=$!
+}
 
-python3 "$tools/base_harness.py" --out "$out/run.json" --label "$side" \
-  --mute-file "$out/mute" "$@"
-status=$?
+if [ "$scenario" = live ]; then
+  # the stream first, the driver 2 s after it really is flowing (a loaded
+  # container can take many seconds just to start Python)
+  rm -f "$out/run.json.streaming"
+  nice -n -5 python3 "$tools/base_harness.py" --out "$out/run.json" --label "$side" \
+    --mute-file "$out/mute" "$@" &
+  harness=$!
+  for _ in $(seq 600); do [ -e "$out/run.json.streaming" ] && break; sleep 0.1; done
+  sleep 2
+  start_driver
+  wait "$harness"
+  status=$?
+else
+  start_driver
+  python3 "$tools/base_harness.py" --out "$out/run.json" --label "$side" \
+    --mute-file "$out/mute" "$@"
+  status=$?
+fi
 
 # SIGTERM: a non-interactive shell starts background jobs with SIGINT ignored.
 stop() {
@@ -82,4 +117,5 @@ stop() {
 stop "$driver"
 stop "$rsp"
 stop "$fake"
+for pid in "${load[@]}"; do kill -KILL "$pid" 2>/dev/null; done
 exit $status

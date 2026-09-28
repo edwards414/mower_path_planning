@@ -7,7 +7,7 @@ the bottom drive an A/B measurement on the real robot.
 | tool | what it does |
 |---|---|
 | `shadow_compare.py` | separate mower_rs binaries vs one `mower_rsd` process, every topic compared (Phase A5) |
-| `fake_base.py`, `base_harness.py`, `base_compare.py`, `base_ab.sh` | a fake STM32 on a pty, then the `ros2_control` chain vs `mower_base` against it (Phase B); `base_ab.sh` runs one side in the runtime image under the robot's CycloneDDS, `base_compare.py` exits 1 on any endpoint QoS difference, `--scenario pull` is the cable pull (recipe in `../README.md`, mower_base "Verification") |
+| `fake_base.py`, `base_harness.py`, `base_compare.py`, `base_ab.sh` | a fake STM32 on a pty, then the `ros2_control` chain vs `mower_base` against it (Phase B); `base_ab.sh` runs one side in the runtime image under the robot's CycloneDDS, `base_compare.py` exits 1 on any endpoint QoS difference, `--scenario pull` / `pullpush` are the cable pull with the stick pushed before / during it, `--scenario live` a restart under a stream that was already running (run it with `--cpus=1 -e LOAD=8` too: discovery latency is what it tests) (recipe in `../README.md`, mower_base "Verification") |
 | `localize_compare.py` | `dual_ekf_navsat.launch.py` vs `mower_localize` on one synthetic sensor stream (Phase C) |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline |
 | `switch.sh`, `measure.sh` | flip `IMAGE_TAG` / `NAV_COMPOSITION` / `RUST_DAEMON` / any `KEY=VAL` on the robot and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |

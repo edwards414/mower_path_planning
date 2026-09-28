@@ -16,9 +16,12 @@ differs between the two (run both under the robot's RMW,
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: SystemDefaultsQoS resolves
 differently per RMW).
 
-Runs recorded with `base_harness.py --scenario pull` get the cable-pull
-report instead of the parity sections: what each chain commanded after the
-lead came back with the stick still held.
+Runs recorded with `base_harness.py --scenario pull` / `pullpush` get the
+cable-pull report instead of the parity sections: what each chain commanded
+after the lead came back with the stick still pushed. `--scenario live` gets
+the restart report: what reached the wheels while a stream that was running
+before the driver started was still live. `mower_base` must send 0/0 in
+both until the release; the C++ chain has no latch and follows at once.
 
 Nothing here runs on the robot.
 """
@@ -162,8 +165,12 @@ def main() -> int:
     print(f"QoS check: {len(out.get('graph', {}))} topics, "
           + ("all SAME" if out["qos_same"] else f"DIFFERENT {differ}, no endpoint {missing}"))
 
-    if run_a.get("scenario") == "pull" or run_b.get("scenario") == "pull":
+    scenario = run_b.get("scenario") or run_a.get("scenario")
+    if scenario in ("pull", "pullpush"):
         pull_report(run_a, frames_a, run_b, frames_b, out)
+        return finish(args, out)
+    if scenario == "live":
+        live_report(run_a, frames_a, run_b, frames_b, out)
         return finish(args, out)
 
     # ---- 2. rates -----------------------------------------------------
@@ -362,16 +369,20 @@ def finish(args, out) -> int:
 
 
 def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
-    """The cable-pull scenario: what reached the wheels once the lead was back.
+    """The cable-pull scenarios: what reached the wheels once the lead was back.
 
-    The stick is held at 0.30 m/s through the pull; it is released at 9.0 s
-    and pushed again from 9.5 s. The C++ chain has no latch and resumes the
-    held command as soon as frames get through again; mower_base must stay at
-    0/0 until the release and follow the stick again after it.
+    `pull`: the stick is held at 0.30 m/s through the pull. `pullpush`: the
+    lead comes out with nothing commanded and the stick is pushed while it
+    is out. Either way it is still pushed when the lead is back, released
+    at 9.0 s and pushed again from 9.5 s. The C++ chain has no latch and
+    resumes the pushed command as soon as frames get through again;
+    mower_base must stay at 0/0 until the release and follow the stick
+    again after it.
     """
-    section("cable pull (stick held; lead out %.1f-%.1f s, released 9.0 s, pushed 9.5 s)"
-            % tuple(run_b.get("mute") or run_a.get("mute") or (0, 0)))
-    out["pull"] = {}
+    scenario = run_b.get("scenario") or run_a.get("scenario")
+    section("cable %s (lead out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
+            "pushed 9.5 s)" % ((scenario,) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
+    out["pull"] = {"scenario": scenario}
     for label, run, frames in (("A", run_a, frames_a), ("B", run_b, frames_b)):
         mute = run.get("mute") or (4.0, 6.0)
         seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
@@ -396,6 +407,32 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "held_max_rpm": rpm_held,
             "after_release_nonzero": len(released),
             "mute_log": run.get("mute_log"),
+        }
+
+
+def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
+    """A restart under a live stream: 0.30 m/s from before the driver
+    started until the release at 12.0 s, pushed again from 12.5 s."""
+    section("live stream before the driver (0.30 m/s until 12.0 s, released, pushed 12.5 s)")
+    out["live"] = {}
+    for label, frames in (("A", frames_a), ("B", frames_b)):
+        seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
+                for f in frames
+                if f["dir"] == "rx" and f["type"] == WHEEL_SPEED_COMMAND and f["fields"]]
+        live = [x for x in seen if x[0] < 12.0]
+        moving = [x for x in live if x[1] or x[2]]
+        after = [x for x in seen if 12.6 <= x[0] < 14.5 and (x[1] or x[2])]
+        first = seen[0][0] if seen else None
+        print(f"  {label}: first 0x01 at {first if first is None else round(first, 3)} s; "
+              f"{len(live)} frames while the stream was live, {len(moving)} non-zero"
+              + (f" (first at {moving[0][0]:.3f} s: {moving[0][1:]})" if moving else ""))
+        print(f"     after release + push: {len(after)} non-zero frames"
+              + (f", first at {after[0][0]:.3f} s" if after else ""))
+        out["live"][label] = {
+            "first_frame": first,
+            "live_frames": len(live),
+            "live_nonzero": len(moving),
+            "after_release_nonzero": len(after),
         }
 
 
