@@ -181,17 +181,20 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
                 let p = &req.message.map_point;
-                let (latitude, longitude, altitude) = nav
-                    .lock()
-                    .await
-                    .core
-                    .map_to_ll(&Vector3::new(p.x, p.y, p.z));
-                // Like upstream: answered even before the datum exists (it
-                // then reports the identity transform's coordinates), which is
-                // exactly what flutter_adapter polls until it locks.
-                let _ = req.respond(ToLL::Response {
-                    ll_point: GeoPoint { latitude, longitude, altitude },
-                });
+                // `toLLCallback` returns false before the datum exists and
+                // rclcpp still sends the default response, so the answer is
+                // (0, 0, 0) until then -- which is what both adapters poll for
+                // ("no navsat datum yet"). Projecting through the identity
+                // transform instead gives e.g. (0.0, 118.51) once a fix has
+                // set the UTM zone, and the adapters would lock that.
+                let answer = nav.lock().await.core.to_ll(&Vector3::new(p.x, p.y, p.z));
+                let ll_point = match answer {
+                    Some((latitude, longitude, altitude)) => {
+                        GeoPoint { latitude, longitude, altitude }
+                    }
+                    None => GeoPoint::default(),
+                };
+                let _ = req.respond(ToLL::Response { ll_point });
             }
         });
     }
@@ -215,10 +218,29 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
-                let mut map_points = Vec::with_capacity(req.message.ll_points.len());
-                for ll in &req.message.ll_points {
-                    map_points.push(from_ll(&nav, ll, &logger).await);
-                }
+                // `fromLLArrayCallback` converts all points or none: on the
+                // first failure it returns false and the default response,
+                // an empty array, goes out.
+                let map_points = {
+                    let n = nav.lock().await;
+                    req.message
+                        .ll_points
+                        .iter()
+                        .map(|ll| n.core.from_ll(ll.latitude, ll.longitude, ll.altitude))
+                        .collect::<Option<Vec<_>>>()
+                };
+                let map_points = match map_points {
+                    Some(points) => {
+                        points.into_iter().map(|p| Point { x: p.x, y: p.y, z: p.z }).collect()
+                    }
+                    None => {
+                        r2r::log_error!(
+                            &logger,
+                            "fromLLArray: no datum yet or a point outside UTM; answering an empty array"
+                        );
+                        Vec::new()
+                    }
+                };
                 let _ = req.respond(FromLLArray::Response { map_points });
             }
         });
@@ -361,10 +383,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     Ok(())
 }
 
-/// `NavSatTransform::fromLL`. Upstream logs an error and still answers with
-/// whatever the (identity) transform produces before the datum exists; this
-/// answers the origin and says so, because a silent wrong coordinate is worse
-/// than a zero the caller can recognise.
+/// `NavSatTransform::fromLLCallback`. Before the datum exists upstream's
+/// `fromLL` throws, the callback returns false and rclcpp sends the default
+/// response, the map origin; this answers the same and also logs it.
 async fn from_ll(nav: &Arc<Mutex<Nav>>, ll: &GeoPoint, logger: &str) -> Point {
     match nav
         .lock()
@@ -376,7 +397,7 @@ async fn from_ll(nav: &Arc<Mutex<Nav>>, ll: &GeoPoint, logger: &str) -> Point {
         None => {
             r2r::log_error!(
                 logger,
-                "fromLL called before the datum was established; answering the map origin"
+                "fromLL: no datum yet or a point outside UTM; answering the map origin"
             );
             Point { x: 0.0, y: 0.0, z: 0.0 }
         }

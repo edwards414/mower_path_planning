@@ -396,6 +396,20 @@ impl NavSatTransformCore {
         gps_odom
     }
 
+    /// `NavSatTransform::toLLCallback`: `None` until the datum exists.
+    ///
+    /// Upstream returns `false` there, which rclcpp ignores, so the client
+    /// receives a default-constructed `GeoPoint` (0, 0, 0) -- the answer both
+    /// adapters take to mean "no navsat datum yet". Calling [`Self::map_to_ll`]
+    /// instead would project through the identity transform and whatever UTM
+    /// zone the first good fix set, e.g. (0.0, 118.51) in zone 51.
+    pub fn to_ll(&self, point: &Vector3) -> Option<(f64, f64, f64)> {
+        if !self.transform_good {
+            return None;
+        }
+        Some(self.map_to_ll(point))
+    }
+
     /// `NavSatTransform::mapToLL`. Returns (latitude, longitude, altitude).
     pub fn map_to_ll(&self, point: &Vector3) -> (f64, f64, f64) {
         let mut pose = Transform::identity();
