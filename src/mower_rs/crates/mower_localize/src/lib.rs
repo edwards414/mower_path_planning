@@ -44,8 +44,9 @@ pub const NODES: [&str; 3] = [NODE_EKF_ODOM, NODE_EKF_MAP, NODE_NAVSAT];
 /// One of the three localization nodes, chosen by `m.node_name`.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     match m.node_name.as_str() {
-        NODE_EKF_ODOM => ekf::run(ctx, m, ekf::Kind::Odom).await,
-        NODE_EKF_MAP => ekf::run(ctx, m, ekf::Kind::Map).await,
+        // Which instance is which is the params file's business: the node
+        // name picks the section, and `world_frame` in it the behaviour.
+        NODE_EKF_ODOM | NODE_EKF_MAP => ekf::run(ctx, m).await,
         NODE_NAVSAT => navsat::run(ctx, m).await,
         other => Err(format!(
             "mower_localize: no such node {other:?}; expected one of {}",

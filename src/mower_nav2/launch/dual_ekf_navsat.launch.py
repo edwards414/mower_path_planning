@@ -31,6 +31,44 @@ import launch_ros.actions
 _TRUE = "('true', '1', 'yes', 'on')"
 
 
+def _remappings(gps_fix_topic):
+    """The topic wiring of the three nodes, per node name.
+
+    The C++ nodes get it as `remappings=`. mower_localize holds all three
+    nodes in one process, so it gets the same rules scoped by node name
+    (`-r <node>:<from>:=<to>`); an unscoped rule would hit every node.
+    """
+    return {
+        'ekf_filter_node_odom': [
+            ('odometry/filtered', 'odometry/local'),
+            ('imu', 'imu/data'),
+        ],
+        'ekf_filter_node_map': [
+            ('odometry/filtered', 'odometry/global'),
+            ('imu', 'imu/data'),
+        ],
+        'navsat_transform': [
+            # navsat_transform subscribes to `imu` (not `imu/data`); the
+            # old ('imu/data','imu/data') was a no-op so it never got IMU
+            # yaw → datum never established → toLL returned 0.
+            ('imu', 'imu/data'),
+            ('gps/fix', gps_fix_topic),
+            ('gps/filtered', 'gps/filtered'),
+            ('odometry/gps', 'odometry/gps'),
+            ('odometry/filtered', 'odometry/global'),
+        ],
+    }
+
+
+def _node_scoped_remap_args(remappings):
+    """`-r <node>:<from>:=<to>` for every rule, as launch arguments."""
+    args = []
+    for node, rules in remappings.items():
+        for src, dst in rules:
+            args += ['-r', [f'{node}:{src}:=', dst]]
+    return args
+
+
 def _rust_localize_binary(rust_localize, rust_daemon):
     """The separate mower_localize process: switch on, daemon not running."""
     return IfCondition(PythonExpression([
@@ -55,6 +93,7 @@ def generate_launch_description():
     mower_nav2_dir = get_package_share_directory('mower_nav2')
     rl_params_file = os.path.join(
         mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml')
+    remappings = _remappings(gps_fix_topic)
     return LaunchDescription(
         [
             declare_use_sim_time,
@@ -90,10 +129,7 @@ def generate_launch_description():
                 output='screen',
                 condition=cpp_localization,
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
-                remappings=[
-                    ('odometry/filtered', 'odometry/local'),
-                    ('imu', 'imu/data'),
-                ],
+                remappings=remappings['ekf_filter_node_odom'],
             ),
             launch_ros.actions.Node(
                 package='robot_localization',
@@ -102,10 +138,7 @@ def generate_launch_description():
                 output='screen',
                 condition=cpp_localization,
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
-                remappings=[
-                    ('odometry/filtered', 'odometry/global'),
-                    ('imu', 'imu/data'),
-                ],
+                remappings=remappings['ekf_filter_node_map'],
             ),
             launch_ros.actions.Node(
                 package='robot_localization',
@@ -114,22 +147,14 @@ def generate_launch_description():
                 output='screen',
                 condition=cpp_localization,
                 parameters=[rl_params_file, {'use_sim_time': use_sim_time}],
-                remappings=[
-                    # navsat_transform subscribes to `imu` (not `imu/data`); the
-                    # old ('imu/data','imu/data') was a no-op so it never got IMU
-                    # yaw → datum never established → toLL returned 0.
-                    ('imu', 'imu/data'),
-                    ('gps/fix', gps_fix_topic),
-                    ('gps/filtered', 'gps/filtered'),
-                    ('odometry/gps', 'odometry/gps'),
-                    ('odometry/filtered', 'odometry/global'),
-                ],
+                remappings=remappings['navsat_transform'],
             ),
             # One process, three nodes with the same names. No `name=`:
             # launch_ros would emit a bare `-r __node:=`, which renames every
-            # node in the process; mower_localize names its nodes itself, and
-            # the topic wiring the C++ nodes get from `remappings=` above is a
-            # node-scoped parameter here.
+            # node in the process; mower_localize names its nodes itself. It
+            # reads the same params file as the C++ nodes (each node its own
+            # section: the one source of the filter settings) and gets the
+            # same topic wiring, scoped per node.
             launch_ros.actions.Node(
                 package='mower_rs',
                 executable='mower_localize',
@@ -137,10 +162,8 @@ def generate_launch_description():
                 condition=_rust_localize_binary(rust_localize, rust_daemon),
                 respawn=True,
                 respawn_delay=2.0,
-                arguments=[
-                    '--ros-args',
-                    '-p', ['navsat_transform:gps_fix_topic:=', gps_fix_topic],
-                ],
+                parameters=[rl_params_file],
+                arguments=['--ros-args'] + _node_scoped_remap_args(remappings),
             ),
         ]
     )

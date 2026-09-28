@@ -514,7 +514,8 @@ The external contract, from the launch file, the yaml and the consumers:
 
 | | topic / service | QoS | rate |
 |---|---|---|---|
-| in | `/odom`, `/imu/data`, `/fix`, `/odometry/gps` (map EKF), `/odometry/global` (navsat) | best effort, keep last 10 | as published |
+| in | `/odom`, `/imu/data`, `/odometry/gps` (EKFs) | best effort, keep last `<input>_queue_size` (10) | as published |
+| in | `/fix`, `/imu/data`, `/odometry/global` (navsat) | best effort, keep last 1 | as published |
 | in | `/tf_static` | reliable, transient local | once |
 | out | `/odometry/local` (odom EKF), `/odometry/global` (map EKF) | reliable, keep last 10 | 20 Hz |
 | out | `/odometry/gps`, `/gps/filtered` | reliable, keep last 10 | 30 Hz timer, one message per new fix / per new odometry |
@@ -542,15 +543,29 @@ Consumers that must not notice: the two `topic_tools` throttles
   is really running; a `set` is refused with a reason rather than accepted and
   ignored, which is what rclcpp does for the many values `ekf_node` reads only
   at start-up.
-* The launch file's `remappings=`. One process holds three nodes, so an
-  unprefixed rule would hit all of them; the resolved topic names are
-  parameters instead (`odom0`, `odom1`, `imu0`, `odometry_topic`,
-  `gps_fix_topic`, ...) whose defaults are the production wiring.
 * Dropping navsat's IMU subscription once the datum is good. Upstream resets
   it; the module only stops feeding the core, so `/imu/data` keeps one extra
-  subscriber that reads nothing. The `delay` parameter is carried but does
-  nothing, as upstream's does not either: both stacks published their first
-  `/odometry/gps` 0.17 s into the differential run, not 3 s.
+  subscriber that reads nothing.
+
+**Configuration** is the C++ nodes' own: each node reads its section of
+`mower_nav2/config/dual_ekf_navsat_params.yaml` (both launch paths pass that
+file), resolved by `mower_localize_core::config` the way `loadParams` and the
+`NavSatTransform` constructor declare the keys -- upstream defaults for absent
+keys, rclcpp's strict typing, a start-up error for a value the port does not
+implement, a warning for a key robot_localization does not know. The parameter
+services report every declared key with its value in effect. The topic wiring
+is the launch file's `remappings=` as node-scoped rules
+(`-r ekf_filter_node_map:odometry/filtered:=odometry/global`), since one
+process holds three nodes and an unprefixed rule would hit all of them.
+
+**navsat's `delay`** (3 s) is applied as upstream applies it: the constructor
+creates everything and then sleeps before the timer exists, with nothing spun,
+so the depth-1 inputs hold only the latest sample and the datum is built from
+inputs at least 3 s after start. It matters when `/odom` initialises the map
+EKF (yaw 0) before the first IMU sample, which with `rust_base` is the normal
+order: locking at once rotated the whole map <-> UTM datum by most of the
+robot's initial heading. (The first differential run could not see this: the
+stack was started long before the stream, so the delay had passed.)
 * `tf2_ros::Buffer`. The static sensor offsets come from `/tf_static`; the two
   dynamic transforms the ported code looks up (`base_footprint <- odom` for the
   map EKF, `map <- base_footprint` for navsat) are the ones these filters

@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::stream::StreamExt;
-use mower_localize_core::config;
+use mower_localize_core::config::NavSatSettings;
 use mower_localize_core::navsat::NavSatTransformCore;
 use mower_localize_core::tf::{Quaternion, Vector3};
-use mower_rs_common::{params, ModuleCtx, ModuleResult};
+use mower_rs_common::{ModuleCtx, ModuleResult};
 use r2r::geographic_msgs::msg::GeoPoint;
 use r2r::geometry_msgs::msg::Point;
 use r2r::nav_msgs::msg::Odometry as ROdometry;
@@ -31,6 +31,15 @@ use crate::tfbus;
 
 /// `navsat_transform`'s Cartesian frame when `use_local_cartesian` is false.
 const CARTESIAN_FRAME: &str = "utm";
+
+/// Upstream's topic names; the launch file remaps them with node-scoped `-r`
+/// rules exactly as it remaps the C++ node (`gps/fix` -> `/fix`, `imu` ->
+/// `imu/data`, `odometry/filtered` -> `odometry/global`).
+const ODOM_TOPIC: &str = "odometry/filtered";
+const FIX_TOPIC: &str = "gps/fix";
+const IMU_TOPIC: &str = "imu";
+const GPS_ODOM_TOPIC: &str = "odometry/gps";
+const FILTERED_GPS_TOPIC: &str = "gps/filtered";
 
 struct Nav {
     core: NavSatTransformCore,
@@ -85,18 +94,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 /// parameters it has set itself.
 async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
-    let cfg = config::navsat_config();
-
-    // Resolved topic names (see the note in ekf.rs: upstream gets these from
-    // launch `remappings=`, this module from parameters, defaulting to the
-    // production wiring).
-    let fix_topic = params::string(&node, "gps_fix_topic", "fix");
-    let imu_topic = params::string(&node, "imu_topic", "imu/data");
-    let odom_topic = params::string(&node, "odometry_topic", "odometry/global");
-    let gps_odom_topic = params::string(&node, "gps_odometry_topic", "odometry/gps");
-    let filtered_gps_topic = params::string(&node, "filtered_gps_topic", "gps/filtered");
-    let frequency = params::f64(&node, "frequency", 30.0).max(1.0);
-    let delay = params::f64(&node, "delay", 3.0);
+    // The node's section of dual_ekf_navsat_params.yaml, resolved as the
+    // `NavSatTransform` constructor reads it.
+    let resolved = NavSatSettings::from_params(&m.node_name, &paramsrv::overrides(&node))?;
+    for w in &resolved.warnings {
+        r2r::log_warn!(&logger, "{w}");
+    }
+    let cfg = resolved.settings.config.clone();
+    let frequency = resolved.settings.frequency;
+    let delay = resolved.settings.delay;
 
     let nav = Arc::new(Mutex::new(Nav {
         core: NavSatTransformCore::new(cfg.clone()),
@@ -121,7 +127,7 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
 
     // ---- inputs -------------------------------------------------------------
     {
-        let mut stream = node.subscribe::<ROdometry>(&odom_topic, input_qos())?;
+        let mut stream = node.subscribe::<ROdometry>(ODOM_TOPIC, input_qos())?;
         let nav = nav.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -139,7 +145,7 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     }
     {
         // `gps/fix` is best-effort sensor data, like the driver publishes it.
-        let mut stream = node.subscribe::<RNavSatFix>(&fix_topic, input_qos())?;
+        let mut stream = node.subscribe::<RNavSatFix>(FIX_TOPIC, input_qos())?;
         let nav = nav.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -155,7 +161,7 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     // reproduces that: the yaw is only needed to build the datum.
     let imu_done = Arc::new(AtomicBool::new(false));
     {
-        let mut stream = node.subscribe::<RImu>(&imu_topic, input_qos())?;
+        let mut stream = node.subscribe::<RImu>(IMU_TOPIC, input_qos())?;
         let nav = nav.clone();
         let imu_done = imu_done.clone();
         tokio::spawn(async move {
@@ -172,9 +178,9 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     }
 
     // ---- outputs ------------------------------------------------------------
-    let gps_odom_pub = node.create_publisher::<ROdometry>(&gps_odom_topic, output_qos())?;
+    let gps_odom_pub = node.create_publisher::<ROdometry>(GPS_ODOM_TOPIC, output_qos())?;
     let filtered_gps_pub = if cfg.publish_filtered_gps {
-        Some(node.create_publisher::<RNavSatFix>(&filtered_gps_topic, output_qos())?)
+        Some(node.create_publisher::<RNavSatFix>(FILTERED_GPS_TOPIC, output_qos())?)
     } else {
         None
     };
@@ -283,39 +289,17 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         });
     }
 
-    paramsrv::advertise(
-        &mut node,
-        &m.node_name,
-        vec![
-            paramsrv::double("frequency", frequency),
-            paramsrv::double("delay", delay),
-            paramsrv::double(
-                "magnetic_declination_radians",
-                cfg.magnetic_declination_radians,
-            ),
-            paramsrv::double("yaw_offset", cfg.yaw_offset),
-            paramsrv::boolean("zero_altitude", cfg.zero_altitude),
-            paramsrv::boolean("broadcast_cartesian_transform", cfg.broadcast_cartesian_transform),
-            paramsrv::boolean(
-                "broadcast_cartesian_transform_as_parent_frame",
-                cfg.broadcast_cartesian_transform_as_parent_frame,
-            ),
-            paramsrv::boolean("publish_filtered_gps", cfg.publish_filtered_gps),
-            paramsrv::boolean("use_odometry_yaw", cfg.use_odometry_yaw),
-            paramsrv::boolean("wait_for_datum", cfg.wait_for_datum),
-            paramsrv::boolean("use_local_cartesian", false),
-            paramsrv::boolean("use_sim_time", false),
-            paramsrv::string("gps_fix_topic", &fix_topic),
-            paramsrv::string("imu_topic", &imu_topic),
-            paramsrv::string("odometry_topic", &odom_topic),
-            paramsrv::string("gps_odometry_topic", &gps_odom_topic),
-            paramsrv::string("filtered_gps_topic", &filtered_gps_topic),
-        ],
-    )?;
+    let mut advertised: Vec<paramsrv::Param> =
+        resolved.parameters.iter().map(|(name, v)| paramsrv::from_core(name, v)).collect();
+    // rclcpp declares it on every node; the resolver refused anything but false.
+    if advertised.iter().all(|p| p.name != "use_sim_time") {
+        advertised.push(paramsrv::boolean("use_sim_time", false));
+    }
+    paramsrv::advertise(&mut node, &m.node_name, advertised)?;
 
     r2r::log_info!(
         &logger,
-        "navsat_transform (mower_rs): {frequency} Hz, fix {fix_topic}, imu {imu_topic}, odom {odom_topic} -> {gps_odom_topic}"
+        "navsat_transform (mower_rs): {frequency} Hz, {FIX_TOPIC} + {IMU_TOPIC} + {ODOM_TOPIC} -> {GPS_ODOM_TOPIC}"
     );
 
     // `delay`, as the upstream constructor does it: everything above exists,
@@ -401,12 +385,12 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         drop(n);
         if let Some(odom) = gps_odom {
             if let Err(e) = gps_odom_pub.publish(&conv::odometry_out(&odom)) {
-                r2r::log_warn!(&logger, "{gps_odom_topic} publish failed: {e:?}");
+                r2r::log_warn!(&logger, "{GPS_ODOM_TOPIC} publish failed: {e:?}");
             }
         }
         if let (Some(pubr), Some(fix)) = (filtered_gps_pub.as_ref(), filtered) {
             if let Err(e) = pubr.publish(&conv::fix_out(&fix)) {
-                r2r::log_warn!(&logger, "{filtered_gps_topic} publish failed: {e:?}");
+                r2r::log_warn!(&logger, "{FILTERED_GPS_TOPIC} publish failed: {e:?}");
             }
         }
     }
@@ -441,19 +425,6 @@ async fn from_ll(nav: &Arc<Mutex<Nav>>, ll: &GeoPoint, logger: &str) -> Point {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_yaml_settings_reach_the_core() {
-        let cfg = config::navsat_config();
-        assert!(cfg.zero_altitude);
-        assert!(cfg.publish_filtered_gps);
-        assert!(!cfg.use_odometry_yaw);
-        assert!(!cfg.wait_for_datum);
-        assert!(cfg.broadcast_cartesian_transform);
-        assert!(!cfg.broadcast_cartesian_transform_as_parent_frame);
-        assert_eq!(cfg.magnetic_declination_radians, 0.0);
-        assert_eq!(cfg.yaw_offset, 0.0);
-    }
-
     fn yaw_quat(yaw: f64) -> r2r::geometry_msgs::msg::Quaternion {
         r2r::geometry_msgs::msg::Quaternion {
             x: 0.0,
@@ -481,19 +452,22 @@ mod tests {
         const SWITCH: f64 = 0.6;
 
         let node = r2r::Node::create(ctx.clone(), crate::NODE_NAVSAT, NS).unwrap();
-        node.params.lock().unwrap().insert(
-            "delay".to_string(),
-            r2r::Parameter::new(r2r::ParameterValue::Double(DELAY)),
-        );
+        for (key, value) in [
+            ("delay", r2r::ParameterValue::Double(DELAY)),
+            ("frequency", r2r::ParameterValue::Double(30.0)),
+            ("broadcast_cartesian_transform", r2r::ParameterValue::Bool(true)),
+        ] {
+            node.params.lock().unwrap().insert(key.to_string(), r2r::Parameter::new(value));
+        }
         let shutdown = mower_rs_common::Shutdown::new();
         let mut m = ModuleCtx::new(crate::NODE_NAVSAT, shutdown.clone());
         m.namespace = NS.to_string();
 
         let mut feeder = r2r::Node::create(ctx, "navsat_delay_feeder", NS).unwrap();
         let qos = || QosProfile::default().keep_last(10).reliable().volatile();
-        let odom_pub = feeder.create_publisher::<ROdometry>("odometry/global", qos()).unwrap();
-        let imu_pub = feeder.create_publisher::<RImu>("imu/data", qos()).unwrap();
-        let fix_pub = feeder.create_publisher::<RNavSatFix>("fix", qos()).unwrap();
+        let odom_pub = feeder.create_publisher::<ROdometry>(ODOM_TOPIC, qos()).unwrap();
+        let imu_pub = feeder.create_publisher::<RImu>(IMU_TOPIC, qos()).unwrap();
+        let fix_pub = feeder.create_publisher::<RNavSatFix>(FIX_TOPIC, qos()).unwrap();
         let mut tf_static = feeder.subscribe::<TFMessage>("/tf_static", tf_static_qos()).unwrap();
 
         let started = tokio::time::Instant::now();
@@ -586,7 +560,7 @@ mod tests {
 
     #[test]
     fn nothing_is_published_before_a_datum_exists() {
-        let mut core = NavSatTransformCore::new(config::navsat_config());
+        let mut core = NavSatTransformCore::new(Default::default());
         assert!(!core.transform_good);
         assert!(core.prepare_gps_odometry().is_none());
         assert!(core.prepare_filtered_gps().is_none());

@@ -327,7 +327,12 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
         '),\n        ]', 1)[0]
     assert 'name=' not in rust_block
     assert 'respawn=True' in rust_block
-    assert 'navsat_transform:gps_fix_topic:=' in rust_block
+    # the same params file and the same topic wiring as the C++ nodes, the
+    # wiring scoped per node name because one process holds all three
+    assert 'parameters=[rl_params_file],' in rust_block
+    assert '_node_scoped_remap_args(remappings)' in rust_block
+    assert dual.count("remappings=remappings['") == 3
+    assert "('gps/fix', gps_fix_topic)," in dual
 
     # the switch reaches dual_ekf_navsat.launch.py from the production entry
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
@@ -337,17 +342,33 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     assert "'rust_localize',\n            default_value='false'," in robot
     assert "'rust_localize': LaunchConfiguration('rust_localize')," in mower
 
-    # one module, three nodes, one parameter section each
+    # one module, three nodes; under mower_rsd they read the C++ nodes' own
+    # params file (no copy in mower_rsd.yaml to drift) and get the same wiring
     daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    rl_params = (
+        SRC_DIR / 'mower_nav2/config/dual_ekf_navsat_params.yaml'
+    ).read_text(encoding='utf-8')
     assert 'id: "localize"' in daemon_main
     assert 'switch: "rust_localize"' in daemon_main
     for node in ('ekf_filter_node_odom', 'ekf_filter_node_map',
                  'navsat_transform'):
         assert f'node: "{node}"' in daemon_main, node
-        assert f'\n{node}:\n  ros__parameters:' in params, node
+        assert f'\n{node}:\n  ros__parameters:' not in params, node
+        assert f'\n{node}:\n  ros__parameters:' in rl_params, node
+    assert "'dual_ekf_navsat_params.yaml'" in robot
+    assert "'localize': [" in robot
+    assert "'navsat_transform:gps/fix:=' + LaunchConfiguration(" in robot
+    for rule in ('ekf_filter_node_odom:odometry/filtered:=odometry/local',
+                 'ekf_filter_node_map:odometry/filtered:=odometry/global',
+                 'navsat_transform:odometry/filtered:=odometry/global',
+                 'navsat_transform:imu:=imu/data'):
+        assert f"'{rule}'," in robot, rule
     # navsat stays at 30 Hz: the health gate wants /odometry/gps within 0.30 s
-    assert 'frequency: 30.0' in params.split('navsat_transform:', 1)[1]
+    # and the datum waits 3 s for the map EKF's heading to settle
+    navsat = rl_params.split('navsat_transform:', 1)[1]
+    assert 'frequency: 30.0' in navsat
+    assert 'delay: 3.0' in navsat
 
     # built and shipped like the other mower_rs binaries
     cmake = MOWER_RS_CMAKE.read_text(encoding='utf-8')
@@ -364,12 +385,12 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     )
     assert 'RUST_LOCALIZE=false' in env_example
 
-    # the ported core is the only source of the filter numbers
+    # the filter settings are resolved from the node's parameters, not
+    # compiled in (mower_localize_core/tests/yaml_config.rs checks the yaml)
     ekf_rs = (
         SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
     ).read_text(encoding='utf-8')
-    assert 'config::ekf_odom_config()' in ekf_rs
-    assert 'config::ekf_map_config()' in ekf_rs
+    assert 'EkfSettings::from_params(' in ekf_rs
     assert 'MissedTickBehavior::Skip' in ekf_rs
 
 

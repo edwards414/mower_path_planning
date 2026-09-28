@@ -4,8 +4,8 @@
 
 mod common;
 
+use common::oracle_config::navsat_config;
 use common::*;
-use mower_localize_core::config::navsat_config;
 use mower_localize_core::msgs::*;
 use mower_localize_core::navsat::NavSatTransformCore;
 use mower_localize_core::tf::{Quaternion, Transform, Vector3};

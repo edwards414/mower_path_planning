@@ -81,6 +81,16 @@ _DAEMON_REMAPS = {
         'velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input',
         'velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel',
     ],
+    # dual_ekf_navsat.launch.py's remappings= for the three localization
+    # nodes; navsat's gps/fix rule is added with the gps_fix_topic value.
+    'localize': [
+        'ekf_filter_node_odom:odometry/filtered:=odometry/local',
+        'ekf_filter_node_odom:imu:=imu/data',
+        'ekf_filter_node_map:odometry/filtered:=odometry/global',
+        'ekf_filter_node_map:imu:=imu/data',
+        'navsat_transform:imu:=imu/data',
+        'navsat_transform:odometry/filtered:=odometry/global',
+    ],
 }
 
 
@@ -123,6 +133,15 @@ def _rust_daemon_node(context):
         parameters.append(
             LaunchConfiguration('gps_params_file').perform(context))
     remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
+    if 'localize' in modules:
+        # The file the C++ nodes read, keyed by the same node names: the one
+        # source of the filter and navsat settings. After mower_rsd.yaml, so
+        # it wins on any key it sets, like gps.yaml.
+        parameters.append(os.path.join(
+            get_package_share_directory('mower_nav2'), 'config',
+            'dual_ekf_navsat_params.yaml'))
+        remaps.append('navsat_transform:gps/fix:=' + LaunchConfiguration(
+            'gps_fix_topic').perform(context))
     if remaps:
         arguments.append('--ros-args')
         for rule in remaps:

@@ -24,7 +24,7 @@ Upstream source: <https://github.com/cra-ros-pkg/robot_localization>, branch
 | `src/utm.rs` | GeographicLib 2.3 `TransverseMercator.cpp`, `UTMUPS.cpp`, `Math.cpp` (via `navsat_conversions.hpp`) |
 | `src/tf.rs` | the `tf2::LinearMath` operations those files use, and `angles::normalize_angle` |
 | `src/msgs.rs` | the ROS messages, as plain structs |
-| `src/config.rs` | `dual_ekf_navsat_params.yaml` itself |
+| `src/config.rs` | the parameter blocks of `RosFilter::loadParams` and the `NavSatTransform` constructor: the node's section of `dual_ekf_navsat_params.yaml` in, the settings out |
 
 ## What the yaml turns on, and is therefore ported
 
@@ -109,8 +109,7 @@ Nothing below is reachable with this robot's configuration.
   paths are ported (they share `preparePose`), but they are not covered by the
   oracle vectors, so treat them as untested.
 * `reset_on_time_jump` — its body is commented out upstream.
-* `permit_corrected_publication`, `predict_to_current_time`,
-  `disabled_at_startup`, `toggled_on_`, the `set_pose` / `reset` /
+* `disabled_at_startup`, `toggled_on_`, the `set_pose` / `reset` /
   `toggle_filter_processing` / `enable`/`disable` services, `initial_state`,
   `dynamic_process_noise_covariance`, `tf_time_offset`, `transform_timeout`,
   `queue sizes`, QoS overrides — publication policy, service plumbing or
@@ -140,7 +139,8 @@ Publishing transforms is left to the caller; `map_to_odom()` returns the value
 * the services (`toLL`, `fromLL`, `toLLArray`, `fromLLArray`, `setDatum`,
   `setUTMZone`) and the transform broadcast: the maths behind them is ported,
   the ROS surface is not.
-* `delay` (a startup sleep) and `frequency` (a timer period).
+* `delay` (a startup sleep) and `frequency` (a timer period); the ROS shell
+  (`crates/mower_localize`) implements both, and `permit_corrected_publication`.
 
 **Two deliberate small differences**
 
