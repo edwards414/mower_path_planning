@@ -11,6 +11,7 @@ import pytest
 
 from mower_mission.adapters.dto import (
     color_rgba_to_hex,
+    is_navsat_datum_point,
     marker_array_to_marker_layer,
     occupancy_grid_to_map_layer,
     params_to_coverage_settings,
@@ -287,3 +288,15 @@ def test_service_response_no_success_field_defaults_true():
     resp = SimpleNamespace(zone_map_list=[])
     env = service_response_to_envelope(resp)
     assert env == {'success': True, 'message': ''}
+
+
+def test_only_a_finite_non_zero_to_ll_answer_is_a_navsat_datum():
+    """navsat_transform answers (0, 0, 0) until its datum exists; a NaN
+    answer (UTM projection without a zone) must not be latched either --
+    ``abs(nan) < 1e-6`` is False, so a plain zero check lets it through."""
+    assert is_navsat_datum_point(23.694, 120.5377)
+    assert not is_navsat_datum_point(0.0, 0.0)
+    assert not is_navsat_datum_point(5e-7, -5e-7)
+    assert not is_navsat_datum_point(float('nan'), float('nan'))
+    assert not is_navsat_datum_point(23.694, float('nan'))
+    assert not is_navsat_datum_point(float('inf'), 120.0)

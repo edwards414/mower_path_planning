@@ -28,6 +28,7 @@ from std_msgs.msg import String
 from visualization_msgs.msg import MarkerArray
 
 from mower_mission.adapters.dto import (
+    is_navsat_datum_point,
     marker_array_to_marker_layer,
     occupancy_grid_to_map_layer,
     params_to_coverage_settings,
@@ -344,11 +345,11 @@ class FlutterAdapter(Node):
             res = future.result()
         except Exception:  # noqa: BLE001
             res = None
-        if res is None or (
-            abs(res.ll_point.latitude) < 1e-6
-            and abs(res.ll_point.longitude) < 1e-6
+        if res is None or not is_navsat_datum_point(
+            res.ll_point.latitude, res.ll_point.longitude
         ):
-            # navsat datum not established (no valid GPS fix) → fallback.
+            # navsat datum not established (the default (0, 0, 0) answer, or
+            # a non-finite one) → fallback.
             self._publish_fallback_datum()
             return
         lat0 = res.ll_point.latitude
@@ -364,7 +365,9 @@ class FlutterAdapter(Node):
             res = future.result()
         except Exception:  # noqa: BLE001
             res = None
-        if res is None:
+        if res is None or not is_navsat_datum_point(
+            res.ll_point.latitude, res.ll_point.longitude
+        ):
             self._publish_fallback_datum()
             return
         bearing = self._bearing_to_north(
