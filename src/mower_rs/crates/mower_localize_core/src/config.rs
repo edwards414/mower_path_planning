@@ -176,11 +176,12 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// A key read only for its presence in the parameter list, never used.
-    fn inert_any(&mut self, key: &str) {
-        if let Some(v) = self.raw(key) {
-            self.declared.push((key.to_string(), v.clone()));
+    fn inert_double(&mut self, key: &str, default: f64, effect: &str) -> Result<(), String> {
+        let v = self.double(key, default)?;
+        if v != default {
+            self.warnings.push(format!("{}: {key}: {v} has no effect here ({effect})", self.node));
         }
+        Ok(())
     }
 
     fn untested(&mut self, key: &str) {
@@ -271,7 +272,8 @@ impl EkfSettings {
         let debug = r.boolean("debug", false)?;
         if debug {
             r.warnings.push(format!("{node}: debug: true has no effect here (no debug file)"));
-            r.inert_any("debug_out_file");
+            // Declared only with debug on, as upstream.
+            r.string("debug_out_file", "robot_localization_debug.txt".to_string())?;
         }
         let map_frame = r.string("map_frame", "map".to_string())?;
         let odom_frame = r.string("odom_frame", "odom".to_string())?;
@@ -313,14 +315,13 @@ impl EkfSettings {
         let sensor_timeout = r.double("sensor_timeout", 1.0 / frequency)?;
         let two_d_mode = r.boolean("two_d_mode", false)?;
         r.refuse_bool("smooth_lagged_data", false, "the lagged-data history")?;
-        // Only meaningful with smooth_lagged_data, which is refused above.
-        r.inert_any("history_length");
-        // Its body is commented out upstream.
-        r.inert_any("reset_on_time_jump");
+        // These four are declared unconditionally upstream, so they are
+        // listed with their defaults even when the yaml leaves them out.
+        r.inert_double("history_length", 0.0, "only used with smooth_lagged_data")?;
+        r.inert_bool("reset_on_time_jump", false, "its body is commented out upstream")?;
         r.refuse_bool("use_control", false, "the control input subscriptions")?;
-        // Declared unconditionally upstream, used only with use_control.
-        r.inert_any("stamped_control");
-        r.inert_any("control_timeout");
+        r.inert_bool("stamped_control", false, "only used with use_control")?;
+        r.inert_double("control_timeout", 0.0, "only used with use_control")?;
         let dynamic_process_noise_covariance = r.boolean("dynamic_process_noise_covariance", false)?;
         if dynamic_process_noise_covariance {
             r.untested("dynamic_process_noise_covariance");
@@ -572,6 +573,30 @@ mod tests {
         assert_eq!(s.odoms[0].queue_size, 10);
         assert_eq!(s.odoms[0].config.update_vector, [false; STATE_SIZE]);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        // loadParams declares these whatever the yaml says, so the parameter
+        // services list them at their defaults.
+        let declared = |k: &str| r.parameters.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(declared("history_length"), Some(ParamValue::Double(0.0)));
+        assert_eq!(declared("reset_on_time_jump"), Some(ParamValue::Bool(false)));
+        assert_eq!(declared("stamped_control"), Some(ParamValue::Bool(false)));
+        assert_eq!(declared("control_timeout"), Some(ParamValue::Double(0.0)));
+        assert_eq!(declared("debug_out_file"), None);
+    }
+
+    #[test]
+    fn inert_keys_are_typed_and_a_non_default_value_is_a_warning() {
+        let mut p = odom_only();
+        p.push(("history_length", ParamValue::Double(2.0)));
+        p.push(("stamped_control", ParamValue::Bool(true)));
+        p.push(("debug", ParamValue::Bool(true)));
+        let r = EkfSettings::from_params("ekf", &params(&p)).unwrap();
+        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
+        assert!(r.parameters.iter().any(|(k, v)| k == "history_length" && *v == ParamValue::Double(2.0)));
+        assert!(r.parameters.iter().any(|(k, _)| k == "debug_out_file"));
+        let mut p = odom_only();
+        p.push(("control_timeout", ParamValue::Integer(1)));
+        let err = EkfSettings::from_params("ekf", &params(&p)).unwrap_err();
+        assert!(err.contains("control_timeout"), "{err}");
     }
 
     #[test]

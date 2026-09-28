@@ -334,6 +334,14 @@ mod tests {
         assert_eq!(find("gravitational_acceleration").double_value, 9.80665);
         assert_eq!(find("sensor_timeout").double_value, 1.0 / 20.0);
         assert_eq!(find("odom1_queue_size").integer_value, 10);
+        // Declared unconditionally by loadParams, absent from the yaml.
+        assert_eq!(find("history_length").type_, paramsrv::PARAMETER_DOUBLE);
+        assert_eq!(find("history_length").double_value, 0.0);
+        assert!(!find("reset_on_time_jump").bool_value);
+        assert!(!find("stamped_control").bool_value);
+        assert_eq!(find("control_timeout").double_value, 0.0);
+        // Only with debug: true, as upstream.
+        assert!(params.iter().all(|p| p.name != "debug_out_file"));
         // Nothing mower_localize invented.
         assert!(params.iter().all(|p| p.name != "odometry_topic"));
         assert_eq!(r.settings.odoms.len(), 2);
