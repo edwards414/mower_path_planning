@@ -319,7 +319,7 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     dual = DUAL_EKF_LAUNCH.read_text(encoding='utf-8')
     # every C++ node is gated off by the same switch that turns the module on
     assert dual.count('condition=cpp_localization,') == 3
-    assert 'cpp_localization = UnlessCondition(rust_localize)' in dual
+    assert 'cpp_localization = _cpp_localization(rust_localize)' in dual
     assert "executable='mower_localize'" in dual
     assert 'condition=_rust_localize_binary(rust_localize, rust_daemon)' in dual
     # a bare __node:= would rename all three nodes in the process
@@ -1039,7 +1039,7 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
     # the include that starts ros2_control_node + both spawners
     assert 'controller_test.launch.py' in mower_launch
     controller_block = mower_launch.split('controller_test.launch.py', 1)[1]
-    assert 'condition=UnlessCondition(rust_base)' in controller_block.split(
+    assert 'condition=_rust_off(rust_base)' in controller_block.split(
         'mower_base_node', 1)[0]
     # ... and the node that replaces it, off whenever the daemon runs it
     assert "executable='mower_base'" in mower_launch
@@ -1079,6 +1079,45 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
     assert 'rust_base:=${RUST_BASE:-false}' in DEPLOY_COMPOSE.read_text(
         encoding='utf-8')
     assert 'RUST_BASE=false' in ENV_EXAMPLE.read_text(encoding='utf-8')
+
+
+def _load_launch_module(path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(path.stem.replace('.', '_'), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_rust_base_and_localize_sides_are_exact_complements_for_any_value():
+    """RUST_BASE=on / RUST_LOCALIZE=yes: a plain UnlessCondition accepts only
+    true/false/1/0 and aborts the whole launch (restart: unless-stopped then
+    crash-loops the stack, bridge included), while the Rust side and
+    robot.launch.py's module set accept yes/on too. Every value has to start
+    exactly one side, and the same side everywhere."""
+    assert 'UnlessCondition(rust_base)' not in MOWER_LAUNCH.read_text(
+        encoding='utf-8')
+    assert 'UnlessCondition(rust_localize)' not in DUAL_EKF_LAUNCH.read_text(
+        encoding='utf-8')
+    pytest.importorskip('launch')
+    pytest.importorskip('xacro')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    mower = _load_launch_module(MOWER_LAUNCH)
+    dual = _load_launch_module(DUAL_EKF_LAUNCH)
+    robot = _load_launch_module(ROBOT_LAUNCH)
+    for value in ('true', 'True', ' on', 'ON', 'yes', '1',
+                  'false', 'FALSE', '0', 'off', 'no', 'maybe', ''):
+        context = LaunchContext()
+        rust = robot._truthy(value)
+        assert mower._rust_binary(value, 'false').evaluate(context) is rust
+        assert mower._rust_off(value).evaluate(context) is not rust
+        assert dual._rust_localize_binary(value, 'false').evaluate(
+            context) is rust
+        assert dual._cpp_localization(value).evaluate(context) is not rust
+        # with the daemon on, the separate binary stays down either way
+        assert mower._rust_binary(value, 'on').evaluate(context) is False
 
 
 def test_rust_base_reproduces_the_launched_controller_parameters():

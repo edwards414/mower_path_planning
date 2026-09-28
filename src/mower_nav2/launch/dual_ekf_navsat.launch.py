@@ -17,7 +17,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 import launch.actions
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 import launch_ros.actions
 
@@ -34,8 +34,19 @@ _TRUE = "('true', '1', 'yes', 'on')"
 def _rust_localize_binary(rust_localize, rust_daemon):
     """The separate mower_localize process: switch on, daemon not running."""
     return IfCondition(PythonExpression([
-        "'", rust_localize, "'.lower() in ", _TRUE,
-        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+        "'", rust_localize, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() not in ", _TRUE,
+    ]))
+
+
+def _cpp_localization(rust_localize):
+    """Run the three robot_localization nodes: the Rust test's complement.
+
+    A plain UnlessCondition accepts only true/false/1/0, so RUST_LOCALIZE=yes
+    would abort the whole launch and crash-loop the stack.
+    """
+    return IfCondition(PythonExpression([
+        "'", rust_localize, "'.strip().lower() not in ", _TRUE,
     ]))
 
 
@@ -50,7 +61,7 @@ def generate_launch_description():
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
     rust_localize = LaunchConfiguration('rust_localize')
     rust_daemon = LaunchConfiguration('rust_daemon')
-    cpp_localization = UnlessCondition(rust_localize)
+    cpp_localization = _cpp_localization(rust_localize)
 
     mower_nav2_dir = get_package_share_directory('mower_nav2')
     rl_params_file = os.path.join(
