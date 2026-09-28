@@ -9,6 +9,7 @@ the bottom drive an A/B measurement on the real robot.
 | `shadow_compare.py` | separate mower_rs binaries vs one `mower_rsd` process, every topic compared (Phase A5) |
 | `fake_base.py`, `base_harness.py`, `base_compare.py` | a fake STM32 on a socat pty, then the `ros2_control` chain vs `mower_base` against it (Phase B) |
 | `localize_compare.py` | `dual_ekf_navsat.launch.py` vs `mower_localize` on one synthetic sensor stream (Phase C) |
+| `slow_copy_check.py` | a source topic and its throttled copies (`/odom` -> `/odom_slow`, `/odometry/global` -> `/odometry/global_slow`): rate, spacing, byte-identity with a source message, publisher QoS; run a `topic_tools throttle` on the same source next to the module's copy to compare (`../README.md`, "The slow copies") |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline |
 | `switch.sh`, `measure.sh` | flip `IMAGE_TAG` / `NAV_COMPOSITION` / `RUST_DAEMON` / any `KEY=VAL` on the robot and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 
