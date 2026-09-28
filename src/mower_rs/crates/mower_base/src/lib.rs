@@ -10,6 +10,7 @@
 //! | `diff_drive_controller` (`diff_controller`) | [`mower_base_core::diff_drive`] |
 //! | `joint_state_broadcaster` | `Driver::publish_joint_states` |
 //! | the two `controller_manager/spawner` processes | nothing: there is no lifecycle to drive |
+//! | `topic_tools throttle` `odom_throttle` (`/odom` -> `/odom_slow`, 5 Hz) | [`SlowCopy`], fed every `/odom` this node publishes |
 //!
 //! `robot_state_publisher` is **not** replaced — it stays, and it is the
 //! reason `/joint_states` has to keep coming out at the controller rate.
@@ -83,6 +84,7 @@ use mower_base_core::diff_drive::{
 };
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::TimeNs;
+use mower_rs_common::throttle::SlowCopy;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{TransformStamped, TwistStamped};
@@ -211,6 +213,7 @@ struct Settings {
 /// publishes straight from its own thread like `mower_imu` does.
 struct Publishers {
     odom: r2r::Publisher<Odometry>,
+    odom_slow: Option<SlowCopy<Odometry>>,
     joint_states: r2r::Publisher<JointState>,
     tf: r2r::Publisher<TFMessage>,
     telemetry: Option<r2r::Publisher<StringMsg>>,
@@ -503,7 +506,7 @@ impl Driver {
         }
     }
 
-    fn publish_odom(&self, odom: &OdomSample) {
+    fn publish_odom(&mut self, odom: &OdomSample) {
         let mut msg = self.odom_template.clone();
         msg.header.stamp = stamp(odom.stamp_ns);
         msg.pose.pose.position.x = odom.x;
@@ -512,8 +515,15 @@ impl Driver {
         msg.pose.pose.orientation.w = odom.qw;
         msg.twist.twist.linear.x = odom.linear_x;
         msg.twist.twist.angular.z = odom.angular_z;
-        if let Err(e) = self.pubs.odom.publish(&msg) {
-            r2r::log_error!(&self.logger, "publish odom failed: {:?}", e);
+        match self.pubs.odom.publish(&msg) {
+            // The throttle only ever saw what reached /odom; the copy is this
+            // same message, stamp and all.
+            Ok(()) => {
+                if let Some(slow) = self.pubs.odom_slow.as_mut() {
+                    slow.offer(&msg);
+                }
+            }
+            Err(e) => r2r::log_error!(&self.logger, "publish odom failed: {:?}", e),
         }
         if !odom.publish_tf {
             return;
@@ -673,6 +683,20 @@ pub fn production_diff_drive() -> DiffDriveParams {
     }
 }
 
+/// `/odom` as `odom_throttle` discovers it on the robot, which is what the
+/// QoS of its `/odom_slow` is derived from (`throttle::output_qos`).
+/// `diff_drive_controller` creates `/odom` with `rclcpp::SystemDefaultsQoS()`,
+/// which the robot's rmw_cyclonedds_cpp announces as reliable + volatile, keep
+/// last 1, so the throttle publishes reliable + volatile, keep last 10. Set
+/// here rather than taken from this node's own `/odom`, which asks for
+/// `SystemDefaultsQoS` as the controller does and so resolves per RMW: under
+/// rmw_fastrtps it is transient local, and a copy derived from that would hand
+/// a late transient-local joiner (a bag recorder) up to 10 stale samples no
+/// throttle on the robot ever did.
+fn throttled_odom_qos() -> QosProfile {
+    QosProfile::default().keep_last(1).reliable().volatile()
+}
+
 fn covariance6(node: &r2r::Node, name: &str, default: [f64; 6]) -> [f64; 6] {
     let value = match node.params.lock().unwrap().get(name).map(|p| p.value.clone()) {
         Some(r2r::ParameterValue::DoubleArray(v)) => v,
@@ -781,6 +805,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let override_topic = params::string(&node, "override_topic", "/mower_base/wheel_override");
     let servo_topic = params::string(&node, "servo_topic", "/mower_base/servo_command");
     let blade_topic = params::string(&node, "blade_topic", "/mower_base/blade_command");
+    // The slow copy of /odom the status nodes read (heartbeat_source_topic and
+    // odom_topic of robot_status, heartbeat / robot_info / telemetry), which
+    // mission.launch.py's odom_throttle makes when ros2_control publishes
+    // /odom and does not start when this node does. Empty turns it off.
+    let odom_slow_topic = params::string(&node, "odom_slow_topic", "/odom_slow");
+    let odom_slow_rate_hz = params::f64(&node, "odom_slow_rate_hz", 5.0);
 
     // QoS, the same profiles the C++ chain asks for, so each RMW resolves
     // them the same way on both sides:
@@ -792,7 +822,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     //   /mower_base/firmware_info, led      transient local + reliable, depth 1
     //   pid                                 reliable, depth 4
     //   wheel_override, servo, blade        best effort, depth 1
-    // (the last four set explicitly in mower_system.cpp). SystemDefaults is
+    //   /odom_slow                          what odom_throttle publishes on the
+    //                                       robot: reliable + volatile, keep
+    //                                       last 10 (`throttled_odom_qos`)
+    // (the four side channels set explicitly in mower_system.cpp; /odom_slow
+    // set, not derived from /odom's profile). SystemDefaults is
     // not a fixed profile: rmw_cyclonedds_cpp, what the robot runs, resolves
     // it to reliable + volatile, keep last 1, and rmw_fastrtps to its own
     // entity defaults (TRANSIENT_LOCAL writers, BEST_EFFORT readers), which
@@ -804,6 +838,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
 
     let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
+    let odom_slow = SlowCopy::<Odometry>::create(
+        &mut node,
+        &odom_slow_topic,
+        odom_slow_rate_hz,
+        &throttled_odom_qos(),
+    );
     let joint_pub =
         node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
     let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
@@ -991,7 +1031,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     r2r::log_info!(
         &logger,
         "device={} baud={} max_rpm={:.1} counts_per_rev={:.0} update_rate={:.0} Hz; \
-         {} -> wheels, odom -> {} ({} loop, odom_tf {})",
+         {} -> wheels, odom -> {} ({} loop, odom_tf {}), slow copy {}",
         settings.device,
         settings.baud,
         cfg.max_rpm,
@@ -1000,7 +1040,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         cmd_vel_topic,
         odom_topic,
         if diff_drive.open_loop { "open" } else { "closed" },
-        diff_drive.enable_odom_tf
+        diff_drive.enable_odom_tf,
+        if odom_slow.is_some() {
+            format!("{odom_slow_topic} at {odom_slow_rate_hz} Hz")
+        } else {
+            "off".to_string()
+        }
     );
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -1010,6 +1055,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         settings,
         pubs: Publishers {
             odom: odom_pub,
+            odom_slow,
             joint_states: joint_pub,
             tf: tf_pub,
             telemetry: telemetry_pub,
@@ -1183,6 +1229,22 @@ mod tests {
         let wall = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
         assert!((SystemClocks.control_ns() - steady).abs() < 50 * MS);
         assert!((SystemClocks.ros_ns() - wall).abs() < 50 * MS);
+    }
+
+    /// /odom_slow keeps what odom_throttle publishes it with on the robot
+    /// (rmw_cyclonedds_cpp, topic_tools 1.3.4 over diff_drive_controller's
+    /// SystemDefaultsQoS /odom): reliable + volatile, keep last 10 under
+    /// every RMW -- not a transient-local copy of what rmw_fastrtps makes of
+    /// this node's SystemDefaultsQoS /odom.
+    #[test]
+    fn odom_slow_is_as_volatile_as_the_throttle_it_replaces() {
+        use mower_rs_common::throttle::output_qos;
+        use r2r::qos::{DurabilityPolicy, HistoryPolicy, ReliabilityPolicy};
+        let slow = output_qos(&throttled_odom_qos());
+        assert_eq!(slow.history, HistoryPolicy::KeepLast);
+        assert_eq!(slow.depth, 10);
+        assert_eq!(slow.reliability, ReliabilityPolicy::Reliable);
+        assert_eq!(slow.durability, DurabilityPolicy::Volatile);
     }
 
     #[test]

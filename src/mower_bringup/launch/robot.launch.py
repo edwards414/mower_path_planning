@@ -281,6 +281,11 @@ def generate_launch_description():
             'rust_coverage': rust_coverage,
             'rust_agent': rust_agent,
             'rust_bridge': rust_bridge,
+            # mower_base / mower_localize publish /odom_slow and
+            # /odometry/global_slow themselves, so mission.launch.py holds
+            # the matching topic_tools throttle down.
+            'rust_base': rust_base,
+            'rust_localize': rust_localize,
             'rust_daemon': rust_daemon,
         }.items(),
     )
@@ -459,7 +464,9 @@ def generate_launch_description():
             description='mower_rs mower_localize instead of the two '
                         'robot_localization ekf_node processes and '
                         'navsat_transform_node (same node names, topics, '
-                        'transforms and services)',
+                        'transforms and services), and instead of the '
+                        'global_odom_throttle that makes '
+                        '/odometry/global_slow',
         ),
         DeclareLaunchArgument(
             'rust_bridge',
@@ -474,8 +481,10 @@ def generate_launch_description():
                         'ros2_control chain: ros2_control_node '
                         '(controller_manager), mower_hardware::MowerSystem, '
                         'diff_controller, joint_state_broadcaster and their '
-                        'two spawners. Same serial protocol, same /odom, '
-                        '/joint_states and /mower_base/* contract; '
+                        'two spawners, and the odom_throttle that makes '
+                        '/odom_slow. Same serial protocol, same /odom, '
+                        '/odom_slow, /joint_states and /mower_base/* '
+                        'contract; '
                         'robot_state_publisher stays and keeps its '
                         '/joint_states input. Flip only after a supervised '
                         'drive.',

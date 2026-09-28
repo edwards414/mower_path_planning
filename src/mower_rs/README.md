@@ -19,8 +19,8 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
 | `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
-| `mower_base` | the whole `ros2_control` chain: `ros2_control_node` (`controller_manager`), `mower_hardware::MowerSystem` and its `mower_hardware_info` node, `diff_drive_controller` (`diff_controller`), `joint_state_broadcaster` and the two `spawner` processes (`/odom`, `/joint_states`, `/mower_base/telemetry`, `/mower_base/firmware_info` and the five `/mower_base/*_command` channels) | `mower.launch.py rust_base:=true` |
-| `mower_localize` | `robot_localization`'s two `ekf_node`s and `navsat_transform_node` (`/odometry/local`, `/odometry/global`, `/odometry/gps`, `/gps/filtered`, the `odom -> base_footprint` and `map -> odom` broadcasts, `/toLL`, `/fromLL`, `/fromLLArray`, `/datum`) | `dual_ekf_navsat.launch.py rust_localize:=true` |
+| `mower_base` | the whole `ros2_control` chain: `ros2_control_node` (`controller_manager`), `mower_hardware::MowerSystem` and its `mower_hardware_info` node, `diff_drive_controller` (`diff_controller`), `joint_state_broadcaster` and the two `spawner` processes (`/odom`, `/joint_states`, `/mower_base/telemetry`, `/mower_base/firmware_info` and the five `/mower_base/*_command` channels); also `mission.launch.py`'s `odom_throttle` (`/odom_slow`) | `mower.launch.py rust_base:=true` (+ `mission.launch.py rust_base:=true` for the throttle; `robot.launch.py` passes both) |
+| `mower_localize` | `robot_localization`'s two `ekf_node`s and `navsat_transform_node` (`/odometry/local`, `/odometry/global`, `/odometry/gps`, `/gps/filtered`, the `odom -> base_footprint` and `map -> odom` broadcasts, `/toLL`, `/fromLL`, `/fromLLArray`, `/datum`); also `mission.launch.py`'s `global_odom_throttle` (`/odometry/global_slow`) | `dual_ekf_navsat.launch.py rust_localize:=true` (+ `mission.launch.py rust_localize:=true` for the throttle; `robot.launch.py` passes both) |
 | `mower_rsd` | nothing: it *is* the binaries below, as modules of one process on one r2r Context (one DDS participant). See the section after this table. | `robot.launch.py rust_daemon:=true` |
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 
@@ -129,6 +129,7 @@ serial thread and the fail-closed path.
 | pub | `/odom` | `nav_msgs/Odometry` | `SystemDefaultsQoS` | `publish_rate` 25 Hz | `diff_controller`'s `~/odom`, remapped. `odom` -> `base_footprint`, covariance diagonals from the yaml (unset there, so the controller's own zeros) |
 | pub | `/tf` | `tf2_msgs/TFMessage` | `SystemDefaultsQoS` | 25 Hz **only if `enable_odom_tf`** | production sets `enable_odom_tf: false` — the two EKFs own `odom -> base_footprint` — so nothing is published; the switch is implemented for parity |
 | pub | `/joint_states` | `sensor_msgs/JointState` | `SystemDefaultsQoS` | every control cycle, 25 Hz | `joint_state_broadcaster` with `use_local_topics: false`. Two joints, `position` and `velocity` real, `effort` two NaNs as the broadcaster writes them, `frame_id` `base_link` (its `frame_id` parameter's default) |
+| pub | `/odom_slow` | `nav_msgs/Odometry` | reliable + **volatile**, depth **10**: what `odom_throttle` publishes on the robot, not derived from the `/odom` row above | 5 Hz at most (`odom_slow_rate_hz`); see [the slow copies](#the-slow-copies-instead-of-topic_tools-throttle) | `mission.launch.py`'s `odom_throttle` (`topic_tools throttle messages /odom 5.0 /odom_slow`), which does not start with `rust_base:=true`. `odom_slow_topic: ""` turns it off |
 | pub | `/mower_base/telemetry` | `std_msgs/String` (JSON) | best effort, depth 1 | one per new 0x85, gated at `0.8 / telemetry_rate_hz` (20 Hz) -> ~15-17 Hz against a 50 ms frame and a 40 ms loop | `MowerSystem::publish_telemetry_if_due` |
 | pub | `/mower_base/firmware_info` | `std_msgs/String` (JSON) | transient local, reliable, depth 1 | once per distinct 0x87 (latched) | `MowerSystem::on_firmware_info` |
 | sub | `/mower_base/led_command` | `std_msgs/String` | transient local, reliable, depth 1 | on change, re-asserted every 5 s | `led_topic` |
@@ -210,7 +211,8 @@ the file the robot actually launches, **not**
 `mower_hardware/config/mower_controllers.yaml`, which is a bench file and
 disagrees with it on `open_loop`, `enable_odom_tf`, `base_frame_id`, the
 wheel geometry and `cmd_vel_timeout`. Only `device` and `shutdown_command`
-are written out, in `mower_bringup/config/mower_rsd.yaml`.
+are written out, in `mower_bringup/config/mower_rsd.yaml`, plus the slow
+copy's `odom_slow_topic` / `odom_slow_rate_hz` at their defaults.
 
 ### What it deliberately does not reproduce
 
@@ -629,14 +631,16 @@ The external contract, from the launch file, the yaml and the consumers:
 | in | `/fix`, `/imu/data`, `/odometry/global` (navsat) | best effort, keep last 1 | as published |
 | in | `/tf_static` | reliable, transient local | once |
 | out | `/odometry/local` (odom EKF), `/odometry/global` (map EKF) | reliable, keep last 10 | 20 Hz |
+| out | `/odometry/global_slow` (map EKF; `odometry_slow_topic`, empty on the odom EKF) | reliable, keep last 10 | 5 Hz at most (`odometry_slow_rate_hz`); see [the slow copies](#the-slow-copies-instead-of-topic_tools-throttle) |
 | out | `/odometry/gps`, `/gps/filtered` | reliable, keep last 10 | 30 Hz timer, one message per new fix / per new odometry |
 | out | `/tf`: `odom -> base_footprint` (odom EKF), `map -> odom` (map EKF) | reliable, keep last 100 | 20 Hz, stamped with the filter's last measurement time |
 | out | `/tf_static`: `map -> utm` | reliable, transient local | once, when the datum locks |
 | srv | `/toLL`, `/fromLL`, `/fromLLArray`, `/datum` | services default | — |
 | srv | `<node>/{get,set,list,describe}_parameters`, `get_parameter_types`, `set_parameters_atomically` | services default | — |
 
-Consumers that must not notice: the two `topic_tools` throttles
-(`/odometry/global` -> `/odometry/global_slow`), nav2 (`map -> odom` and
+Consumers that must not notice: `mission.launch.py`'s `global_odom_throttle`
+(`/odometry/global` -> `/odometry/global_slow`) while it still runs, i.e. with
+`rust_localize:=false` there, nav2 (`map -> odom` and
 `/odometry/global`), `mower_adapter` (`/toLL` until the datum locks, then
 `/adapter/map_datum`), `mower_record` and `mower_nav` (the health gate wants
 `/odometry/gps` within 0.30 s of a fix, which is why navsat stays at 30 Hz).
@@ -670,6 +674,13 @@ services report every declared key with its value in effect. The topic wiring
 is the launch file's `remappings=` as node-scoped rules
 (`-r ekf_filter_node_map:odometry/filtered:=odometry/global`), since one
 process holds three nodes and an unprefixed rule would hit all of them.
+The only keys of the module's own are the two EKFs' `odometry_slow_topic` /
+`odometry_slow_rate_hz` ([the slow copies](#the-slow-copies-instead-of-topic_tools-throttle)),
+which robot_localization has no equivalent of: `ekf_filter_node_map`'s
+section in `mower_rsd.yaml` sets them (the defaults, `odometry/global_slow`
+at 5.0, and empty on `ekf_filter_node_odom`), they are taken out of the
+section before the resolver sees it, and the parameter services report them
+with the rest.
 
 **navsat's `delay`** (3 s) is applied as upstream applies it: the constructor
 creates everything and then sleeps before the timer exists, with nothing spun,
@@ -737,6 +748,129 @@ stream playing; indication only, the RK3568 pays far more per process):
 |---|---|---|---|
 | `ekf_node` x2 + `navsat_transform_node` | 3 | 48 | 8.2 % of a core |
 | `mower_localize` (release) | 1 | 21 | **4.4 %** |
+
+## The slow copies instead of `topic_tools throttle`
+
+`mission.launch.py` runs two C++ `topic_tools throttle` processes whose only
+job is a 5 Hz copy of a fast topic for the status nodes: `odom_throttle`
+(`/odom` -> `/odom_slow`: `robot_status` / heartbeat, robot_info, telemetry)
+and `global_odom_throttle` (`/odometry/global` -> `/odometry/global_slow`:
+`flutter_adapter` and `path_record_node`'s `robot_pose_source_topic`). On the
+LubanCat the pair cost 6.3 % of a core, about 1.3 ms per *input* message
+(`docs/ROS_FREE_PLAN.md` section 1). Once the source topic comes from a
+mower_rs module, the module publishes the copy itself
+(`mower_rs_common::throttle::SlowCopy`, fed with every message it has just
+published on the source) and the throttle is not started:
+
+| copy | published by, when the switch is on | throttle held down | parameters (`mower_rsd.yaml`) |
+|---|---|---|---|
+| `/odom_slow` | `mower_base` | `odom_throttle`, by `rust_base` | `mower_base`: `odom_slow_topic`, `odom_slow_rate_hz` |
+| `/odometry/global_slow` | `mower_localize`'s `ekf_filter_node_map` | `global_odom_throttle`, by `rust_localize` | `ekf_filter_node_map`: `odometry_slow_topic`, `odometry_slow_rate_hz` |
+
+The defaults are the throttles' arguments (the topic, 5.0); an empty topic
+turns a copy off, and is the default on `ekf_filter_node_odom` because nothing
+throttles `/odometry/local`. A rate that is not a positive number or a topic
+name rcl refuses (`/odom_slow/`, a space) is logged and also turns the copy
+off: a typo in the yaml costs the 5 Hz status copy, never the module and its
+fast topic (`/odom` and the wheels, or `map -> odom`).
+
+`robot.launch.py` hands `rust_base` and `rust_localize` to
+`mission.launch.py` as well as to `mower.launch.py`; with both false (the
+default) `mission.launch.py` starts exactly the processes it did before.
+Launching the two files separately means giving both the same value, or a
+copy has two publishers (twice the rate) or none.
+
+What is reproduced, from topic_tools 1.3.4 (the image's
+`ros-jazzy-topic-tools`, `src/throttle_node.cpp`, `src/tool_base_node.cpp`):
+
+* **The rule.** A message is forwarded, unchanged, when at least one period
+  has passed since the last forwarded one: `now - last >= period`, with
+  `period = rclcpp::Rate(5.0).period()` = 200 000 000 ns, and `last` restarts
+  at that message. There is no fixed grid and no catching up. The copy is the
+  same message the module published, stamp included, not a re-stamped one.
+* **The clock.** The time a message is *seen* on the node clock, never its
+  header stamp. The throttles run with `use_sim_time` from the launch file,
+  which on the robot is false, so their clock is the system clock
+  (`CLOCK_REALTIME`), and that is what the copies use. `mower_base` and
+  `mower_localize` do not run on simulated time at all (`mower.launch.py` and
+  `robot.launch.py` refuse `use_sim_time:=true`). "Seen" is the moment the
+  module publishes the source message instead of the moment DDS delivers it
+  to a second process.
+* **The first message.** `last` starts when the node is constructed, so a
+  source message within the first period after start-up is dropped; in
+  practice the source starts later than that and its first message goes.
+* **A clock stepped backwards** (NTP) restarts the period at the new time and
+  drops that message, with the same warning.
+* **QoS**, which the throttle derives from the source publisher it
+  *discovers*: keep last **10**, the source's reliability and durability,
+  automatic liveliness. What it discovers depends on the RMW.
+  `diff_drive_controller` creates `/odom` with `rclcpp::SystemDefaultsQoS()`,
+  which the robot's rmw_cyclonedds_cpp announces as reliable + volatile,
+  keep last 1, and Fast DDS as reliable + transient local.
+  So on the robot `odom_throttle` publishes `/odom_slow` reliable +
+  **volatile**, keep last 10 (probed in `mower-runtime-main:local`), and
+  that is what `mower_base` sets explicitly rather than deriving it from its
+  own `/odom`: that asks for `SystemDefaultsQoS` as the controller does, so
+  under Fast DDS a derived copy would be transient local and hand a late
+  transient-local joiner (a bag recorder) up to 10 stale samples that no
+  throttle on the robot ever did. `robot_localization`'s `/odometry/global` is an explicit
+  `rclcpp::QoS(10)`, reliable + volatile under every RMW, and so is
+  `/odometry/global_slow`. Every subscriber of either (`robot_status`, the
+  rclpy status nodes, `mower_adapter` / `flutter_adapter_node`,
+  `mower_record` / `path_record_node`, all `QoS(10)` reliable volatile)
+  matches both; the app subscribes to neither.
+
+Not reproduced: `lazy` (false in both launch entries, so the throttle also
+published with no subscriber), the `bytes` mode, the `qos_overrides.*`
+parameters nobody sets, and the throttle's discovery dance (it has no output
+publisher until it has seen a source publisher, and drops it when the source
+goes away; the module's copy lives exactly as long as its source).
+
+**It is not 5.0 Hz, and never was.** A 25 Hz `/odom` puts every fifth message
+exactly one period after the last forwarded one, so arrival jitter decides
+whether the fifth or the sixth goes; the same holds for the 20 Hz
+`/odometry/global` and its fourth. Both the C++ throttle and the copy come out
+at about 4.3-4.5 Hz on these sources, forwarding 200 or 240 ms apart on
+`/odom` and 200 or 250 ms apart on `/odometry/global`. The consumers only
+judge freshness over seconds (the heartbeat's stale timeout is 2 s).
+
+Verification, in the arm64 Jazzy container with a C++ throttle on the *same*
+source next to the module's copy (`tools/slow_copy_check.py`, 30 s,
+`mower_rsd --modules base,localize` with `mower_rsd.yaml`, the fake STM32 of
+`tools/fake_base.py` driven by `tools/base_harness.py`):
+
+| | source | module's copy | `topic_tools throttle` on the same source |
+|---|---|---|---|
+| `/odom` (25.003 Hz) | 750 | `/odom_slow` 135, 4.50 Hz, all 135 byte-identical to an `/odom` message | 134, 4.47 Hz, all identical |
+| `/odometry/global` (20.001 Hz) | 601 | `/odometry/global_slow` 130, 4.32 Hz, all 130 identical | 130, 4.32 Hz, all identical |
+| publisher QoS | — | reliable + volatile on both, keep last 10, automatic (set, not derived) | `/odometry/global_slow_cpp` the same; `/odom_slow_cpp` transient local, derived from `mower_base`'s `/odom`, which was still hard-coded latched then (before the pre-flight fixes; this image's Fast DDS). The robot's throttle over `diff_drive_controller` under Cyclone publishes reliable + volatile, keep last 10 |
+
+The two copies forward the same message for only 56-65 (`/odom`) and 72-106
+(`/odometry/global`) of their ~130 over two runs: where the fifth-or-sixth
+decision falls depends on each one's own arrival times.
+The standalone binaries give the same picture (`mower_base` with
+`mower_rsd.yaml` as `base_params_file`: 4.48 vs 4.45 Hz; `mower_localize`
+with the slow copy's defaults: 4.32 vs 4.32 Hz).
+
+With slow-copy topics rcl refuses (`odom_slow_topic: /odom_slow/`,
+`odometry_slow_topic: odometry/global slow`) both modules log
+`RCL_RET_TOPIC_NAME_INVALID`, publish no copy, and keep `/odom` at 25.0 Hz
+and `/odometry/global` at 20.0 Hz.
+
+Re-checked 2026-09-28 after merging onto the pre-flight fixes, in the runtime
+image under CycloneDDS (`mower_rsd --modules base,localize` with
+`mower_rsd.yaml` + `dual_ekf_navsat_params.yaml` and the launch file's
+node-scoped remaps, `fake_base.py`, 20 s, a C++ throttle on each source next
+to the copy): `/odom` 25.005 Hz, reliable + volatile, keep last 1 (its
+`SystemDefaultsQoS` under Cyclone); `/odom_slow` 88 messages, 4.41 Hz, all
+identical to an `/odom` message, against 89 / 4.43 Hz from the throttle;
+`/odometry/global` 19.99 Hz, `/odometry/global_slow` 86, 4.33 Hz, all
+identical, against 87 / 4.33 Hz. All four copies reliable + volatile, keep
+last 10: under the robot's RMW the throttle over `mower_base`'s `/odom`
+derives exactly what `mower_base` sets. No resolver warning for the two
+`odometry_slow_*` keys, and `ros2 param get` answers them on
+`ekf_filter_node_map` (`/odometry/global_slow`, 5.0) and
+`ekf_filter_node_odom` (empty).
 
 ## mower_agent
 

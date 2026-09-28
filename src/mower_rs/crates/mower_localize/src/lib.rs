@@ -24,6 +24,12 @@
 //! Which node a task runs is decided by its node name, which is how
 //! `mower_rsd`'s module table addresses an instance; [`run_all`] is the same
 //! three roles for the standalone binary.
+//!
+//! **One process more goes away.** `ekf_filter_node_map` also publishes the
+//! 5 Hz `/odometry/global_slow` itself (`mower_rs_common::throttle`), which
+//! `mission.launch.py`'s `global_odom_throttle` (`topic_tools throttle`)
+//! otherwise makes from `/odometry/global`; with `rust_localize:=true` that
+//! launch file does not start the throttle.
 
 mod conv;
 mod ekf;

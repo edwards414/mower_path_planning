@@ -187,6 +187,33 @@ def generate_launch_description():
                     'the rclpy flutter_adapter_node (same /adapter/* topics).',
     )
 
+    # The two switches mower.launch.py starts mower_base / mower_localize with
+    # (robot.launch.py passes the same value to both files). Those modules
+    # publish /odom_slow and /odometry/global_slow themselves, so each one
+    # holds down the topic_tools throttle that would otherwise make that copy
+    # (odom_throttle / global_odom_throttle below). Independent of
+    # rust_daemon: the modules do the same inside mower_rsd.
+    rust_base = LaunchConfiguration('rust_base')
+
+    declare_rust_base = DeclareLaunchArgument(
+        'rust_base',
+        default_value='false',
+        description='mower_rs mower_base publishes /odom (and /odom_slow), '
+                    'so odom_throttle does not start. Must match the '
+                    'rust_base given to mower.launch.py.',
+    )
+
+    rust_localize = LaunchConfiguration('rust_localize')
+
+    declare_rust_localize = DeclareLaunchArgument(
+        'rust_localize',
+        default_value='false',
+        description='mower_rs mower_localize publishes /odometry/global (and '
+                    '/odometry/global_slow), so global_odom_throttle does not '
+                    'start. Must match the rust_localize given to '
+                    'mower.launch.py.',
+    )
+
     auto_coverage = LaunchConfiguration('auto_coverage')
 
     declare_auto_coverage = DeclareLaunchArgument(
@@ -405,11 +432,17 @@ def generate_launch_description():
     # LubanCat (throttled A55), i.e. ~28 % of a core per Python subscriber.
     # The status nodes below only need a few Hz, so they read this C++
     # throttled copy instead.
+    #
+    # rust_base:=true -- mower_base publishes /odom_slow itself, from every
+    # /odom it publishes, by the same rule (mower_rs_common::throttle;
+    # odom_slow_topic / odom_slow_rate_hz in mower_rsd.yaml), which saves
+    # this process and its ~1.3 ms per /odom message.
     odom_throttle = Node(
         package='topic_tools',
         executable='throttle',
         name='odom_throttle',
         output='screen',
+        condition=UnlessCondition(rust_base),
         arguments=['messages', '/odom', '5.0', '/odom_slow'],
         parameters=[{'use_sim_time': use_sim_time}],
     )
@@ -419,11 +452,16 @@ def generate_launch_description():
     # path_record_node are pointed at this 5 Hz copy (robot_pose_source_topic)
     # instead of running a tf2 TransformListener, which would cost each of
     # them the full 77 Hz /tf stream (~50 % of a core per node in rclpy).
+    #
+    # rust_localize:=true -- mower_localize's ekf_filter_node_map publishes
+    # /odometry/global_slow itself, by the same rule (odometry_slow_topic /
+    # odometry_slow_rate_hz in mower_rsd.yaml).
     global_odom_throttle = Node(
         package='topic_tools',
         executable='throttle',
         name='global_odom_throttle',
         output='screen',
+        condition=UnlessCondition(rust_localize),
         arguments=[
             'messages', '/odometry/global', '5.0', '/odometry/global_slow',
         ],
@@ -577,6 +615,8 @@ def generate_launch_description():
         declare_rust_coverage,
         declare_rust_agent,
         declare_rust_bridge,
+        declare_rust_base,
+        declare_rust_localize,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,

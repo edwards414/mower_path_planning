@@ -4,15 +4,18 @@
 //! Everything numeric is the core's, which is checked against the real
 //! `librl_lib.so` to 1e-15 (see `mower_localize_core/README.md`). This file
 //! only does what `ros_filter_node.cpp` does around it: subscribe, convert,
-//! enqueue, and run `periodicUpdate` on the `frequency` timer.
+//! enqueue, and run `periodicUpdate` on the `frequency` timer -- plus the
+//! 5 Hz slow copy of the map instance's output that `mission.launch.py`'s
+//! `global_odom_throttle` makes when the C++ filter runs.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::stream::StreamExt;
-use mower_localize_core::config::{EkfSettings, SensorInput};
+use mower_localize_core::config::{EkfSettings, ParamValue, Params, SensorInput};
 use mower_localize_core::prepare::RosFilterCore;
-use mower_rs_common::{ModuleCtx, ModuleResult};
+use mower_rs_common::throttle::SlowCopy;
+use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::nav_msgs::msg::Odometry as ROdometry;
 use r2r::sensor_msgs::msg::Imu as RImu;
 use r2r::tf2_msgs::msg::TFMessage;
@@ -28,6 +31,66 @@ use crate::tfbus;
 /// `odomN` / `imuN` values (`odom`, `imu`), and the launch file remaps them
 /// with node-scoped `-r` rules exactly as it remaps the C++ nodes.
 const OUTPUT_TOPIC: &str = "odometry/filtered";
+
+/// The two keys this port reads that robot_localization has none of: the
+/// slow copy of the output that `mission.launch.py`'s `global_odom_throttle`
+/// (`topic_tools throttle messages /odometry/global 5.0
+/// /odometry/global_slow`) makes when the C++ map filter runs, and does not
+/// start when this module runs (`rust_localize`). `flutter_adapter` and
+/// `path_record_node` read it as `robot_pose_source_topic`. They come from
+/// `mower_rsd.yaml` (or the defaults), are taken out before the resolver sees
+/// the section -- which would call them unknown and ignored -- and are
+/// reported on the parameter services with the rest.
+const SLOW_TOPIC_KEY: &str = "odometry_slow_topic";
+const SLOW_RATE_KEY: &str = "odometry_slow_rate_hz";
+
+/// Where the slow copy goes and how often.
+struct SlowCopySettings {
+    /// Empty turns it off.
+    topic: String,
+    rate_hz: f64,
+}
+
+/// The throttle's output for the node whose `odometry/filtered` the launch
+/// files remap to `/odometry/global`; nothing throttles `/odometry/local`.
+fn default_slow_topic(node_name: &str) -> &'static str {
+    match node_name {
+        crate::NODE_EKF_MAP => "odometry/global_slow",
+        _ => "",
+    }
+}
+
+fn slow_copy_settings(node: &r2r::Node, node_name: &str) -> SlowCopySettings {
+    SlowCopySettings {
+        topic: params::string(node, "odometry_slow_topic", default_slow_topic(node_name)),
+        rate_hz: params::f64(node, "odometry_slow_rate_hz", 5.0),
+    }
+}
+
+/// The node's parameter section without the slow-copy keys: what the
+/// resolver gets, i.e. what `ekf_node` would have read.
+fn without_slow_copy_keys(mut section: Params) -> Params {
+    section.remove(SLOW_TOPIC_KEY);
+    section.remove(SLOW_RATE_KEY);
+    section
+}
+
+/// What the parameter services report: every key the resolver declared with
+/// its value in effect, the slow copy's two, and `use_sim_time`.
+fn advertised_parameters(
+    resolved: &[(String, ParamValue)],
+    slow: &SlowCopySettings,
+) -> Vec<paramsrv::Param> {
+    let mut advertised: Vec<paramsrv::Param> =
+        resolved.iter().map(|(name, v)| paramsrv::from_core(name, v)).collect();
+    advertised.push(paramsrv::from_core(SLOW_TOPIC_KEY, &ParamValue::String(slow.topic.clone())));
+    advertised.push(paramsrv::from_core(SLOW_RATE_KEY, &ParamValue::Double(slow.rate_hz)));
+    // rclcpp declares it on every node; the resolver refused anything but false.
+    if advertised.iter().all(|p| p.name != "use_sim_time") {
+        advertised.push(paramsrv::boolean("use_sim_time", false));
+    }
+    advertised
+}
 
 /// Inputs: `rclcpp::SensorDataQoS().keep_last(queue_size)` -- best effort, as
 /// `ros2 topic info -v` reports for the C++ nodes.
@@ -100,7 +163,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     // Everything the filter does comes from the node's section of
     // dual_ekf_navsat_params.yaml, resolved as `loadParams` would; a value
     // this port does not implement stops it here instead of being dropped.
-    let resolved = EkfSettings::from_params(&m.node_name, &paramsrv::overrides(&node))?;
+    let resolved = EkfSettings::from_params(
+        &m.node_name,
+        &without_slow_copy_keys(paramsrv::overrides(&node)),
+    )?;
     for w in &resolved.warnings {
         r2r::log_warn!(&logger, "{w}");
     }
@@ -140,15 +206,20 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- outputs ------------------------------------------------------------
     let odom_pub = node.create_publisher::<ROdometry>(OUTPUT_TOPIC, output_qos())?;
+    // The throttle's own QoS, derived from this publisher's: keep last 10,
+    // reliable, volatile (throttle::output_qos). ekf_node's QoS(10) is explicit,
+    // so it reads the same under every RMW. A bad topic or rate costs the copy,
+    // logged, never the filter.
+    let slow = slow_copy_settings(&node, &m.node_name);
+    let mut odom_slow =
+        SlowCopy::<ROdometry>::create(&mut node, &slow.topic, slow.rate_hz, &output_qos());
     let tf_pub = node.create_publisher::<TFMessage>("/tf", tf_qos())?;
 
-    let mut advertised: Vec<paramsrv::Param> =
-        resolved.parameters.iter().map(|(name, v)| paramsrv::from_core(name, v)).collect();
-    // rclcpp declares it on every node; the resolver refused anything but false.
-    if advertised.iter().all(|p| p.name != "use_sim_time") {
-        advertised.push(paramsrv::boolean("use_sim_time", false));
-    }
-    paramsrv::advertise(&mut node, &m.node_name, advertised)?;
+    paramsrv::advertise(
+        &mut node,
+        &m.node_name,
+        advertised_parameters(&resolved.parameters, &slow),
+    )?;
 
     // ---- spin ---------------------------------------------------------------
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -170,12 +241,17 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         .collect();
     r2r::log_info!(
         &logger,
-        "{} (mower_rs): {} Hz, world_frame {}, {}, publishing {}",
+        "{} (mower_rs): {} Hz, world_frame {}, {}, publishing {}{}",
         m.node_name,
         config.frequency,
         config.world_frame,
         inputs.join(", "),
-        OUTPUT_TOPIC
+        OUTPUT_TOPIC,
+        if odom_slow.is_some() {
+            format!(" and {} at {} Hz", slow.topic, slow.rate_hz)
+        } else {
+            String::new()
+        }
     );
 
     // `periodicUpdate` on the yaml's frequency. Skip, not Burst: after a
@@ -245,8 +321,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 }
             }
         }
-        if let Err(e) = odom_pub.publish(&conv::odometry_out(&odom)) {
-            r2r::log_warn!(&logger, "{OUTPUT_TOPIC} publish failed: {e:?}");
+        // Only what passed the gate above reaches here, so the copy never
+        // sees a corrected (not newer) state either: the throttle only ever
+        // saw what reached the output topic, and the copy is this same
+        // message, stamp and all.
+        let out = conv::odometry_out(&odom);
+        match odom_pub.publish(&out) {
+            Ok(()) => {
+                if let Some(slow) = odom_slow.as_mut() {
+                    slow.offer(&out);
+                }
+            }
+            Err(e) => r2r::log_warn!(&logger, "{OUTPUT_TOPIC} publish failed: {e:?}"),
         }
     }
 
@@ -388,5 +474,33 @@ mod tests {
             }
         }
         assert_eq!(published, 1);
+    }
+
+    /// The slow-copy keys are reported with the rest and never reach the
+    /// resolver, which would warn that they are not robot_localization's.
+    #[test]
+    fn the_parameter_set_reports_the_slow_copy_the_filter_is_really_running() {
+        let mut section = map_section();
+        section.insert(SLOW_TOPIC_KEY.into(), V::String("/odometry/global_slow".into()));
+        section.insert(SLOW_RATE_KEY.into(), V::Double(5.0));
+        let r = EkfSettings::from_params("ekf_filter_node_map", &without_slow_copy_keys(section))
+            .unwrap();
+        assert!(r.warnings.iter().all(|w| !w.contains("odometry_slow")), "{:?}", r.warnings);
+        assert!(r.parameters.iter().all(|(k, _)| !k.starts_with("odometry_slow")));
+        let slow = SlowCopySettings { topic: "/odometry/global_slow".into(), rate_hz: 5.0 };
+        let params = advertised_parameters(&r.parameters, &slow);
+        let find = |n: &str| &params.iter().find(|p| p.name == n).unwrap_or_else(|| panic!("{n}")).value;
+        assert_eq!(find("odometry_slow_topic").string_value, "/odometry/global_slow");
+        assert_eq!(find("odometry_slow_topic").type_, paramsrv::PARAMETER_STRING);
+        assert_eq!(find("odometry_slow_rate_hz").double_value, 5.0);
+        assert_eq!(find("odometry_slow_rate_hz").type_, paramsrv::PARAMETER_DOUBLE);
+        assert_eq!(find("frequency").double_value, 20.0);
+        assert_eq!(find("odom1").string_value, "odometry/gps");
+        assert!(!find("use_sim_time").bool_value);
+        assert_eq!(params.iter().filter(|p| p.name == "use_sim_time").count(), 1);
+        // Only the map instance has a copy by default: nothing throttles
+        // /odometry/local.
+        assert_eq!(default_slow_topic(crate::NODE_EKF_MAP), "odometry/global_slow");
+        assert_eq!(default_slow_topic(crate::NODE_EKF_ODOM), "");
     }
 }

@@ -361,7 +361,9 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     assert "'rust_localize': LaunchConfiguration('rust_localize')," in mower
 
     # one module, three nodes; under mower_rsd they read the C++ nodes' own
-    # params file (no copy in mower_rsd.yaml to drift) and get the same wiring
+    # params file (no copy in mower_rsd.yaml to drift) and get the same wiring.
+    # The one section mower_rsd.yaml has is ekf_filter_node_map's slow copy,
+    # keys robot_localization does not have.
     daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
     rl_params = (
@@ -369,11 +371,19 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     ).read_text(encoding='utf-8')
     assert 'id: "localize"' in daemon_main
     assert 'switch: "rust_localize"' in daemon_main
+    import yaml
+    rsd = yaml.safe_load(params)
     for node in ('ekf_filter_node_odom', 'ekf_filter_node_map',
                  'navsat_transform'):
         assert f'node: "{node}"' in daemon_main, node
-        assert f'\n{node}:\n  ros__parameters:' not in params, node
         assert f'\n{node}:\n  ros__parameters:' in rl_params, node
+        own = rsd.get(node, {}).get('ros__parameters', {})
+        assert set(own) <= {'odometry_slow_topic', 'odometry_slow_rate_hz'}, \
+            (node, sorted(own))
+        for key in own:
+            assert f'\n    {key}:' not in rl_params, (node, key)
+    assert '\nekf_filter_node_odom:\n' not in params
+    assert '\nnavsat_transform:\n' not in params
     assert "'dual_ekf_navsat_params.yaml'" in robot
     # one override reaches both stacks: robot.launch.py -> mower.launch.py ->
     # dual_ekf_navsat.launch.py for the C++ nodes and mower_localize, and
@@ -1203,3 +1213,52 @@ def test_rust_base_reproduces_the_launched_controller_parameters():
     assert '"/mower_base/telemetry"' in source
     assert '"/mower_base/firmware_info"' in source
     assert '"/mower_base/wheel_override"' in source
+
+
+def test_rust_source_modules_publish_the_slow_copies_their_throttle_made():
+    """/odom_slow and /odometry/global_slow come from a topic_tools throttle
+    while the C++ source runs, and from mower_base / mower_localize once they
+    publish the source topic. Each throttle is held down by exactly the switch
+    that moves its source into mower_rs, so every copy always has one
+    publisher, and with both switches false (the default) mission.launch.py
+    starts the same nodes as before."""
+    mission = MISSION_LAUNCH.read_text(encoding='utf-8')
+    for name, switch in (('odom_throttle', 'rust_base'),
+                         ('global_odom_throttle', 'rust_localize')):
+        block = mission.split(f"name='{name}',", 1)[1].split('\n    )\n', 1)[0]
+        assert f'condition=UnlessCondition({switch}),' in block, name
+        assert f"'{switch}',\n        default_value='false'," in mission, switch
+        assert f'declare_{switch},' in mission, switch
+    # what the modules reproduce: the throttles' own arguments
+    assert "arguments=['messages', '/odom', '5.0', '/odom_slow']," in mission
+    assert "'messages', '/odometry/global', '5.0', '/odometry/global_slow'," \
+        in mission
+
+    # robot.launch.py threads both switches into mission.launch.py too, not
+    # only into mower.launch.py, which starts the modules
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mission_include = robot.split("'mission.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert "'rust_base': rust_base," in mission_include
+    assert "'rust_localize': rust_localize," in mission_include
+
+    # topic and rate are parameters whose defaults are the throttles' values,
+    # written out in the parameter file both launch paths of mower_base and
+    # the daemon read
+    base_rs = MOWER_BASE_RS.read_text(encoding='utf-8')
+    assert 'params::string(&node, "odom_slow_topic", "/odom_slow")' in base_rs
+    assert 'params::f64(&node, "odom_slow_rate_hz", 5.0)' in base_rs
+    ekf_rs = (
+        SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
+    ).read_text(encoding='utf-8')
+    assert '"odometry_slow_topic"' in ekf_rs
+    assert 'crate::NODE_EKF_MAP => "odometry/global_slow",' in ekf_rs
+    assert 'params::f64(node, "odometry_slow_rate_hz", 5.0)' in ekf_rs
+    params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    base = params.split('\nmower_base:\n', 1)[1].split('\n\n', 1)[0]
+    assert 'odom_slow_topic: /odom_slow' in base
+    assert 'odom_slow_rate_hz: 5.0' in base
+    ekf_map = params.split('\nekf_filter_node_map:\n', 1)[1].split(
+        '\nnavsat_transform:', 1)[0]
+    assert 'odometry_slow_topic: /odometry/global_slow' in ekf_map
+    assert 'odometry_slow_rate_hz: 5.0' in ekf_map
