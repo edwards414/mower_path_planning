@@ -55,17 +55,21 @@ Units and safety behaviour are documented on `cycle` itself; the short version:
 * The **arm latch** (`BaseConfig::arm_latch`, on; not in the C++): after
   every activation, when 0x85 feedback that had been arriving stops for
   longer than `feedback_timeout_s` (both leads out), when two fresh 0x81 in
-  a row report COMMAND_TIMEOUT while the cycle writes a 0x01 every tick
-  after one had shown the board receiving (the LubanCat TX lead alone), and
-  when the board restarted (COMMAND_VALID cleared, or both encoder totals
-  back at zero by an impossible jump), the cmd_vel reference is held at zero
-  and `wheel_override` is not applied, each until its own stream shows a
-  stop edge — an explicit stop, or nothing for longer than `cmd_vel_timeout`
-  — and the link is back (feedback arriving, and after the last two a
-  fresh 0x81 showing the board receiving again). Feedback that was *never*
+  a row report COMMAND_TIMEOUT once the cycle has been writing a 0x01 every
+  tick for 1.5 board timeouts (the LubanCat TX lead alone, also when it was
+  already out at activation), and when the board restarted (COMMAND_VALID
+  cleared, or both encoder totals back at zero by an impossible jump), the
+  cmd_vel reference is held at zero and `wheel_override` is not applied,
+  each until its own stream shows a stop edge — an explicit stop, or
+  nothing for longer than `cmd_vel_timeout` — and, after one of the three
+  losses, the link is back both ways (feedback arriving, and a fresh 0x81
+  showing the board receiving again; at activation too, once the board has
+  sent a 0x81). The three losses also stop a running
+  blade and hold it until its dead-man is let go. Feedback that was *never*
   seen does not trip it. `BaseCycle::disarmed()` has the details; the C++
   chain simply never came back after an error. With the latch off none of
-  it runs, the 0x81 checks included, which keeps the replay byte-identical.
+  it runs, the 0x81 checks and the blade included, which keeps the replay
+  byte-identical.
 * Transitions worth a log line (the ones `mower_system.cpp` and
   `diff_drive_controller` logged, plus the latch) come out of
   `BaseCycle::take_events()`.
@@ -84,7 +88,7 @@ cargo test -p mower_base_core
 | `tests/protocol_vectors.rs` | `vectors/protocol_oracle.json` | 9 CRC, 39 encode (byte-identical), 17 byte-stream parses, 29 decode (field-identical, incl. every wrong-length rejection) |
 | `tests/diff_drive_vectors.rs` | `vectors/diff_drive_oracle.json` | rolling mean, 90 × 4 speed-limiter calls, 4 × 60 odometry steps, `updateFromVelocity` / `updateOpenLoop`, and a 200-cycle controller run — all to 1e-12; plus the cmd_vel subscription's stamp rules (zero stamp, stale, ageing from the stamp) and the open-loop odometry seed at activation |
 | `tests/replay.rs` | `vectors/replay_synthetic.*` | a 300-cycle recording replayed through `BaseCycle` (latch off: the C++ has none): every tx byte identical, odometry to 1e-12 |
-| `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule; against a model of the firmware's command timeout and status batch: the TX-only pull with the stick held, zeros on the re-seat, re-arm only after the board is back *and* a stop edge, the C++ lurch with the latch off, a restart seen in the encoder totals / in COMMAND_VALID / after a real bootloader silence, both leads re-seated together (only the feedback loss, not the board's stale timeout reports) and only the STM32 TX one (the command path loss follows), nothing at activation, on one or a stale or garbled timeout report or after a stall of the loop, pid_autotune through a flash save), a wall-clock step that changes nothing but the stamps, the log events |
+| `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule; against a model of the firmware's command timeout and status batch: the TX-only pull with the stick held, zeros on the re-seat, re-arm only after the board is back *and* a stop edge, the C++ lurch with the latch off, a restart seen in the encoder totals / in COMMAND_VALID / after a real bootloader silence, both leads re-seated together (only the feedback loss, not the board's stale timeout reports; re-armed within three cycles) and only the STM32 TX one (the feedback alone re-arms nothing; pin 8 back 280 ms or 1 s later gets zeros), pin 8 already out at activation (0x03 and 0x02; also a zero, a push and the contact all inside the first 450 ms), nothing at activation, on one or a stale or garbled timeout report or after a stall of the loop, pid_autotune through a flash save, a blade held through a pull not restarting until let go), a wall-clock step that changes nothing but the stamps, the log events |
 
 ### Regenerating the vectors
 

@@ -68,9 +68,12 @@
 //! also trips on what the board says: 0x85 feedback that had been arriving
 //! stops for longer than `feedback_timeout_s` (both leads, or the STM32 TX
 //! one), the 0x81 motor status reports COMMAND_TIMEOUT twice in a row while
-//! this loop writes a 0x01 every cycle (the LubanCat TX lead alone), or the
-//! board restarted. It re-arms only once the feedback is back and the board
-//! shows it receiving again.
+//! this loop has been writing a 0x01 every cycle (the LubanCat TX lead
+//! alone, also when it was already out at start-up), or the board
+//! restarted. Those three also stop a running blade and hold it until its
+//! dead-man is let go. It re-arms only once the feedback is back and the
+//! board shows it receiving again — at start-up too, once the board has
+//! sent its first 0x81.
 
 pub mod requests;
 
@@ -379,31 +382,33 @@ impl Driver {
         let stream_name = |stream| match stream {
             Stream::CmdVel => "cmd_vel",
             Stream::WheelOverride => "wheel_override",
+            Stream::Blade => "blade_command",
         };
+        let blade = "a running blade stops and stays off until its dead-man is let go";
         match event {
             Event::Disarmed(DisarmReason::Activation) => r2r::log_info!(
                 l,
-                "arm latch: wheels held until cmd_vel stops (a zero command, or none for \
-                 {timeout_s:.2} s once its publisher has been matched for {settle_s:.1} s); \
-                 wheel_override likewise"
+                "arm latch: wheels held until the STM32 shows it receives our commands and \
+                 cmd_vel stops (a zero command, or none for {timeout_s:.2} s once its publisher \
+                 has been matched for {settle_s:.1} s); wheel_override likewise"
             ),
             Event::Disarmed(DisarmReason::FeedbackLost) => r2r::log_warn!(
                 l,
                 "arm latch: wheel feedback lost, braking; wheels held until the feedback is \
-                 back and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
-                 wheel_override likewise"
+                 back, the STM32 receives again and cmd_vel stops (a zero command, or none for \
+                 {timeout_s:.2} s); wheel_override likewise; {blade}"
             ),
             Event::Disarmed(DisarmReason::BoardNotReceiving) => r2r::log_warn!(
                 l,
                 "arm latch: the STM32 is not receiving our commands, braking; wheels held \
                  until it receives again and cmd_vel stops (a zero command, or none for \
-                 {timeout_s:.2} s); wheel_override likewise"
+                 {timeout_s:.2} s); wheel_override likewise; {blade}"
             ),
             Event::Disarmed(DisarmReason::BoardReset) => r2r::log_warn!(
                 l,
                 "arm latch: the STM32 restarted, braking; wheels held until it receives again \
                  and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
-                 wheel_override likewise"
+                 wheel_override likewise; {blade}"
             ),
             Event::BoardNotReceiving { command_age_ms } => r2r::log_warn!(
                 l,
@@ -439,9 +444,12 @@ impl Driver {
                     DisarmReason::BoardNotReceiving => "command path loss",
                     DisarmReason::BoardReset => "STM32 restart",
                 };
-                let by = match by {
-                    StopEdge::Stop => "an explicit stop".to_string(),
-                    StopEdge::Silence => format!("silence (nothing for > {timeout_s:.2} s)"),
+                let by = match (by, stream) {
+                    (StopEdge::Stop, _) => "an explicit stop".to_string(),
+                    (StopEdge::Silence, "blade_command") => {
+                        "its dead-man running out (no refresh within its ttl)".to_string()
+                    }
+                    (StopEdge::Silence, _) => format!("silence (nothing for > {timeout_s:.2} s)"),
                 };
                 r2r::log_info!(
                     l,
