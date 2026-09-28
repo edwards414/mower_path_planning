@@ -357,9 +357,12 @@ fn stale_commands_are_ignored_at_the_subscription() {
     assert!(zero);
     assert_eq!(c.stamp_ns, control_now);
 
-    // a stamp from the future is accepted as is (negative age), like upstream
+    // a stamp from the future is accepted, like upstream, but it ages from
+    // its arrival: upstream would keep it alive until stamp + timeout
     let (c, _) = accepted(receive_command(tw, ros_now + 50 * MS, ros_now, control_now, 0.25));
-    assert_eq!(c.stamp_ns, control_now + 50 * MS);
+    assert_eq!(c.stamp_ns, control_now);
+    let (c, _) = accepted(receive_command(tw, ros_now + 5_000 * MS, ros_now, control_now, 0.25));
+    assert_eq!(c.stamp_ns, control_now, "5 s ahead (a backward wall-clock step)");
 
     // cmd_vel_timeout 0 disables the check
     accepted(receive_command(tw, ros_now - 60_000 * MS, ros_now, control_now, 0.0));

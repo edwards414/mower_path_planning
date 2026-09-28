@@ -191,8 +191,9 @@ impl Twist {
 pub struct Command {
     pub twist: Twist,
     /// `header.stamp`, moved onto the control clock: the control-clock time
-    /// of arrival minus the age the message already had on the ROS clock.
-    /// The command ages from here, as upstream ages it from the stamp.
+    /// of arrival minus the age the message already had on the ROS clock
+    /// (never later than the arrival, see [`receive_command`]). The command
+    /// ages from here, as upstream ages it from the stamp.
     pub stamp_ns: TimeNs,
 }
 
@@ -217,6 +218,14 @@ pub enum Received {
 /// `ros_now_ns` is the ROS clock now, `control_now_ns` the control clock at
 /// the same moment; the accepted command's stamp is carried over onto the
 /// control clock so that a later ROS clock step cannot change its age.
+///
+/// One deliberate difference: a stamp from the future (negative age) is
+/// carried over as "now", not as a control-clock time in the future.
+/// Upstream keeps such a command alive until its stamp plus the timeout,
+/// so a message stamped just before the wall clock stepped back by S, or by
+/// a sender whose clock runs S ahead, would keep driving for S + timeout if
+/// the stream stopped right after it. Here it times out `cmd_vel_timeout`
+/// after it arrived, like any other. Accept / ignore is unchanged.
 pub fn receive_command(
     twist: Twist,
     header_stamp_ns: TimeNs,
@@ -230,7 +239,7 @@ pub fn receive_command(
     let timeout_ns = duration_from_seconds_ns(cmd_vel_timeout);
     if timeout_ns == 0 || age_ns < timeout_ns {
         Received::Accepted {
-            command: Command { twist, stamp_ns: control_now_ns - age_ns },
+            command: Command { twist, stamp_ns: control_now_ns - age_ns.max(0) },
             zero_stamp,
         }
     } else {

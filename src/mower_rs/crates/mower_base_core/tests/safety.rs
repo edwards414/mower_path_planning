@@ -9,7 +9,9 @@
 use mower_base_core::cycle::{
     BaseConfig, BaseCycle, DisarmReason, Event, StopEdge, Stream, TxFrame,
 };
-use mower_base_core::diff_drive::{Command, DiffDriveParams, LimitParams, OdomSample, Twist};
+use mower_base_core::diff_drive::{
+    receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
+};
 use mower_base_core::protocol::{
     build_frame, MOTOR_STATUS, STATUS_FLAG_DRIVER_ALARM, WHEEL_FEEDBACK_STATUS,
 };
@@ -283,50 +285,133 @@ fn the_latch_can_be_turned_off_for_the_parity_tests() {
 
 // ---- clocks ----------------------------------------------------------------
 
-/// Everything the cycle times runs on the control clock: stepping ROS time
-/// back 5 s and then forward 10 s changes the stamps and nothing else.
-#[test]
-fn a_wall_clock_step_changes_nothing() {
-    let run = |step_ros: bool| {
-        let (mut base, _) = BaseCycle::new(production(), T0).unwrap();
-        let mut out = Vec::new();
-        for k in 1..=150i64 {
-            let t = T0 + k * DT;
-            let mut ros = ROS0 + k * DT;
-            if step_ros && k > 50 {
-                ros -= 5_000 * MS;
-            }
-            if step_ros && k > 100 {
-                ros += 10_000 * MS;
-            }
-            if k % 2 == 0 {
-                base.on_rx(&feedback((k * 10) as i32), t);
-            }
-            if k == 20 {
-                base.request_blade(600, 1000, t);
-                base.request_wheel_override(300, 300, 1000, t);
-            }
-            let cmd = match k {
-                1 => Some(Twist::new(0.0, 0.0)),
-                2..=40 | 60..=90 => Some(Twist::new(0.4, 0.3)),
-                _ => None,
-            }
-            .map(|twist| Command { twist, stamp_ns: t });
-            let (tx, odom, joints) = base.tick(cmd, t, ros);
-            if let Some(o) = &odom {
-                assert_eq!(o.stamp_ns, ros, "odom carries ROS time");
-            }
-            assert_eq!(joints.as_ref().unwrap().stamp_ns, ros);
-            let telemetry = base.telemetry().to_json(mower_base_core::seconds(t), base.blade_active());
-            out.push((tx.unwrap().bytes, odom.map(|o| (o.x, o.y, o.yaw)), telemetry));
+/// ROS time (the robot's wall clock) as the publisher and the driver both
+/// read it, `real_ns` of control-clock time after activation: stepped back
+/// 5 s just before the 51st cycle and forward 10 s just before the 101st,
+/// each step landing between a message's stamp and its receipt.
+fn ros_at(real_ns: i64, stepped: bool) -> i64 {
+    let mut ros = ROS0 + real_ns;
+    if stepped && real_ns >= 51 * DT - 2 * MS {
+        ros -= 5_000 * MS;
+    }
+    if stepped && real_ns >= 101 * DT - 2 * MS {
+        ros += 10_000 * MS;
+    }
+    ros
+}
+
+/// One run of the cmd_vel path end to end in the core: each message is
+/// stamped by the (possibly stepped) ROS clock 5 ms before it is received,
+/// goes through `receive_command` against the same clock, and the cycle runs
+/// on the control clock. `cmd(k)` is the command sent for cycle k.
+fn run_through_a_step(
+    stepped: bool,
+    cycles: i64,
+    cmd: impl Fn(i64) -> Option<Twist>,
+) -> Vec<(Vec<u8>, Option<(f64, f64, f64)>, String)> {
+    let (mut base, _) = BaseCycle::new(production(), T0).unwrap();
+    let mut out = Vec::new();
+    for k in 1..=cycles {
+        let real = k * DT;
+        let t = T0 + real;
+        let ros = ros_at(real, stepped);
+        if k % 2 == 0 {
+            base.on_rx(&feedback((k * 10) as i32), t);
         }
-        out
+        if k == 20 {
+            base.request_blade(600, 1000, t);
+        }
+        if k == 70 {
+            base.request_wheel_override(300, 300, 1000, t);
+        }
+        let command = cmd(k).and_then(|twist| {
+            let stamp = ros_at(real - 5 * MS, stepped);
+            match receive_command(twist, stamp, ros, t, 0.25) {
+                Received::Accepted { command, .. } => Some(command),
+                Received::Stale { .. } => None,
+            }
+        });
+        let (tx, odom, joints) = base.tick(command, t, ros);
+        if let Some(o) = &odom {
+            assert_eq!(o.stamp_ns, ros, "odom carries ROS time");
+        }
+        assert_eq!(joints.as_ref().unwrap().stamp_ns, ros);
+        let telemetry = base.telemetry().to_json(mower_base_core::seconds(t), base.blade_active());
+        out.push((tx.unwrap().bytes, odom.map(|o| (o.x, o.y, o.yaw)), telemetry));
+    }
+    out
+}
+
+/// A wall-clock step while commands flow changes the stamps and nothing
+/// else: stepping ROS time back 5 s and then forward 10 s, with a message in
+/// flight across each step, gives byte-identical frames, the same odometry
+/// and the same telemetry, and the blade and override dead-men last as long.
+/// (The in-flight message at the forward step is 10 s old on arrival and
+/// ignored, as upstream ignores it; the one before it is 40 ms older than
+/// it would have been, well inside the timeout.)
+#[test]
+fn a_wall_clock_step_under_a_live_command_changes_nothing() {
+    let cmd = |k: i64| match k {
+        1 => Some(Twist::new(0.0, 0.0)),
+        2..=40 => Some(Twist::new(0.4, 0.3)),
+        41..=130 => Some(Twist::new(0.2, 0.0)),
+        _ => None,
     };
-    let steady = run(false);
-    let stepped = run(true);
+    let steady = run_through_a_step(false, 150, cmd);
+    let stepped = run_through_a_step(true, 150, cmd);
     for (k, (a, b)) in steady.iter().zip(&stepped).enumerate() {
         assert_eq!(a, b, "cycle {} differs", k + 1);
     }
+    // and the run did what it says: moving through both steps, the override
+    // applied, stopped at the end
+    assert!(wheels(&TxFrame { bytes: steady[99].0.clone(), frames: vec![] }).0 > 0);
+    assert_eq!(wheels(&TxFrame { bytes: steady[70].0.clone(), frames: vec![] }), (300, 300));
+    assert_eq!(wheels(&TxFrame { bytes: steady[149].0.clone(), frames: vec![] }), (0, 0));
+}
+
+/// The stream stops right after a message that crossed a backward step: it
+/// still times out 0.25 s after it arrived. (Upstream ages it from its
+/// stamp, which the step put 5 s in the future, and would keep driving on it
+/// for 5.25 s.)
+#[test]
+fn a_backward_step_does_not_extend_the_last_command() {
+    let cmd = |k: i64| match k {
+        1 => Some(Twist::new(0.0, 0.0)),
+        2..=51 => Some(Twist::new(0.3, 0.0)),
+        _ => None,
+    };
+    let steady = run_through_a_step(false, 80, cmd);
+    let stepped = run_through_a_step(true, 80, cmd);
+    let permille = |run: &Vec<(Vec<u8>, _, _)>, k: usize| {
+        wheels(&TxFrame { bytes: run[k - 1].0.clone(), frames: vec![] })
+    };
+    assert!(permille(&stepped, 57).0 > 500, "0.24 s after the last message");
+    assert_eq!(permille(&stepped, 58), (0, 0), "0.28 s after it: timed out, braked");
+    for k in 1..=80 {
+        assert_eq!(permille(&steady, k), permille(&stepped, k), "cycle {k}");
+    }
+}
+
+/// `BaseCycle` itself never reads the `stamp` argument for timing: the same
+/// control times with a jumping `stamp` give the same bytes.
+#[test]
+fn the_cycle_times_nothing_on_the_stamp_argument() {
+    let run = |jump: bool| {
+        let (mut base, _) = BaseCycle::new(production(), T0).unwrap();
+        (1..=100i64)
+            .map(|k| {
+                let t = T0 + k * DT;
+                let stamp = if jump && k % 7 == 0 { 0 } else { ROS0 + k * DT };
+                base.on_rx(&feedback(k as i32), t);
+                let v = if k == 1 { 0.0 } else { 0.4 };
+                let cmd = (k < 60).then_some(Command { twist: Twist::new(v, 0.0), stamp_ns: t });
+                base.tick(cmd, t, stamp).0.unwrap().bytes
+            })
+            .collect::<Vec<_>>()
+    };
+    let steady = run(false);
+    assert_eq!(steady, run(true));
+    assert!(wheels(&TxFrame { bytes: steady[30].clone(), frames: vec![] }).0 > 600);
 }
 
 // ---- the log events ------------------------------------------------------
