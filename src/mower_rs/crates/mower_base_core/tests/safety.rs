@@ -1,6 +1,7 @@
 //! The behaviour `mower_base` adds on top of the C++ chain, or keeps apart
 //! from it: the arm latch, the control clock vs. ROS time, and the cmd_vel
-//! stamp handling at the cycle level.
+//! stamp handling at the cycle level. (The driver's own clock wiring, which
+//! clock feeds which argument, is tested in `mower_base`.)
 //!
 //! Everything runs with the production controller parameters
 //! (`mower_controller/controllers/diff_drive_controller.yaml`: open loop,
@@ -83,12 +84,15 @@ struct Rig {
     t: i64,
     events: Vec<Event>,
     last_odom: Option<OdomSample>,
+    /// What the driver reads off the ROS graph each cycle, for both streams:
+    /// a publisher is there (the default, from the first cycle on).
+    publishers: bool,
 }
 
 impl Rig {
     fn new(cfg: BaseConfig) -> Self {
         let (base, _) = BaseCycle::new(cfg, T0).unwrap();
-        Rig { base, t: T0, events: Vec::new(), last_odom: None }
+        Rig { base, t: T0, events: Vec::new(), last_odom: None, publishers: true }
     }
     /// One cycle 40 ms later with `cmd` (fresh), optionally after a 0x85.
     fn step(&mut self, cmd: Option<(f64, f64)>, with_feedback: bool) -> (i16, i16) {
@@ -96,6 +100,8 @@ impl Rig {
         if with_feedback {
             self.base.on_rx(&feedback(0), self.t);
         }
+        self.base.set_publishers(Stream::CmdVel, self.publishers, self.t);
+        self.base.set_publishers(Stream::WheelOverride, self.publishers, self.t);
         let cmd = cmd.map(|(l, a)| Command { twist: Twist::new(l, a), stamp_ns: self.t });
         let (tx, odom, _) = self.base.tick(cmd, self.t, self.t - T0 + ROS0);
         if odom.is_some() {
@@ -112,6 +118,10 @@ impl Rig {
             Event::Armed { stream: s, by, .. } if *s == stream => Some(*by),
             _ => None,
         })
+    }
+    /// Seconds since activation.
+    fn elapsed(&self) -> f64 {
+        (self.t - T0) as f64 / 1e9
     }
 }
 
@@ -152,19 +162,79 @@ fn activation_holds_a_live_command_until_a_zero() {
     assert!(x > 0.0 && x < 0.4, "open-loop pose after 1 s of ramp: {x} m");
 }
 
-/// Silence for longer than cmd_vel_timeout is the other stop edge.
+/// Silence for longer than cmd_vel_timeout is the other stop edge, counted
+/// once the publisher has been there for `publisher_settle_s`: here it is
+/// seen on the first cycle (40 ms), so silence runs from 2.04 s.
 #[test]
 fn activation_rearms_after_silence() {
     let mut rig = Rig::new(production());
-    let frames = rig.run(6, None, true); // 240 ms
+    let frames = rig.run(57, None, true); // 2.28 s
     assert!(all_zero(&frames));
-    assert!(rig.base.holds(Stream::CmdVel), "240 ms is not yet > 250 ms");
-    rig.step(None, true); // 280 ms
+    assert!(rig.base.holds(Stream::CmdVel), "2.28 - 2.04 s is not yet > 0.25 s");
+    rig.step(None, true); // 2.32 s
     assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
     assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
     assert_eq!(rig.base.disarmed(), None);
     let moving = rig.run(3, Some((0.3, 0.0)), true);
     assert_eq!(moving[0], (73, 73));
+}
+
+/// Finding: a restarted node's reader hears nothing from a live nav2 or
+/// teleop writer until DDS discovery has matched them, which on a loaded
+/// RK3568 has taken 2.7 s. That quiet stretch is not silence: whenever the
+/// publisher shows up in the graph and its non-zero stream starts arriving
+/// (writer-side matching can lag the graph by a while more), the wheels
+/// stay held until the stream itself stops.
+#[test]
+fn discovery_latency_is_not_silence() {
+    // (graph shows the publisher, first message arrives), s after activation
+    for (seen_s, first_s) in [(0.3, 0.3), (0.3, 0.5), (1.0, 2.9), (2.7, 2.9), (3.0, 3.0), (2.7, 4.6)] {
+        let mut rig = Rig::new(production());
+        rig.publishers = false;
+        let mut frames = Vec::new();
+        while rig.elapsed() < 8.0 {
+            let t = rig.elapsed() + 0.04;
+            rig.publishers = t >= seen_s - 1e-9;
+            let cmd = (t >= first_s - 1e-9).then_some((0.3, 0.0));
+            frames.push(rig.step(cmd, true));
+        }
+        assert!(all_zero(&frames), "seen {seen_s} s, first message {first_s} s: {frames:?}");
+        assert!(rig.base.holds(Stream::CmdVel), "seen {seen_s} s, first {first_s} s");
+        let seen = rig.events.iter().find_map(|e| match e {
+            Event::Publishers { stream: Stream::CmdVel, present: true, after_activation_s } => {
+                Some(*after_activation_s)
+            }
+            _ => None,
+        });
+        assert!(seen.is_some_and(|s| (s - seen_s).abs() < 0.041), "{:?}", rig.events);
+
+        // the stream stops: re-armed by the zero, then it drives
+        rig.step(Some((0.0, 0.0)), true);
+        assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Stop));
+        assert_eq!(rig.step(Some((0.3, 0.0)), true), (73, 73));
+    }
+}
+
+/// With no publisher in the graph and nothing heard, there is nothing to
+/// time: only an explicit stop re-arms. Once a message has arrived, the
+/// silence after it counts whether or not the graph shows its writer.
+#[test]
+fn no_publisher_and_no_message_is_not_silence() {
+    let mut rig = Rig::new(production());
+    rig.publishers = false;
+    let frames = rig.run(250, None, true); // 10 s
+    assert!(all_zero(&frames));
+    assert!(rig.base.holds(Stream::CmdVel) && rig.base.holds(Stream::WheelOverride));
+
+    // one non-zero message from a writer the graph has not caught up with,
+    // then nothing: re-armed 0.25 s after it
+    rig.step(Some((0.3, 0.0)), true);
+    let quiet = rig.run(6, None, true);
+    assert!(all_zero(&quiet));
+    assert!(rig.base.holds(Stream::CmdVel));
+    rig.step(None, true);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
+    assert!(rig.base.holds(Stream::WheelOverride), "the override stream is still unheard");
 }
 
 /// A zero followed by a new command in a later cycle re-arms at the zero; a
@@ -211,6 +281,81 @@ fn feedback_loss_after_presence_disarms() {
     assert_eq!(again[0], (73, 73));
 }
 
+/// Finding: the lead comes out while the robot is idle, the operator (or a
+/// nav2 goal) pushes while it is still out, and the lead is re-seated. Nothing
+/// re-arms while the feedback is missing, so the command that started during
+/// the outage never ramps up against wheels that cannot move, and on the
+/// re-seat it is still held: the wheels see 0/0 until a stop edge. The same
+/// for a wheel_override requested during the outage.
+#[test]
+fn a_command_given_during_the_outage_waits_for_a_stop() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), true);
+    rig.run(60, None, true); // the override stream too, by silence
+    assert_eq!(rig.base.disarmed(), None);
+    rig.events.clear();
+
+    // idle pull: disarmed at 0.52 s, and 1 s of silence does not re-arm
+    let idle = rig.run(38, None, false);
+    assert!(all_zero(&idle));
+    assert!(rig.events.contains(&Event::Disarmed(DisarmReason::FeedbackLost)));
+    assert!(rig.base.holds(Stream::CmdVel) && rig.base.holds(Stream::WheelOverride));
+    assert_eq!(rig.armed(Stream::CmdVel), None);
+
+    // pushed with the lead out: nothing moves, the odometry does not wander
+    let x0 = rig.last_odom.clone().unwrap().x;
+    let pushed = rig.run(25, Some((0.4, 0.0)), false);
+    assert!(all_zero(&pushed), "{pushed:?}");
+    assert_eq!(rig.last_odom.clone().unwrap().x, x0);
+    assert_eq!(rig.last_odom.clone().unwrap().linear_x, 0.0);
+
+    // re-seated, still pushed: held, no step to full speed
+    let back = rig.run(25, Some((0.4, 0.0)), true);
+    assert!(all_zero(&back), "{back:?}");
+    assert!(rig.events.contains(&Event::FeedbackResumed));
+    assert!(rig.base.holds(Stream::CmdVel));
+
+    // released, pushed again: the normal ramp
+    rig.step(Some((0.0, 0.0)), true);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Stop));
+    assert_eq!(rig.step(Some((0.4, 0.0)), true), (73, 73));
+
+    // the same through wheel_override: requested during an outage, still
+    // streaming on the re-seat, not applied until cancelled
+    rig.run(20, Some((0.0, 0.0)), true);
+    rig.run(20, None, false);
+    for _ in 0..20 {
+        rig.base.request_wheel_override(800, 800, 300, rig.t);
+        assert_eq!(rig.step(None, false), (0, 0));
+    }
+    for _ in 0..20 {
+        rig.base.request_wheel_override(800, 800, 300, rig.t);
+        assert_eq!(rig.step(None, true), (0, 0), "re-seated, override still streaming");
+    }
+    rig.base.request_wheel_override(0, 0, 0, rig.t);
+    rig.step(None, true);
+    assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Stop));
+    rig.base.request_wheel_override(800, 800, 300, rig.t);
+    assert_eq!(rig.step(None, true), (800, 800));
+}
+
+/// An outage that ends with the streams at rest re-arms on the re-seat
+/// cycle itself, not during the outage.
+#[test]
+fn an_idle_outage_rearms_when_the_lead_is_back() {
+    let mut rig = Rig::new(production());
+    rig.step(Some((0.0, 0.0)), true);
+    rig.run(10, None, true);
+    rig.run(60, None, false); // 2.4 s out, idle
+    assert!(rig.base.holds(Stream::CmdVel));
+    rig.events.clear();
+    rig.step(None, true);
+    assert_eq!(rig.events[0], Event::FeedbackResumed);
+    assert_eq!(rig.armed(Stream::CmdVel), Some(StopEdge::Silence));
+    assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
+    assert_eq!(rig.step(Some((0.4, 0.0)), true), (73, 73));
+}
+
 /// A board that never sends 0x85 must still drive (not bricked), and says so
 /// once in the log.
 #[test]
@@ -246,8 +391,11 @@ fn wheel_override_obeys_the_latch() {
     assert!(all_zero(&held), "{held:?}");
     assert!(rig.base.holds(Stream::WheelOverride));
 
-    // the stream stops; 250 ms later it is armed, and a new request applies
-    rig.run(7, None, true);
+    // the stream stops; once it has been quiet for 250 ms (and its
+    // publisher has been known for 2 s) it is armed, and a new request applies
+    rig.run(6, None, true);
+    assert!(rig.base.holds(Stream::WheelOverride), "publisher seen 0.04 s, settles at 2.04 s");
+    rig.run(40, None, true);
     assert_eq!(rig.armed(Stream::WheelOverride), Some(StopEdge::Silence));
     rig.base.request_wheel_override(400, -400, 300, rig.t);
     assert_eq!(rig.step(None, true), (400, -400));
@@ -315,6 +463,8 @@ fn run_through_a_step(
         let real = k * DT;
         let t = T0 + real;
         let ros = ros_at(real, stepped);
+        base.set_publishers(Stream::CmdVel, true, t);
+        base.set_publishers(Stream::WheelOverride, true, t);
         if k % 2 == 0 {
             base.on_rx(&feedback((k * 10) as i32), t);
         }

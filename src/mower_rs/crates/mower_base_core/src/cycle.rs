@@ -44,7 +44,9 @@
 //!   stop edge — see [`BaseCycle::disarmed`]. The C++ chain latched off for
 //!   good after a runtime error; this driver is restarted after 2 s instead,
 //!   and without the latch it would resume a live nav2 or teleop command on
-//!   its own, and so would a re-seated UART lead.
+//!   its own, and so would a re-seated UART lead. Silence only counts as a
+//!   stop edge once the stream can deliver ([`BaseCycle::set_publishers`]),
+//!   and nothing re-arms while the feedback is still lost.
 
 use crate::diff_drive::{Command, DiffDrive, DiffDriveParams, OdomSample, WheelCommand};
 use crate::protocol::{self as proto, FrameParser, PidConfig};
@@ -75,6 +77,12 @@ pub struct BaseConfig {
     /// command streams show a stop edge. Off only to reproduce the C++
     /// chain, which has no such latch, in the parity tests.
     pub arm_latch: bool,
+    /// Silence on a held stream is only counted from this long after its
+    /// publisher first appears ([`BaseCycle::set_publishers`]). Seeing the
+    /// writer in the graph does not mean the writer has matched this reader
+    /// yet (discovery runs both ways, and the RK3568 under load has been
+    /// seen to take seconds), and until it has, "no message" is not silence.
+    pub publisher_settle_s: f64,
     pub diff_drive: DiffDriveParams,
 }
 
@@ -92,6 +100,7 @@ impl Default for BaseConfig {
             override_max_ttl_ms: 1000,
             blade_max_ttl_ms: 1000,
             arm_latch: true,
+            publisher_settle_s: 2.0,
             diff_drive: DiffDriveParams::mower(),
         }
     }
@@ -192,7 +201,8 @@ pub enum StopEdge {
     /// An explicit stop: a finite cmd_vel with linear.x and angular.z both
     /// 0, or a wheel_override of 0/0 or with ttl 0.
     Stop,
-    /// Nothing on the stream for longer than `cmd_vel_timeout`.
+    /// Nothing on the stream for longer than `cmd_vel_timeout`, counted
+    /// only while it can deliver (see [`BaseCycle::set_publishers`]).
     Silence,
 }
 
@@ -224,6 +234,9 @@ pub enum Event {
     /// once per timeout and only when it brakes a non-zero command
     /// (upstream repeats it every second, idle or not).
     CmdVelTimedOut { linear_x: f64, angular_z: f64 },
+    /// `stream` gained its first publisher or lost its last one, as
+    /// reported by [`BaseCycle::set_publishers`].
+    Publishers { stream: Stream, present: bool, after_activation_s: f64 },
 }
 
 /// `C++ RCLCPP_WARN_THROTTLE(..., 2000, "driver alarm flag set")`.
@@ -241,14 +254,37 @@ struct Hold {
 impl Hold {
     /// The stop edge, if the stream has shown one: the newest message since
     /// the disarm was a stop, or nothing has arrived for longer than
-    /// `window_ns` (measured from the disarm or the newest message,
-    /// whichever is later). A `window_ns` of 0 accepts only explicit stops.
-    fn edge(&self, last_ns: Option<TimeNs>, now: TimeNs, window_ns: i64) -> Option<StopEdge> {
+    /// `window_ns` while the stream could deliver.
+    ///
+    /// "Could deliver" is what keeps DDS discovery from passing for a stop:
+    /// a restarted node's reader gets nothing from a live nav2 or teleop
+    /// writer until both sides have matched, and that is not silence. So
+    /// silence runs from the latest of the disarm, the newest message and
+    /// `settle_ns` after the current publisher first appeared, and not at
+    /// all while there has been neither a message nor a publisher. A
+    /// `window_ns` of 0 accepts only explicit stops.
+    fn edge(
+        &self,
+        last_ns: Option<TimeNs>,
+        publisher_since_ns: Option<TimeNs>,
+        now: TimeNs,
+        window_ns: i64,
+        settle_ns: i64,
+    ) -> Option<StopEdge> {
         if self.stopped {
             return Some(StopEdge::Stop);
         }
-        let from = last_ns.map_or(self.since_ns, |t| t.max(self.since_ns));
-        (window_ns > 0 && now - from > window_ns).then_some(StopEdge::Silence)
+        if window_ns <= 0 || (last_ns.is_none() && publisher_since_ns.is_none()) {
+            return None;
+        }
+        let mut from = self.since_ns;
+        if let Some(t) = last_ns {
+            from = from.max(t);
+        }
+        if let Some(t) = publisher_since_ns {
+            from = from.max(t + settle_ns);
+        }
+        (now - from > window_ns).then_some(StopEdge::Silence)
     }
 }
 
@@ -284,6 +320,9 @@ pub struct BaseCycle {
     last_cmd_ns: Option<TimeNs>,
     /// control-clock time of the last wheel_override request
     last_override_ns: Option<TimeNs>,
+    /// since when each stream has had a publisher ([`BaseCycle::set_publishers`])
+    cmd_publisher_since: Option<TimeNs>,
+    override_publisher_since: Option<TimeNs>,
     no_feedback_reported: bool,
     driver_alarm_logged_ns: Option<TimeNs>,
     events: Vec<Event>,
@@ -335,6 +374,8 @@ impl BaseCycle {
             activated_ns: now,
             last_cmd_ns: None,
             last_override_ns: None,
+            cmd_publisher_since: None,
+            override_publisher_since: None,
             no_feedback_reported: false,
             driver_alarm_logged_ns: None,
             events: Vec::new(),
@@ -420,8 +461,15 @@ impl BaseCycle {
     /// that was running is dropped at the disarm. Each stream is re-armed
     /// by its own stop edge *after* the disarm: an explicit stop (cmd_vel
     /// 0/0; override 0/0 or ttl 0) as the newest message, or no message for
-    /// longer than `cmd_vel_timeout`. With `cmd_vel_timeout` 0 only the
+    /// longer than `cmd_vel_timeout` while the stream could deliver one
+    /// ([`BaseCycle::set_publishers`]). With `cmd_vel_timeout` 0 only the
     /// explicit stops count.
+    ///
+    /// Nothing re-arms while feedback that had been arriving is still
+    /// missing: a command given with the lead out would otherwise ramp up
+    /// against wheels that cannot move and reach them as a step the moment
+    /// the lead is back. On the cycle it returns, the newest message
+    /// decides: at rest (a stop, or silence) re-arms, moving stays held.
     pub fn disarmed(&self) -> Option<DisarmReason> {
         self.cmd_hold.or(self.override_hold).map(|h| h.reason)
     }
@@ -483,16 +531,40 @@ impl BaseCycle {
         self.events.push(Event::Disarmed(reason));
     }
 
+    /// Whether `stream`'s topic has at least one publisher at `now`, as the
+    /// driver reads it off the ROS graph once per cycle. Until a held stream
+    /// has had a publisher for `publisher_settle_s` (or has delivered a
+    /// message), its silence is not a stop edge: a reader that has not been
+    /// matched yet hears nothing from a writer that is sending. A driver
+    /// that never calls this gets only explicit stops, plus silence after a
+    /// message.
+    pub fn set_publishers(&mut self, stream: Stream, present: bool, now: TimeNs) {
+        let since = match stream {
+            Stream::CmdVel => &mut self.cmd_publisher_since,
+            Stream::WheelOverride => &mut self.override_publisher_since,
+        };
+        if present == since.is_some() {
+            return;
+        }
+        *since = present.then_some(now);
+        self.events.push(Event::Publishers {
+            stream,
+            present,
+            after_activation_s: seconds(now - self.activated_ns),
+        });
+    }
+
     /// Re-arm each stream that has shown its stop edge.
     fn try_rearm(&mut self, now: TimeNs) {
         let window = self.ddc.cmd_vel_timeout_ns();
+        let settle = (self.cfg.publisher_settle_s.max(0.0) * 1e9) as i64;
         if let Some(hold) = self.cmd_hold {
             // Silence also needs the controller to have timed the stored
             // command out, so re-arming can never hand the limiter a stale
-            // non-zero reference: a command stamped in the future is not
-            // aged until its stamp passes, and only an explicit zero clears it.
+            // non-zero reference (belt and braces: the stored stamp is never
+            // later than its pickup, see `receive_command`).
             let edge = hold
-                .edge(self.last_cmd_ns, now, window)
+                .edge(self.last_cmd_ns, self.cmd_publisher_since, now, window, settle)
                 .filter(|e| *e == StopEdge::Stop || self.ddc.command_timed_out());
             if let Some(by) = edge {
                 self.cmd_hold = None;
@@ -505,7 +577,9 @@ impl BaseCycle {
             }
         }
         if let Some(hold) = self.override_hold {
-            if let Some(by) = hold.edge(self.last_override_ns, now, window) {
+            if let Some(by) =
+                hold.edge(self.last_override_ns, self.override_publisher_since, now, window, settle)
+            {
                 self.override_hold = None;
                 self.events.push(Event::Armed {
                     stream: Stream::WheelOverride,
@@ -811,7 +885,11 @@ impl BaseCycle {
                 });
             }
         }
-        self.try_rearm(now);
+        // Not while feedback that had been arriving is still missing: see
+        // `disarmed`.
+        if !self.feedback_stale {
+            self.try_rearm(now);
+        }
         if self.cmd_hold.is_some() {
             self.ddc.hold_zero();
         }

@@ -57,10 +57,15 @@
 //! ([`BaseCycle::disarmed`]): it holds the wheels until cmd_vel shows a stop
 //! edge (a zero command, or nothing for `cmd_vel_timeout`), so it never
 //! picks up a live nav2 or teleop command on its own. The C++ chain got the
-//! same result by never coming back after an error. The latch also trips
-//! when 0x85 feedback that had been arriving stops for longer than
+//! same result by never coming back after an error. A new reader hears
+//! nothing until DDS discovery has matched it with the writer, so the spin
+//! thread reads the command topics' publishers off the graph and the cycle
+//! only counts silence once a publisher has been there for
+//! `publisher_settle_s` ([`BaseCycle::set_publishers`]). The latch also
+//! trips when 0x85 feedback that had been arriving stops for longer than
 //! `feedback_timeout_s` — on the robot's native UART a pulled lead is not a
-//! read or write error, so that is how this driver notices it.
+//! read or write error, so that is how this driver notices it — and does
+//! not re-arm until the feedback is back.
 
 pub mod requests;
 
@@ -111,6 +116,33 @@ fn mono_ns() -> TimeNs {
     ns + at.elapsed().as_nanos() as i64
 }
 
+/// Whether each command topic has a publisher, as the spin thread last read
+/// it off the ROS graph (the serial thread passes it to
+/// [`BaseCycle::set_publishers`] every cycle).
+#[derive(Default)]
+struct GraphSeen {
+    cmd_vel: AtomicBool,
+    wheel_override: AtomicBool,
+}
+
+impl GraphSeen {
+    /// How often the spin thread asks the graph. Discovery takes longer
+    /// than this, and `publisher_settle_s` covers the rest.
+    const POLL: Duration = Duration::from_millis(100);
+
+    fn poll(&self, node: &r2r::Node, cmd_vel_topic: &str, override_topic: &str) {
+        let has_publisher = |topic: &str| {
+            !topic.is_empty()
+                && node
+                    .get_publishers_info_by_topic(topic, false)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+        };
+        self.cmd_vel.store(has_publisher(cmd_vel_topic), Ordering::Relaxed);
+        self.wheel_override.store(has_publisher(override_topic), Ordering::Relaxed);
+    }
+}
+
 fn stamp(ns: TimeNs) -> Time {
     Time { sec: (ns / 1_000_000_000) as i32, nanosec: (ns % 1_000_000_000) as u32 }
 }
@@ -158,6 +190,7 @@ struct Driver {
     settings: Settings,
     pubs: Publishers,
     slots: Shared,
+    graph: Arc<GraphSeen>,
     logger: String,
     stop: Arc<AtomicBool>,
     odom_template: Odometry,
@@ -230,6 +263,12 @@ impl Driver {
             self.apply_requests(&mut base, time);
 
             // ---- update() + write() -------------------------------------
+            base.set_publishers(Stream::CmdVel, self.graph.cmd_vel.load(Ordering::Relaxed), time);
+            base.set_publishers(
+                Stream::WheelOverride,
+                self.graph.wheel_override.load(Ordering::Relaxed),
+                time,
+            );
             let cmd = self.slots.lock().expect("slots").cmd_vel.take();
             let (tx, odom, joints) = base.tick(cmd, time, stamp);
             if let Some(tx) = tx {
@@ -296,29 +335,33 @@ impl Driver {
     fn log_event(&self, event: Event) {
         let l = &self.logger;
         let timeout_s = self.cfg.diff_drive.cmd_vel_timeout;
+        let settle_s = self.cfg.publisher_settle_s;
+        let stream_name = |stream| match stream {
+            Stream::CmdVel => "cmd_vel",
+            Stream::WheelOverride => "wheel_override",
+        };
         match event {
             Event::Disarmed(DisarmReason::Activation) => r2r::log_info!(
                 l,
                 "arm latch: wheels held until cmd_vel stops (a zero command, or none for \
-                 {timeout_s:.2} s); wheel_override likewise"
+                 {timeout_s:.2} s once its publisher has been matched for {settle_s:.1} s); \
+                 wheel_override likewise"
             ),
             Event::Disarmed(DisarmReason::FeedbackLost) => r2r::log_warn!(
                 l,
-                "arm latch: wheel feedback lost, braking; wheels held until cmd_vel stops \
-                 (a zero command, or none for {timeout_s:.2} s); wheel_override likewise"
+                "arm latch: wheel feedback lost, braking; wheels held until the feedback is \
+                 back and cmd_vel stops (a zero command, or none for {timeout_s:.2} s); \
+                 wheel_override likewise"
             ),
             Event::Armed { stream, reason, by, after_s } => {
-                let stream = match stream {
-                    Stream::CmdVel => "cmd_vel",
-                    Stream::WheelOverride => "wheel_override",
-                };
+                let stream = stream_name(stream);
                 let reason = match reason {
                     DisarmReason::Activation => "activation",
                     DisarmReason::FeedbackLost => "feedback loss",
                 };
                 let by = match by {
                     StopEdge::Stop => "an explicit stop".to_string(),
-                    StopEdge::Silence => format!("{timeout_s:.2} s of silence"),
+                    StopEdge::Silence => format!("silence (nothing for > {timeout_s:.2} s)"),
                 };
                 r2r::log_info!(
                     l,
@@ -349,6 +392,16 @@ impl Driver {
                 l,
                 "Velocity command timed out. Braking. (last command {linear_x:.3} m/s, \
                  {angular_z:.3} rad/s)"
+            ),
+            Event::Publishers { stream, present: true, after_activation_s } => r2r::log_info!(
+                l,
+                "{}: publisher in the graph {after_activation_s:.2} s after activation",
+                stream_name(stream)
+            ),
+            Event::Publishers { stream, present: false, after_activation_s } => r2r::log_info!(
+                l,
+                "{}: no publisher any more ({after_activation_s:.2} s after activation)",
+                stream_name(stream)
             ),
         }
     }
@@ -665,6 +718,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         blade_max_ttl_ms: params::i64(&node, "blade_max_ttl_ms", 1000),
         // Not a parameter: the latch only ever comes off in the parity tests.
         arm_latch: true,
+        publisher_settle_s: params::f64(&node, "publisher_settle_s", 2.0),
         diff_drive: diff_drive.clone(),
     };
     let settings = Settings {
@@ -919,6 +973,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     );
 
     let stop = Arc::new(AtomicBool::new(false));
+    let graph = Arc::new(GraphSeen::default());
     let mut driver = Driver {
         cfg,
         settings,
@@ -930,6 +985,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             firmware_info: firmware_pub,
         },
         slots,
+        graph: graph.clone(),
         logger: logger.clone(),
         stop: stop.clone(),
         odom_template,
@@ -941,12 +997,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         .spawn(move || driver.run())?;
 
     // ---- spin the subscriptions until shutdown ---------------------------
+    // The graph is read here because the node lives here.
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
         tokio::task::spawn_blocking(move || {
+            let mut polled: Option<Instant> = None;
             while running.load(Ordering::Relaxed) {
-                node.spin_once(Duration::from_millis(100));
+                node.spin_once(Duration::from_millis(50));
+                if polled.map_or(true, |t| t.elapsed() >= GraphSeen::POLL) {
+                    polled = Some(Instant::now());
+                    graph.poll(&node, &cmd_vel_topic, &override_topic);
+                }
             }
             drop(node);
         })
