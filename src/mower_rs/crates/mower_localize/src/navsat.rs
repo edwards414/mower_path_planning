@@ -59,8 +59,13 @@ impl Nav {
     }
 }
 
-fn input_qos(depth: usize) -> QosProfile {
-    QosProfile::default().keep_last(depth).best_effort().volatile()
+/// `rclcpp::SensorDataQoS(rclcpp::KeepLast(1))`, upstream's `custom_qos` for
+/// all three inputs. The depth of one is part of the start-up behaviour: while
+/// the node waits out `delay` nothing is taken, so the reader holds only the
+/// latest odometry, fix and IMU sample, and those are what the datum is built
+/// from.
+fn input_qos() -> QosProfile {
+    QosProfile::default().keep_last(1).best_effort().volatile()
 }
 
 fn output_qos() -> QosProfile {
@@ -72,7 +77,13 @@ fn tf_static_qos() -> QosProfile {
 }
 
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    run_node(node, m).await
+}
+
+/// Everything after `Node::create`, so a test can hand in a node whose
+/// parameters it has set itself.
+async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
     let cfg = config::navsat_config();
 
@@ -110,7 +121,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- inputs -------------------------------------------------------------
     {
-        let mut stream = node.subscribe::<ROdometry>(&odom_topic, input_qos(10))?;
+        let mut stream = node.subscribe::<ROdometry>(&odom_topic, input_qos())?;
         let nav = nav.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -128,7 +139,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
     {
         // `gps/fix` is best-effort sensor data, like the driver publishes it.
-        let mut stream = node.subscribe::<RNavSatFix>(&fix_topic, input_qos(10))?;
+        let mut stream = node.subscribe::<RNavSatFix>(&fix_topic, input_qos())?;
         let nav = nav.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -144,7 +155,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     // reproduces that: the yaw is only needed to build the datum.
     let imu_done = Arc::new(AtomicBool::new(false));
     {
-        let mut stream = node.subscribe::<RImu>(&imu_topic, input_qos(10))?;
+        let mut stream = node.subscribe::<RImu>(&imu_topic, input_qos())?;
         let nav = nav.clone();
         let imu_done = imu_done.clone();
         tokio::spawn(async move {
@@ -302,6 +313,29 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         ],
     )?;
 
+    r2r::log_info!(
+        &logger,
+        "navsat_transform (mower_rs): {frequency} Hz, fix {fix_topic}, imu {imu_topic}, odom {odom_topic} -> {gps_odom_topic}"
+    );
+
+    // `delay`, as the upstream constructor does it: everything above exists,
+    // but the node is not spun until the delay has passed, so no callback and
+    // no service runs meanwhile, and the depth-1 readers keep only the latest
+    // odometry, fix and IMU sample. The datum is therefore built from inputs
+    // at least `delay` old -- by then the map EKF's yaw has had time to
+    // converge on the IMU heading when it was initialised from /odom (yaw 0).
+    // Locking on the first tick instead rotated the map<->UTM datum by most of
+    // the robot's initial heading.
+    if delay > 0.0 {
+        r2r::log_info!(&logger, "Delaying for {delay} seconds before starting...");
+        tokio::select! {
+            // Nothing is spinning yet, so returning drops the node cleanly.
+            _ = m.shutdown.wait() => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs_f64(delay)) => {}
+        }
+        r2r::log_info!(&logger, "Delay elapsed. Continuing.");
+    }
+
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
@@ -313,14 +347,13 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         })
     };
 
-    r2r::log_info!(
-        &logger,
-        "navsat_transform (mower_rs): {frequency} Hz, fix {fix_topic}, imu {imu_topic}, odom {odom_topic} -> {gps_odom_topic}"
-    );
-
     // `transformCallback`: while the datum is missing, try to build it; once
     // it exists, publish. Never both in the same tick, as upstream's if/else.
-    let mut tick = tokio::time::interval(Duration::from_secs_f64(1.0 / frequency));
+    // Upstream creates the wall timer after the delay, so its first tick is
+    // one period later: the first spin takes the waiting samples before the
+    // datum is attempted. A tokio interval would tick at once.
+    let period = Duration::from_secs_f64(1.0 / frequency);
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
@@ -419,6 +452,136 @@ mod tests {
         assert!(!cfg.broadcast_cartesian_transform_as_parent_frame);
         assert_eq!(cfg.magnetic_declination_radians, 0.0);
         assert_eq!(cfg.yaw_offset, 0.0);
+    }
+
+    fn yaw_quat(yaw: f64) -> r2r::geometry_msgs::msg::Quaternion {
+        r2r::geometry_msgs::msg::Quaternion {
+            x: 0.0,
+            y: 0.0,
+            z: (yaw / 2.0).sin(),
+            w: (yaw / 2.0).cos(),
+        }
+    }
+
+    /// `delay` as upstream applies it: no datum before the delay has passed,
+    /// and then the one built from the *latest* odometry, IMU and fix, not
+    /// from the first ones -- the samples that arrived meanwhile were never
+    /// taken. Needs a ROS environment (it talks DDS within one context); it
+    /// returns early without one, like the dispatch test in lib.rs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_datum_waits_for_the_delay_and_uses_the_latest_inputs() {
+        let ctx = match r2r::Context::create() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        // A namespace of its own, so the relative input topics cannot meet
+        // anything else on the graph.
+        const NS: &str = "/navsat_delay_test";
+        const DELAY: f64 = 1.5;
+        const SWITCH: f64 = 0.6;
+
+        let node = r2r::Node::create(ctx.clone(), crate::NODE_NAVSAT, NS).unwrap();
+        node.params.lock().unwrap().insert(
+            "delay".to_string(),
+            r2r::Parameter::new(r2r::ParameterValue::Double(DELAY)),
+        );
+        let shutdown = mower_rs_common::Shutdown::new();
+        let mut m = ModuleCtx::new(crate::NODE_NAVSAT, shutdown.clone());
+        m.namespace = NS.to_string();
+
+        let mut feeder = r2r::Node::create(ctx, "navsat_delay_feeder", NS).unwrap();
+        let qos = || QosProfile::default().keep_last(10).reliable().volatile();
+        let odom_pub = feeder.create_publisher::<ROdometry>("odometry/global", qos()).unwrap();
+        let imu_pub = feeder.create_publisher::<RImu>("imu/data", qos()).unwrap();
+        let fix_pub = feeder.create_publisher::<RNavSatFix>("fix", qos()).unwrap();
+        let mut tf_static = feeder.subscribe::<TFMessage>("/tf_static", tf_static_qos()).unwrap();
+
+        let started = tokio::time::Instant::now();
+        let navsat = tokio::spawn(run_node(node, m));
+
+        let feeding = Arc::new(AtomicBool::new(true));
+        let spin = {
+            let feeding = feeding.clone();
+            tokio::task::spawn_blocking(move || {
+                while feeding.load(Ordering::Relaxed) {
+                    feeder.spin_once(Duration::from_millis(10));
+                }
+            })
+        };
+        // Two phases, both inside the delay. Phase 1 is what a node that
+        // locks on its first tick would use; phase 2 keeps being published,
+        // so it is the latest of each input when the delay is over.
+        let feed = {
+            let feeding = feeding.clone();
+            tokio::spawn(async move {
+                let mut k = 0i64;
+                while feeding.load(Ordering::Relaxed) {
+                    let phase2 = started.elapsed().as_secs_f64() >= SWITCH;
+                    let (odom_yaw, imu_yaw, lat, lon) = if phase2 {
+                        (0.1, 1.2, 23.6950, 120.5387)
+                    } else {
+                        (0.0, 0.3, 23.6940, 120.5377)
+                    };
+                    let stamp = r2r::builtin_interfaces::msg::Time { sec: 1000 + (k / 20) as i32, nanosec: ((k % 20) * 50_000_000) as u32 };
+                    let mut odom = ROdometry::default();
+                    odom.header.stamp = stamp.clone();
+                    odom.header.frame_id = "map".to_string();
+                    odom.child_frame_id = "base_footprint".to_string();
+                    odom.pose.pose.orientation = yaw_quat(odom_yaw);
+                    let _ = odom_pub.publish(&odom);
+                    let mut imu = RImu::default();
+                    imu.header.stamp = stamp.clone();
+                    imu.header.frame_id = "base_footprint".to_string();
+                    imu.orientation = yaw_quat(imu_yaw);
+                    let _ = imu_pub.publish(&imu);
+                    let mut fix = RNavSatFix::default();
+                    fix.header.stamp = stamp;
+                    fix.header.frame_id = "base_footprint".to_string();
+                    fix.status.status = 0; // STATUS_FIX
+                    fix.latitude = lat;
+                    fix.longitude = lon;
+                    fix.altitude = 50.0;
+                    fix.position_covariance[0] = 0.04;
+                    fix.position_covariance[4] = 0.04;
+                    fix.position_covariance[8] = 0.09;
+                    let _ = fix_pub.publish(&fix);
+                    k += 1;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+        };
+
+        // The datum announces itself as map -> utm on /tf_static.
+        let locked = tokio::time::timeout(Duration::from_secs_f64(DELAY + 5.0), async {
+            while let Some(msg) = tf_static.next().await {
+                if let Some(t) = msg.transforms.iter().find(|t| t.child_frame_id == CARTESIAN_FRAME) {
+                    return Some((started.elapsed().as_secs_f64(), t.clone()));
+                }
+            }
+            None
+        })
+        .await;
+
+        feeding.store(false, Ordering::Relaxed);
+        shutdown.trigger();
+        let _ = feed.await;
+        let _ = spin.await;
+        navsat.await.expect("navsat task").expect("navsat result");
+
+        let (at, t) = locked.expect("no datum within the delay + 5 s").expect("tf_static closed");
+        assert!(at >= DELAY, "datum locked after {at:.3} s, before the {DELAY} s delay");
+        assert_eq!(t.header.frame_id, "map");
+        let q = &t.transform.rotation;
+        let yaw = (2.0 * (q.w * q.z + q.x * q.y)).atan2(1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+        // map->utm yaw = odometry yaw - (IMU yaw + meridian convergence); the
+        // convergence at 120.54 E in zone 51 is -0.99 deg (-0.0173 rad).
+        let convergence = -0.0173;
+        let latest = 0.1 - (1.2 + convergence);
+        let first = 0.0 - (0.3 + convergence);
+        assert!(
+            (yaw - latest).abs() < 0.01,
+            "datum yaw {yaw:.4} rad: expected the latest inputs' {latest:.4}, the first inputs give {first:.4}"
+        );
     }
 
     #[test]
