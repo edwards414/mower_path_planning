@@ -24,8 +24,20 @@ _TRUE = "('true', '1', 'yes', 'on')"
 def _rust_binary(flag, rust_daemon):
     """Run the separate mower_rs binary: switch on and daemon not running."""
     return IfCondition(PythonExpression([
-        "'", flag, "'.lower() in ", _TRUE,
-        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+        "'", flag, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() not in ", _TRUE,
+    ]))
+
+
+def _rust_off(flag):
+    """Run the side a rust_* switch replaces: the Rust test's complement.
+
+    A plain UnlessCondition accepts only true/false/1/0, so RUST_BASE=on would
+    abort the whole launch, and restart: unless-stopped would crash-loop the
+    stack, bridge included.
+    """
+    return IfCondition(PythonExpression([
+        "'", flag, "'.strip().lower() not in ", _TRUE,
     ]))
 
 
@@ -213,7 +225,7 @@ def generate_launch_description():
                 'controller_test.launch.py'
             )
         ),
-        condition=UnlessCondition(rust_base),
+        condition=_rust_off(rust_base),
         launch_arguments={
             'publish_robot_state_publisher': 'false',
         }.items(),

@@ -120,6 +120,10 @@ nav_action_server:
     gps_fix_topic: /fix
 
 # --- record (rust_record) ----------------------------------------------------
+# save_dir / sites_dir below are only what a bare `mower_rsd --params-file`
+# (the tools) gets: robot.launch.py overrides both for this node with its
+# zone_record_dir / sites_dir arguments, as mission.launch.py does for the
+# separate mower_record, so zones land in the ~/.mower bind mount.
 path_record_node:
   ros__parameters:
     save_dir: zone_record
