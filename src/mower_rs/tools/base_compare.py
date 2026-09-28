@@ -16,12 +16,17 @@ differs between the two (run both under the robot's RMW,
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp: SystemDefaultsQoS resolves
 differently per RMW).
 
-Runs recorded with `base_harness.py --scenario pull` / `pullpush` get the
-cable-pull report instead of the parity sections: what each chain commanded
-after the lead came back with the stick still pushed. `--scenario live` gets
-the restart report: what reached the wheels while a stream that was running
-before the driver started was still live. `mower_base` must send 0/0 in
-both until the release; the C++ chain has no latch and follows at once.
+Runs recorded with `base_harness.py --scenario pull` / `pullpush` / `txpull`
+get the cable-pull report instead of the parity sections: what each chain
+commanded after the lead came back with the stick still pushed (`txpull`:
+only the LubanCat TX lead was out, the feedback never stopped). `--scenario
+live` gets the restart report: what reached the wheels while a stream that
+was running before the driver started was still live. `mower_base` must
+send 0/0 in all of them until the release; the C++ chain has no latch and
+follows at once. `--scenario autotune` gets the pid_autotune report: the
+run's states, the flash save's stall, and whether the second run's steps
+reached the wheels after it. Where a run directory has the driver's log
+(`base_ab.sh` writes `driver.log`), its arm-latch lines are printed.
 
 Nothing here runs on the robot.
 """
@@ -51,7 +56,7 @@ def load(directory: str):
         run = json.load(f)
     frames = []
     t0_fake = None
-    mutes = []
+    metas = []
     with open(os.path.join(directory, "fake.jsonl")) as f:
         for line in f:
             rec = json.loads(line)
@@ -59,15 +64,29 @@ def load(directory: str):
                 if "t0_monotonic" in rec["fields"]:
                     t0_fake = rec["fields"]["t0_monotonic"]
                 else:
-                    mutes.append(rec)
+                    metas.append(rec)
                 continue
             frames.append(rec)
     # Put every frame on the harness timeline.
     shift = (t0_fake - run["t0_monotonic"]) if t0_fake is not None else 0.0
-    for rec in frames + mutes:
+    for rec in frames + metas:
         rec["h"] = rec["t"] + shift
-    run["mute_log"] = [(m["h"], m["fields"]["muted"]) for m in mutes]
+    # (t, what, on): the fake's lead cuts ("muted", "deaf") and flash stalls
+    run["mute_log"] = [(round(m["h"], 3), key, value)
+                       for m in metas for key, value in m["fields"].items()
+                       if key in ("muted", "deaf", "stalled")]
+    run["latch_log"] = latch_lines(directory)
     return run, frames
+
+
+def latch_lines(directory: str):
+    """The driver's arm-latch and board-link log lines, if it left a log."""
+    path = os.path.join(directory, "driver.log")
+    if not os.path.exists(path):
+        return []
+    keep = ("arm latch", "STM32 re", "feedback", "COMMAND_TIMEOUT")
+    with open(path, errors="replace") as f:
+        return [line.rstrip() for line in f if any(k in line for k in keep)]
 
 
 def rate(samples, key="t", window=WINDOW):
@@ -166,11 +185,14 @@ def main() -> int:
           + ("all SAME" if out["qos_same"] else f"DIFFERENT {differ}, no endpoint {missing}"))
 
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    if scenario in ("pull", "pullpush"):
+    if scenario in ("pull", "pullpush", "txpull"):
         pull_report(run_a, frames_a, run_b, frames_b, out)
         return finish(args, out)
     if scenario == "live":
         live_report(run_a, frames_a, run_b, frames_b, out)
+        return finish(args, out)
+    if scenario == "autotune":
+        autotune_report(run_a, frames_a, run_b, frames_b, out)
         return finish(args, out)
 
     # ---- 2. rates -----------------------------------------------------
@@ -368,20 +390,32 @@ def finish(args, out) -> int:
     return 0 if out.get("qos_same") else 1
 
 
+def print_latch_log(label, run, limit=12) -> None:
+    lines = run.get("latch_log") or []
+    for line in lines[:limit]:
+        # drop the "[INFO] [1790000000.123] [mower_base]: " prefix
+        print(f"     {label} log: {line.split(']: ', 1)[-1]}")
+    if len(lines) > limit:
+        print(f"     {label} log: ... {len(lines) - limit} more")
+
+
 def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
     """The cable-pull scenarios: what reached the wheels once the lead was back.
 
     `pull`: the stick is held at 0.30 m/s through the pull. `pullpush`: the
     lead comes out with nothing commanded and the stick is pushed while it
-    is out. Either way it is still pushed when the lead is back, released
-    at 9.0 s and pushed again from 9.5 s. The C++ chain has no latch and
-    resumes the pushed command as soon as frames get through again;
-    mower_base must stay at 0/0 until the release and follow the stick
-    again after it.
+    is out. `txpull`: as `pull`, but only the LubanCat TX -> STM32 RX lead
+    is out, so the feedback keeps coming and the board reports
+    COMMAND_TIMEOUT. Either way it is still pushed when the lead is back,
+    released at 9.0 s and pushed again from 9.5 s. The C++ chain has no
+    latch and resumes the pushed command as soon as frames get through
+    again; mower_base must stay at 0/0 until the release and follow the
+    stick again after it.
     """
     scenario = run_b.get("scenario") or run_a.get("scenario")
-    section("cable %s (lead out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
-            "pushed 9.5 s)" % ((scenario,) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
+    leads = "LubanCat TX lead" if scenario == "txpull" else "lead"
+    section("cable %s (%s out %.1f-%.1f s, stick pushed at the re-seat, released 9.0 s, "
+            "pushed 9.5 s)" % ((scenario, leads) + tuple(run_b.get("mute") or run_a.get("mute") or (0, 0))))
     out["pull"] = {"scenario": scenario}
     for label, run, frames in (("A", run_a, frames_a), ("B", run_b, frames_b)):
         mute = run.get("mute") or (4.0, 6.0)
@@ -395,18 +429,34 @@ def pull_report(run_a, frames_a, run_b, frames_b, out) -> None:
         moving_after = [x for x in held if x[1] or x[2]]
         released = [x for x in seen if 9.6 <= x[0] < 11.5 and (x[1] or x[2])]
         rpm_held = max((abs(r) for h, r in fb if mute[1] + 0.3 <= h < 9.0), default=0.0)
+        status = [(f["h"], f["fields"]["flags"], f["fields"]["command_age_ms"])
+                  for f in frames if f["dir"] == "tx" and f["type"] == 0x81 and f["fields"]]
+        out_status = [x for x in status if mute[0] <= x[0] < mute[1]]
+        timeouts = [x for x in out_status if x[1] & 0x02]
+        fb_out = [h for h, _ in fb if mute[0] <= h < mute[1]]
         print(f"  {label}: before the pull {sorted({(l, r) for _, l, r in before})}")
+        if scenario == "txpull":
+            print(f"     lead out: {len(fb_out)} feedback frames still sent, "
+                  f"{len(timeouts)}/{len(out_status)} 0x81 with COMMAND_TIMEOUT"
+                  + (f", first at {timeouts[0][0]:.3f} s, command_age_ms up to "
+                     f"{max(x[2] for x in timeouts)}" if timeouts else ""))
         print(f"     lead back, stick held: {len(held)} frames, {len(moving_after)} non-zero"
               + (f" (first at {moving_after[0][0]:.3f} s: {moving_after[0][1:]})" if moving_after else "")
               + f"; wheel speed up to {rpm_held:.1f} rpm")
         print(f"     after release + push: {len(released)} non-zero frames"
               + (f", first at {released[0][0]:.3f} s" if released else ""))
+        print_latch_log(label, run)
         out["pull"][label] = {
             "held_frames": len(held),
             "held_nonzero": len(moving_after),
+            "first_held": list(held[0]) if held else None,
             "held_max_rpm": rpm_held,
             "after_release_nonzero": len(released),
+            "status_while_out": len(out_status),
+            "timeouts_while_out": len(timeouts),
+            "feedback_while_out": len(fb_out),
             "mute_log": run.get("mute_log"),
+            "latch_log": run.get("latch_log"),
         }
 
 
@@ -433,6 +483,56 @@ def live_report(run_a, frames_a, run_b, frames_b, out) -> None:
             "live_frames": len(live),
             "live_nonzero": len(moving),
             "after_release_nonzero": len(after),
+        }
+
+
+def autotune_report(run_a, frames_a, run_b, frames_b, out) -> None:
+    """pid_autotune end to end: two runs, the first applied (the flash save
+    stalls the fake board like the STM32's sector erase), the second
+    discarded. The second run's open-loop steps must reach the wheels: the
+    save must not leave the base latched."""
+    section("pid_autotune: run 1 applied (flash save), run 2 discarded")
+    out["autotune"] = {}
+    for label, run, frames in (("A", run_a, frames_a), ("B", run_b, frames_b)):
+        at = run.get("autotune") or {}
+        states = [x["state"] for x in at.get("states", [])]
+        saves = [f["h"] for f in frames
+                 if f["dir"] == "rx" and f["type"] == PID_CONFIG_COMMAND
+                 and f["fields"].get("persist")]
+        stalls = [x for x in run.get("mute_log", []) if x[1] == "stalled"]
+        seen = [(f["h"], f["fields"]["left"], f["fields"]["right"])
+                for f in frames
+                if f["dir"] == "rx" and f["type"] == WHEEL_SPEED_COMMAND and f["fields"]]
+        save_t = saves[0] if saves else None
+        before = [x for x in seen if save_t is not None and x[0] < save_t and (x[1] or x[2])]
+        after = [x for x in seen if save_t is not None and x[0] > save_t and (x[1] or x[2])]
+        levels_after = sorted({x[1] for x in after})
+        # the board's reports around the save (the stall plus a second);
+        # the ones after the drivers stop at the end are not about the save
+        stall_end = max((t for t, _, on in stalls if not on), default=save_t)
+        timeouts = [(f["h"], f["fields"]["command_age_ms"]) for f in frames
+                    if f["dir"] == "tx" and f["type"] == 0x81 and f["fields"]
+                    and f["fields"]["flags"] & 0x02 and save_t is not None
+                    and save_t < f["h"] <= stall_end + 1.0]
+        print(f"  {label}: states {states}; error {at.get('error')}")
+        print(f"     flash save 0x04 at {save_t if save_t is None else round(save_t, 3)} s, "
+              f"stall log {stalls}")
+        print(f"     0x81 COMMAND_TIMEOUT within 1 s of the stall: {len(timeouts)}"
+              + (f" (first {timeouts[0][0]:.3f} s, command_age_ms {timeouts[0][1]})" if timeouts else ""))
+        print(f"     non-zero 0x01: {len(before)} before the save, {len(after)} after it "
+              f"(left permille levels after: {levels_after})")
+        print_latch_log(label, run, limit=20)
+        out["autotune"][label] = {
+            "states": states,
+            "error": at.get("error"),
+            "calls": at.get("calls"),
+            "save_t": save_t,
+            "stalls": stalls,
+            "timeouts_after_save": len(timeouts),
+            "nonzero_before_save": len(before),
+            "nonzero_after_save": len(after),
+            "levels_after_save": levels_after,
+            "latch_log": run.get("latch_log"),
         }
 
 

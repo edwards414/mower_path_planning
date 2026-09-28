@@ -21,11 +21,24 @@ commanded, the stick is pushed while it is still out, and the lead is
 re-seated with the stick still pushed (PULLPUSH_SCRIPT). `mower_base` must
 not re-arm during the outage, so it stays at 0/0 until the release.
 
+`--scenario txpull --deaf-file F`: PULL_SCRIPT again, but only the LubanCat
+TX -> STM32 RX lead is out (the 2026-09-28 pull on the robot): `fake_base.py`
+goes deaf and keeps sending, its 0x81 reporting COMMAND_TIMEOUT with a
+growing age. The feedback never stops, so only mower_base's command-path
+trigger can catch it; the C++ chain lurches on the re-seat.
+
 `--scenario live`: a live 0.30 m/s stream at nav2's 20 Hz that is already
 running when the driver starts (`base_ab.sh` starts this harness first), as
 after a restart under nav2 or teleop. No discovery wait: the stream starts
 at once. The driver hears nothing until DDS has matched it with this writer,
 and that quiet stretch must not re-arm it (LIVE_SCRIPT).
+
+`--scenario autotune`: no cmd_vel at all; drives `mower_pid_autotune`
+(which `base_ab.sh` starts beside the driver) through a whole run to
+"review", "apply" (the flash save, which `fake_base.py` stalls for like the
+STM32's sector erase), and then a second run to "review" and "discard", and
+records the status states. The second run's steps reaching the wheels is
+what shows the save did not leave the base latched.
 
 Nothing here runs on the robot.
 """
@@ -115,12 +128,19 @@ LIVE_RATE_HZ = 20.0
 LIVE_SECONDS = 17.0
 LIVE_DRIVER_START_S = 2.0  # after the first message (base_ab.sh)
 
+# pid_autotune end to end: no cmd_vel, just the service calls (run_autotune).
+AUTOTUNE_SCRIPT = [(0.0, 1e9, None, None)]
+AUTOTUNE_SECONDS = 120.0  # a cap; the run ends when the sequence does
+
 SCENARIOS = {
-    # name: (command script, mute window, rate, seconds)
-    "default": (CMD_SCRIPT, None, CMD_RATE_HZ, RUN_SECONDS),
-    "pull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS),
-    "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS),
-    "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS),
+    # name: (command script, lead-out window, rate, seconds, which leads:
+    #        "mute" = both (--mute-file), "deaf" = LubanCat TX only (--deaf-file))
+    "default": (CMD_SCRIPT, None, CMD_RATE_HZ, RUN_SECONDS, None),
+    "pull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS, "mute"),
+    "pullpush": (PULLPUSH_SCRIPT, PULLPUSH_MUTE, CMD_RATE_HZ, PULL_SECONDS, "mute"),
+    "txpull": (PULL_SCRIPT, PULL_MUTE, CMD_RATE_HZ, PULL_SECONDS, "deaf"),
+    "live": (LIVE_SCRIPT, None, LIVE_RATE_HZ, LIVE_SECONDS, None),
+    "autotune": (AUTOTUNE_SCRIPT, None, CMD_RATE_HZ, AUTOTUNE_SECONDS, None),
 }
 
 # (t_from, t_to, rate_hz, topic, payload)
@@ -160,7 +180,7 @@ def stamp_s(header) -> float:
 
 
 class Harness(Node):
-    def __init__(self, label: str, scenario: str = "default", mute_file: str = "",
+    def __init__(self, label: str, scenario: str = "default", cut_file: str = "",
                  streaming_file: str = "") -> None:
         super().__init__("base_harness")
         # touched on the first command published, so base_ab.sh can start
@@ -168,14 +188,16 @@ class Harness(Node):
         self.streaming_file = streaming_file
         self.label = label
         self.scenario = scenario
-        self.script, self.mute, rate_hz, _ = SCENARIOS[scenario]
+        self.script, self.mute, rate_hz, _, self.cut = SCENARIOS[scenario]
         self.side_script = SIDE_SCRIPT if scenario == "default" else []
-        self.mute_file = mute_file
+        # the file fake_base.py watches for this scenario's lead(s)
+        self.mute_file = cut_file
         self.t0 = time.monotonic()
         self.rec = {
             "label": label,
             "scenario": scenario,
             "mute": list(self.mute) if self.mute else None,
+            "cut": self.cut,
             # CLOCK_MONOTONIC is shared across processes on Linux, so this
             # is what lines the harness up with fake_base.py's log.
             "t0_monotonic": self.t0,
@@ -397,6 +419,76 @@ class Harness(Node):
         )
 
 
+def run_autotune(node: Harness, end: float) -> None:
+    """start -> review -> apply -> done, then start -> review -> discard.
+
+    Records every status state change and every service answer in
+    `rec["autotune"]`, on the harness clock.
+    """
+    from mower_interface.srv import PidAutotune
+
+    rec = {"states": [], "calls": [], "error": None}
+    node.rec["autotune"] = rec
+    latest = {"state": None}
+
+    def on_status(msg: String) -> None:
+        try:
+            st = json.loads(msg.data)
+        except ValueError:
+            return
+        if st.get("state") != latest["state"]:
+            latest["state"] = st.get("state")
+            rec["states"].append({"t": round(node.rel(), 3), "state": st.get("state"),
+                                  "message": st.get("message"), "error": st.get("error")})
+
+    latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+    node.create_subscription(String, "/pid_autotune/status", on_status, latched)
+    client = node.create_client(PidAutotune, "/pid_autotune")
+    if not client.wait_for_service(timeout_sec=30.0):
+        rec["error"] = "no /pid_autotune service"
+        return
+
+    def call(op: str) -> bool:
+        future = client.call_async(PidAutotune.Request(op=op))
+        while rclpy.ok() and not future.done() and time.monotonic() < end:
+            rclpy.spin_once(node, timeout_sec=0.02)
+        res = future.result() if future.done() else None
+        rec["calls"].append({"t": round(node.rel(), 3), "op": op,
+                             "success": bool(res and res.success),
+                             "message": res.message if res else "no answer"})
+        return bool(res and res.success)
+
+    def wait_for(states, timeout_s: float) -> str:
+        deadline = min(end, time.monotonic() + timeout_s)
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.02)
+            if latest["state"] in states:
+                return latest["state"]
+        return latest["state"]
+
+    for decision in ("apply", "discard"):
+        latest["state"] = None
+        if not call("start"):
+            rec["error"] = f"start refused before {decision}"
+            return
+        state = wait_for({"review", "failed", "aborted"}, 60.0)
+        if state != "review":
+            rec["error"] = f"run ended in {state} before {decision}"
+            return
+        if not call(decision):
+            rec["error"] = f"{decision} refused"
+            return
+        state = wait_for({"done", "idle", "failed", "aborted"}, 30.0)
+        want = "done" if decision == "apply" else "idle"
+        if state != want:
+            rec["error"] = f"{decision} ended in {state}"
+            return
+        # let the run's `finally` (the override cancel, the lights) go out
+        end_wait = time.monotonic() + 1.0
+        while time.monotonic() < end_wait:
+            rclpy.spin_once(node, timeout_sec=0.02)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", required=True)
@@ -405,14 +497,18 @@ def main() -> int:
     ap.add_argument("--scenario", choices=sorted(SCENARIOS), default="default")
     ap.add_argument("--mute-file", default="",
                     help="the file fake_base.py --mute-file watches (pull, pullpush)")
+    ap.add_argument("--deaf-file", default="",
+                    help="the file fake_base.py --deaf-file watches (txpull)")
     args = ap.parse_args()
     if args.seconds is None:
         args.seconds = SCENARIOS[args.scenario][3]
-    if SCENARIOS[args.scenario][1] and not args.mute_file:
-        ap.error(f"--scenario {args.scenario} needs --mute-file")
+    cut = SCENARIOS[args.scenario][4]
+    cut_file = {"mute": args.mute_file, "deaf": args.deaf_file}.get(cut, "")
+    if cut and not cut_file:
+        ap.error(f"--scenario {args.scenario} needs --{cut}-file")
 
     rclpy.init()
-    node = Harness(args.label, args.scenario, args.mute_file,
+    node = Harness(args.label, args.scenario, cut_file,
                    args.out + ".streaming" if args.scenario == "live" else "")
     if args.scenario == "live":
         # the stream is already running when the driver starts: no waiting
@@ -421,6 +517,11 @@ def main() -> int:
         print(f"[{args.label}] WARNING: not every endpoint matched before the run")
     end = time.monotonic() + args.seconds
     graphed = False
+    if args.scenario == "autotune":
+        node.snapshot_graph()
+        graphed = True
+        run_autotune(node, end)
+        end = time.monotonic()
     while rclpy.ok() and time.monotonic() < end:
         rclpy.spin_once(node, timeout_sec=0.01)
         if not graphed and node.rel() > 10.0:
@@ -428,8 +529,8 @@ def main() -> int:
             graphed = True
     if not graphed:
         node.snapshot_graph()
-    if args.mute_file and os.path.exists(args.mute_file):
-        os.unlink(args.mute_file)
+    if cut_file and os.path.exists(cut_file):
+        os.unlink(cut_file)
     with open(args.out, "w") as f:
         json.dump(node.rec, f)
     print(
@@ -437,6 +538,10 @@ def main() -> int:
         f"tf={len(node.rec['tf'])} telemetry={len(node.rec['telemetry'])} "
         f"cmd={len(node.rec['cmd_log'])}"
     )
+    if "autotune" in node.rec:
+        at = node.rec["autotune"]
+        print(f"[{args.label}] autotune states "
+              f"{[x['state'] for x in at['states']]} error={at['error']}")
     node.destroy_node()
     rclpy.shutdown()
     return 0

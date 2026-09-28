@@ -12,8 +12,13 @@
 #   ... base_ab.sh B /out/b [/path/to/mower_base]              # mower_base
 #   ... base_ab.sh B /out/b_pull "" --scenario pull            # the cable pull
 #   ... base_ab.sh B /out/b_pp "" --scenario pullpush          # pushed during the pull
+#   ... base_ab.sh B /out/b_tx "" --scenario txpull            # LubanCat TX lead only
 #   ... base_ab.sh B /out/b_live "" --scenario live            # restart under a live stream
+#   ... base_ab.sh B /out/b_at "" --scenario autotune          # pid_autotune + flash save
 #   python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b
+#
+# `--scenario autotune` also starts `mower_pid_autotune` beside the driver:
+# $AUTOTUNE_BIN, else the one next to the B binary given, else the image's.
 #
 # `--scenario live` starts the harness (and its 0.30 m/s stream) before the
 # driver, the way a restart under nav2 or teleop looks. What decides that
@@ -54,14 +59,14 @@ EOF
 echo "[base_ab] $side: RMW=$RMW_IMPLEMENTATION CYCLONEDDS_URI=${CYCLONEDDS_URI:-} ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}"
 
 mkdir -p "$out"
-rm -f "$out/mute"
+rm -f "$out/mute" "$out/deaf"
 load=()
 for _ in $(seq "${LOAD:-0}"); do
   ( while :; do :; done ) &
   load+=($!)
 done
 nice -n -5 python3 "$tools/fake_base.py" --pty-link /dev/stmcom --log "$out/fake.jsonl" \
-  --seconds 120 --mute-file "$out/mute" &
+  --seconds 150 --mute-file "$out/mute" --deaf-file "$out/deaf" &
 fake=$!
 sleep 1
 
@@ -87,6 +92,14 @@ start_driver() {
       --params-file "$repo/src/mower_bringup/config/mower_rsd.yaml" >"$out/driver.log" 2>&1 &
   fi
   driver=$!
+  autotune=
+  if [ "$scenario" = autotune ]; then
+    local at=${AUTOTUNE_BIN:-}
+    if [ -z "$at" ] && [ -n "$bin" ]; then at=$(dirname "$bin")/mower_pid_autotune; fi
+    [ -n "$at" ] && [ -x "$at" ] || at=/mower_ws/install/mower_rs/lib/mower_rs/mower_pid_autotune
+    "$at" >"$out/autotune.log" 2>&1 &
+    autotune=$!
+  fi
 }
 
 if [ "$scenario" = live ]; then
@@ -94,7 +107,7 @@ if [ "$scenario" = live ]; then
   # container can take many seconds just to start Python)
   rm -f "$out/run.json.streaming"
   nice -n -5 python3 "$tools/base_harness.py" --out "$out/run.json" --label "$side" \
-    --mute-file "$out/mute" "$@" &
+    --mute-file "$out/mute" --deaf-file "$out/deaf" "$@" &
   harness=$!
   for _ in $(seq 600); do [ -e "$out/run.json.streaming" ] && break; sleep 0.1; done
   sleep 2
@@ -104,7 +117,7 @@ if [ "$scenario" = live ]; then
 else
   start_driver
   python3 "$tools/base_harness.py" --out "$out/run.json" --label "$side" \
-    --mute-file "$out/mute" "$@"
+    --mute-file "$out/mute" --deaf-file "$out/deaf" "$@"
   status=$?
 fi
 
@@ -114,6 +127,7 @@ stop() {
   for _ in $(seq 50); do kill -0 "$1" 2>/dev/null || return; sleep 0.1; done
   kill -KILL "$1" 2>/dev/null
 }
+[ -n "${autotune:-}" ] && stop "$autotune"
 stop "$driver"
 stop "$rsp"
 stop "$fake"

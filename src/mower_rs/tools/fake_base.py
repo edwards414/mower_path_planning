@@ -17,11 +17,30 @@ or, where there is no socat (the runtime image), let it make the pty:
 
     ./fake_base.py --pty-link /dev/stmcom --log /tmp/fake_base.jsonl
 
-`--mute-file PATH`: while PATH exists the fake is a pulled UART lead --
-nothing is sent and everything received is dropped (so its own 300 ms
-command timeout stops the wheels), which on the robot's native UART is
-also no error at all on the host side. Used by `base_harness.py
---scenario pull`.
+`--mute-file PATH`: while PATH exists the fake is a UART with both leads
+pulled -- nothing is sent and everything received is dropped (so its own
+300 ms command timeout stops the wheels), which on the robot's native UART
+is also no error at all on the host side. Used by `base_harness.py
+--scenario pull` / `pullpush`.
+
+`--deaf-file PATH`: while PATH exists only the LubanCat TX -> STM32 RX lead
+is out (the 2026-09-28 pull): everything received is dropped, but the fake
+keeps sending, and its 0x81 reports COMMAND_TIMEOUT with a growing
+`command_age_ms` once its 300 ms timeout has stopped the wheels. Used by
+`base_harness.py --scenario txpull`.
+
+0x81 follows `firmware/Module/Src/motor.cpp`: COMMAND_VALID from the first
+accepted 0x01 on (only a restart clears it), COMMAND_TIMEOUT when there has
+been none yet or the last one is older than its `command_timeout_ms`,
+`command_age_ms` saturating at 65535 (65535 before the first).
+
+0x04 is applied at once and answered with a 0x84 (CLOSED_LOOP as
+requested, LAST_APPLY_OK, FLASH_VALID / LAST_SAVE_OK once saved). With
+`persist_to_flash` the fake stalls like the STM32's sector-7 erase
+(`--flash-stall-s`, 1 s): nothing sent, nothing taken, and what the host
+wrote meanwhile is lost (the firmware's 256-byte DMA ring has long
+wrapped), so the first status batch after it reports COMMAND_TIMEOUT.
+Used by `base_harness.py --scenario autotune`.
 
 Log format: one JSON object per line, so the comparison script can diff two
 runs frame by frame.
@@ -154,7 +173,8 @@ class FakeBase:
     COMMAND_TIMEOUT_S = 0.300
 
     def __init__(self, port: str, log_path: str, max_rpm: float, counts_per_rev: float,
-                 pty_link: str = "", mute_file: str = "") -> None:
+                 pty_link: str = "", mute_file: str = "", deaf_file: str = "",
+                 flash_stall_s: float = 1.0) -> None:
         if pty_link:
             # socat's `pty,raw,echo=0,link=...`: the driver's end is the
             # slave, raw from the start so nothing is echoed back, and held
@@ -169,6 +189,10 @@ class FakeBase:
             self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self.mute_file = mute_file
         self.muted = False
+        self.deaf_file = deaf_file
+        self.deaf = False
+        self.flash_stall_s = flash_stall_s
+        self.stalled_until = 0.0
         self.log = open(log_path, "w", buffering=1)
         self.t0 = time.monotonic()
         self.log.write(
@@ -181,11 +205,15 @@ class FakeBase:
         self.right = Wheel(counts_per_rev, max_rpm)
         self.cmd_permille = (0, 0)
         self.last_command_at = None
+        self.command_timeout_s = self.COMMAND_TIMEOUT_S
         self.blade_permille = 0
         self.blade_last_at = None
         self.servo_pulse = 0
         self.led = (0, 0, 0, 0, 0)
         self.pid = (2.0, 0.6, 0.0, 2.0, 0.6, 0.0, 0, 1)
+        # PID_FLAG_CLOSED_LOOP | PID_FLAG_FLASH_VALID, as a board that booted
+        # with saved gains reports it
+        self.pid_flags = 0x03
         self.last_rx_seq = {}
 
     # -- logging ---------------------------------------------------------
@@ -232,6 +260,8 @@ class FakeBase:
             self.left.command(left)
             self.right.command(right)
             self.last_command_at = now
+            # MOTOR_DEFAULT_COMMAND_TIMEOUT_MS for 0
+            self.command_timeout_s = (timeout or 200) / 1000.0
         elif frame_type == LAWER_MOTOR_COMMAND and len(payload) == 8:
             permille, timeout = struct.unpack("<hH", payload[:4])
             fields = {"permille": permille, "timeout_ms": timeout}
@@ -245,6 +275,15 @@ class FakeBase:
             vals = struct.unpack("<ffffffBBH", payload)
             fields = dict(zip(["lkp", "lki", "lkd", "rkp", "rki", "rkd", "persist", "closed"], vals[:8]))
             self.pid = vals[:8]
+            persist, closed = vals[6], vals[7]
+            # CLOSED_LOOP as asked, LAST_APPLY_OK; a save adds FLASH_VALID
+            # and LAST_SAVE_OK, and stalls the board for the sector erase
+            flags = (self.pid_flags & 0x06) | 0x08 | (0x01 if closed else 0)
+            if persist:
+                flags |= 0x06
+                self.stalled_until = now + self.flash_stall_s
+                fields["flash_stall_s"] = self.flash_stall_s
+            self.pid_flags = flags
         elif frame_type == SERVO_COMMAND and len(payload) == 8:
             pulse, hold = struct.unpack("<HH", payload[:4])
             fields = {"pulse_us": pulse, "hold_ms": hold}
@@ -257,6 +296,8 @@ class FakeBase:
         self._log("rx", frame_type, seq, payload, fields)
         if frame_type == INFO_REQUEST:
             self.send_firmware_info()
+        if frame_type == PID_CONFIG_COMMAND and not self.stalled_until > now:
+            self.send_pid_status()
 
     # -- STM32 -> host ---------------------------------------------------
     def send_wheel_feedback(self) -> None:
@@ -285,14 +326,19 @@ class FakeBase:
         )
 
     def send_motor_status(self, now: float) -> None:
-        age = 0 if self.last_command_at is None else int((now - self.last_command_at) * 1000)
-        flags = 0x01 if age < self.COMMAND_TIMEOUT_S * 1000 else 0x02
+        # motor.cpp control_update_50hz: valid from the first 0x01 until a
+        # restart; timeout = !valid || age > command_timeout_ms
+        valid = self.last_command_at is not None
+        age = int((now - self.last_command_at) * 1000) if valid else 0xFFFFFFFF
+        timeout = not valid or age > self.command_timeout_s * 1000
+        flags = (0x01 if valid else 0) | (0x02 if timeout else 0)
+        applied = (0, 0) if timeout else self.cmd_permille
         payload = struct.pack(
             "<hhhhHBB",
-            self.cmd_permille[0],
-            self.cmd_permille[1],
-            int(self.cmd_permille[0] * 2),
-            int(self.cmd_permille[1] * 2),
+            self.cmd_permille[0] if valid else 0,
+            self.cmd_permille[1] if valid else 0,
+            int(applied[0] * 2),
+            int(applied[1] * 2),
             min(age, 65535),
             flags,
             self.last_rx_seq.get(WHEEL_SPEED_COMMAND, 0),
@@ -326,10 +372,10 @@ class FakeBase:
 
     def send_pid_status(self) -> None:
         payload = struct.pack(
-            "<ffffffBBH", *self.pid[:6], 0x03,
+            "<ffffffBBH", *self.pid[:6], self.pid_flags,
             self.last_rx_seq.get(PID_CONFIG_COMMAND, 0), 0
         )
-        self._send(PID_CONFIG_STATUS, payload)
+        self._send(PID_CONFIG_STATUS, payload, {"flags": self.pid_flags})
 
     def send_power_status(self) -> None:
         payload = struct.pack("<BBBBHH", 0, 0x02, 0, 0, 0, 0)
@@ -350,7 +396,16 @@ class FakeBase:
         last_step = time.monotonic()
         end = time.monotonic() + duration
         self.send_firmware_info()
+        stalled = False
         while time.monotonic() < end:
+            now = time.monotonic()
+            if now < self.stalled_until:
+                # the sector erase: the CPU runs nothing, UART included
+                if not stalled:
+                    stalled = True
+                    self._log("meta", 0, 0, b"", {"stalled": True})
+                time.sleep(0.002)
+                continue
             try:
                 data = os.read(self.fd, 4096)
             except BlockingIOError:
@@ -358,16 +413,32 @@ class FakeBase:
             except OSError:
                 data = b""
             now = time.monotonic()
+            if stalled:
+                # what came in during the erase overran the DMA ring
+                stalled = False
+                self._log("meta", 0, 0, b"", {"stalled": False, "dropped": len(data)})
+                data = b""
+                self.parser = Parser()
+                # the save's outcome goes out with the first status batch
+                self.send_pid_status()
             muted = bool(self.mute_file) and os.path.exists(self.mute_file)
             if muted != self.muted:
                 self.muted = muted
                 self._log("meta", 0, 0, b"", {"muted": muted})
-            if muted:
+            deaf = bool(self.deaf_file) and os.path.exists(self.deaf_file)
+            if deaf != self.deaf:
+                self.deaf = deaf
+                self._log("meta", 0, 0, b"", {"deaf": deaf})
+            if muted or deaf:
                 data = b""
             for frame_type, seq, payload in self.parser.feed(data):
                 self.on_frame(frame_type, seq, payload, now)
+                if self.stalled_until > now:
+                    break  # the rest of this read is lost with the erase
+            if self.stalled_until > now:
+                continue
             # the firmware's own command timeout
-            if self.last_command_at is not None and now - self.last_command_at > self.COMMAND_TIMEOUT_S:
+            if self.last_command_at is not None and now - self.last_command_at > self.command_timeout_s:
                 self.left.command(0)
                 self.right.command(0)
             if now >= next_status:
@@ -401,6 +472,10 @@ def main() -> int:
                     help="make the pty pair here instead and link the driver's end to this path")
     ap.add_argument("--mute-file", default="",
                     help="while this file exists: send nothing, drop everything received")
+    ap.add_argument("--deaf-file", default="",
+                    help="while this file exists: drop everything received, keep sending")
+    ap.add_argument("--flash-stall-s", type=float, default=1.0,
+                    help="how long a 0x04 with persist_to_flash stalls the board")
     ap.add_argument("--log", required=True, help="JSONL frame log")
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--max-rpm", type=float, default=58.0)
@@ -409,7 +484,8 @@ def main() -> int:
     if not args.port and not args.pty_link:
         ap.error("one of --port / --pty-link is required")
     FakeBase(args.port, args.log, args.max_rpm, args.counts_per_rev,
-             args.pty_link, args.mute_file).run(args.seconds)
+             args.pty_link, args.mute_file, args.deaf_file,
+             args.flash_stall_s).run(args.seconds)
     return 0
 
 
