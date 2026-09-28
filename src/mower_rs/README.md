@@ -147,10 +147,10 @@ reader best effort where the C++ one is reliable. `tools/base_compare.py`
 now fails unless every endpoint of every topic this node owns resolves the
 same as the C++ chain's; run it under the robot's RMW (`tools/base_ab.sh`).
 
-### What it adds: the arm latch, and a monotonic control clock
+### What it adds: the arm latch, a monotonic control clock, future stamps
 
-Two deliberate differences from the C++ chain, both for the restart this
-node gets and the chain never had:
+Three deliberate differences from the C++ chain, the first two for the
+restart this node gets and the chain never had:
 
 * **The arm latch.** After every (re)activation, and when 0x85 feedback
   that had been arriving stops for longer than `feedback_timeout_s`, the
@@ -166,12 +166,29 @@ node gets and the chain never had:
   lead into "stopped until released" instead of a lurch. Feedback that never
   arrived since activation only logs a warning — a board that does not send
   0x85 is not bricked. Disarm and re-arm are logged (`arm latch: ...`).
+  Two rules keep "silence" honest. A restarted node's reader hears nothing
+  from a live writer until DDS discovery has matched the two (2.7 s has been
+  seen under load), so silence only counts once the topic has had a
+  publisher in the graph for `publisher_settle_s` (2 s), or after a message
+  has actually arrived; with neither, only an explicit stop re-arms
+  (`cmd_vel: publisher in the graph ... after activation` is logged). And
+  nothing re-arms while the feedback is still lost: a command given with the
+  lead out would otherwise ramp up against wheels that cannot move and hit
+  them as a step on the re-seat; on the cycle the feedback returns, a
+  stream at rest re-arms and a pushed one stays held.
 * **The control clock is CLOCK_MONOTONIC**, as ros2_control's steady trigger
   clock is: the loop period, the command age, the feedback age, the blade,
   override and LED deadlines, the telemetry throttle and the telemetry `t`
   (seconds of uptime, as the C++ printed). The system clock only stamps
   message headers and ages a cmd_vel by its own stamp, so a wall-clock step
   cannot pulse the wheels through the limiter or stretch a dead-man.
+* **A cmd_vel stamped in the future ages from its arrival.** Accepting and
+  ignoring are exactly diff_drive_controller 4.42.1 (zero stamp = now,
+  `now - stamp >= cmd_vel_timeout` ignored), but upstream keeps a
+  future-stamped command alive until stamp + timeout. A message stamped just
+  before the wall clock steps back by S would then keep driving for
+  S + 0.25 s if the stream stopped after it; here it times out 0.25 s after
+  it arrived.
 
 The transitions the C++ logged are logged with the same text: `no wheel
 feedback for %.2f s` / `feedback resumed`, `driver alarm flag set` (2 s
@@ -234,6 +251,10 @@ python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a --b /tmp/ab/b   # exit 
 run A /out/a_pull "" --scenario pull             # the cable pull, both sides
 run B /out/b_pull /repo/path/to/new/mower_base --scenario pull
 python3 src/mower_rs/tools/base_compare.py --a /tmp/ab/a_pull --b /tmp/ab/b_pull
+# the same shape for --scenario pullpush (pushed while the lead is out) and
+# --scenario live (a restart under a stream that is already running); give
+# live a loaded variant too, discovery latency is what it is about:
+#   docker run --cpus=1 -e LOAD=8 ... base_ab.sh B /out/b_live_load <bin> --scenario live
 ```
 
 `fake_base.py` answers 0x85 at the firmware's 50 ms period from a
@@ -294,6 +315,29 @@ at a load of ~40:
   frame (6.04 s) — the lurch; `mower_base` sent 74/74 at 0/0 with the stick
   still held, and moved again only after the release (`arm latch: cmd_vel
   re-armed by an explicit stop`).
+
+Re-run the same day after a review found two holes in that latch (silence
+counted during DDS discovery; re-arming while the lead was still out),
+release build of `fix/rf-base-preflight`, same image and RMW:
+
+* Default script: QoS all eleven topics identical; odometry 6.1e-4 m apart
+  after 3.0 m; telemetry keys 84 = 84; side-channel payloads identical.
+  The latch now arms by silence 2.57 s after activation (publisher in the
+  graph at 0.28 s + `publisher_settle_s` + 0.25 s), still before the
+  harness starts.
+* `--scenario live` (0.30 m/s at 20 Hz running before the driver starts):
+  C++ 230 of 246 frames non-zero from 2.82 s, `mower_base` 0 of 257 until
+  the release, then followed the push. Loaded (`--cpus=1`, `LOAD=8`), twice:
+  0 of 114 and 0 of 120, re-armed only by the release's explicit stop. (A
+  first loaded attempt, before `base_ab.sh` waited for the stream to flow,
+  had the harness itself stall: two real 0.27-0.29 s gaps in its own
+  stream, which *are* the silence stop edge, and the base followed after
+  the second. That is the specified rule, and the C++ controller braked
+  and resumed on the same gaps.)
+* `--scenario pullpush` (idle pull, pushed while out, re-seated pushed):
+  C++ 50/50 frames at 549 permille from the first frame after the re-seat;
+  `mower_base` 0/49, re-armed by the release. `--scenario pull` again:
+  C++ 71/71 non-zero, `mower_base` 0/75.
 
 ### Capturing a real serial recording on the robot
 
