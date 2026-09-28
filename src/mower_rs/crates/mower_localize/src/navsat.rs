@@ -335,7 +335,11 @@ async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     // it exists, publish. Never both in the same tick, as upstream's if/else.
     // Upstream creates the wall timer after the delay, so its first tick is
     // one period later: the first spin takes the waiting samples before the
-    // datum is attempted. A tokio interval would tick at once.
+    // datum is attempted. A tokio interval would tick at once. The order those
+    // three samples are taken in is not fixed upstream either (rclcpp's
+    // executor keys its entities by handle address in an unordered_map): an
+    // IMU sample handled before the odometry is dropped, as `imuCallback`
+    // drops it, and the datum waits for the next one, up to 0.1 s at 10 Hz.
     let period = Duration::from_secs_f64(1.0 / frequency);
     let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -556,6 +560,40 @@ mod tests {
             (yaw - latest).abs() < 0.01,
             "datum yaw {yaw:.4} rad: expected the latest inputs' {latest:.4}, the first inputs give {first:.4}"
         );
+    }
+
+    /// A shutdown during the delay ends the node at once, instead of after the
+    /// delay (mower_rsd restarts a module in place, and a stop must not hang
+    /// for `delay` seconds). Needs a ROS environment, like the test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_shutdown_during_the_delay_ends_the_node_at_once() {
+        let ctx = match r2r::Context::create() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        const NS: &str = "/navsat_delay_shutdown_test";
+        let node = r2r::Node::create(ctx, crate::NODE_NAVSAT, NS).unwrap();
+        for (key, value) in [
+            ("delay", r2r::ParameterValue::Double(30.0)),
+            ("frequency", r2r::ParameterValue::Double(30.0)),
+        ] {
+            node.params.lock().unwrap().insert(key.to_string(), r2r::Parameter::new(value));
+        }
+        let shutdown = mower_rs_common::Shutdown::new();
+        let mut m = ModuleCtx::new(crate::NODE_NAVSAT, shutdown.clone());
+        m.namespace = NS.to_string();
+
+        let navsat = tokio::spawn(run_node(node, m));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!navsat.is_finished(), "returned before the shutdown");
+        let asked = tokio::time::Instant::now();
+        shutdown.trigger();
+        tokio::time::timeout(Duration::from_secs(2), navsat)
+            .await
+            .expect("still waiting out the delay 2 s after the shutdown")
+            .expect("navsat task")
+            .expect("navsat result");
+        assert!(asked.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
