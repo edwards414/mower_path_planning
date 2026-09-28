@@ -831,11 +831,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     if !override_topic.is_empty() {
         let mut sub = node.subscribe::<StringMsg>(&override_topic, best_effort_1.clone())?;
         let slots = slots.clone();
+        let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                if let Some(req) = requests::wheel_override(&msg.data) {
-                    slots.lock().expect("slots").wheel_override = Some(req);
-                }
+                let req = requests::wheel_override(&msg.data).unwrap_or_else(|cancel| {
+                    r2r::log_warn!(
+                        &logger,
+                        "wheel override request is not JSON, cancelling: {}",
+                        msg.data
+                    );
+                    cancel
+                });
+                slots.lock().expect("slots").wheel_override = Some(req);
             }
         });
     }
@@ -859,11 +866,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     if !blade_topic.is_empty() {
         let mut sub = node.subscribe::<StringMsg>(&blade_topic, best_effort_1.clone())?;
         let slots = slots.clone();
+        let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                if let Some(req) = requests::blade(&msg.data) {
-                    slots.lock().expect("slots").blade = Some(req);
-                }
+                let req = requests::blade(&msg.data).unwrap_or_else(|stop| {
+                    r2r::log_warn!(&logger, "blade request is not JSON, stopping: {}", msg.data);
+                    stop
+                });
+                slots.lock().expect("slots").blade = Some(req);
             }
         });
     }
@@ -880,6 +890,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         odom_template.twist.covariance[6 * i + i] = diff_drive.twist_covariance_diagonal[i];
     }
     let mut joint_template = JointState::default();
+    // joint_state_broadcaster's `frame_id` parameter, default "base_link".
+    joint_template.header.frame_id = params::string(&node, "joint_states_frame_id", "base_link");
     joint_template.name = vec!["left_wheel_joint".to_string(), "right_wheel_joint".to_string()];
     // joint_state_broadcaster fills every array it exports and writes NaN
     // for an interface the hardware does not have; these joints export
