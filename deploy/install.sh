@@ -75,7 +75,11 @@ echo "== systemd"
 for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-update-check.service mower-update-check.timer mower-link-status.service mower-camera.service; do
   sed "s#/home/cat/.mower#$state_dir#g; s#/home/cat#$home#g; s#^User=cat#User=$user#" "$here/host/$unit" > "/etc/systemd/system/$unit"
 done
+# no RTC battery: ntpd is the only thing that sets the clock, so it must not
+# be rate-limited to death by the DHCP hook's restarts at boot
+install -D -m 644 "$here/host/ntpsec-mower.conf" /etc/systemd/system/ntpsec.service.d/10-mower.conf
 systemctl daemon-reload
+systemctl is-failed -q ntpsec.service && systemctl restart ntpsec.service || true
 systemctl enable mower.service >/dev/null
 systemctl enable --now mower-host-request.path >/dev/null
 systemctl enable --now mower-update.timer >/dev/null
