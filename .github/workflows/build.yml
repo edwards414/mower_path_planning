@@ -326,6 +326,14 @@ jobs:
             test -x /usr/local/bin/mower-host-request
             # the slimmed image (docs/IMAGE_SIZE.md) must still load everything
             ros2 launch mower_nav2 navigation.launch.py --show-args >/dev/null
+            # nav2 runs composed on the robot (nav_composition, ROS_FREE_PLAN A3):
+            # the container binary and every component library must survive pruning
+            test -x /opt/ros/${ROS_DISTRO}/lib/rclcpp_components/component_container_isolated
+            for f in /opt/ros/${ROS_DISTRO}/share/ament_index/resource_index/rclcpp_components/nav2_*; do
+              lib=/opt/ros/${ROS_DISTRO}/$(cut -d";" -f2 "$f")
+              test -f "$lib" || { echo "missing component library: $lib"; exit 1; }
+              if ldd "$lib" | grep -q "not found"; then echo "missing shared libs: $lib"; exit 1; fi
+            done
             python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server, rosapi, mower_coverage_core; from nav2_simple_commander.robot_navigator import BasicNavigator"
             for b in /opt/ros/${ROS_DISTRO}/lib/{nav2_*,robot_localization,controller_manager,joy,twist_mux,topic_tools,opennav_docking,apriltag_ros}/* /opt/ros/${ROS_DISTRO}/lib/libnav2_*.so "${WORKSPACE}"/install/mower_hardware/lib/*.so; do
               if ldd "$b" 2>/dev/null | grep -q "not found"; then echo "missing shared libs: $b"; ldd "$b" | grep "not found"; exit 1; fi

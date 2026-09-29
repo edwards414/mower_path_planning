@@ -1,0 +1,15 @@
+[package]
+name = "mower_localize_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS-free port of the robot_localization paths this mower uses: the 15-state EKF, the sensor preprocessing for odom/imu/gps and the navsat_transform datum maths (see README.md)"
+
+# Pure core: no r2r, no ROS, no external crates. Builds and tests with a plain
+# `cargo test` on any host; the ROS-side wiring lives in the daemon.
+[dependencies]
+
+[dev-dependencies]
+serde_json.workspace = true
+# tests/yaml_config.rs reads mower_nav2/config/dual_ekf_navsat_params.yaml.
+serde_yaml = "0.9"

@@ -220,6 +220,10 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 **2026-09-19 已切換 `RUST_BRIDGE=true`**：iOS app、Studio、agent 都重新連上；Python rosbridge / rosapi / auth proxy 0 個 process；整機 **388% → 212%**（Python 298 → 106）；溫度 84 → 79 °C。切換後發現兩件事並已修：(1) 剛建立的 service client 在 DDS 配對完成前送出的 request 會被丟掉、永遠等不到回應（app 連線後第一次 `/check_nav_status` 30 s timeout）→ 先等 `is_available`（上限 5 s）再送；(2) Studio 用 `/rosapi/get_time` 量延遲 → 原生回答。並行壓力測試：同一 service 40 筆並行全部回應、1 Hz 輪詢延遲 1–2 ms、不存在的 service 5 s 內回 result=false。未做：`fragment` / `png` / actions（客戶端不用）。
 
+### 8.2 `mower_rsd`（把上面全部合成一個 process，2026-09-23）
+
+所有 crate 拆成 library + 三行 binary，新增 `mower_rsd --modules a,b,c`：同一個 `r2r::Context`（一個 DDS participant），每個模組仍各自 `Node::create` 保留 node 名與參數服務。參數走一份 `--params-file`（以 node 名分節，`mower_bringup/config/mower_rsd.yaml`），remap 走 rcl 的 `-r <node>:<from>:=<to>`。開關 `rust_daemon`（`robot.launch.py`，預設 false，模組集合由既有的 `rust_*` + `enable_gps` 推得）。細節、影子比對與 CPU 數字見 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md) 的「A5 執行紀錄」。
+
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
 | 順序 | Rust bin | 取代 | Python 行數 | 現在 → 之後 | 驗證 |

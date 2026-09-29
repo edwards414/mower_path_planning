@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Wheel-speed PID auto-tune for the STM32 base: FOPDT identification + SIMC PI, verified closed loop, operator apply/discard (port of mower_mission/pid_autotune_node.py + pid_tuning.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_pid_autotune"
 path = "src/main.rs"

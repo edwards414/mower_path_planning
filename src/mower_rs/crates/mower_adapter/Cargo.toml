@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Flutter adapter: republishes maps, markers, pose, settings, zone summaries and the map datum as compact JSON (port of mower_mission/adapters/flutter_adapter_node.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_adapter"
 path = "src/main.rs"

@@ -24,6 +24,10 @@
   <exec_depend>nav2_smoother</exec_depend>
   <exec_depend>nav2_velocity_smoother</exec_depend>
   <exec_depend>nav2_waypoint_follower</exec_depend>
+  <!-- navigation.launch.py with use_composition:=true runs the servers as
+       components inside rclcpp_components' component_container_isolated;
+       the runtime image's apt list is generated from these exec deps. -->
+  <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>opennav_docking</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>mower_mission</exec_depend>

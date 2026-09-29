@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "rosbridge-protocol WebSocket bridge with the pairing gate built in (replaces rosbridge_websocket + rosapi + rosbridge_auth_proxy)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_ws_bridge"
 path = "src/main.rs"

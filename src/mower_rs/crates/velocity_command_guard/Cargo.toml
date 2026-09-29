@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Final robot-side validation and watchdog for drivetrain commands (port of mower_bringup/velocity_command_guard.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "velocity_command_guard"
 path = "src/main.rs"

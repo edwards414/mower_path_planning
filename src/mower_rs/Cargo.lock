@@ -678,6 +678,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_base"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_base_core",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "serialport",
+ "tokio",
+]
+
+[[package]]
+name = "mower_base_core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "mower_battery"
 version = "0.1.0"
 dependencies = [
@@ -729,6 +749,25 @@ dependencies = [
  "r2r",
  "serialport",
  "tokio",
+]
+
+[[package]]
+name = "mower_localize"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_localize_core",
+ "mower_rs_common",
+ "r2r",
+ "tokio",
+]
+
+[[package]]
+name = "mower_localize_core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -785,6 +824,31 @@ dependencies = [
  "r2r",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "mower_rsd"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_adapter",
+ "mower_agent",
+ "mower_base",
+ "mower_battery",
+ "mower_coverage",
+ "mower_gps",
+ "mower_imu",
+ "mower_localize",
+ "mower_map",
+ "mower_nav",
+ "mower_pid_autotune",
+ "mower_record",
+ "mower_rs_common",
+ "mower_ws_bridge",
+ "r2r",
+ "robot_status",
+ "tokio",
+ "velocity_command_guard",
 ]
 
 [[package]]

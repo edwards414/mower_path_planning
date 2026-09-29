@@ -47,6 +47,21 @@ def quaternion_to_yaw(q) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def is_navsat_datum_point(lat: float, lon: float) -> bool:
+    """Whether a /toLL answer is a navsat datum point.
+
+    navsat_transform answers the default (0, 0, 0) until its datum exists;
+    anything non-finite (a UTM projection without a zone) is no datum either
+    and must never be latched. ``abs(nan) < 1e-6`` is False, so the finite
+    check has to be explicit.
+    """
+    lat = float(lat)
+    lon = float(lon)
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        return False
+    return abs(lat) >= 1e-6 or abs(lon) >= 1e-6
+
+
 def occupancy_grid_to_map_layer(name: str, msg) -> dict:
     """nav_msgs/OccupancyGrid → MapLayer DTO (base64-encoded int8 data)."""
     info = msg.info

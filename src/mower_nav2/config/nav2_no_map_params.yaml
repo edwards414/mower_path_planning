@@ -103,8 +103,12 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      # A4 (docs/ROS_FREE_PLAN.md): the only layer here is a static map that
+      # changes when a zone is (re)loaded, so 5 Hz bought nothing but CPU.
+      # 2 Hz still refreshes the rolling window well inside the controller's
+      # 0.5 m/s worst case; publish 1 Hz is for the app/rviz only.
+      update_frequency: 2.0
+      publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true

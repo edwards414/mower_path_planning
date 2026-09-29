@@ -6,8 +6,22 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+
+
+# `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
+# process (started by robot.launch.py), so the separate binaries must not also
+# start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
+_TRUE = "('true', '1', 'yes', 'on')"
+
+
+def _rust_binary(flag, rust_daemon):
+    """Run the separate mower_rs binary: switch on and daemon not running."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.lower() in ", _TRUE,
+        " and '", rust_daemon, "'.lower() not in ", _TRUE,
+    ]))
 
 
 def generate_launch_description():
@@ -66,6 +80,18 @@ def generate_launch_description():
         'heartbeat_source_topic',
         default_value='/odom_slow',
         description='Topic whose freshness drives the /robot/online heartbeat',
+    )
+
+    rust_daemon = LaunchConfiguration('rust_daemon')
+
+    declare_rust_daemon = DeclareLaunchArgument(
+        'rust_daemon',
+        default_value='false',
+        description='The enabled mower_rs modules run inside one mower_rsd '
+                    'process started by robot.launch.py (one r2r Context, one '
+                    'DDS participant), so the separate binaries stay down '
+                    'here; the rclpy fallbacks still follow their own rust_* '
+                    'switch. See src/mower_rs/README.md.',
     )
 
     rust_status = LaunchConfiguration('rust_status')
@@ -161,6 +187,33 @@ def generate_launch_description():
                     'the rclpy flutter_adapter_node (same /adapter/* topics).',
     )
 
+    # The two switches mower.launch.py starts mower_base / mower_localize with
+    # (robot.launch.py passes the same value to both files). Those modules
+    # publish /odom_slow and /odometry/global_slow themselves, so each one
+    # holds down the topic_tools throttle that would otherwise make that copy
+    # (odom_throttle / global_odom_throttle below). Independent of
+    # rust_daemon: the modules do the same inside mower_rsd.
+    rust_base = LaunchConfiguration('rust_base')
+
+    declare_rust_base = DeclareLaunchArgument(
+        'rust_base',
+        default_value='false',
+        description='mower_rs mower_base publishes /odom (and /odom_slow), '
+                    'so odom_throttle does not start. Must match the '
+                    'rust_base given to mower.launch.py.',
+    )
+
+    rust_localize = LaunchConfiguration('rust_localize')
+
+    declare_rust_localize = DeclareLaunchArgument(
+        'rust_localize',
+        default_value='false',
+        description='mower_rs mower_localize publishes /odometry/global (and '
+                    '/odometry/global_slow), so global_odom_throttle does not '
+                    'start. Must match the rust_localize given to '
+                    'mower.launch.py.',
+    )
+
     auto_coverage = LaunchConfiguration('auto_coverage')
 
     declare_auto_coverage = DeclareLaunchArgument(
@@ -197,6 +250,7 @@ def generate_launch_description():
             'address': rosbridge_address,
             'rust_bridge': LaunchConfiguration('rust_bridge'),
             'rust_agent': LaunchConfiguration('rust_agent'),
+            'rust_daemon': rust_daemon,
         }.items(),
     )
 
@@ -268,7 +322,7 @@ def generate_launch_description():
         executable='mower_record',
         name='path_record_node',
         output='screen',
-        condition=IfCondition(rust_record),
+        condition=_rust_binary(rust_record, rust_daemon),
         parameters=[{
             'save_dir': zone_record_dir,
             'sites_dir': sites_dir,
@@ -295,7 +349,7 @@ def generate_launch_description():
         executable='mower_map',
         name='map_manage',
         output='screen',
-        condition=IfCondition(rust_map),
+        condition=_rust_binary(rust_map, rust_daemon),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -318,7 +372,7 @@ def generate_launch_description():
         executable='mower_coverage',
         name='boustrophedon_coverage',
         output='screen',
-        condition=IfCondition(rust_coverage),
+        condition=_rust_binary(rust_coverage, rust_daemon),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -343,7 +397,7 @@ def generate_launch_description():
         executable='mower_nav',
         name='nav_action_server',
         output='screen',
-        condition=IfCondition(rust_nav),
+        condition=_rust_binary(rust_nav, rust_daemon),
         parameters=[{
             'require_navigation_health': require_navigation_health,
             'gps_fix_topic': gps_fix_topic,
@@ -370,7 +424,7 @@ def generate_launch_description():
         executable='mower_adapter',
         name='flutter_adapter',
         output='screen',
-        condition=IfCondition(rust_adapter),
+        condition=_rust_binary(rust_adapter, rust_daemon),
         parameters=[{'robot_pose_source_topic': '/odometry/global_slow'}],
     )
 
@@ -378,11 +432,17 @@ def generate_launch_description():
     # LubanCat (throttled A55), i.e. ~28 % of a core per Python subscriber.
     # The status nodes below only need a few Hz, so they read this C++
     # throttled copy instead.
+    #
+    # rust_base:=true -- mower_base publishes /odom_slow itself, from every
+    # /odom it publishes, by the same rule (mower_rs_common::throttle;
+    # odom_slow_topic / odom_slow_rate_hz in mower_rsd.yaml), which saves
+    # this process and its ~1.3 ms per /odom message.
     odom_throttle = Node(
         package='topic_tools',
         executable='throttle',
         name='odom_throttle',
         output='screen',
+        condition=UnlessCondition(rust_base),
         arguments=['messages', '/odom', '5.0', '/odom_slow'],
         parameters=[{'use_sim_time': use_sim_time}],
     )
@@ -392,11 +452,16 @@ def generate_launch_description():
     # path_record_node are pointed at this 5 Hz copy (robot_pose_source_topic)
     # instead of running a tf2 TransformListener, which would cost each of
     # them the full 77 Hz /tf stream (~50 % of a core per node in rclpy).
+    #
+    # rust_localize:=true -- mower_localize's ekf_filter_node_map publishes
+    # /odometry/global_slow itself, by the same rule (odometry_slow_topic /
+    # odometry_slow_rate_hz in mower_rsd.yaml).
     global_odom_throttle = Node(
         package='topic_tools',
         executable='throttle',
         name='global_odom_throttle',
         output='screen',
+        condition=UnlessCondition(rust_localize),
         arguments=[
             'messages', '/odometry/global', '5.0', '/odometry/global_slow',
         ],
@@ -453,7 +518,7 @@ def generate_launch_description():
         executable='robot_status',
         name='robot_status',
         output='screen',
-        condition=IfCondition(rust_status),
+        condition=_rust_binary(rust_status, rust_daemon),
         parameters=[{
             'heartbeat_source_topic': heartbeat_source_topic,
             'heartbeat_stale_timeout_s': 2.0,
@@ -490,7 +555,7 @@ def generate_launch_description():
         executable='mower_battery',
         name='battery_state',
         output='screen',
-        condition=IfCondition(rust_battery),
+        condition=_rust_binary(rust_battery, rust_daemon),
         parameters=[{
             'charger_present_min_v': 25.0,
             'meter_current_wired': False,
@@ -518,7 +583,7 @@ def generate_launch_description():
         executable='mower_pid_autotune',
         name='pid_autotune',
         output='screen',
-        condition=IfCondition(rust_pid_autotune),
+        condition=_rust_binary(rust_pid_autotune, rust_daemon),
     )
 
     temp_dock_pose_publisher = Node(
@@ -539,6 +604,7 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_launch_temp_dock_pose_publisher,
         declare_heartbeat_source_topic,
+        declare_rust_daemon,
         declare_rust_status,
         declare_rust_adapter,
         declare_rust_record,
@@ -549,6 +615,8 @@ def generate_launch_description():
         declare_rust_coverage,
         declare_rust_agent,
         declare_rust_bridge,
+        declare_rust_base,
+        declare_rust_localize,
         declare_auto_coverage,
         declare_record,
         declare_robot_id,

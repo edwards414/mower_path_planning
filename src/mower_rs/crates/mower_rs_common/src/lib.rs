@@ -1,7 +1,9 @@
 //! Shared helpers for the mower_rs nodes.
 //!
 //! Everything here is ROS-free except [`params`], which reads the initial
-//! parameter overrides r2r loaded from `--ros-args` / `--params-file`.
+//! parameter overrides r2r loaded from `--ros-args` / `--params-file`, the
+//! service client in [`guard`], and [`throttle::SlowCopy`], the publisher half
+//! of the in-process `topic_tools throttle`.
 
 use std::fs;
 use std::io::Write;
@@ -11,6 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub mod guard;
+pub mod module;
+pub mod throttle;
+
+pub use module::{module_main, BoxError, ModuleCtx, ModuleResult, ModuleRun, Shutdown};
 
 /// Typed access to a node's initial parameters with defaults.
 ///

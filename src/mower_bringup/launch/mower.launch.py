@@ -7,12 +7,38 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 import os
 import xacro
+
+
+# `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
+# process (started by robot.launch.py), so the separate binaries must not also
+# start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
+_TRUE = "('true', '1', 'yes', 'on')"
+
+
+def _rust_binary(flag, rust_daemon):
+    """Run the separate mower_rs binary: switch on and daemon not running."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() not in ", _TRUE,
+    ]))
+
+
+def _rust_off(flag):
+    """Run the side a rust_* switch replaces: the Rust test's complement.
+
+    A plain UnlessCondition accepts only true/false/1/0, so RUST_BASE=on would
+    abort the whole launch, and restart: unless-stopped would crash-loop the
+    stack, bridge included.
+    """
+    return IfCondition(PythonExpression([
+        "'", flag, "'.strip().lower() not in ", _TRUE,
+    ]))
 
 
 def _reject_sim_time_for_real_hardware(context):
@@ -35,6 +61,7 @@ def generate_launch_description():
     enable_navigation = LaunchConfiguration('enable_navigation')
     enable_apriltag_docking = LaunchConfiguration('enable_apriltag_docking')
     nav_autostart = LaunchConfiguration('nav_autostart')
+    nav_composition = LaunchConfiguration('nav_composition')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     enable_physical_joystick = LaunchConfiguration(
         'enable_physical_joystick'
@@ -53,10 +80,49 @@ def generate_launch_description():
         description='Run the mower_rs velocity guards instead of the rclpy ones',
     )
 
+    declare_rust_daemon = DeclareLaunchArgument(
+        'rust_daemon',
+        default_value='false',
+        description='The enabled mower_rs modules run inside one mower_rsd '
+                    'process started by robot.launch.py, so the separate '
+                    'binaries stay down here',
+    )
+
+    declare_rust_localize = DeclareLaunchArgument(
+        'rust_localize',
+        default_value='false',
+        description='Run mower_rs mower_localize instead of the two ekf_node '
+                    'processes and navsat_transform_node',
+    )
+
     declare_rust_imu = DeclareLaunchArgument(
         'rust_imu',
         default_value='false',
         description='Run the mower_rs WIT IMU driver instead of wit_ros2_imu',
+    )
+
+    # rust_base:=true replaces the whole ros2_control chain -- the
+    # controller_manager process, mower_hardware::MowerSystem, diff_controller,
+    # joint_state_broadcaster and the two spawners -- with one mower_rs node
+    # (src/mower_rs/crates/mower_base). Same serial protocol, same /odom,
+    # /joint_states and /mower_base/* contract; ~28 % of a core on the
+    # LubanCat is what the chain costs there (docs/ROS_FREE_PLAN.md Phase B).
+    # robot_state_publisher is NOT replaced and still needs /joint_states.
+    declare_rust_base = DeclareLaunchArgument(
+        'rust_base',
+        default_value='false',
+        description='mower_rs mower_base instead of ros2_control_node + '
+                    'mower_hardware + diff_controller + '
+                    'joint_state_broadcaster',
+    )
+    declare_base_params_file = DeclareLaunchArgument(
+        'base_params_file',
+        default_value=os.path.join(
+            mower_bringup_dir, 'config', 'mower_rsd.yaml'
+        ),
+        description='Parameter file for the Rust base driver; the same '
+                    'per-node file mower_rsd reads, whose `mower_base:` '
+                    'section is the only one that applies here',
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -83,6 +149,14 @@ def generate_launch_description():
         'nav_autostart',
         default_value='true',
         description='Automatically activate Nav2 lifecycle nodes',
+    )
+    declare_nav_composition = DeclareLaunchArgument(
+        'nav_composition',
+        default_value='true',
+        description=(
+            'Run the Nav2 servers as components in one '
+            'component_container_isolated process instead of one process each'
+        ),
     )
     declare_nav2_params_file = DeclareLaunchArgument(
         'nav2_params_file',
@@ -129,6 +203,13 @@ def generate_launch_description():
         description='mower_gps parameter file (device, rate_hz, frame_id, '
                     'timeouts)',
     )
+    declare_localize_params_file = DeclareLaunchArgument(
+        'localize_params_file',
+        default_value=os.path.join(
+            mower_nav2_dir, 'config', 'dual_ekf_navsat_params.yaml'),
+        description='Parameters of the two EKFs and navsat_transform, for '
+                    'the C++ nodes and mower_localize alike',
+    )
 
     robot_description_path = os.path.join(
         get_package_share_directory('mower_description'),
@@ -139,6 +220,10 @@ def generate_launch_description():
         'robot_description': xacro.process_file(robot_description_path).toxml()
     }
 
+    rust_base = LaunchConfiguration('rust_base')
+
+    # ros2_control_node + the two spawners. Exactly one of this and the
+    # mower_base node below ever runs: they open the same serial port.
     mower_controller_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -147,9 +232,28 @@ def generate_launch_description():
                 'controller_test.launch.py'
             )
         ),
+        condition=_rust_off(rust_base),
         launch_arguments={
             'publish_robot_state_publisher': 'false',
         }.items(),
+    )
+
+    # The same 25 Hz cycle as one r2r node. A serial failure ends the
+    # process fail-closed (the firmware's own 300 ms command timeout has
+    # already stopped the wheels) and launch brings it back after 2 s. The
+    # C++ chain never came back after an ERROR (the controllers stayed
+    # deactivated), so the restarted node holds the wheels at zero until
+    # cmd_vel shows a stop edge (mower_base's arm latch) and cannot pick up
+    # a live nav2 or teleop command on its own.
+    mower_base_node = Node(
+        package='mower_rs',
+        executable='mower_base',
+        name='mower_base',
+        output='screen',
+        condition=_rust_binary(rust_base, LaunchConfiguration('rust_daemon')),
+        respawn=True,
+        respawn_delay=2.0,
+        parameters=[LaunchConfiguration('base_params_file')],
     )
 
     twist_mux_launch = IncludeLaunchDescription(
@@ -163,6 +267,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'rust_guards': LaunchConfiguration('rust_guards'),
+            'rust_daemon': LaunchConfiguration('rust_daemon'),
         }.items(),
     )
 
@@ -178,6 +283,10 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'gps_fix_topic': gps_fix_topic,
+            'rust_localize': LaunchConfiguration('rust_localize'),
+            'rust_daemon': LaunchConfiguration('rust_daemon'),
+            'localize_params_file': LaunchConfiguration(
+                'localize_params_file'),
         }.items(),
     )
 
@@ -194,6 +303,10 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'params_file': nav2_params_file,
             'autostart': nav_autostart,
+            # A3 (docs/ROS_FREE_PLAN.md): one process for the whole stack on
+            # the robot. Simulation launches keep navigation.launch.py's own
+            # default (separate processes) so a crashing server is obvious.
+            'use_composition': nav_composition,
             # This is the real-robot bringup. Never publish synthetic battery
             # telemetry here; simulation launch files keep their own default.
             'launch_battery_simulator': 'false',
@@ -262,7 +375,7 @@ def generate_launch_description():
         executable='mower_imu',
         name='imu',
         output='screen',
-        condition=IfCondition(rust_imu),
+        condition=_rust_binary(rust_imu, LaunchConfiguration('rust_daemon')),
         respawn=True,
         respawn_delay=2.0,
         remappings=[('imu/data_raw', 'imu/data')],
@@ -284,7 +397,7 @@ def generate_launch_description():
         executable='mower_gps',
         name='gps',
         output='screen',
-        condition=IfCondition(enable_gps),
+        condition=_rust_binary(enable_gps, LaunchConfiguration('rust_daemon')),
         respawn=True,
         respawn_delay=2.0,
         parameters=[gps_params_file, {'fix_topic': gps_fix_topic}],
@@ -330,11 +443,16 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_rust_guards,
         declare_rust_imu,
+        declare_rust_base,
+        declare_base_params_file,
+        declare_rust_localize,
+        declare_rust_daemon,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,
         declare_enable_navigation,
         declare_enable_apriltag_docking,
         declare_nav_autostart,
+        declare_nav_composition,
         declare_nav2_params_file,
         declare_enable_physical_joystick,
         declare_physical_joystick_enable_button,
@@ -342,11 +460,13 @@ def generate_launch_description():
         declare_gps_fix_topic,
         declare_enable_gps,
         declare_gps_params_file,
+        declare_localize_params_file,
         robot_state_publisher,
         wit_ros2_imu_node,
         mower_imu_node,
         mower_gps_node,
         mower_controller_launch,
+        mower_base_node,
         twist_mux_launch,
         robot_localization_launch,
         navigation_launch,

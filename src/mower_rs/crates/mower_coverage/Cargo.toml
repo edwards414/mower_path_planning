@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Coverage planner node: zone coverage paths from the mower_coverage_core planner, zone execution and zone sequences through the navigation action server (port of mower_mission/coverage_node.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_coverage"
 path = "src/main.rs"
