@@ -400,6 +400,10 @@ def main():
         for s in args.only:
             getattr(check, f'scenario_{s}')()
     finally:
+        # a goal left executing (scenario D ends with one) would keep an
+        # executor thread alive and the process from ever exiting
+        fake.end_goal_now = True
+        time.sleep(0.5)
         executor.shutdown()
         rclpy.try_shutdown()
     if check.failures:

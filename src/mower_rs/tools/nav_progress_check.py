@@ -100,6 +100,7 @@ class FakeNav2(Node):
         self.follow_count = 0
         self.hold_segment = None  # FollowPath goal that stops halfway
         self.navigate_goals = []
+        self.stopping = False  # ends a held goal at exit
         self.create_service(GetState, 'bt_navigator/get_state', self._state, callback_group=group)
         ActionServer(
             self, NavigateToPose, 'navigate_to_pose', self._navigate,
@@ -134,7 +135,7 @@ class FakeNav2(Node):
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 return FollowPath.Result()
-            if index == self.hold_segment and i > steps // 2:
+            if index == self.hold_segment and i > steps // 2 and not self.stopping:
                 time.sleep(0.05)  # stuck halfway until canceled
                 continue
             fb = FollowPath.Feedback()
@@ -142,7 +143,7 @@ class FakeNav2(Node):
             fb.speed = 0.3
             goal_handle.publish_feedback(fb)
             time.sleep(SEGMENT_TIME_S / steps)
-        while index == self.hold_segment and not goal_handle.is_cancel_requested:
+        while index == self.hold_segment and not goal_handle.is_cancel_requested and not self.stopping:
             time.sleep(0.05)
         if goal_handle.is_cancel_requested:
             goal_handle.canceled()
@@ -405,6 +406,8 @@ def main():
     finally:
         server.stop()
         tmp.cleanup()
+        fake.stopping = True
+        time.sleep(0.3)
         executor.shutdown()
         rclpy.try_shutdown()
     if check.failures:

@@ -144,6 +144,7 @@ jobs:
           cargo test --locked --workspace
 
       - name: Coverage node cancel tracking (black box)
+        timeout-minutes: 10
         shell: bash
         run: |
           source /opt/ros/jazzy/setup.bash
@@ -153,6 +154,7 @@ jobs:
           python3 tools/coverage_cancel_check.py --binary target/debug/mower_coverage
 
       - name: Coverage progress of both navigation servers (black box)
+        timeout-minutes: 10
         shell: bash
         run: |
           source /opt/ros/jazzy/setup.bash
