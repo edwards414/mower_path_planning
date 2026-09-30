@@ -8,9 +8,10 @@ library crate with no ROS, PyO3 or colcon packaging.
 | `safe_map_filter` | Drops small 4-connected safe-map fragments (`filter_safe_components_rs`) |
 | `path_validator` | Checks points and Bresenham segments against the safe grid (`validate_path_rs`) |
 | `connector_planner` | Boundary-aware 8-connected A* connector with no corner cutting (`plan_connector_rs`) |
-| `zigzag` | Back-and-forth lanes with rounded U-turns; also rotated lanes via `angle_deg` (`generate_coverage_zigzag_path_rs`) |
+| `zigzag` | Legacy generator, pinned by the oracle; not used by the node (its rotated branch is broken) |
 | `spiral` | Onion-layer spiral for each connected component (`plan_spiral_coverage_rs`) |
-| `cell_decomposition` | Row-sweep boustrophedon cell decomposition (`decompose`, `CoverageCell`) |
+| `boustrophedon` | The zigzag planner the node uses: straight lanes at any angle, cells, optimised cell order, optional angle search (`plan_boustrophedon_rs`); also `coverage_ratio_rs`, `simplify_path_rs` |
+| `cell_decomposition` | Row-sweep boustrophedon cell decomposition (`decompose`, `CoverageCell`); ported from Python, not used by the node (`boustrophedon` builds its own cells in the sweep frame, at any angle) |
 | `types` | `SafeMap`, `ValidationResult` and the world/grid conversions |
 
 ## Who uses it

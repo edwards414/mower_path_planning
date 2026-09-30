@@ -1,3 +1,9 @@
+//! Legacy zigzag generator: a 1:1 port of the removed Python
+//! `path_generators/zigzag.py`, kept so its behaviour stays pinned by the
+//! regression oracle (tests/python_reference_oracle.rs). The coverage node
+//! uses [`crate::boustrophedon::plan_boustrophedon_rs`] instead; the rotated
+//! branch here zig-zags sideways inside each band and is not fit for use.
+
 use crate::path_validator::validate_path_rs;
 use crate::types::SafeMap;
 

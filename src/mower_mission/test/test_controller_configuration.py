@@ -723,6 +723,16 @@ def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
                  'action is still not terminal; retrying correlated cancel',
                  'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
         assert text in main, text
+    # zigzag: the boustrophedon planner (straight lanes at any angle, cells,
+    # optimised order); the sweep angle is searched only when asked, so an
+    # angle set from the app / Qt is never silently overridden
+    assert 'plan_boustrophedon_rs(' in main
+    assert 'generate_coverage_zigzag_path_rs' not in main
+    assert '"zigzag_auto_angle", false' in main
+    assert 'if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) }' in main
+    assert '"zigzag_auto_angle"' in main.split('let guarded = [', 1)[1].split(']', 1)[0]
+    # /coverage_path carries the planned paths, not only the clearing message
+    assert 'pubs.lock().unwrap().path.publish(&all)' in main
     assert 'make_parameter_handler' not in main
 
 

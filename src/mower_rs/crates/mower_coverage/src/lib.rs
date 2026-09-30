@@ -53,7 +53,7 @@ use mower_coverage_core::path_validator::validate_path_rs;
 use mower_coverage_core::safe_map_filter::filter_safe_components_rs;
 use mower_coverage_core::spiral::plan_spiral_coverage_rs;
 use mower_coverage_core::types::{SafeMap, ValidationResult};
-use mower_coverage_core::zigzag::generate_coverage_zigzag_path_rs;
+use mower_coverage_core::boustrophedon::{coverage_ratio_rs, plan_boustrophedon_rs, simplify_path_rs};
 
 // visualization_msgs/Marker constants (r2r does not export them)
 const MARKER_ARROW: i32 = 0;
@@ -184,6 +184,7 @@ struct Params {
     strip_width_m: f64,
     waypoint_spacing_m: f64,
     zigzag_angle_deg: f64,
+    zigzag_auto_angle: bool,
     unknown_as_obstacle: bool,
     min_safe_component_area_m2: f64,
     coverage_pattern: String,
@@ -195,7 +196,7 @@ struct Params {
     start_type_description_service: bool,
 }
 
-const PARAM_NAMES: [&str; 12] = [
+const PARAM_NAMES: [&str; 13] = [
     "allow_backend_fallback",
     "boundary_ring",
     "coverage_backend",
@@ -208,12 +209,13 @@ const PARAM_NAMES: [&str; 12] = [
     "use_sim_time",
     "waypoint_spacing_m",
     "zigzag_angle_deg",
+    "zigzag_auto_angle",
 ];
 
 fn declared_type(name: &str) -> Option<u8> {
     match name {
         "strip_width_m" | "waypoint_spacing_m" | "zigzag_angle_deg" | "min_safe_component_area_m2" | "fallback_cancel_request_timeout_s" => Some(PARAMETER_DOUBLE),
-        "unknown_as_obstacle" | "allow_backend_fallback" | "boundary_ring" | "use_sim_time" | "start_type_description_service" => Some(PARAMETER_BOOL),
+        "unknown_as_obstacle" | "allow_backend_fallback" | "boundary_ring" | "zigzag_auto_angle" | "use_sim_time" | "start_type_description_service" => Some(PARAMETER_BOOL),
         "coverage_pattern" | "coverage_backend" => Some(PARAMETER_STRING),
         _ => None,
     }
@@ -259,6 +261,7 @@ impl Params {
             "unknown_as_obstacle" => b(&mut v, self.unknown_as_obstacle),
             "allow_backend_fallback" => b(&mut v, self.allow_backend_fallback),
             "boundary_ring" => b(&mut v, self.boundary_ring),
+            "zigzag_auto_angle" => b(&mut v, self.zigzag_auto_angle),
             "use_sim_time" => b(&mut v, self.use_sim_time),
             "start_type_description_service" => b(&mut v, self.start_type_description_service),
             "coverage_pattern" => s(&mut v, &self.coverage_pattern),
@@ -279,6 +282,7 @@ impl Params {
             "unknown_as_obstacle" => self.unknown_as_obstacle = v.bool_value,
             "allow_backend_fallback" => self.allow_backend_fallback = v.bool_value,
             "boundary_ring" => self.boundary_ring = v.bool_value,
+            "zigzag_auto_angle" => self.zigzag_auto_angle = v.bool_value,
             "use_sim_time" => self.use_sim_time = v.bool_value,
             "start_type_description_service" => self.start_type_description_service = v.bool_value,
             "coverage_pattern" => self.coverage_pattern = v.string_value.clone(),
@@ -542,7 +546,9 @@ impl Ctx {
             if i + 1 >= points.len() || !invalid_set.contains(&(i, i + 1)) {
                 continue;
             }
-            match plan_connector_rs(pt, points[i + 1], sm, 0.2) {
+            // A* gives one waypoint per cell: pull it straight (endpoints and
+            // safety kept) before inserting it.
+            match plan_connector_rs(pt, points[i + 1], sm, 0.2).map(|c| simplify_path_rs(&c, sm)) {
                 Some(connector) if connector.len() > 2 => {
                     for cp in &connector[1..connector.len() - 1] {
                         new_points.push(*cp);
@@ -677,13 +683,32 @@ impl Ctx {
             let risk_cells = risk_data.iter().filter(|&&v| v != 0).count();
             self.info(format!("zone {zone_id}: safe_cells={safe_cells}, risk_cells={risk_cells}"));
 
+            let sm = SafeMap { grid: safe.view(), resolution: res, origin_x: ox, origin_y: oy };
+            let frame_id = if zones[i].mask_map.header.frame_id.is_empty() { "map".to_string() } else { zones[i].mask_map.header.frame_id.clone() };
+            let started = std::time::Instant::now();
             let (mut coverage_pts, split_pts, invalid_segs) = if pattern == "spiral" {
                 plan_spiral_coverage_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy)
             } else {
-                generate_coverage_zigzag_path_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy, zigzag_angle_deg)
+                // straight lanes at any angle, cell decomposition, optimised
+                // cell order; zigzag_auto_angle searches the sweep angle
+                let angle = if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) };
+                let plan = plan_boustrophedon_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle);
+                self.info(format!(
+                    "zone {zone_id}: boustrophedon angle={:.1} deg ({}), lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
+                    plan.angle_deg,
+                    if angle.is_none() { "auto" } else { "fixed" },
+                    plan.lanes,
+                    plan.cells,
+                    plan.turns,
+                    plan.length_m,
+                    plan.connectors.len()
+                ));
+                if !plan.connectors.is_empty() {
+                    self.publish_connectors(&plan.connectors, i, &frame_id);
+                }
+                (plan.points, plan.split_points, plan.invalid_segments)
             };
-            let sm = SafeMap { grid: safe.view(), resolution: res, origin_x: ox, origin_y: oy };
-            let frame_id = if zones[i].mask_map.header.frame_id.is_empty() { "map".to_string() } else { zones[i].mask_map.header.frame_id.clone() };
+            let planning_ms = started.elapsed().as_secs_f64() * 1000.0;
 
             if !invalid_segs.is_empty() {
                 self.warn(format!("zone {zone_id}: {} unsafe segment(s) — running ConnectorPlanner", invalid_segs.len()));
@@ -705,6 +730,13 @@ impl Ctx {
                 self.error(format!("zone {zone_id}: final path is unsafe: {}; coverage path not published", final_validation.message));
                 return false;
             }
+
+            self.info(format!(
+                "zone {zone_id}: {} points, coverage {:.1}% of the safe area, planned in {:.0} ms",
+                coverage_pts.len(),
+                coverage_ratio_rs(&coverage_pts, &sm, strip_width_m) * 100.0,
+                planning_ms
+            ));
 
             if p.boundary_ring {
                 let safe_u8: Vec<u8> = safe.iter().map(|&v| v as u8).collect();
@@ -784,6 +816,15 @@ impl Ctx {
             color_i += 1;
         }
         let n = arr.markers.len();
+        // /coverage_path: every zone's path in one Path, in zone order (it
+        // used to be published only empty, by clear_path_visuals)
+        if let Some(first) = zones.iter().find(|z| !z.path.poses.is_empty()) {
+            let mut all = Path { header: first.path.header.clone(), poses: Vec::new() };
+            for z in &zones {
+                all.poses.extend(z.path.poses.iter().cloned());
+            }
+            let _ = self.pubs.lock().unwrap().path.publish(&all);
+        }
         let _ = self.pubs.lock().unwrap().path_markers.publish(&arr);
         self.info(format!("發布了 {n} 個路徑markers"));
         *self.zone_map_list.lock().await = zones;
@@ -1426,7 +1467,7 @@ impl Ctx {
         if !immutable.is_empty() {
             return reject(format!("{} is a legacy startup-only parameter; coverage always plans with mower_coverage_core", immutable.join(", ")));
         }
-        let guarded = ["strip_width_m", "waypoint_spacing_m", "zigzag_angle_deg", "unknown_as_obstacle", "min_safe_component_area_m2", "coverage_pattern", "boundary_ring"];
+        let guarded = ["strip_width_m", "waypoint_spacing_m", "zigzag_angle_deg", "zigzag_auto_angle", "unknown_as_obstacle", "min_safe_component_area_m2", "coverage_pattern", "boundary_ring"];
         if params.iter().any(|p| guarded.contains(&p.name.as_str())) {
             let g = self.guard.lock().await;
             if g.blocked() || g.busy() {
@@ -1528,6 +1569,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         strip_width_m: params::f64(&node, "strip_width_m", 0.8),
         waypoint_spacing_m: params::f64(&node, "waypoint_spacing_m", 0.2),
         zigzag_angle_deg: params::f64(&node, "zigzag_angle_deg", 0.0),
+        zigzag_auto_angle: params::bool(&node, "zigzag_auto_angle", false),
         unknown_as_obstacle: params::bool(&node, "unknown_as_obstacle", true),
         min_safe_component_area_m2: params::f64(&node, "min_safe_component_area_m2", 0.05),
         coverage_pattern: params::string(&node, "coverage_pattern", "zigzag"),

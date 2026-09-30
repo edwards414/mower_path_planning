@@ -47,10 +47,11 @@ const MARKER_TOPICS: [(&str, &str); 6] = [
     ("/coverage_connectors", "connectors"),
 ];
 
-const COVERAGE_PARAM_NAMES: [&str; 6] = [
+const COVERAGE_PARAM_NAMES: [&str; 7] = [
     "strip_width_m",
     "waypoint_spacing_m",
     "zigzag_angle_deg",
+    "zigzag_auto_angle",
     "unknown_as_obstacle",
     "coverage_pattern",
     "boundary_ring",

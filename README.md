@@ -306,7 +306,16 @@ the only coverage planner (the Python `coverage_node` was removed on
 
 - `strip_width_m`: mower cutting strip width, default `0.8`
 - `waypoint_spacing_m`: generated waypoint spacing, default `0.2`
-- `zigzag_angle_deg`: zigzag scan angle in degrees, default `0.0`, range `0.0`-`180.0`
+- `zigzag_angle_deg`: zigzag sweep angle in degrees, default `0.0`, range
+  `0.0`-`180.0` (0 = lanes along the map y axis). `zigzag` runs the
+  boustrophedon planner (`mower_coverage_core/src/boustrophedon.rs`): straight
+  lanes at any angle, lanes placed from the safe area's own extent, a cell per
+  split/merge of the free space, cell order and entry corners optimised,
+  A* connectors pulled straight
+- `zigzag_auto_angle`: search the sweep angle (every 5 deg, then 1 deg around
+  the best) that minimises path length + 3 m per turn + uncovered area,
+  ignoring `zigzag_angle_deg`; default `false` so an angle set from the app or
+  Qt is never silently overridden. The chosen angle is logged
 - `unknown_as_obstacle`: treat unknown cells as obstacles, default `true`
 - `min_safe_component_area_m2`: minimum retained safe component area, default `0.05`
 - `coverage_pattern`: `zigzag` or `spiral`
