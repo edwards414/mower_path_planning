@@ -22,7 +22,27 @@ subscription and none of the raw sensor topics have to be exposed::
                   "voltage_v": 23.4, "current_a": null, "status": "discharging",
                   "aon": {"present": true, "pct": 0.8, "voltage_v": 3.9} | null},
       "link": {"valid": true, "age_s": 2.1, ...link_status.json from the host...},
-      "host": {"load1": 0.8, "mem_used_pct": 41.2, "cpu_temp_c": 52.0, "uptime_s": ...},
+      "host": {"load1": 0.8, "load5": 0.7, "load15": 0.6, "mem_used_pct": 41.2,
+               "cpu_temp_c": 52.0, "uptime_s": <this node>, "boot_uptime_s": 1260,
+               "sample_s": 2.0,
+               "cpu": {"pct": 38.2, "user": 25.1, "system": 9.0, "iowait": 0.4,
+                       "irq": 3.7, "steal": 0.0, "cores": [40.1, 35.0, 38.2, 39.4],
+                       "freq": [{"cpus": [0, 1, 2, 3], "cur_mhz": 1416,
+                                 "max_mhz": 1992, "limit_mhz": 1416}],
+                       "temps_c": {"soc-thermal": 52.0, "gpu-thermal": 50.1}},
+               "mem": {"total_mb": 3895.0, "used_mb": 611.0, "cache_mb": 950.0,
+                       "free_mb": 2387.0, "avail_mb": 3284.0,
+                       "swap_total_mb": 0.0, "swap_used_mb": 0.0},
+               "disks": [{"role": "state"|"bags"|"root", "path": "/home/mower/.mower",
+                          "dev": "mmcblk0p3", "fstype": "ext4", "total_gb": 30.7,
+                          "used_gb": 7.5, "avail_gb": 21.9, "used_pct": 25.6}],
+               "io": [{"dev": "mmcblk0", "model": "TWSC", "size_gb": 31.3,
+                       "read_kbs": 0.0, "write_kbs": 12.3, "util_pct": 0.9,
+                       "life_time": [1, 1], "pre_eol": 1}],
+               "tasks": {"procs": 182, "threads": 412, "running": 3},
+               "procs": [{"pid": 812, "name": "ros2_control_node", "node": null,
+                          "state": "S", "cpu": 27.2, "mem": 1.3, "rss_mb": 50.1,
+                          "threads": 12}, ...10 busiest]},
       "info": {...the latest /robot/info JSON... } | null
     }
 
@@ -30,7 +50,11 @@ Sources: ``/fix`` (+ ``/gps/filtered``, optional u-blox ``navpvt``),
 ``/imu/data``, ``/odom``, ``/mower_base/telemetry`` (mower_hardware),
 ``/battery_state`` + ``/aon_battery_state`` (battery_state_node),
 ``/robot/info`` (robot_info_node), ``<state_dir>/link_status.json``
-(deploy/host/mower-link-status.py) and /proc for host load.
+(deploy/host/mower-link-status.py) and /proc + /sys for the host block
+(``host_stats.py``, refreshed every 2 s; CPU %, per-core %, per-process % and
+disk throughput are deltas, so ``None`` in the first sample; process CPU is
+% of one core like ``top``; ``mem_used_pct`` is (total - available) / total
+while ``mem.used_mb`` follows ``free``).
 
 Every block carries ``valid`` (seen at least once) and ``age_s`` (time since
 the last sample) so the dashboard can grey out stale data itself.
@@ -52,6 +76,7 @@ from sensor_msgs.msg import BatteryState, Imu, NavSatFix, NavSatStatus
 from std_msgs.msg import String
 
 from mower_mission import host_request
+from mower_mission.host_stats import HostSampler
 
 try:  # only present in the gps image / a dev container with the driver
     from ublox_msgs.msg import NavPVT
@@ -154,7 +179,7 @@ class TelemetryNode(Node):
         self._link = _Sample()
         self._link_mtime = None
         self._host = {}
-        self._host_t = 0.0
+        self._host_sampler = HostSampler(self._state_dir)
 
         latched = QoSProfile(depth=1)
         latched.reliability = QoSReliabilityPolicy.RELIABLE
@@ -236,36 +261,6 @@ class TelemetryNode(Node):
                 self._store(self._link, json.load(f))
         except (OSError, ValueError):
             pass
-
-    def _poll_host(self, now):
-        if now - self._host_t < 2.0:
-            return
-        self._host_t = now
-        host = {'load1': None, 'mem_used_pct': None, 'cpu_temp_c': None}
-        try:
-            with open('/proc/loadavg') as f:
-                host['load1'] = float(f.read().split()[0])
-        except (OSError, ValueError):
-            pass
-        try:
-            mem = {}
-            with open('/proc/meminfo') as f:
-                for line in f:
-                    k, v = line.split(':', 1)
-                    mem[k] = int(v.split()[0])
-            total, avail = mem.get('MemTotal'), mem.get('MemAvailable')
-            if total and avail is not None:
-                host['mem_used_pct'] = round(100.0 * (total - avail) / total, 1)
-        except (OSError, ValueError):
-            pass
-        for zone in ('/sys/class/thermal/thermal_zone0/temp',):
-            try:
-                with open(zone) as f:
-                    host['cpu_temp_c'] = round(int(f.read().strip()) / 1000.0, 1)
-                break
-            except (OSError, ValueError):
-                pass
-        self._host = host
 
     # ---- output --------------------------------------------------------------
 
@@ -357,7 +352,9 @@ class TelemetryNode(Node):
     def _tick(self):
         now = time.monotonic()
         self._poll_link(now)
-        self._poll_host(now)
+        block = self._host_sampler.poll(now)
+        if block is not None:
+            self._host = block
         self._seq += 1
         host = dict(self._host)
         host['uptime_s'] = round(now - self._start, 1)

@@ -1,6 +1,7 @@
 """Launch the real mower stack and its app-facing mission services once."""
 
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -11,6 +12,9 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+import yaml
 
 
 def _enforce_production_safety(context):
@@ -37,6 +41,151 @@ def _enforce_production_safety(context):
     return []
 
 
+# rust_daemon:=true -- every enabled mower_rs module in ONE process
+# (src/mower_rs/crates/mower_rsd) instead of one binary each: one r2r Context,
+# so one DDS participant and one discovery/executor thread set rather than
+# eleven to fourteen (docs/ROS_FREE_PLAN.md Phase A5, ~35 % of a core on the
+# LubanCat is mostly that overhead). Node names, namespaces, topics, services,
+# actions and parameters are unchanged, so nothing else on the graph — or in
+# the app — can tell the difference.
+#
+# The module set is derived from the same rust_* switches the separate
+# binaries use, so a roll-back is `rust_daemon:=false` and nothing else. The
+# rclpy fallbacks are untouched: a module whose rust_* switch is false still
+# runs as its Python node.
+_DAEMON_MODULES = (
+    # module id      launch switch
+    ('base', 'rust_base'),
+    ('status', 'rust_status'),
+    ('guards', 'rust_guards'),
+    ('imu', 'rust_imu'),
+    ('gps', 'enable_gps'),
+    ('localize', 'rust_localize'),
+    ('map', 'rust_map'),
+    ('coverage', 'rust_coverage'),
+    ('nav', 'rust_nav'),
+    ('record', 'rust_record'),
+    ('adapter', 'rust_adapter'),
+    ('battery', 'rust_battery'),
+    ('pid_autotune', 'rust_pid_autotune'),
+    ('bridge', 'rust_bridge'),
+    ('agent', 'rust_agent'),
+)
+
+# Remappings the separate binaries get from their launch `remappings=`. In one
+# process they have to be scoped by node name (`-r <node>:<from>:=<to>`, which
+# rcl applies per node); an unprefixed rule would hit every node.
+_DAEMON_REMAPS = {
+    'imu': ['imu:imu/data_raw:=imu/data'],
+    'guards': [
+        'manual_velocity_guard:cmd_vel_in:=/app_joy_cmd',
+        'manual_velocity_guard:cmd_vel_out:=/joy_cmd',
+        'manual_velocity_guard:command_clock:=/manual_command_clock',
+        'velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input',
+        'velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel',
+    ],
+    # dual_ekf_navsat.launch.py's remappings= for the three localization
+    # nodes; navsat's gps/fix rule is added with the gps_fix_topic value.
+    'localize': [
+        'ekf_filter_node_odom:odometry/filtered:=odometry/local',
+        'ekf_filter_node_odom:imu:=imu/data',
+        'ekf_filter_node_map:odometry/filtered:=odometry/global',
+        'ekf_filter_node_map:imu:=imu/data',
+        'navsat_transform:imu:=imu/data',
+        'navsat_transform:odometry/filtered:=odometry/global',
+    ],
+}
+
+
+def _truthy(value):
+    return value.strip().lower() in {'true', '1', 'yes', 'on'}
+
+
+def _node_params_file(node, params):
+    """Write a --params-file that sets `params` on one node of mower_rsd.
+
+    launch_ros writes a dict under `/**`, which would hand the values to every
+    node in the process.
+    """
+    with tempfile.NamedTemporaryFile(
+            'w', prefix=f'mower_rsd_{node}_', suffix='.yaml',
+            delete=False) as f:
+        yaml.safe_dump({node: {'ros__parameters': params}}, f)
+    return f.name
+
+
+def _rust_daemon_node(context):
+    """The single mower_rsd process, or nothing."""
+    if not _truthy(LaunchConfiguration('rust_daemon').perform(context)):
+        return []
+    modules = [
+        module for module, switch in _DAEMON_MODULES
+        if _truthy(LaunchConfiguration(switch).perform(context))
+    ]
+    if not modules:
+        raise RuntimeError(
+            'rust_daemon:=true but no rust_* switch is on: nothing to run'
+        )
+
+    bringup = get_package_share_directory('mower_bringup')
+    params_file = LaunchConfiguration('rust_daemon_params_file').perform(context)
+    parameters = [params_file]
+
+    arguments = ['--modules', ','.join(modules)]
+    # The two modules that are configured on the command line rather than with
+    # ROS parameters; the values are the same ones rosbridge.launch.py passes.
+    if 'bridge' in modules:
+        arguments += ['--module-args', ' '.join([
+            'bridge=--address', LaunchConfiguration('rosbridge_address').perform(context),
+            '--port', '9090',
+            '--loopback-port', '9091',
+            '--policy', os.path.join(bringup, 'config', 'ws_bridge.yaml'),
+        ])]
+    if 'agent' in modules:
+        arguments += ['--module-args',
+                      'agent=--gate ws://127.0.0.1:9090 '
+                      '--rosbridge ws://127.0.0.1:9091']
+    if 'gps' in modules:
+        parameters.append(
+            LaunchConfiguration('gps_params_file').perform(context))
+    if 'record' in modules:
+        # The same directories the separate mower_record gets from
+        # mission.launch.py -- on the robot the ~/.mower bind mount. The yaml's
+        # relative save_dir would resolve against the container's WORKDIR
+        # (/mower_ws): no saved zones listed, new ones lost with the container.
+        # Listed after the yaml, so it wins.
+        parameters.append(_node_params_file('path_record_node', {
+            'save_dir': LaunchConfiguration('zone_record_dir').perform(context),
+            'sites_dir': LaunchConfiguration('sites_dir').perform(context),
+        }))
+    remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
+    if 'localize' in modules:
+        # The file the C++ nodes read, keyed by the same node names: the one
+        # source of the filter and navsat settings. After mower_rsd.yaml, so
+        # it wins on any key it sets, like gps.yaml; an override goes through
+        # localize_params_file, which reaches either stack.
+        parameters.append(
+            LaunchConfiguration('localize_params_file').perform(context))
+        remaps.append('navsat_transform:gps/fix:=' + LaunchConfiguration(
+            'gps_fix_topic').perform(context))
+    if remaps:
+        arguments.append('--ros-args')
+        for rule in remaps:
+            arguments += ['-r', rule]
+
+    # No `name=`: launch_ros would emit a bare `-r __node:=...`, which renames
+    # every node in the process. mower_rsd names its nodes itself.
+    return [Node(
+        package='mower_rs',
+        executable='mower_rsd',
+        output='screen',
+        respawn=True,
+        respawn_delay=2.0,
+        arguments=arguments,
+        parameters=parameters,
+    )]
+
+
 def generate_launch_description():
     """Build the single production entry point for the mower container."""
     mower_bringup_dir = get_package_share_directory('mower_bringup')
@@ -61,9 +210,11 @@ def generate_launch_description():
     gps_fix_topic = LaunchConfiguration('gps_fix_topic')
     enable_gps = LaunchConfiguration('enable_gps')
     gps_params_file = LaunchConfiguration('gps_params_file')
+    localize_params_file = LaunchConfiguration('localize_params_file')
     require_navigation_health = LaunchConfiguration(
         'require_navigation_health'
     )
+    nav_composition = LaunchConfiguration('nav_composition')
     rust_status = LaunchConfiguration('rust_status')
     rust_adapter = LaunchConfiguration('rust_adapter')
     rust_record = LaunchConfiguration('rust_record')
@@ -75,7 +226,10 @@ def generate_launch_description():
     rust_agent = LaunchConfiguration('rust_agent')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
+    rust_localize = LaunchConfiguration('rust_localize')
     rust_bridge = LaunchConfiguration('rust_bridge')
+    rust_base = LaunchConfiguration('rust_base')
+    rust_daemon = LaunchConfiguration('rust_daemon')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -91,8 +245,13 @@ def generate_launch_description():
             'gps_fix_topic': gps_fix_topic,
             'enable_gps': enable_gps,
             'gps_params_file': gps_params_file,
+            'localize_params_file': localize_params_file,
             'rust_guards': rust_guards,
             'rust_imu': rust_imu,
+            'rust_base': rust_base,
+            'rust_localize': rust_localize,
+            'nav_composition': nav_composition,
+            'rust_daemon': rust_daemon,
         }.items(),
     )
 
@@ -122,6 +281,12 @@ def generate_launch_description():
             'rust_coverage': rust_coverage,
             'rust_agent': rust_agent,
             'rust_bridge': rust_bridge,
+            # mower_base / mower_localize publish /odom_slow and
+            # /odometry/global_slow themselves, so mission.launch.py holds
+            # the matching topic_tools throttle down.
+            'rust_base': rust_base,
+            'rust_localize': rust_localize,
+            'rust_daemon': rust_daemon,
         }.items(),
     )
 
@@ -206,6 +371,23 @@ def generate_launch_description():
                         '~/.mower to try receiver settings without a new image',
         ),
         DeclareLaunchArgument(
+            'localize_params_file',
+            default_value=os.path.join(
+                get_package_share_directory('mower_nav2'), 'config',
+                'dual_ekf_navsat_params.yaml'
+            ),
+            description='EKF and navsat_transform parameter file, read by the '
+                        'C++ nodes and mower_localize alike; point at a copy '
+                        'under ~/.mower to try other values without a new '
+                        'image',
+        ),
+        DeclareLaunchArgument(
+            'nav_composition',
+            default_value='true',
+            description='Run the Nav2 servers as components in one '
+                        'component_container_isolated process',
+        ),
+        DeclareLaunchArgument(
             'require_navigation_health',
             default_value='true',
             description='Fail closed when pose or precise GPS becomes stale',
@@ -277,12 +459,57 @@ def generate_launch_description():
             description='mower_rs mower_imu instead of the wit_ros2_imu driver',
         ),
         DeclareLaunchArgument(
+            'rust_localize',
+            default_value='false',
+            description='mower_rs mower_localize instead of the two '
+                        'robot_localization ekf_node processes and '
+                        'navsat_transform_node (same node names, topics, '
+                        'transforms and services), and instead of the '
+                        'global_odom_throttle that makes '
+                        '/odometry/global_slow',
+        ),
+        DeclareLaunchArgument(
             'rust_bridge',
             default_value='false',
             description='mower_rs mower_ws_bridge instead of rosbridge_auth_proxy '
                         '+ rosbridge_websocket + rosapi',
         ),
+        DeclareLaunchArgument(
+            'rust_base',
+            default_value='false',
+            description='mower_rs mower_base instead of the whole '
+                        'ros2_control chain: ros2_control_node '
+                        '(controller_manager), mower_hardware::MowerSystem, '
+                        'diff_controller, joint_state_broadcaster and their '
+                        'two spawners, and the odom_throttle that makes '
+                        '/odom_slow. Same serial protocol, same /odom, '
+                        '/odom_slow, /joint_states and /mower_base/* '
+                        'contract; '
+                        'robot_state_publisher stays and keeps its '
+                        '/joint_states input. Flip only after a supervised '
+                        'drive.',
+        ),
+        DeclareLaunchArgument(
+            'rust_daemon',
+            default_value='false',
+            description='Run every enabled mower_rs module inside one '
+                        'mower_rsd process (one r2r Context / DDS '
+                        'participant) instead of one binary each. The module '
+                        'set is derived from the rust_* switches above plus '
+                        'enable_gps; node names, topics, services and '
+                        'parameters are unchanged.',
+        ),
+        DeclareLaunchArgument(
+            'rust_daemon_params_file',
+            default_value=os.path.join(
+                mower_bringup_dir, 'config', 'mower_rsd.yaml'
+            ),
+            description='Per-node parameter sections for mower_rsd; copy into '
+                        '~/.mower and point here to change them without a new '
+                        'image',
+        ),
         OpaqueFunction(function=_enforce_production_safety),
         mower_launch,
         mission_launch,
+        OpaqueFunction(function=_rust_daemon_node),
     ])

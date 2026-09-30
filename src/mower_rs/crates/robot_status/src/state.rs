@@ -77,8 +77,8 @@ pub struct State {
     pub aon_battery: Sample<BatteryState>,
     pub link: Sample<Value>,
     pub link_mtime: Option<SystemTime>,
+    /// Latest `host` block from `host::Sampler` (sampled outside the lock).
     pub host: Value,
-    pub host_t: Option<Instant>,
     /// robot_info inputs and its last published snapshot (embedded in the
     /// telemetry document as `info`).
     pub firmware_running: Option<Value>,

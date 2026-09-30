@@ -6,8 +6,10 @@
 //! here and glued back together on the phone (and the other way round). The
 //! hub only adds or strips the 8-byte session id.
 //!
-//!     robot <-> hub :  [type][sid: 8 bytes][payload]
-//!     app   <-> hub :  [type][payload]
+//! ```text
+//! robot <-> hub :  [type][sid: 8 bytes][payload]
+//! app   <-> hub :  [type][payload]
+//! ```
 //!
 //! type: 0x01 text (last chunk), 0x11 text (more follows),
 //!       0x02 binary (last chunk), 0x12 binary (more follows).

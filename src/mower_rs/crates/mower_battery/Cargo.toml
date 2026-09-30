@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "sensor_msgs/BatteryState from the base telemetry (port of mower_mission/battery_state_node.py + battery_estimator.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_battery"
 path = "src/main.rs"

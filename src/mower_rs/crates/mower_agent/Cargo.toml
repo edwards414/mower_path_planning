@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Robot side of the fleet backend: registration, relay WebSocket with heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials (port of mower_mission/mower_agent.py)"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_agent"
 path = "src/main.rs"

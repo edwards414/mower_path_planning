@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Robot status process: /robot/online heartbeat, /robot/info, /robot/telemetry and the /system/* host requests"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "robot_status"
 path = "src/main.rs"
@@ -15,3 +18,4 @@ r2r.workspace = true
 futures.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+libc = "0.2"

@@ -1,0 +1,32 @@
+[package]
+name = "mower_rsd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "One process running any subset of the mower_rs nodes on a single r2r Context (one DDS participant) instead of one binary each"
+
+[[bin]]
+name = "mower_rsd"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+
+robot_status = { path = "../robot_status" }
+velocity_command_guard = { path = "../velocity_command_guard" }
+mower_adapter = { path = "../mower_adapter" }
+mower_imu = { path = "../mower_imu" }
+mower_gps = { path = "../mower_gps" }
+mower_ws_bridge = { path = "../mower_ws_bridge" }
+mower_record = { path = "../mower_record" }
+mower_nav = { path = "../mower_nav" }
+mower_battery = { path = "../mower_battery" }
+mower_pid_autotune = { path = "../mower_pid_autotune" }
+mower_map = { path = "../mower_map" }
+mower_coverage = { path = "../mower_coverage" }
+mower_agent = { path = "../mower_agent" }
+mower_base = { path = "../mower_base" }
+mower_localize = { path = "../mower_localize" }

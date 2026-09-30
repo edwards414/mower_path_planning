@@ -50,6 +50,7 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 | `mower-host-request.path` + `.service` | 監看 `~/.mower/host.request`；容器寫 `update` / `restart` / `reboot` / `poweroff` 進去，host 執行。STM32 電源鍵長按 3 s → 驅動寫 `poweroff` → `systemctl poweroff` |
 | `mower-update.sh` | pull + 比對 digest + `up -d`，寫 `update_status.json`、`image.json`；`--auto` 給 timer 用（閒置才更新） |
 | `mower-update.timer` + `.service` | 每小時 `mower-update.sh --auto` |
+| `ntpsec-mower.conf` | 裝成 `ntpsec.service.d/10-mower.conf`，拿掉 ntpsec 的啟動次數限制。RTC 沒電池，冷開機時間是 2025-06-26，只能靠 ntpd 校正；開機時 DHCP hook 在幾秒內 try-restart 它 5 次以上就被 systemd 判定失敗、整次開機都不再啟動，時鐘錯了 app 的 HMAC（±60 s）、後台與 ghcr.io 的 TLS 全部失敗 |
 
 ## 裝置名（`udev/99-mower.rules`）
 

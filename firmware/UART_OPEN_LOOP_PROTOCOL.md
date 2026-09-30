@@ -471,7 +471,7 @@ Payload 長度固定 `16` bytes。
 
 常見組合:
 
-- `0x00`: 尚未收到有效命令
+- `0x02`: 尚未收到有效命令（`motor.cpp` 的 `timeout = !valid || age > timeout`，此時 `command_age_ms` 回 `65535`；舊版文件寫成 `0x00`，韌體不會送 `0x00`）
 - `0x01`: 有有效命令，且目前未 timeout、未 alarm
 - `0x03`: 曾收到有效命令，但目前已 timeout
 - `0x05`: 有有效命令，但目前 driver alarm

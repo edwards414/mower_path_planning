@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "u-blox ZED-F9P USB driver publishing sensor_msgs/NavSatFix (UBX NAV-PVT + NAV-HPPOSLLH), exits on a dead port so launch respawns it"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "mower_gps"
 path = "src/main.rs"

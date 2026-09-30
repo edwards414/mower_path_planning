@@ -1,0 +1,20 @@
+[package]
+name = "mower_localize"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "robot_localization's two EKFs and navsat_transform as one r2r module (Phase C of docs/ROS_FREE_PLAN.md)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mower_localize"
+path = "src/main.rs"
+
+[dependencies]
+mower_rs_common = { path = "../mower_rs_common" }
+mower_localize_core = { path = "../mower_localize_core" }
+r2r.workspace = true
+tokio.workspace = true
+futures.workspace = true
