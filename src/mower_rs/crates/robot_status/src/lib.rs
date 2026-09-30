@@ -12,13 +12,15 @@
 //!   Trigger services (host.request hand-off, refused while moving).
 //! * `/robot/telemetry` (std_msgs/String JSON, reliable, 10 Hz): the
 //!   dashboard feed built from `/fix`, `/imu/data`, odometry, the base
-//!   telemetry, the battery topics, `link_status.json` and /proc.
+//!   telemetry, the battery topics, `link_status.json` and the host's CPU,
+//!   memory, disks and busiest processes from /proc (`host.rs`).
 //!
 //! rclpy needed 5-12 ms of CPU per delivered message on the LubanCat; this
 //! process handles the same ~45 events/s for well under 1 % of a core.
 //! Timestamps use the monotonic and wall clocks (the Python nodes ran with
 //! use_sim_time:=false for the same reason).
 
+mod host;
 mod info;
 mod state;
 mod telemetry;
@@ -432,13 +434,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let state_dir = cfg.state_dir.clone();
         tokio::spawn(async move {
             let mut seq: u64 = 0;
+            let mut host = host::Sampler::new(&state_dir);
             while timer_telemetry.tick().await.is_ok() {
                 let now = Instant::now();
                 seq += 1;
+                // The /proc scan (~2 ms every two seconds) runs outside the lock.
+                let host_block = host.poll(now);
                 let doc = {
                     let mut st = shared.lock().unwrap();
                     telemetry::poll_link(&mut st, &state_dir, now);
-                    telemetry::poll_host(&mut st, now);
+                    if let Some(block) = host_block {
+                        st.host = block;
+                    }
                     telemetry::build_document(&st, &robot_id, seq, start, now)
                 };
                 if let Err(e) = pub_telemetry.publish(&json_string(&doc)) {

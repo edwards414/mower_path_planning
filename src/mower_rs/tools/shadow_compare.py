@@ -109,10 +109,11 @@ VOLATILE_KEYS = re.compile(
     r'(^|_)(age_s|uptime_s|uptime|time|timestamp|time_s|stamp|_ts|now|'
     r'last_seen|since_s|elapsed_s)$'
 )
-# Machine state, not module behaviour: the container's load and temperature
-# move between the two runs whatever the code does.
-VOLATILE_PATHS = {('host', 'load1'), ('host', 'mem_used_pct'),
-                  ('host', 'cpu_temp_c'), ('host', 'uptime_s')}
+# Machine state, not module behaviour: the container's load, memory, disks
+# and process list move between the two runs whatever the code does, so the
+# whole host block is left out (host.rs and host_stats.py have their own
+# shared test vectors).
+VOLATILE_PATHS = {('host',)}
 # `manual-session-v1:<32 hex>` from /dev/urandom at every start: different by
 # design in every process, and the guard's rule (only its own id is accepted)
 # is what /joy_cmd proves.

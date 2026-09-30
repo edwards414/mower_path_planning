@@ -616,6 +616,14 @@ Known intentional difference: `/robot/telemetry`'s `robot_id` is the paired
 identity (`identity.json`, as on `/robot/info`) instead of the container
 hostname.
 
+The telemetry `host` block (`host.rs`) is what Mower Studio's 主機監控 page
+draws: `top`'s CPU line and per-core %, cpufreq and thermal zones, `free`,
+`df` of the state dir (and `bags/` when it is a separate drive), per-drive
+throughput and eMMC wear, and the ten busiest processes. It is sampled every
+2 s outside the state lock, by scanning /proc (the container runs with
+`pid: host`); about 2 ms per scan. `mower_mission/host_stats.py` is the
+Python twin with the same test vectors.
+
 ## velocity_command_guard
 
 The decision rules are in `crates/velocity_command_guard/src/core.rs`, free
