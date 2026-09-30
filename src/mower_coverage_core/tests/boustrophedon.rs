@@ -5,6 +5,8 @@ mod common;
 
 use common::*;
 use mower_coverage_core::boustrophedon::*;
+use mower_coverage_core::connector_planner::plan_connector_rs;
+use mower_coverage_core::nav_split::{nav_short_segment, nav_segments};
 use mower_coverage_core::path_validator::validate_path_rs;
 use mower_coverage_core::safe_map_filter::filter_safe_components_rs;
 use mower_coverage_core::types::SafeMap;
@@ -62,8 +64,9 @@ fn every_plan_is_safe_and_inside_the_grid() {
                 assert!(p.points.iter().any(|q| (q.0 - sp.0).abs() < TOL && (q.1 - sp.1).abs() < TOL),
                     "{name} {ang:?}: split point {sp:?} is not a path point");
             }
-            assert_eq!(p.split_points.last(), p.points.last(), "{name} {ang:?}: the path end is a split point");
             assert!((p.length_m - path_length_rs(&p.points)).abs() < 1e-9);
+            assert_eq!(nav_short_segment(&p.points, &p.split_points), None,
+                "{name} {ang:?}: the navigation server would refuse a segment");
         }
     }
 }
@@ -88,7 +91,8 @@ fn coverage_is_high_at_the_axis_angle_and_at_least_the_legacy_one() {
         let cov = coverage_ratio_rs(&p.points, &sm, STRIP);
         let legacy = coverage_ratio_rs(&lp, &sm, STRIP);
         assert!(cov >= 0.9, "{name}: coverage {cov:.3}");
-        assert!(cov + 1e-9 >= legacy, "{name}: coverage {cov:.3} < legacy {legacy:.3}");
+        // a noise map can lose a few cells to the split coalescing at a path end
+        assert!(cov + 0.01 >= legacy, "{name}: coverage {cov:.3} < legacy {legacy:.3}");
     }
 }
 
@@ -186,4 +190,74 @@ fn simplify_pulls_a_staircase_straight_but_not_through_an_obstacle() {
     let s = simplify_path_rs(&detour, &safe_map(&g));
     assert!(validate_path_rs(&s, &safe_map(&g)).valid);
     assert!(s.len() >= 3);
+}
+
+/// Gardens like the robot's: a rectangle or an ellipse with a few round trees,
+/// already eroded by the robot radius. The navigation server must accept
+/// every plan (no FollowPath segment of 0.15 m or less) at every angle; the
+/// review found 30 deg / 135 deg / auto refused most of the time before
+/// split points were coalesced.
+#[test]
+fn navigation_accepts_every_garden_plan() {
+    let mut refused = Vec::new();
+    for seed in 0..24u64 {
+        let res = if seed % 2 == 0 { 0.05 } else { 0.1 };
+        let n = (8.0 / res) as usize;
+        let ellipse = seed % 3 == 0;
+        let trees: Vec<(f64, f64, f64)> = (0..(seed % 5))
+            .map(|k| {
+                let f = |m: u64| ((seed * 7919 + k * 104729 + m) % 1000) as f64 / 1000.0;
+                (1.5 + 5.0 * f(1), 1.5 + 5.0 * f(2), 0.3 + 0.5 * f(3))
+            })
+            .collect();
+        let g = Array2::from_shape_fn((n, n), |(r, c)| {
+            let (x, y) = ((c as f64 + 0.5) * res, (r as f64 + 0.5) * res);
+            let inside = if ellipse {
+                ((x - 4.0) / 3.2).powi(2) + ((y - 4.0) / 2.4).powi(2) < 1.0
+            } else {
+                (0.8..7.2).contains(&x) && (1.2..6.6).contains(&y)
+            };
+            inside && trees.iter().all(|&(tx, ty, tr)| (x - tx).powi(2) + (y - ty).powi(2) > (tr + 0.75).powi(2))
+        });
+        let (g, _, kept) = filter_safe_components_rs(g.view(), res, 0.05, true);
+        if kept.is_empty() {
+            continue;
+        }
+        let sm = SafeMap { grid: g.view(), resolution: res, origin_x: 0.0, origin_y: 0.0 };
+        for ang in [Some(0.0), Some(30.0), Some(90.0), Some(135.0), None] {
+            let p = plan_boustrophedon_rs(g.view(), STRIP, SPACING, res, 0.0, 0.0, ang);
+            assert!(validate_path_rs(&p.points, &sm).valid, "seed {seed} {ang:?}");
+            if let Some(bad) = nav_short_segment(&p.points, &p.split_points) {
+                refused.push((seed, ang, bad));
+            }
+            assert!(nav_segments(&p.points, &p.split_points).len() >= 1);
+        }
+    }
+    assert!(refused.is_empty(), "refused plans: {refused:?}");
+}
+
+/// The review's reproductions: a corner stub as the first lane (45 deg,
+/// 30 deg) and a thin region (0 deg) produced segments of 0.10-0.15 m.
+#[test]
+fn review_reproductions_are_accepted_by_navigation() {
+    for (h, w, res, ang) in [(150, 200, 0.05, 45.0), (150, 200, 0.05, 30.0), (10, 61, 0.05, 0.0)] {
+        let g = ones(h, w);
+        let p = plan_boustrophedon_rs(g.view(), STRIP, SPACING, res, 0.0, 0.0, Some(ang));
+        assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{h}x{w} {ang}");
+    }
+}
+
+/// A* forbids passing diagonally between two unsafe cells; pulling its path
+/// straight must not undo that (the straight line through the zero-width gap
+/// at (1.0, 1.0) passes the shared Bresenham check).
+#[test]
+fn simplify_keeps_the_no_corner_cut_rule() {
+    let mut g = ones(20, 20);
+    set(&mut g, 1..10, 10..19, false);
+    set(&mut g, 10..20, 0..10, false);
+    let sm = safe_map(&g);
+    let a = plan_connector_rs((0.55, 0.55), (1.45, 1.45), &sm, 0.2).expect("A* path");
+    let s = simplify_path_rs(&a, &sm);
+    assert!(s.len() > 2, "pulled straight through the corner gap: {s:?}");
+    assert!(validate_path_rs(&s, &sm).valid);
 }

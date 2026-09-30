@@ -16,3 +16,4 @@ pub mod zigzag;
 pub mod spiral;
 pub mod cell_decomposition;
 pub mod boustrophedon;
+pub mod nav_split;

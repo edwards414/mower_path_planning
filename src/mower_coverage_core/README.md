@@ -11,6 +11,7 @@ library crate with no ROS, PyO3 or colcon packaging.
 | `zigzag` | Legacy generator, pinned by the oracle; not used by the node (its rotated branch is broken) |
 | `spiral` | Onion-layer spiral for each connected component (`plan_spiral_coverage_rs`) |
 | `boustrophedon` | The zigzag planner the node uses: straight lanes at any angle, cells, optimised cell order, optional angle search (`plan_boustrophedon_rs`); also `coverage_ratio_rs`, `simplify_path_rs` |
+| `nav_split` | Mirror of the navigation server's path segmentation (`nav_segments`) and `coalesce_for_navigation`, which drops split points that would make it refuse a run |
 | `cell_decomposition` | Row-sweep boustrophedon cell decomposition (`decompose`, `CoverageCell`); ported from Python, not used by the node (`boustrophedon` builds its own cells in the sweep frame, at any angle) |
 | `types` | `SafeMap`, `ValidationResult` and the world/grid conversions |
 

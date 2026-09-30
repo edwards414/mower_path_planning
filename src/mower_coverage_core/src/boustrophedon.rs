@@ -21,7 +21,8 @@
 //! lanes parallel to the map y axis, stepping in +x; a positive angle rotates
 //! the lanes counter-clockwise.
 
-use crate::connector_planner::plan_connector_rs;
+use crate::connector_planner::{boundary_distance, plan_connector_with_bdist_rs};
+use crate::nav_split::coalesce_for_navigation;
 use crate::path_validator::{is_point_safe_rs, is_segment_safe_rs};
 use crate::types::SafeMap;
 
@@ -111,12 +112,83 @@ fn point_ok(p: (f64, f64), sm: &SafeMap) -> bool {
     c >= 0.0 && r >= 0.0 && is_point_safe_rs(p.0, p.1, sm)
 }
 
+/// Every cell the straight segment touches (supercover, Amanatides-Woo),
+/// both side cells where it passes exactly through a cell corner, must be
+/// safe. Stricter than the shared Bresenham check, which can clip an unsafe
+/// corner cell and lets a line through the zero-width gap between two
+/// diagonal unsafe cells (A* forbids that corner cut).
+fn supercover_ok(p: (f64, f64), q: (f64, f64), sm: &SafeMap) -> bool {
+    let res = sm.resolution;
+    let (h, w) = (sm.grid.nrows() as i64, sm.grid.ncols() as i64);
+    let safe = |r: i64, c: i64| r >= 0 && c >= 0 && r < h && c < w && sm.grid[[r as usize, c as usize]];
+    let (x0, y0) = ((p.0 - sm.origin_x) / res, (p.1 - sm.origin_y) / res);
+    let (x1, y1) = ((q.0 - sm.origin_x) / res, (q.1 - sm.origin_y) / res);
+    let (mut c, mut r) = (x0.floor() as i64, y0.floor() as i64);
+    let (c_end, r_end) = (x1.floor() as i64, y1.floor() as i64);
+    if !safe(r, c) {
+        return false;
+    }
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let (sc, sr) = (if dx > 0.0 { 1 } else { -1 }, if dy > 0.0 { 1 } else { -1 });
+    // parameter t in [0, 1] at which the segment crosses the next cell edge
+    let t_for = |v: f64, d: f64| {
+        if d > 0.0 {
+            (v.floor() + 1.0 - v) / d
+        } else if d < 0.0 {
+            (v - v.floor()) / -d
+        } else {
+            f64::INFINITY
+        }
+    };
+    let mut t_max_x = t_for(x0, dx);
+    let mut t_max_y = t_for(y0, dy);
+    let t_dx = if dx == 0.0 { f64::INFINITY } else { (1.0 / dx).abs() };
+    let t_dy = if dy == 0.0 { f64::INFINITY } else { (1.0 / dy).abs() };
+    let mut guard = 0;
+    while (c, r) != (c_end, r_end) {
+        guard += 1;
+        if guard > 100_000 {
+            return false;
+        }
+        let tie = (t_max_x - t_max_y).abs() < 1e-12;
+        if tie {
+            if t_max_x > 1.0 {
+                break;
+            }
+            // through a corner: both side cells count
+            if !safe(r, c + sc) || !safe(r + sr, c) {
+                return false;
+            }
+            c += sc;
+            r += sr;
+            t_max_x += t_dx;
+            t_max_y += t_dy;
+        } else if t_max_x < t_max_y {
+            if t_max_x > 1.0 {
+                break;
+            }
+            c += sc;
+            t_max_x += t_dx;
+        } else {
+            if t_max_y > 1.0 {
+                break;
+            }
+            r += sr;
+            t_max_y += t_dy;
+        }
+        if !safe(r, c) {
+            return false;
+        }
+    }
+    safe(r_end, c_end)
+}
+
 fn segment_ok(p: (f64, f64), q: (f64, f64), sm: &SafeMap) -> bool {
-    point_ok(p, sm) && point_ok(q, sm) && is_segment_safe_rs(p, q, sm)
+    point_ok(p, sm) && point_ok(q, sm) && is_segment_safe_rs(p, q, sm) && supercover_ok(p, q, sm)
 }
 
 fn path_ok(points: &[(f64, f64)], sm: &SafeMap) -> bool {
-    points.iter().all(|&p| point_ok(p, sm)) && points.windows(2).all(|w| is_segment_safe_rs(w[0], w[1], sm))
+    points.iter().all(|&p| point_ok(p, sm)) && points.windows(2).all(|w| segment_ok(w[0], w[1], sm))
 }
 
 /// Segments that are unsafe under the shared validator or leave the grid.
@@ -273,7 +345,7 @@ fn lane_intervals(sm: &SafeMap, frame: Frame, strip: f64) -> Option<(usize, Vec<
                 continue;
             }
             run = match run {
-                Some((b0, _, cnt, q)) if is_segment_safe_rs(q, p, sm) => Some((b0, b, cnt + 1, p)),
+                Some((b0, _, cnt, q)) if segment_ok(q, p, sm) => Some((b0, b, cnt + 1, p)),
                 other => {
                     close(other, &mut out);
                     Some((b, b, 1, p))
@@ -376,27 +448,25 @@ fn transition_cost(p: (f64, f64), q: (f64, f64), sm: &SafeMap) -> f64 {
 }
 
 /// Transition costs from the exit of cell `i` (variant `vi`) to the entry of
-/// cell `j` (variant `vj`), computed on first use and cached.
+/// cell `j` (variant `vj`), computed on first use and cached. Only the pairs
+/// the ordering actually looks at are stored (a dense table is 128 B x
+/// cells^2, gigabytes on a noisy map).
 struct TransitionCosts<'a, 'g> {
-    m: usize,
     ends: &'a [[((f64, f64), (f64, f64)); 4]],
     sm: &'a SafeMap<'g>,
-    tc: Vec<std::cell::Cell<f64>>,
+    tc: std::cell::RefCell<std::collections::HashMap<(usize, usize, usize, usize), f64>>,
 }
 
 impl<'a, 'g> TransitionCosts<'a, 'g> {
     fn new(ends: &'a [[((f64, f64), (f64, f64)); 4]], sm: &'a SafeMap<'g>) -> Self {
-        let m = ends.len() * 4;
-        TransitionCosts { m, ends, sm, tc: (0..m * m).map(|_| std::cell::Cell::new(f64::NAN)).collect() }
+        TransitionCosts { ends, sm, tc: std::cell::RefCell::new(std::collections::HashMap::new()) }
     }
     fn get(&self, i: usize, vi: usize, j: usize, vj: usize) -> f64 {
-        let slot = &self.tc[(i * 4 + vi) * self.m + j * 4 + vj];
-        let v = slot.get();
-        if !v.is_nan() {
+        if let Some(&v) = self.tc.borrow().get(&(i, vi, j, vj)) {
             return v;
         }
         let v = transition_cost(self.ends[i][vi].1, self.ends[j][vj].0, self.sm);
-        slot.set(v);
+        self.tc.borrow_mut().insert((i, vi, j, vj), v);
         v
     }
 }
@@ -506,6 +576,14 @@ struct Assembly {
     turns: usize,
     /// Straight transitions left unsafe (estimate mode, or no A* path).
     unsafe_transitions: f64,
+    /// A*'s boundary-distance cost map, computed on the first connector.
+    bdist: Option<ndarray::Array2<f64>>,
+}
+
+impl Assembly {
+    fn new() -> Self {
+        Assembly { points: vec![], split_points: vec![], connectors: vec![], turns: 0, unsafe_transitions: 0.0, bdist: None }
+    }
 }
 
 fn lane_points(a: f64, b_from: f64, b_to: f64, spacing: f64, frame: Frame) -> Vec<(f64, f64)> {
@@ -569,10 +647,15 @@ fn join(out: &mut Assembly, from: (f64, f64), to: (f64, f64), sm: &SafeMap, use_
     if use_astar {
         // A* returns cell centres from the start cell to the end cell: put
         // the real endpoints back before checking and pulling it straight.
-        if let Some(c) = plan_connector_rs(from, to, sm, 0.2) {
+        let bdist = out.bdist.get_or_insert_with(|| boundary_distance(sm.grid));
+        if let Some(c) = plan_connector_with_bdist_rs(from, to, sm, 0.2, bdist) {
+            // from -> start-cell centre and end-cell centre -> to stay inside
+            // one cell each
             let mut full = vec![from];
-            full.extend(c.iter().skip(1).take(c.len().saturating_sub(2)));
-            full.push(to);
+            for &p in &c {
+                push_unique(&mut full, p);
+            }
+            push_unique(&mut full, to);
             if path_ok(&full, sm) {
                 let full = simplify_path_rs(&full, sm);
                 for &p in &full[1..] {
@@ -597,7 +680,7 @@ fn assemble(
     use_astar: bool,
 ) -> Assembly {
     let res = sm.resolution;
-    let mut out = Assembly { points: vec![], split_points: vec![], connectors: vec![], turns: 0, unsafe_transitions: 0.0 };
+    let mut out = Assembly::new();
     for (k, &ci) in order.iter().enumerate() {
         let lanes = ordered_lanes(&cells[ci], VARIANTS[variants[k]]);
         // start of the first lane may be moved by a U-turn trim; keep as-is here
@@ -663,7 +746,8 @@ fn repair(out: &mut Assembly, sm: &SafeMap) {
     if kept.len() == out.points.len() && strict_invalid_segments(&kept, sm).is_empty() {
         return;
     }
-    let mut fixed = Assembly { points: vec![], split_points: vec![], connectors: vec![], turns: 0, unsafe_transitions: 0.0 };
+    let mut fixed = Assembly::new();
+    fixed.bdist = out.bdist.take();
     for &p in &kept {
         match fixed.points.last().copied() {
             None => fixed.points.push(p),
@@ -770,6 +854,10 @@ pub fn plan_boustrophedon_rs(
     };
     let mut asm = assemble(&c.cells, &c.order, &c.variants, spacing, c.frame, &sm, true);
     repair(&mut asm, &sm);
+    // no FollowPath segment the navigation server would refuse
+    let (points, split_points) = coalesce_for_navigation(&asm.points, &asm.split_points);
+    asm.points = points;
+    asm.split_points = split_points;
     let invalid_segments = strict_invalid_segments(&asm.points, &sm);
     BoustrophedonPlan {
         length_m: path_length_rs(&asm.points),

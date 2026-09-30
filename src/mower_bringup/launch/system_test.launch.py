@@ -54,6 +54,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
     zigzag_angle_deg = LaunchConfiguration('zigzag_angle_deg')
+    zigzag_auto_angle = LaunchConfiguration('zigzag_auto_angle')
 
     declare_launch_sim = DeclareLaunchArgument(
         'launch_sim',
@@ -74,6 +75,11 @@ def generate_launch_description():
         'zigzag_angle_deg',
         default_value='0.0',
         description='Zigzag scan angle in degrees, from 0 to 180',
+    )
+    declare_zigzag_auto_angle = DeclareLaunchArgument(
+        'zigzag_auto_angle',
+        default_value='false',
+        description='Search the sweep angle (ignores zigzag_angle_deg)',
     )
 
     mower_bringup_dir = get_package_share_directory('mower_bringup')
@@ -125,6 +131,7 @@ def generate_launch_description():
             'ros2', 'run', 'mower_rs', 'mower_coverage',
             '--ros-args',
             '-p', ['zigzag_angle_deg:=', zigzag_angle_deg],
+            '-p', ['zigzag_auto_angle:=', zigzag_auto_angle],
             '-p', ['use_sim_time:=', use_sim_time],
         ],
         output='screen'
@@ -249,6 +256,7 @@ def generate_launch_description():
         OpaqueFunction(function=_require_sim_time),
         declare_use_rviz,
         declare_zigzag_angle_deg,
+        declare_zigzag_auto_angle,
         rosbridge_launch,
         manual_velocity_guard,
         twist_mux,

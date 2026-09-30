@@ -48,7 +48,10 @@ fn is_boundary_cell(r: usize, c: usize, grid: ArrayView2<bool>) -> bool {
     false
 }
 
-fn boundary_distance(grid: ArrayView2<bool>) -> Array2<f64> {
+/// Distance (in cells, BFS) of every cell to the nearest safe-region boundary
+/// cell: the cost map A* adds. Depends only on the grid, so a caller planning
+/// many connectors on one map computes it once ([`plan_connector_with_bdist_rs`]).
+pub fn boundary_distance(grid: ArrayView2<bool>) -> Array2<f64> {
     let h = grid.nrows();
     let w = grid.ncols();
     let mut dist = Array2::from_elem((h, w), f64::INFINITY);
@@ -109,6 +112,28 @@ pub fn plan_connector_rs(
     sm: &SafeMap,
     boundary_weight: f64,
 ) -> Option<Vec<(f64, f64)>> {
+    plan_connector_impl(start, end, sm, boundary_weight, None)
+}
+
+/// [`plan_connector_rs`] with a precomputed [`boundary_distance`] of `sm.grid`
+/// (the O(cells) pass otherwise repeated for every connector).
+pub fn plan_connector_with_bdist_rs(
+    start: (f64, f64),
+    end: (f64, f64),
+    sm: &SafeMap,
+    boundary_weight: f64,
+    bdist: &Array2<f64>,
+) -> Option<Vec<(f64, f64)>> {
+    plan_connector_impl(start, end, sm, boundary_weight, Some(bdist))
+}
+
+fn plan_connector_impl(
+    start: (f64, f64),
+    end: (f64, f64),
+    sm: &SafeMap,
+    boundary_weight: f64,
+    bdist: Option<&Array2<f64>>,
+) -> Option<Vec<(f64, f64)>> {
     // Check start/end safety
     let h = sm.grid.nrows();
     let w = sm.grid.ncols();
@@ -129,7 +154,14 @@ pub fn plan_connector_rs(
         return Some(vec![start, end]);
     }
 
-    let bdist = boundary_distance(sm.grid);
+    let owned;
+    let bdist = match bdist {
+        Some(b) => b,
+        None => {
+            owned = boundary_distance(sm.grid);
+            &owned
+        }
+    };
 
     let heuristic = |r: usize, c: usize| -> f64 {
         ((r1 as f64 - r as f64).powi(2) + (c1 as f64 - c as f64).powi(2)).sqrt()

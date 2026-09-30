@@ -48,7 +48,8 @@ use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use r2r::{GoalStatus, QosProfile};
 use tokio::sync::Mutex;
 
-use mower_coverage_core::connector_planner::plan_connector_rs;
+use mower_coverage_core::connector_planner::{boundary_distance, plan_connector_with_bdist_rs};
+use mower_coverage_core::nav_split::coalesce_for_navigation;
 use mower_coverage_core::path_validator::validate_path_rs;
 use mower_coverage_core::safe_map_filter::filter_safe_components_rs;
 use mower_coverage_core::spiral::plan_spiral_coverage_rs;
@@ -541,6 +542,8 @@ impl Ctx {
         let mut new_points = Vec::with_capacity(points.len());
         let mut viz = Vec::new();
         let mut unresolved = Vec::new();
+        // A*'s boundary-distance map depends only on the grid: once per call
+        let mut bdist = None;
         for (i, &pt) in points.iter().enumerate() {
             new_points.push(pt);
             if i + 1 >= points.len() || !invalid_set.contains(&(i, i + 1)) {
@@ -548,7 +551,8 @@ impl Ctx {
             }
             // A* gives one waypoint per cell: pull it straight (endpoints and
             // safety kept) before inserting it.
-            match plan_connector_rs(pt, points[i + 1], sm, 0.2).map(|c| simplify_path_rs(&c, sm)) {
+            let bdist = bdist.get_or_insert_with(|| boundary_distance(sm.grid));
+            match plan_connector_with_bdist_rs(pt, points[i + 1], sm, 0.2, bdist).map(|c| simplify_path_rs(&c, sm)) {
                 Some(connector) if connector.len() > 2 => {
                     for cp in &connector[1..connector.len() - 1] {
                         new_points.push(*cp);
@@ -686,27 +690,49 @@ impl Ctx {
             let sm = SafeMap { grid: safe.view(), resolution: res, origin_x: ox, origin_y: oy };
             let frame_id = if zones[i].mask_map.header.frame_id.is_empty() { "map".to_string() } else { zones[i].mask_map.header.frame_id.clone() };
             let started = std::time::Instant::now();
-            let (mut coverage_pts, split_pts, invalid_segs) = if pattern == "spiral" {
-                plan_spiral_coverage_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy)
-            } else {
-                // straight lanes at any angle, cell decomposition, optimised
-                // cell order; zigzag_auto_angle searches the sweep angle
-                let angle = if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) };
-                let plan = plan_boustrophedon_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle);
-                self.info(format!(
-                    "zone {zone_id}: boustrophedon angle={:.1} deg ({}), lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
-                    plan.angle_deg,
-                    if angle.is_none() { "auto" } else { "fixed" },
-                    plan.lanes,
-                    plan.cells,
-                    plan.turns,
-                    plan.length_m,
-                    plan.connectors.len()
-                ));
-                if !plan.connectors.is_empty() {
-                    self.publish_connectors(&plan.connectors, i, &frame_id);
+            // CPU-bound (angle search, A* connectors): off the async workers,
+            // which mower_rsd shares with every other module
+            let angle = if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) };
+            enum Planned {
+                Spiral((Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(usize, usize)>)),
+                Boustrophedon(mower_coverage_core::boustrophedon::BoustrophedonPlan),
+            }
+            let (safe_owned, spiral) = (safe.clone(), pattern == "spiral");
+            let planned = tokio::task::spawn_blocking(move || {
+                if spiral {
+                    Planned::Spiral(plan_spiral_coverage_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy))
+                } else {
+                    // straight lanes at any angle, cell decomposition,
+                    // optimised cell order; None searches the sweep angle
+                    Planned::Boustrophedon(plan_boustrophedon_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle))
                 }
-                (plan.points, plan.split_points, plan.invalid_segments)
+            })
+            .await;
+            let planned = match planned {
+                Ok(v) => v,
+                Err(e) => {
+                    self.error(format!("zone {zone_id}: coverage planning failed: {e}"));
+                    return false;
+                }
+            };
+            // every connector of this zone, published once (one marker id range)
+            let mut connectors_viz: Vec<Vec<(f64, f64)>> = Vec::new();
+            let (mut coverage_pts, split_pts, invalid_segs) = match planned {
+                Planned::Spiral(spiral_plan) => spiral_plan,
+                Planned::Boustrophedon(plan) => {
+                    self.info(format!(
+                        "zone {zone_id}: boustrophedon angle={:.1} deg ({}), lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
+                        plan.angle_deg,
+                        if angle.is_none() { "auto" } else { "fixed" },
+                        plan.lanes,
+                        plan.cells,
+                        plan.turns,
+                        plan.length_m,
+                        plan.connectors.len()
+                    ));
+                    connectors_viz.extend(plan.connectors);
+                    (plan.points, plan.split_points, plan.invalid_segments)
+                }
             };
             let planning_ms = started.elapsed().as_secs_f64() * 1000.0;
 
@@ -720,9 +746,7 @@ impl Ctx {
                     self.error(format!("zone {zone_id}: {} unsafe connector(s) unresolved; coverage path not published", unresolved.len()));
                     return false;
                 }
-                if !viz.is_empty() {
-                    self.publish_connectors(&viz, i, &frame_id);
-                }
+                connectors_viz.extend(viz);
             }
             let final_validation: ValidationResult = validate_path_rs(&coverage_pts, &sm);
             if !final_validation.valid {
@@ -756,9 +780,7 @@ impl Ctx {
                             self.error(format!("zone {zone_id}: {} unsafe boundary-ring connector(s) unresolved; coverage path not published", unresolved.len()));
                             return false;
                         }
-                        if !viz.is_empty() {
-                            self.publish_connectors(&viz, i, &frame_id);
-                        }
+                        connectors_viz.extend(viz);
                     }
                     let ring_final = validate_path_rs(&coverage_pts, &sm);
                     if !ring_final.valid {
@@ -769,6 +791,15 @@ impl Ctx {
                 }
             }
 
+            if !connectors_viz.is_empty() {
+                self.publish_connectors(&connectors_viz, i, &frame_id);
+            }
+            // The navigation server cuts at every pose within 0.1 m of a split
+            // point and at sharp turns, and refuses a run with any piece of
+            // 0.15 m or less: drop the split points (or the few centimetres at
+            // a path end) that would do that. Only end poses can go, so the
+            // validated path stays valid.
+            let (coverage_pts, split_pts) = coalesce_for_navigation(&coverage_pts, &split_pts);
             zones[i].path = path_from_points(&coverage_pts, &zones[i].mask_map.header);
             zones[i].coverage_split_points = split_poses(&split_pts);
         }
