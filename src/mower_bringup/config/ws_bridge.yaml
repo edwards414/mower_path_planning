@@ -47,6 +47,8 @@ services:
   /edit_zone: mower_interface/srv/EditZone
   /site_op: mower_interface/srv/SiteOp
   /zone_exec_path: mower_interface/srv/ZoneExecPath
+  /run_zone_sequence: mower_interface/srv/ZoneSequence
+  /stop_zone_sequence: std_srvs/srv/Trigger
   /cancel_nav2: std_srvs/srv/Trigger
   /cencel_nav2: std_srvs/srv/Trigger
   /check_nav_status: std_srvs/srv/Trigger

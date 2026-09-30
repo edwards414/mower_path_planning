@@ -250,6 +250,8 @@ Flutter 顯示建議：
 | UI | Service / Action | Type | Request | 說明 |
 |---|---|---|---|---|
 | Execute Zone | `/zone_exec_path` | `mower_interface/srv/ZoneExecPath` | `zone_id: int32` | 執行指定 zone path |
+| Run Zone Sequence | `/run_zone_sequence` | `mower_interface/srv/ZoneSequence` | `zone_ids: int32[]`, `channel_proximity_m: float32`（0 用預設 1.5 m） | 依序執行多個 zone，zone 之間走錄好的通道（`/get_channel_route`）；2026-09-30 起在 app 白名單 |
+| Stop Zone Sequence | `/stop_zone_sequence` | `std_srvs/srv/Trigger` | 無 | 停止序列並取消目前那個 zone 的導航 |
 | Cancel Navigation | `/cencel_nav2` | `std_srvs/Trigger` | 無 | 取消 Nav2 任務 |
 | Check Nav Status | `/check_nav_status` | `std_srvs/Trigger` | 無 | 查詢 BasicNavigator 狀態 |
 | Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 由後端內部呼叫 |
@@ -374,6 +376,8 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/get_zone_map_list_srv` | `mower_interface/ZoneMapList` | `map_manage` | 取得 ZoneMap[] | 使用 |
 | `/generate_coverage_path` | `std_srvs/Trigger` | `boustrophedon_coverage` | 生成 coverage path | 使用 |
 | `/zone_exec_path` | `mower_interface/ZoneExecPath` | `boustrophedon_coverage` | 執行 zone path | 使用 |
+| `/run_zone_sequence` | `mower_interface/ZoneSequence` | `boustrophedon_coverage` | 依序執行多個 zone（中間走通道） | 可用（2026-09-30 加入白名單） |
+| `/stop_zone_sequence` | `std_srvs/Trigger` | `boustrophedon_coverage` | 停止 zone 序列 | 可用（2026-09-30 加入白名單） |
 | `/cencel_nav2` | `std_srvs/Trigger` | `boustrophedon_coverage` | 取消導航 | 使用 |
 | `/check_nav_status` | `std_srvs/Trigger` | `boustrophedon_coverage` | 查詢導航狀態 | 使用 |
 | `/risk_zone_save` | `std_srvs/Trigger` | 未註冊 | 函式存在但 service 不存在 | 不使用 |
