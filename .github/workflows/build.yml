@@ -32,21 +32,34 @@ permissions:
   packages: write
   id-token: write
 
+# A new push to a PR cancels that PR's run still in progress; pushes to main
+# and tags always run to the end (they publish the image robots pull).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Where the jobs run: GitHub-hosted by default, a self-hosted runner when the
+# repository variable is set (Settings -> Secrets and variables -> Actions ->
+# Variables), as a JSON label list, e.g.
+#   IMAGE_RUNNER = ["self-hosted", "linux", "arm64"]   the arm64 image build
+#   CI_RUNNER    = ["self-hosted", "linux"]            the test jobs
+# Unset (or deleted) means the GitHub-hosted runner below, so a runner that is
+# offline is a variable change away from the old behaviour. Setup, security
+# and what each runner needs: docs/CI_RUNNERS.md.
 jobs:
   python-tests:
     name: Pure Python tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    # in a container, so any Linux runner with Docker works (no setup-python
+    # toolcache or sudo needed on a self-hosted machine)
+    container: python:3.12-slim
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install test dependencies
-        run: python -m pip install numpy opencv-python-headless pytest websockets
+        run: python -m pip install numpy opencv-python-headless pytest pyyaml websockets
 
       - name: Run ROS-free mower_mission tests
         working-directory: src/mower_mission
@@ -71,13 +84,12 @@ jobs:
     # crate linked into the mower_rs coverage node through a cargo path
     # dependency, so its unit tests need neither ROS nor r2r.
     name: mower_coverage_core tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container: rust:1-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: cargo test
         working-directory: src/mower_coverage_core
@@ -88,17 +100,22 @@ jobs:
     # stage uses. Fails in ~1 min instead of after the 1 h image build, and
     # the .bin is downloadable from the run for bench flashing.
     name: STM32 firmware
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container: ubuntu:24.04
     steps:
+      # git before checkout: without it checkout downloads a tarball and
+      # `make version` (git describe) has no history
+      - name: Install arm-none-eabi toolchain
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates make python3 gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Install arm-none-eabi toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
 
       - name: Build application and bootloader
         working-directory: firmware
@@ -122,7 +139,8 @@ jobs:
   driver-tests:
     # mower_hardware protocol unit tests (gtest) against the real ROS distro.
     name: mower_hardware tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
     container: ros:jazzy-ros-base
     steps:
       - name: Checkout
@@ -148,7 +166,9 @@ jobs:
     # Native arm64 (GitHub standard runner, counts against the plan's included
     # minutes like ubuntu-latest). Both images are arm64-only for the robot;
     # building them under QEMU on x86 took 82 min, native is ~10 min.
-    runs-on: ubuntu-24.04-arm
+    # It is ~75 % of the workflow's billed minutes, so IMAGE_RUNNER moves it
+    # to a self-hosted arm64 machine (see the top of this file).
+    runs-on: ${{ fromJSON(vars.IMAGE_RUNNER || '"ubuntu-24.04-arm"') }}
     needs: [python-tests, coverage-core-tests, firmware, driver-tests]
 
     # Only the image something actually pulls from GHCR:
@@ -193,8 +213,10 @@ jobs:
           echo "MOWER_VERSION=${version}" >> "$GITHUB_ENV"
           echo "build identity: ${version} ${GITHUB_SHA}"
 
+      # GitHub-hosted only: on a self-hosted machine this would delete its
+      # tools and prune every Docker image and the persistent build cache.
       - name: Free runner disk space
-        if: runner.os == 'Linux'
+        if: runner.environment == 'github-hosted'
         run: |
           df -h
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
@@ -224,7 +246,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Self-hosted: the long-lived `mower-ci` builder created once when the
+      # runner was set up (docs/CI_RUNNERS.md), so its cache mounts (colcon
+      # build tree, ccache, cargo) stay on the machine and the actions/cache
+      # round trip below is skipped. GitHub-hosted: a fresh builder per job.
       - name: Set up Docker Buildx
+        id: buildx
+        if: runner.environment == 'github-hosted'
         uses: docker/setup-buildx-action@v3
 
       # Incremental workspace builds for the runtime image. Checkout gives
@@ -238,12 +266,12 @@ jobs:
       - name: Restore git mtimes
         if: matrix.name == 'runtime'
         run: |
-          sudo apt-get install -y --no-install-recommends git-restore-mtime
+          command -v git-restore-mtime >/dev/null || sudo apt-get install -y --no-install-recommends git-restore-mtime
           git restore-mtime --skip-missing
           ls -l --time-style=+%F src/mower_hardware/package.xml
 
       - name: Restore build caches
-        if: matrix.name == 'runtime'
+        if: matrix.name == 'runtime' && runner.environment == 'github-hosted'
         id: build-cache
         uses: actions/cache@v4
         with:
@@ -253,7 +281,7 @@ jobs:
             runtime-build-cache-
 
       - name: Inject build caches into BuildKit
-        if: matrix.name == 'runtime'
+        if: matrix.name == 'runtime' && runner.environment == 'github-hosted'
         uses: reproducible-containers/buildkit-cache-dance@v3.4.0
         with:
           cache-map: |
@@ -268,6 +296,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          builder: ${{ runner.environment == 'self-hosted' && 'mower-ci' || steps.buildx.outputs.name }}
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
@@ -282,16 +311,17 @@ jobs:
           platforms: ${{ matrix.push_platforms }}
           push: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/') }}
           load: ${{ github.event_name == 'pull_request' && matrix.name == 'runtime' && !contains(github.event.pull_request.labels.*.name, 'push-image') }}
-          # Always keep the fast GitHub Actions cache. Additionally publish a
+          # GitHub-hosted: the GitHub Actions layer cache (a self-hosted
+          # builder keeps its own layers). Additionally publish a
           # GHCR registry cache for the runtime target (only when GHCR login has
           # run: pushes, tags, or PRs labeled push-image) so local
           # `docker buildx` builds can reuse the same builder layers via
           # --cache-from. The expression collapses to an empty line otherwise.
           cache-from: |
-            type=gha,scope=${{ matrix.name }}
+            ${{ runner.environment == 'github-hosted' && format('type=gha,scope={0}', matrix.name) || '' }}
             ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
           cache-to: |
-            type=gha,mode=max,scope=${{ matrix.name }}
+            ${{ runner.environment == 'github-hosted' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
             ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
@@ -353,3 +383,9 @@ jobs:
             test -n "${MOWER_VERSION}"
             echo "image ${MOWER_IMAGE} version ${MOWER_VERSION} sha ${MOWER_GIT_SHA}"
           '
+
+      # A self-hosted daemon keeps every PR image the smoke test loaded;
+      # drop this one (its layers stay in the mower-ci builder cache).
+      - name: Remove the PR image from a self-hosted runner
+        if: always() && runner.environment == 'self-hosted' && github.event_name == 'pull_request' && matrix.name == 'runtime' && steps.runtime-image.outputs.tag != ''
+        run: docker image rm "${{ steps.runtime-image.outputs.tag }}" || true
