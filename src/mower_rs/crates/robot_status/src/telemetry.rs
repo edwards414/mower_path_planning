@@ -199,46 +199,6 @@ pub fn poll_link(st: &mut State, state_dir: &str, now: Instant) {
     }
 }
 
-/// Host load / memory / CPU temperature, refreshed every two seconds.
-pub fn poll_host(st: &mut State, now: Instant) {
-    if let Some(t) = st.host_t {
-        if now.duration_since(t).as_secs_f64() < 2.0 {
-            return;
-        }
-    }
-    st.host_t = Some(now);
-    let load1 = fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()));
-    let mem_used_pct = fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
-        let mut total = None;
-        let mut avail = None;
-        for line in s.lines() {
-            let mut parts = line.split(':');
-            let key = parts.next()?.trim();
-            let value = parts.next()?.split_whitespace().next()?.parse::<f64>().ok()?;
-            match key {
-                "MemTotal" => total = Some(value),
-                "MemAvailable" => avail = Some(value),
-                _ => {}
-            }
-        }
-        match (total, avail) {
-            (Some(t), Some(a)) if t > 0.0 => Some(round_to(100.0 * (t - a) / t, 1)),
-            _ => None,
-        }
-    });
-    let cpu_temp_c = fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
-        .ok()
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .map(|m| round_to(m / 1000.0, 1));
-    st.host = json!({
-        "load1": opt_number(load1),
-        "mem_used_pct": opt_number(mem_used_pct),
-        "cpu_temp_c": opt_number(cpu_temp_c),
-    });
-}
-
 /// One `/robot/telemetry` document.
 pub fn build_document(st: &State, robot_id: &str, seq: u64, start: Instant, now: Instant) -> Value {
     let mut host = match &st.host {
