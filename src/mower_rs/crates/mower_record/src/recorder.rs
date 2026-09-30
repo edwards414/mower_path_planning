@@ -1371,15 +1371,35 @@ pub fn wall_stamp() -> Time {
     Time { sec: d.as_secs() as i32, nanosec: d.subsec_nanos() }
 }
 
-#[allow(dead_code)]
 pub fn since(t: Instant) -> f64 {
     t.elapsed().as_secs_f64()
+}
+
+/// Rear-light effect to publish on this tick, if any (same rule as
+/// `path_record_utils.rear_light_update`). The driver drops the recording
+/// overlay after ~6 s without a refresh, so while recording it is re-sent
+/// every `period_s`; "off" goes out once, on the first tick after the end.
+pub fn rear_light_update(recording: bool, light_on: bool, since_sent_s: f64, period_s: f64) -> Option<&'static str> {
+    if recording {
+        (!light_on || since_sent_s >= period_s).then_some("recording")
+    } else {
+        light_on.then_some("off")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn rear_light_on_refreshed_then_off_once() {
+        assert_eq!(rear_light_update(true, false, 0.0, 2.0), Some("recording"));
+        assert_eq!(rear_light_update(true, true, 1.99, 2.0), None);
+        assert_eq!(rear_light_update(true, true, 2.0, 2.0), Some("recording"));
+        assert_eq!(rear_light_update(false, true, 0.3, 2.0), Some("off"));
+        assert_eq!(rear_light_update(false, false, 1e6, 2.0), None);
+    }
 
     #[derive(Default)]
     struct Log {

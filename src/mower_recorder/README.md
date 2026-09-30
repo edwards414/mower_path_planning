@@ -50,10 +50,13 @@ IncludeLaunchDescription(PythonLaunchDescriptionSource(
 ```
 
 While a recording is running the robot's **rear light breathes red** (front
-light unchanged): `recorder_manager_node` publishes `{"effect":"recording"}` /
-`{"effect":"off"}` on `/mower_base/rear_light` with every 2 s status tick, and
-the `mower_hardware` driver turns it into the STM32 `0x03` overlay bit (drops it
-after 6 s without a refresh). Param `rear_light_topic` (`''` disables).
+light unchanged): `recorder_manager_node` publishes
+`{"effect":"recording"|"off","source":"bag"}` on `/mower_base/rear_light` with
+every 2 s status tick, and the `mower_hardware` driver turns it into the STM32
+`0x03` overlay bit (drops it after 6 s without a refresh). The app's zone
+recording (`path_record_node`, source `path_record`) uses the same light; the
+driver keeps them apart, so this node's idle "off" does not cut a zone
+recording. Param `rear_light_topic` (`''` disables).
 
 ### Control services
 

@@ -19,6 +19,8 @@ import math
 
 import os
 
+import time
+
 from mower_interface.srv import ChannelPathList, ChannelRoute, EditZone, \
     GetZoneList, SiteOp
 
@@ -47,7 +49,8 @@ from .navigation_guard import (
     guarded_mission_mutation,
 )
 
-from .utils.path_record_utils import path_to_marker, simplify_path
+from .utils.path_record_utils import (
+    path_to_marker, rear_light_update, simplify_path)
 
 
 def _write_json_atomic(path, payload):
@@ -88,6 +91,10 @@ class PathRecorder(Node, NavigationActivityGuard):
         self.declare_parameter('sites_dir', '~/.mower/sites')
         self.declare_parameter('max_site_datum_distance_m', 100.0)
         self.declare_parameter('polygon_simplify_dist', 0.1)
+        # Red breathing rear light while a zone / risk zone / channel is being
+        # recorded (mower_hardware driver -> STM32 0x03 overlay); '' disables.
+        self.declare_parameter('rear_light_topic', '/mower_base/rear_light')
+        self.declare_parameter('rear_light_period_s', 2.0)
         self.get_logger().info('path_recorder ready.')
 
         os.makedirs(self.get_parameter('save_dir').value, exist_ok=True)
@@ -116,6 +123,16 @@ class PathRecorder(Node, NavigationActivityGuard):
             Path, '/channel_path', 10)
         self.channel_path_array_pub = self.create_publisher(
             MarkerArray, '/channel_path_array', polygon_qos)
+        # Transient-local like the driver's subscription (a volatile writer
+        # would not match it). Re-sent by the sampler while recording: the
+        # driver drops the overlay after ~6 s without a refresh, so a dead
+        # recorder cannot leave the robot claiming it is still recording.
+        rear_topic = self.get_parameter('rear_light_topic').value
+        self.rear_light_pub = (
+            self.create_publisher(String, rear_topic, polygon_qos)
+            if rear_topic else None)
+        self._rear_light_on = False
+        self._rear_light_sent = 0.0
 
         # The 10 Hz trace-path sampler only runs while a zone / risk zone /
         # channel recording is active: the start services re-arm it and the
@@ -419,8 +436,10 @@ class PathRecorder(Node, NavigationActivityGuard):
 
     def publish_path_timer(self):
         """定時發布trace path."""
-        if not (self.record_zone_status or self.risk_zone_status
-                or self.chennal_record_status):
+        recording = (self.record_zone_status or self.risk_zone_status
+                     or self.chennal_record_status)
+        self._update_rear_light(recording)
+        if not recording:
             self.timer.cancel()
             return
         if self.record_zone_status:
@@ -519,6 +538,21 @@ class PathRecorder(Node, NavigationActivityGuard):
                     self.get_clock().now().to_msg())
                 self.chennal_path_pub.publish(self.chennal_path)
                 self.channel_path_pub.publish(self.chennal_path)
+
+    def _update_rear_light(self, recording):
+        if self.rear_light_pub is None:
+            return
+        now = time.monotonic()
+        effect = rear_light_update(
+            recording, self._rear_light_on, now - self._rear_light_sent,
+            self.get_parameter('rear_light_period_s').value)
+        if effect is None:
+            return
+        self.rear_light_pub.publish(
+            String(data=json.dumps(
+                {'effect': effect, 'source': 'path_record'})))
+        self._rear_light_on = effect == 'recording'
+        self._rear_light_sent = now
 
     def _active_recording_kind(self):
         """Return the one active recorder mode, if any."""

@@ -114,7 +114,7 @@ CallbackReturn MowerSystem::on_configure(const rclcpp_lifecycle::State &)
       }
       if (!rear_light_topic_.empty()) {
         rear_light_sub_ = info_node_->create_subscription<std_msgs::msg::String>(
-          rear_light_topic_, rclcpp::QoS(1).transient_local().reliable(),
+          rear_light_topic_, rclcpp::QoS(8).transient_local().reliable(),
           [this](const std_msgs::msg::String & msg) { on_rear_light(msg); });
       }
       if (!pid_topic_.empty()) {
@@ -314,8 +314,10 @@ void MowerSystem::on_rear_light(const std_msgs::msg::String & msg)
     RCLCPP_WARN(logger(), "ignoring rear light request without a known effect: %s", msg.data.c_str());
     return;
   }
-  rear_recording_until_ns_.store(
-    recording ? steady_ns() + static_cast<int64_t>(rear_light_timeout_s_ * 1e9) : 0);
+  std::lock_guard<std::mutex> lock(rear_sources_mutex_);
+  rear_recording_until_ns_.store(rear_sources_.update(
+    json_str(msg.data, "source"), recording, steady_ns(),
+    static_cast<int64_t>(rear_light_timeout_s_ * 1e9)));
 }
 
 void MowerSystem::send_led_if_needed(const rclcpp::Time & now)

@@ -136,14 +136,18 @@ private:
 
   // Rear-light overlay (0x03 byte 6), from its own topic so it survives
   // whoever publishes the base light request:
-  //   {"effect":"recording"}  red breath on the back strip
-  //   {"effect":"off"}
-  // The publisher (mower_recorder) repeats it every ~2 s; without a refresh
-  // for rear_light_timeout_s the overlay drops, so a dead recorder cannot
-  // leave the robot claiming it is still recording.
+  //   {"effect":"recording","source":"path_record"}  red breath on the back strip
+  //   {"effect":"off","source":"path_record"}
+  // Each recorder (path_record = zones from the app, bag = mower_recorder)
+  // repeats its state every ~2 s under its own `source`, and the overlay is
+  // on while any source is: one recorder's "off" does not cut another's
+  // breath. Without a refresh for rear_light_timeout_s a source drops, so a
+  // dead recorder cannot leave the robot claiming it is still recording.
   std::string rear_light_topic_ = "/mower_base/rear_light";
   double rear_light_timeout_s_ = 6.0;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr rear_light_sub_;
+  std::mutex rear_sources_mutex_;
+  RearLightSources rear_sources_;
   std::atomic<int64_t> rear_recording_until_ns_{0};  // steady clock; 0 = off
   uint8_t led_overlay_sent_ = 0;
   void on_rear_light(const std_msgs::msg::String & msg);

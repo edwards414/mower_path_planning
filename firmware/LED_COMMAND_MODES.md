@@ -22,7 +22,7 @@
 - LED command 沒有 timeout 機制，最後一次收到的效果會一直維持
 - `CLEAR` / `ALL_ON` 不再瞬間切換：從目前燈條上的顏色淡入淡出 400 ms（`Module/Src/led_effects.cpp`）
 - `0x06 ORBIT`：時間驅動的環繞光（次像素位置、指數尾巴、呼吸底光），20 ms 一幀；主機更新軟體時用它顯示琥珀色
-- payload byte 6 `overlay`（原 `reserved0`）：疊加在 `mode` 上、跟 `mode` 無關的燈效。`0x01` `REAR_RECORDING` = 錄製 mower_bag 時後燈紅色呼吸（前燈不動），見下方〈後燈疊加〉
+- payload byte 6 `overlay`（原 `reserved0`）：疊加在 `mode` 上、跟 `mode` 無關的燈效。`0x01` `REAR_RECORDING` = 錄製中（app 錄區域或錄 mower_bag）後燈紅色呼吸（前燈不動），見下方〈後燈疊加〉
 
 完整 UART frame、CRC 與其他 motor command 可另外看 [UART_OPEN_LOOP_PROTOCOL.md](UART_OPEN_LOOP_PROTOCOL.md)。
 
@@ -298,7 +298,7 @@ mode=0x06, r=255, g=180, b=0, effect_period_ms=1600
 
 ### `0x01` `REAR_RECORDING`
 
-錄製 mower_bag 時由主機打開（`mower_recorder` → `/mower_base/rear_light` → `mower_hardware` → 這個 bit）。
+錄製中由主機打開：app 錄區域 / 禁區 / 通道（`path_record_node`）或錄 mower_bag（`mower_recorder`）→ `/mower_base/rear_light` → `mower_hardware` → 這個 bit。
 
 - 紅色不對稱呼吸，一個週期 2.4 s：吸氣 0.86 s（ease-in-out）→ 吐氣 1.2 s（較慢）→ 底部停 0.34 s，每個接點斜率都是 0，沒有折角
 - 最暗不會全黑，保留約 6 % 的暗紅餘燼；最亮跟其他燈效同上限（每色 110/255）
@@ -306,7 +306,7 @@ mode=0x06, r=255, g=180, b=0, effect_period_ms=1600
 - 暗部做有序抖動（ordered dither，16 顆的門檻用 4-bit bit reversal 打散），整條燈的平均亮度以 1/16 階前進，不會在相鄰兩個 WS2812 碼之間一格一格跳
 - 打開時從目前後燈的畫面交叉淡入 600 ms，並從吸氣開始；關掉時淡回底圖 900 ms
 - 開機 / 關機動畫期間不畫（直接清掉，動畫結束後依最後一筆命令重新淡入）
-- 主機端有 6 s 保活：`/mower_base/rear_light` 超過 6 s 沒有再送 `recording`，驅動就把 bit 清掉，錄製節點掛掉時後燈不會一直紅
+- 主機端有 6 s 保活：`/mower_base/rear_light` 每個 `source` 各自計時，超過 6 s 沒有再送 `recording` 就失效，錄製節點掛掉時後燈不會一直紅；任一 source 在錄就亮，一個 source 的 `off` 只清掉自己
 
 ```text
 mode=0x01, r=110, g=110, b=110, effect_period_ms=0, overlay=0x01   # 前燈常亮白，後燈紅色呼吸

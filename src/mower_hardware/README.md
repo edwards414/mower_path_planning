@@ -55,7 +55,7 @@ blade motor (`0x82`); `held` is this driver's dead-man state (below).
 
 Five command side channels (JSON on `std_msgs/String`); the first two are
 used by the `mower_mission` `pid_autotune_node`, servo / blade by Mower
-Studio's 機構 / 割草 card, the rear light by `mower_recorder`:
+Studio's 機構 / 割草 card, the rear light by `path_record_node` (app zone recording) and `mower_recorder`:
 
 | Topic | Payload | Effect |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ Studio's 機構 / 割草 card, the rear light by `mower_recorder`:
 | `/mower_base/wheel_override` | `{"left_permille":400,"right_permille":400,"ttl_ms":300}` | while the ttl (clamped to 1 s) has not expired, `write()` sends these permille instead of the controller's velocity command, so an open-loop / closed-loop step is a real step and not one shaped by `diff_drive_controller`'s acceleration limits. Keep re-publishing to hold it; it falls back to the controller on expiry |
 | `/mower_base/servo_command` | `{"pulse_us":1500,"hold_ms":0}` | one `0x07` per message. `pulse_us` 500–2500 is a target the STM32 slews to at 25 µs/10 ms, stopping (and backing off 50 µs) when a limit microswitch trips; `0` releases the servo. `hold_ms` 0 = hold until the next command, else pulses stop that long after the command |
 | `/mower_base/blade_command` | `{"permille":300,"ttl_ms":500}` | dead-man: while the ttl (clamped to 1 s) has not expired `write()` re-sends `0x02` every cycle with the STM32 command timeout; on expiry (or `permille` 0) one explicit stop goes out. A dead publisher, a dropped link or a stalled controller manager all stop the blade within ttl + `command_timeout_ms`. Keep re-publishing (e.g. 5 Hz, ttl 500) to hold it |
-| `/mower_base/rear_light` | `{"effect":"recording"}` / `{"effect":"off"}` | sets the `0x03` `overlay` byte (`REAR_RECORDING`): a red breath on the back strip only, on top of whatever `/mower_base/led_command` asked for (front untouched). Needs a refresh within `rear_light_timeout_s` or it drops, so a dead publisher cannot leave it on; `mower_recorder` re-sends it with its 2 s status. Telemetry `led.flags` bit `0x08` confirms the firmware applied it |
+| `/mower_base/rear_light` | `{"effect":"recording"\|"off","source":"path_record"}` | sets the `0x03` `overlay` byte (`REAR_RECORDING`): a red breath on the back strip only, on top of whatever `/mower_base/led_command` asked for (front untouched). Kept per `source` (`path_record` = zones from the app, `bag` = `mower_recorder`): on while any source is recording, and one source's "off" clears only itself. Each source needs a refresh within `rear_light_timeout_s` or it drops, so a dead publisher cannot leave it on; both recorders re-send every 2 s. Telemetry `led.flags` bit `0x08` confirms the firmware applied it |
 
 Two joints, left then right, in the order they appear in the URDF.
 

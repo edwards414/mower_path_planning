@@ -229,7 +229,8 @@ class RecorderManager(Node):
         self._status_pub.publish(m)
         if self._rear_pub is not None:
             self._rear_pub.publish(String(
-                data=json.dumps({'effect': 'recording' if recording else 'off'})))
+                data=json.dumps({'effect': 'recording' if recording else 'off',
+                                 'source': 'bag'})))
 
     @staticmethod
     def _dir_size(path):

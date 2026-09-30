@@ -1,5 +1,6 @@
 #include "mower_hardware/mower_protocol.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -333,6 +334,23 @@ bool decode_pid_config_status(const uint8_t * p, size_t len, PidConfigStatus & o
   out.last_rx_seq = p[25];
   out.flash_diag = get_u16(p + 26);
   return true;
+}
+
+int64_t RearLightSources::update(
+  const std::string & source, bool recording, int64_t now_ns, int64_t timeout_ns)
+{
+  if (recording) {
+    until_ns_[source] = now_ns + timeout_ns;
+  } else {
+    until_ns_.erase(source);
+  }
+  // An expired source keeps its (past) deadline, which is harmless: only
+  // the latest one matters.
+  int64_t until = 0;
+  for (const auto & kv : until_ns_) {
+    until = std::max(until, kv.second);
+  }
+  return until;
 }
 
 }  // namespace mower_hardware

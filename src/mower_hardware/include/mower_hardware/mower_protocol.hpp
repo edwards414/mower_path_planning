@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -47,7 +48,7 @@ enum Ws2812Mode : uint8_t {
 };
 
 // 0x03 payload byte 6 `overlay`: drawn on top of the mode, back strip only
-constexpr uint8_t kLedOverlayRearRecording = 0x01;  // red breath while a bag records
+constexpr uint8_t kLedOverlayRearRecording = 0x01;  // red breath while something records
 // 0x83 flags: bit0 = command valid; set when the firmware applies the overlay
 constexpr uint8_t kLedStatusFlagRearRecording = 0x08;
 
@@ -303,5 +304,20 @@ bool decode_firmware_info(const uint8_t * payload, size_t len, FirmwareInfo & ou
 bool decode_charger_status(const uint8_t * payload, size_t len, ChargerStatus & out);
 bool decode_servo_status(const uint8_t * payload, size_t len, ServoStatus & out);
 bool decode_lawer_motor_status(const uint8_t * payload, size_t len, LawerMotorStatus & out);
+
+// Rear-light overlay requests (/mower_base/rear_light) from several
+// recorders, each under its own `source`. The overlay is on while any
+// source's last "recording" is younger than the timeout; a source's "off"
+// clears only that source.
+class RearLightSources
+{
+public:
+  // Returns the latest deadline over all sources (steady-clock ns), 0 when
+  // none has ever been recording. The overlay is on while now < deadline.
+  int64_t update(const std::string & source, bool recording, int64_t now_ns, int64_t timeout_ns);
+
+private:
+  std::map<std::string, int64_t> until_ns_;
+};
 
 }  // namespace mower_hardware

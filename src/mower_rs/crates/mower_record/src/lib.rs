@@ -178,6 +178,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         robot_pose_max_age_s: params::f64(&node, "robot_pose_max_age_s", 1.0),
     };
     let pose_topic = params::string(&node, "robot_pose_source_topic", "/odometry/global");
+    // Red breathing rear light while recording (mower_hardware -> STM32 0x03
+    // overlay); '' disables.
+    let rear_topic = params::string(&node, "rear_light_topic", "/mower_base/rear_light");
+    let rear_period_s = params::f64(&node, "rear_light_period_s", 2.0);
     std::fs::create_dir_all(&cfg.save_dir)?;
     r2r::log_info!(&logger, "path_recorder ready (mower_rs).");
 
@@ -193,6 +197,13 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         chennal_path_array: node.create_publisher::<MarkerArray>("/chennal_path_array", latched())?,
         channel_path_array: node.create_publisher::<MarkerArray>("/channel_path_array", latched())?,
         site_list: node.create_publisher::<StringMsg>("/site_list", latched())?,
+    };
+    // Transient-local like the driver's subscription (a volatile writer would
+    // not match it).
+    let rear_light = if rear_topic.is_empty() {
+        None
+    } else {
+        Some(node.create_publisher::<StringMsg>(&rear_topic, latched())?)
     };
     let lock_client = node.create_client::<MissionOperationLock::Service>("/mission_operation_lock", QosProfile::services_default())?;
     let owner = format!("{}:{}", node.fully_qualified_name()?, uuid_hex());
@@ -256,6 +267,26 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 if app.rec.recording() {
                     let App { rec, out, .. } = &mut *app;
                     rec.sample(out);
+                }
+            }
+        });
+    }
+
+    // Rear light, 10 Hz from the start: unlike the sampler it does not wait
+    // for the first pose (the Python sampler timer does not either).
+    if let Some(publisher) = rear_light {
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            let mut on = false;
+            let mut sent = std::time::Instant::now();
+            loop {
+                tick.tick().await;
+                let recording = shared.lock().await.rec.recording();
+                if let Some(effect) = recorder::rear_light_update(recording, on, recorder::since(sent), rear_period_s) {
+                    let _ = publisher.publish(&StringMsg { data: format!(r#"{{"effect":"{effect}","source":"path_record"}}"#) });
+                    on = effect == "recording";
+                    sent = std::time::Instant::now();
                 }
             }
         });
