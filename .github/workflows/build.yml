@@ -137,6 +137,15 @@ jobs:
           cd src/mower_rs
           cargo test --locked --workspace
 
+      - name: Coverage node cancel tracking (black box)
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_coverage
+          python3 tools/coverage_cancel_check.py --binary target/debug/mower_coverage
+
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`
     # stage uses. Fails in ~1 min instead of after the 1 h image build, and

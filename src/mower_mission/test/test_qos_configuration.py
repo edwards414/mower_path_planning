@@ -336,9 +336,9 @@ def test_map_inflation_cannot_start_or_change_below_safety_envelope():
 
 
 def test_cancel_tracking_shares_attempts_and_stops_before_teardown():
-    """Source-level stand-in for the deleted Python tracker tests
-    (test_coverage_cancel_tracking.py): the Rust tracker has no behavioural
-    #[test] yet (docs/RUST_REFACTOR_PLAN.md 7.12, 測試缺口). One correlated
+    """Source-level companion of src/mower_rs/tools/coverage_cancel_check.py
+    (the black-box behaviour check of the same tracker, run in CI's mower_rs
+    job), which replaced the deleted test_coverage_cancel_tracking.py. One correlated
     cancel attempt per dispatch id, only the current attempt may clear
     itself, no fallback after shutdown, and tracking stops before the node
     stops spinning."""
