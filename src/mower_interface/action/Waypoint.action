@@ -2,6 +2,8 @@
 nav_msgs/Path path
 geometry_msgs/Pose[] coverage_split_points
 string dispatch_id
+# Zone being covered, reported back in /coverage_progress; -1 = none.
+int32 zone_id -1
 ---
 # Result
 bool success

@@ -44,6 +44,8 @@ pub struct Nav2Tracker {
     pub goal: Option<Arc<dyn CancelableGoal>>,
     pub terminal: Option<Arc<TerminalSlot>>,
     pub last_feedback: Option<String>,
+    /// Path length left, from the active FollowPath feedback.
+    pub last_feedback_distance: Option<f64>,
 }
 
 impl Nav2Tracker {
@@ -51,6 +53,7 @@ impl Nav2Tracker {
         self.goal = None;
         self.terminal = None;
         self.last_feedback = None;
+        self.last_feedback_distance = None;
     }
 }
 

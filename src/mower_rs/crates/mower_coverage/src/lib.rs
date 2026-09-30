@@ -1263,7 +1263,8 @@ impl Ctx {
     // ------------------------------------------------------- dispatching
 
     /// `_send_follow_path`: dispatch a goal and wait at least for acceptance.
-    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
+    /// `zone_id` is echoed in /coverage_progress (-1 for a channel route).
+    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
         let timeout_s = 600.0;
         let acceptance_timeout_s = 3.0;
         self.set_error("");
@@ -1286,7 +1287,7 @@ impl Ctx {
             return false;
         }
         let dispatch_id = uuid_hex();
-        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone() };
+        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone(), zone_id };
         let fut = match self.follow_client.send_goal_request(goal) {
             Ok(f) => f,
             Err(e) => {
@@ -1449,7 +1450,7 @@ impl Ctx {
                 }
             };
             self.info(format!("[{}/{}] 執行 zone {zone_id} 覆蓋路徑，共 {} 個路徑點", i + 1, zone_ids.len(), zone.path.poses.len()));
-            let ok = self.send_follow_path(&handles, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
+            let ok = self.send_follow_path(&handles, zone.zone_id, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
             if !ok {
                 self.error(format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止"));
                 return;
@@ -1471,7 +1472,7 @@ impl Ctx {
                 }
             };
             self.info(format!("走通道 #{} (zone {zone_id} → zone {next_zone_id})，共 {} 個路徑點", route.matched_channel_id, route.channel_path.poses.len()));
-            let ok = self.send_follow_path(&handles, route.channel_path, Vec::new(), true, true).await;
+            let ok = self.send_follow_path(&handles, -1, route.channel_path, Vec::new(), true, true).await;
             if !ok {
                 self.error(format!("通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止"));
                 return;
@@ -1743,7 +1744,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                                 None => ZoneExecPath::Response { success: false, message: "Zone not found".into() },
                                 Some(zone) if zone.path.poses.is_empty() => ZoneExecPath::Response { success: false, message: "Zone coverage path is empty".into() },
                                 Some(zone) => {
-                                    let dispatched = ctx.send_follow_path(&handles, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
+                                    let dispatched = ctx.send_follow_path(&handles, zone.zone_id, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
                                     ZoneExecPath::Response { success: dispatched, message: if dispatched { "Navigation action goal accepted".into() } else { ctx.last_error() } }
                                 }
                             }

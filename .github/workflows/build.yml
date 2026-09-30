@@ -67,6 +67,7 @@ jobs:
           python -m pytest -q \
             test/test_battery_simulator.py \
             test/test_controller_configuration.py \
+            test/test_coverage_progress_tracker.py \
             test/test_flutter_adapter_dto.py \
             test/test_image_mask_import.py \
             test/test_map_safety.py \
@@ -118,7 +119,8 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization
+            curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
+            ros-jazzy-nav2-simple-commander
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -127,6 +129,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/mower_rs
+          # r2r generates its bindings once per build dir and never notices
+          # an edited .msg/.srv/.action, so a changed interface needs a
+          # fresh cache.
+          key: ${{ hashFiles('src/mower_interface/msg/**', 'src/mower_interface/srv/**', 'src/mower_interface/action/**') }}
 
       - name: Build mower_interface and test
         shell: bash
@@ -145,6 +151,17 @@ jobs:
           cd src/mower_rs
           cargo build --locked -p mower_coverage
           python3 tools/coverage_cancel_check.py --binary target/debug/mower_coverage
+
+      - name: Coverage progress of both navigation servers (black box)
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_nav
+          python3 tools/nav_progress_check.py -- target/debug/mower_nav
+          PYTHONPATH="$GITHUB_WORKSPACE/src/mower_mission:$PYTHONPATH" \
+            python3 tools/nav_progress_check.py -- python3 -m mower_mission.navigation.nav_action_server
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`

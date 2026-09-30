@@ -1,0 +1,4 @@
+---
+bool success
+string message
+mower_interface/CoverageProgress progress

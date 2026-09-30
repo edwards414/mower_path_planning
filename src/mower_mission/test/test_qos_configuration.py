@@ -135,7 +135,7 @@ def test_navigation_dispatch_requires_a_correlated_confirmation():
     assert 'self.track_and_cancel_goal(' in coverage
     assert 'navigation may be active' in coverage
     # the coverage node stamps every goal and confirms that same id
-    assert 'dispatch_id: dispatch_id.clone() };' in coverage
+    assert 'dispatch_id: dispatch_id.clone(), zone_id };' in coverage
     assert (
         'ConfirmNavigationDispatch::Request { dispatch_id: '
         'dispatch_id.clone() }'

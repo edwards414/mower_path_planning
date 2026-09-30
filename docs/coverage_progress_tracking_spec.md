@@ -2,6 +2,8 @@
 
 > **2026-09-30 補記：** 本文寫作時 coverage 節點是 Python 的 `mower_mission/coverage_node.py`，這個檔案已在 2026-09-30 移除。同一個節點（node 名 `boustrophedon_coverage`，服務與 topic 不變）現在是 `mower_rs` 的 `mower_coverage`，程式在 `src/mower_rs/crates/mower_coverage/src/lib.rs`。下文要改 `coverage_node.py` 的項目，現在要改那個檔案。現況描述保留原文。
 
+> **2026-09-30 M1 已完成：** `mower_interface` 新增 `msg/CoverageProgress.msg`（欄位同 5.1）與 `srv/GetCoverageProgress.srv`；`Waypoint.action` goal 加了 `int32 zone_id -1`（`mower_coverage` 填 zone id，通道路線為 -1）。沒有另加 `mission_id` 欄位：每次執行本來就有唯一的 `dispatch_id`，`mission_id` 直接用它。兩個導航伺服器（rclpy `nav_action_server` 與 `mower_rs` 的 `mower_nav`）都發 latched `/coverage_progress` 並提供 `/coverage_progress_status`，計算與狀態轉換照第 6 節；另外三點：段內進度不倒退（Nav2 的剩餘距離會抖動）、回饋驅動的訊息最多每 0.5 s 一筆（狀態轉換立即發）、`current_pose` 取自 `/adapter/robot_pose`。取消途中若 run 以 abort 結束，最終狀態依導航狀態判為 `canceled`。邏輯在 `mower_mission/navigation/coverage_progress.py` 與 `mower_rs/crates/mower_nav/src/progress.rs`（兩份要同步，單元測試同一組情境），`src/mower_rs/tools/nav_progress_check.py` 對兩個伺服器用假 Nav2 做黑箱檢查（CI 會跑）。兩個 topic/service 已加入 app 白名單（rosbridge、ws_bridge）。7.2 的 `/check_nav_status` 改寫與 7.5 的 Qt 按鈕沒做；M2 checkpoint、M3 resume 尚未開始。
+
 本文件規劃如何在目前割草 coverage path 執行時，記錄、發布、查詢目前工作進度。目標是讓前端能顯示割草進度，也讓後續中斷恢復任務有可靠基礎。
 
 ## 1. 背景與現況

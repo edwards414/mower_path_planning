@@ -16,6 +16,7 @@
 
 mod geometry;
 mod nav2;
+mod progress;
 mod state;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,7 +29,8 @@ use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped, TwistStamped};
 use r2r::lifecycle_msgs::srv::GetState;
 use r2r::mower_interface::action::Waypoint;
-use r2r::mower_interface::srv::{CancelNavigationDispatch, ConfirmNavigationDispatch, MissionOperationLock};
+use r2r::mower_interface::msg::CoverageProgress;
+use r2r::mower_interface::srv::{CancelNavigationDispatch, ConfirmNavigationDispatch, GetCoverageProgress, MissionOperationLock};
 use r2r::nav2_msgs::action::{FollowPath, NavigateToPose};
 use r2r::nav_msgs::msg::{Odometry, Path};
 use r2r::rcl_interfaces::msg::Log;
@@ -40,6 +42,7 @@ use r2r::{ActionServerGoal, QosProfile};
 use tokio::sync::Notify;
 
 use crate::nav2::{terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
+use crate::progress::{Progress, Status as ProgressStatus};
 use crate::state::{NavState, SafetyParams, TaskResult};
 
 const CONTROLLER_ID: &str = "FollowPath";
@@ -72,9 +75,51 @@ struct Ctx {
     coordinator_lock_pub: Mutex<r2r::Publisher<Bool>>,
     split_path_pub: Mutex<r2r::Publisher<Path>>,
     split_points_pub: Mutex<r2r::Publisher<Marker>>,
+    progress: Mutex<ProgressState>,
+    progress_pub: Mutex<r2r::Publisher<CoverageProgress>>,
     navigate_client: r2r::ActionClient<NavigateToPose::Action>,
     follow_client: r2r::ActionClient<FollowPath::Action>,
     state_client: r2r::Client<GetState::Service>,
+}
+
+/// Minimum spacing of feedback-driven `/coverage_progress` messages; state
+/// transitions publish immediately.
+const PROGRESS_FEEDBACK_PERIOD: Duration = Duration::from_millis(500);
+
+#[derive(Default)]
+struct ProgressState {
+    progress: Progress<PoseStamped>,
+    /// Latest `/adapter/robot_pose`, reported as `current_pose`.
+    robot_pose: PoseStamped,
+    last_published: Option<Instant>,
+}
+
+impl ProgressState {
+    fn to_msg(&self) -> CoverageProgress {
+        let p = &self.progress;
+        let mut msg = CoverageProgress::default();
+        msg.header.stamp = stamp_now();
+        msg.header.frame_id = "map".into();
+        msg.status = p.status as u8;
+        msg.status_text = p.status.text().into();
+        msg.mission_id = p.mission_id.clone();
+        msg.zone_id = p.zone_id;
+        msg.current_segment_index = p.current_segment_index;
+        msg.total_segments = p.total_segments();
+        msg.completed_segments = p.completed_segments;
+        msg.current_segment_progress = p.current_segment_progress as f32;
+        msg.overall_progress = p.overall_progress as f32;
+        msg.current_segment_distance_m = p.current_segment_distance_m() as f32;
+        msg.completed_distance_m = p.completed_distance_m as f32;
+        msg.total_distance_m = p.total_distance_m as f32;
+        msg.remaining_distance_m = p.remaining_distance_m as f32;
+        msg.current_pose = self.robot_pose.clone();
+        msg.current_segment_start = p.current_segment_start.clone();
+        msg.current_segment_goal = p.current_segment_goal.clone();
+        msg.checkpoint_available = false;
+        msg.message = p.message.clone();
+        msg
+    }
 }
 
 fn wall_ns() -> i64 {
@@ -148,6 +193,24 @@ impl Ctx {
         self.publish_safety_stop_if_needed();
     }
 
+    /// Apply `f` to the coverage progress and publish it (feedback-driven
+    /// updates, `force == false`, at most every PROGRESS_FEEDBACK_PERIOD).
+    fn update_progress(&self, force: bool, f: impl FnOnce(&mut Progress<PoseStamped>) -> bool) {
+        let msg = {
+            let mut ps = self.progress.lock().unwrap();
+            if !f(&mut ps.progress) {
+                return;
+            }
+            let now = Instant::now();
+            if !force && ps.last_published.is_some_and(|t| now.duration_since(t) < PROGRESS_FEEDBACK_PERIOD) {
+                return;
+            }
+            ps.last_published = Some(now);
+            ps.to_msg()
+        };
+        let _ = self.progress_pub.lock().unwrap().publish(&msg);
+    }
+
     /// Atomically match a goal, request cancel, and revoke its velocity.
     fn request_navigation_cancel(&self, message: &str, expected_dispatch_id: Option<&str>) -> bool {
         {
@@ -164,6 +227,10 @@ impl Ctx {
             st.nav_state = "canceling".into();
             st.last_status_message = message.to_string();
         }
+        self.update_progress(true, |p| {
+            p.canceling(message);
+            true
+        });
         self.confirm.notify_waiters();
         self.publish_nav_operation_active(true);
         self.publish_safety_zero();
@@ -424,7 +491,7 @@ impl Ctx {
     where
         G: CancelableGoal + 'static,
         R: std::future::Future<Output = Result<(r2r::GoalStatus, Terminal), ()>> + Send + 'static,
-        F: std::future::Future<Output = Result<(G, R, Option<Box<dyn futures::Stream<Item = String> + Send + Unpin>>), r2r::Error>> + Send + 'static,
+        F: std::future::Future<Output = Result<(G, R, Option<Box<dyn futures::Stream<Item = (String, Option<f64>)> + Send + Unpin>>), r2r::Error>> + Send + 'static,
     {
         let response_timeout = Duration::from_secs_f64(self.exec.nav2_goal_response_timeout_s.max(0.1));
         let ctx = self.clone();
@@ -454,6 +521,7 @@ impl Ctx {
                     t.goal = Some(goal);
                     t.terminal = Some(slot.clone());
                     t.last_feedback = None;
+                    t.last_feedback_distance = None;
                 }
                 tokio::spawn(async move {
                     let outcome = result.await;
@@ -463,8 +531,10 @@ impl Ctx {
                     let mut feedback = feedback;
                     let ctx2 = self.clone();
                     tokio::spawn(async move {
-                        while let Some(summary) = feedback.next().await {
-                            ctx2.nav2.lock().unwrap().last_feedback = Some(summary);
+                        while let Some((summary, distance)) = feedback.next().await {
+                            let mut t = ctx2.nav2.lock().unwrap();
+                            t.last_feedback = Some(summary);
+                            t.last_feedback_distance = distance;
                         }
                     });
                 }
@@ -539,7 +609,7 @@ impl CancelableGoal for FollowGoal {
     }
 }
 
-type GoalResponse<G> = Result<(G, nav2::BoxFuture<Result<(r2r::GoalStatus, Terminal), ()>>, Option<Box<dyn futures::Stream<Item = String> + Send + Unpin>>), r2r::Error>;
+type GoalResponse<G> = Result<(G, nav2::BoxFuture<Result<(r2r::GoalStatus, Terminal), ()>>, Option<Box<dyn futures::Stream<Item = (String, Option<f64>)> + Send + Unpin>>), r2r::Error>;
 
 /// Adapt r2r's typed goal future into the type-erased shape await_goal_response takes.
 fn adapt_navigate(
@@ -553,7 +623,7 @@ fn adapt_navigate(
                 Err(_) => Err(()),
             }
         });
-        let feedback: Box<dyn futures::Stream<Item = String> + Send + Unpin> = Box::new(feedback.map(|f| format!("distance_remaining={:.3}", f.distance_remaining)));
+        let feedback: Box<dyn futures::Stream<Item = (String, Option<f64>)> + Send + Unpin> = Box::new(feedback.map(|f| (format!("distance_remaining={:.3}", f.distance_remaining), None)));
         Ok((NavigateGoal(goal), result, Some(feedback)))
     }
 }
@@ -569,7 +639,10 @@ fn adapt_follow(
                 Err(_) => Err(()),
             }
         });
-        let feedback: Box<dyn futures::Stream<Item = String> + Send + Unpin> = Box::new(feedback.map(|f| format!("distance_to_goal={:.3}, speed={:.3}", f.distance_to_goal, f.speed)));
+        // FollowPath's distance_to_goal is the path length left; it drives the coverage progress.
+        let feedback: Box<dyn futures::Stream<Item = (String, Option<f64>)> + Send + Unpin> = Box::new(
+            feedback.map(|f| (format!("distance_to_goal={:.3}, speed={:.3}", f.distance_to_goal, f.speed), Some(f.distance_to_goal as f64))),
+        );
         Ok((FollowGoal(goal), result, Some(feedback)))
     }
 }
@@ -786,7 +859,13 @@ impl Execution {
                 self.ctx.set_nav_state("canceled", &format!("{task_name} canceled"));
                 return false;
             }
-            let feedback = self.ctx.nav2.lock().unwrap().last_feedback.clone();
+            let (feedback, feedback_distance) = {
+                let t = self.ctx.nav2.lock().unwrap();
+                (t.last_feedback.clone(), t.last_feedback_distance)
+            };
+            if let Some(remaining) = feedback_distance {
+                self.ctx.update_progress(false, |p| p.update_remaining(remaining));
+            }
             if let Some(fb) = feedback {
                 if last_feedback.as_deref() != Some(fb.as_str()) {
                     self.ctx.state.lock().unwrap().last_feedback_message = fb.clone();
@@ -934,6 +1013,12 @@ impl Execution {
         if let Some(reason) = geometry::coverage_segments_block_reason(&split_paths, 0.15) {
             return self.abort(&reason);
         }
+        let distances = split_paths.iter().map(geometry::path_distance).collect();
+        self.ctx.update_progress(true, |p| {
+            p.set_segments(distances);
+            p.message = "Navigating to the coverage start".into();
+            true
+        });
 
         Self::stamp_path_for_execution(&mut path);
         self.ctx.info("導航到覆蓋路徑起點");
@@ -959,6 +1044,11 @@ impl Execution {
             Self::stamp_path_for_execution(split_path);
             let _ = self.ctx.split_path_pub.lock().unwrap().publish(split_path);
             let distance = geometry::path_distance(split_path);
+            let (start_pose, goal_pose) = (split_path.poses[0].clone(), split_path.poses[split_path.poses.len() - 1].clone());
+            self.ctx.update_progress(true, |p| {
+                p.start_segment(idx as i32, start_pose, goal_pose);
+                true
+            });
             let start = &split_path.poses[0].pose.position;
             let goal_p = &split_path.poses[split_path.poses.len() - 1].pose.position;
             self.ctx.info(&format!(
@@ -983,6 +1073,10 @@ impl Execution {
             if !self.wait_for_nav_task(&format!("Follow coverage segment {idx}")).await {
                 return Outcome::Aborted;
             }
+            self.ctx.update_progress(true, |p| {
+                p.complete_segment();
+                true
+            });
         }
         if self.cancel_requested() {
             return self.canceled_before_task();
@@ -1058,6 +1152,7 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
         st.last_status_message = "Navigation goal accepted; waiting for dispatch confirmation".into();
     }
     ctx.publish_nav_operation_active(true);
+    let zone_id = req.goal.zone_id;
     let (goal_handle, mut cancel_requests) = match req.accept() {
         Ok(v) => v,
         Err(e) => {
@@ -1084,9 +1179,33 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
             }
         });
     }
+    ctx.update_progress(true, |p| {
+        p.begin(&dispatch_id, zone_id);
+        true
+    });
     let mut execution = Execution { ctx: ctx.clone(), goal: Mutex::new(goal_handle), action_cancel_accepted, dispatch_id };
-    let _ = execution.run().await;
+    let outcome = execution.run().await;
+    finish_progress(&ctx, &outcome);
     finish_reserved_goal(&ctx);
+}
+
+/// Final `/coverage_progress` of an execution. A cancel during a Nav2 task
+/// makes run() return `Aborted` too, so the navigation state decides.
+fn finish_progress(ctx: &Ctx, outcome: &Outcome) {
+    let (nav_state, message) = {
+        let st = ctx.state.lock().unwrap();
+        (st.nav_state.clone(), st.last_status_message.clone())
+    };
+    let status = match outcome {
+        Outcome::Succeeded => ProgressStatus::Succeeded,
+        Outcome::Canceled => ProgressStatus::Canceled,
+        Outcome::Aborted if nav_state == "canceled" => ProgressStatus::Canceled,
+        Outcome::Aborted => ProgressStatus::Failed,
+    };
+    ctx.update_progress(true, |p| {
+        p.finish(status, &message);
+        true
+    });
 }
 
 fn finish_reserved_goal(ctx: &Ctx) {
@@ -1170,11 +1289,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         coordinator_lock_pub: Mutex::new(node.create_publisher::<Bool>("/navigation_coordinator_lock", QosProfile::default())?),
         split_path_pub: Mutex::new(node.create_publisher::<Path>("/split_path", QosProfile::default().keep_last(1))?),
         split_points_pub: Mutex::new(node.create_publisher::<Marker>("/coverage_split_points", QosProfile::default().keep_last(1))?),
+        progress: Mutex::new(ProgressState::default()),
+        progress_pub: Mutex::new(node.create_publisher::<CoverageProgress>("/coverage_progress", latched())?),
         navigate_client: node.create_action_client::<NavigateToPose::Action>("navigate_to_pose")?,
         follow_client: node.create_action_client::<FollowPath::Action>("follow_path")?,
         state_client: node.create_client::<GetState::Service>("bt_navigator/get_state", QosProfile::services_default())?,
     });
     ctx.publish_nav_operation_active(false);
+    ctx.update_progress(true, |_| true);
 
     // ---- manual sources: manual motion and autonomy are mutually exclusive
     for topic in ["/joy_cmd", "/physical_joy_cmd", "/keyboard_cmd_vel"] {
@@ -1224,6 +1346,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w],
                     &ctx.safety,
                 );
+                if reason.is_none() {
+                    ctx.progress.lock().unwrap().robot_pose = msg.clone();
+                }
                 let mut st = ctx.state.lock().unwrap();
                 st.last_robot_pose_received_at = if reason.is_none() { Some(Instant::now()) } else { None };
                 st.robot_pose_rejection_reason = reason;
@@ -1336,6 +1461,17 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     (true, m)
                 };
                 let _ = req.respond(Trigger::Response { success, message });
+            }
+        });
+    }
+    {
+        let mut stream = node.create_service::<GetCoverageProgress::Service>("/coverage_progress_status", QosProfile::services_default())?;
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            while let Some(req) = stream.next().await {
+                let progress = ctx.progress.lock().unwrap().to_msg();
+                let message = if progress.mission_id.is_empty() { "No coverage execution yet".to_string() } else { progress.status_text.clone() };
+                let _ = req.respond(GetCoverageProgress::Response { success: true, message, progress });
             }
         });
     }

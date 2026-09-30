@@ -254,7 +254,8 @@ Flutter 顯示建議：
 | Stop Zone Sequence | `/stop_zone_sequence` | `std_srvs/srv/Trigger` | 無 | 停止序列並取消目前那個 zone 的導航 |
 | Cancel Navigation | `/cencel_nav2` | `std_srvs/Trigger` | 無 | 取消 Nav2 任務 |
 | Check Nav Status | `/check_nav_status` | `std_srvs/Trigger` | 無 | 查詢 BasicNavigator 狀態 |
-| Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 由後端內部呼叫 |
+| Coverage Progress | `/coverage_progress_status` | `mower_interface/srv/GetCoverageProgress` | 無 | 目前（或最後一次）割草執行的進度快照；平常訂閱 latched topic `/coverage_progress` 即可，這個給重連後補查。2026-09-30 加入 |
+| Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points`, `dispatch_id`, `zone_id` | 由後端內部呼叫 |
 | Nav Action | `/nav_action` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 舊版逐段 path action |
 
 `ZoneExecPath` request：
@@ -271,6 +272,8 @@ Flutter 顯示建議：
 # Goal
 nav_msgs/Path path
 geometry_msgs/Pose[] coverage_split_points
+string dispatch_id
+int32 zone_id -1
 ---
 # Result
 bool success
@@ -293,8 +296,8 @@ Execution 頁建議欄位：
 - Zone selector：從 `/get_zone_map_list_srv` 或 coverage result 建立。
 - Start button：呼叫 `/zone_exec_path`。
 - Cancel button：呼叫 `/cencel_nav2`。
-- Current segment：由 `/split_path` 更新。
-- Distance remaining / speed：若 adapter 能接 Nav2 feedback，顯示。
+- Progress bar / current segment / distance remaining：訂閱 `/coverage_progress`（`mower_interface/msg/CoverageProgress`，latched）。`overall_progress` 0–1 以各段長度加權；`status_text` 為 `navigating_to_start` / `running` / `canceling` / `canceled` / `succeeded` / `failed`；`mission_id` 換了就是新任務；`zone_id` 是正在割的 zone（通道為 -1）。取消與失敗會保留最後進度。欄位定義見 `docs/coverage_progress_tracking_spec.md`。
+- Current segment path：由 `/split_path` 更新。
 - Error panel：顯示 `/rosout` 中 `controller_server`、`planner_server`、`bt_navigator`、`behavior_server` 錯誤。
 
 ### 5.6 Manual
@@ -380,6 +383,7 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/stop_zone_sequence` | `std_srvs/Trigger` | `boustrophedon_coverage` | 停止 zone 序列 | 可用（2026-09-30 加入白名單） |
 | `/cencel_nav2` | `std_srvs/Trigger` | `boustrophedon_coverage` | 取消導航 | 使用 |
 | `/check_nav_status` | `std_srvs/Trigger` | `boustrophedon_coverage` | 查詢導航狀態 | 使用 |
+| `/coverage_progress_status` | `mower_interface/GetCoverageProgress` | `nav_action_server` | 割草進度快照 | 可用（2026-09-30 加入白名單） |
 | `/risk_zone_save` | `std_srvs/Trigger` | 未註冊 | 函式存在但 service 不存在 | 不使用 |
 | `/risk_zone_load` | `std_srvs/Trigger` | 未註冊 | 函式存在但 service 不存在 | 不使用 |
 | `/record_path_status` | `std_srvs/SetBool` | 未註冊 | coverage_node 有 client / callback，但未建立 service | 不使用 |
@@ -407,6 +411,7 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/coverage_invalid_segments` | `visualization_msgs/MarkerArray` | `coverage_node` | unsafe segment |
 | `/coverage_connectors` | `visualization_msgs/MarkerArray` | `coverage_node` | A* connector |
 | `/split_path` | `nav_msgs/Path` | `nav_action_server` | 目前執行中的切段 |
+| `/coverage_progress` | `mower_interface/CoverageProgress` | `nav_action_server` | 割草進度（latched；狀態變化即發，執行中約 2 Hz）；2026-09-30 加入白名單 |
 | `/coverage_split_points` | `visualization_msgs/Marker` | `nav_action_server` | 分段點 |
 | `/rosout` | `rcl_interfaces/Log` | ROS | 診斷與錯誤 |
 | `/app_joy_cmd` | `geometry_msgs/TwistStamped` | Flutter App | 未信任的手動命令入口 |
