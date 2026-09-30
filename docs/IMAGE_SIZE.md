@@ -15,7 +15,7 @@ runtime 的 apt 清單由 `rosdep keys --dependency-types=exec` 對 `src/` 全�
 ## 做了什麼
 
 1. `mower_nav2/package.xml`：`nav2_bringup` 換成 launch 真正用到的 13 個 nav2 套件（servers + navfn / RPP / rotation shim / simple smoother / costmap_2d / common）。1135 → 646 個新裝 deb。
-2. `mower_coverage_core/package.xml`：`python3` 改成 buildtool 依賴。
+2. `mower_coverage_core/package.xml`：`python3` 改成 buildtool 依賴。（2026-09-30 補記：`mower_coverage_core` 已改成純 Rust library crate，由 `mower_rs` 以 cargo path 依賴連結，不再是 colcon 套件，`package.xml` 已刪除，所以這個 rosdep 源頭也不存在了。）
 3. Dockerfile runtime stage（同一個 RUN layer，否則刪掉的檔案還留在上一層）：
    - dpkg `path-exclude` 掉 doc / man / info / locale（保留 copyright）
    - 裝完後 `dpkg --purge --force-depends`：Mesa 軟體 GL + LLVM（`libGL.so` 由 glvnd 保留；headless 不會 render）、ruby（gz-tools-vendor 的 CLI）、sanitizer libs、`libgcc/libstdc++-13-dev`、`libboost-dev`、`proj-data`
@@ -29,9 +29,13 @@ docker buildx build --target runtime --platform linux/arm64 -t mower-runtime:tes
 docker run --rm --platform linux/arm64 mower-runtime:test bash -lc '
   set +u; source /opt/ros/jazzy/setup.bash; source /mower_ws/install/setup.bash
   ros2 launch mower_bringup robot.launch.py --show-args >/dev/null
-  python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server, mower_coverage_core"
+  python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server"
+  test -x /mower_ws/install/mower_rs/lib/mower_rs/mower_coverage || echo "MISSING: mower_coverage"
+  ldd /mower_ws/install/mower_rs/lib/mower_rs/* | grep "not found"
   for b in /opt/ros/jazzy/lib/{nav2_*,robot_localization,controller_manager,joy}/* /opt/ros/jazzy/lib/libnav2_*.so; do
     ldd "$b" | grep -q "not found" && echo "MISSING deps: $b"; done'
 ```
+
+2026-09-30 補記：上面的指令原本還有 `import mower_coverage_core`。Python coverage 與 PyO3 wheel 已移除，coverage 規劃器是 `mower_rs` 的 `mower_coverage` binary，所以改成檢查那個 binary 存在、而且共享函式庫都找得到（`ldd` 沒有 not found）。
 
 PR 的 smoke test（`.github/workflows/build.yml`）也跑同樣的檢查。真機驗證：更新後 `docker logs` 要看到 `Managed nodes are active`，app 連得上。

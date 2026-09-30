@@ -1,5 +1,28 @@
 # Rust Coverage Planner Migration Specification
 
+## 0. 目前狀態（2026-09-30）
+
+遷移已經結束。第 1–11 節保留為當時的計畫原文（歷史紀錄）。其中提到的 Python 檔案、`coverage_backend` 切換、Python fallback、PyO3 / maturin 建置與 `pytest` 指令都已不存在。
+
+| Phase | 狀態 |
+| --- | --- |
+| Phase 0 Baseline | baseline fixtures（`test/conftest.py`，2026-09-30 隨 Python 測試刪除）錄進了 `src/mower_coverage_core/tests/data/python_reference_oracle.json` 的 `conftest ...` 地圖；可用 `tests/data/gen_python_reference_oracle.py` 從 dff480b 重新產生 |
+| Phase 1 Backend facade | 完成（`coverage_backend/` facade、`coverage_backend` / `allow_backend_fallback` 參數）；2026-09-30 隨 Python 實作一起刪除 |
+| Phase 2 Rust core skeleton | 完成（`mower_coverage_core`，當時是 PyO3 / maturin wheel + colcon 套件）；2026-09-30 起改成純 Rust library crate |
+| Phase 3 PathValidator | 完成 → `src/mower_coverage_core/src/path_validator.rs` |
+| Phase 4 SafeMapFilter | 完成 → `src/mower_coverage_core/src/safe_map_filter.rs` |
+| Phase 5 ConnectorPlanner | 完成 → `src/mower_coverage_core/src/connector_planner.rs` |
+| Phase 6 Zigzag | 完成，含 `angle_deg != 0.0` 的旋轉分支 → `src/mower_coverage_core/src/zigzag.rs` |
+| Phase 7 Spiral | 完成 → `src/mower_coverage_core/src/spiral.rs` |
+| Phase 8 Production switch | 以移除 Python 實作結案：2026-09-30 刪掉 Python 實作與 PyO3 後端，已經沒有 backend 可以切換，所以 `allow_backend_fallback` 不再適用（節點仍接受 `coverage_backend` / `allow_backend_fallback` 這兩個舊參數，但沒有作用） |
+| Phase 9 Rust ROS2 node | 完成，但用 r2r 而不是 rclrs：`src/mower_rs/crates/mower_coverage`（commit `518679f`），node 名仍是 `boustrophedon_coverage`，與 Python 節點做 48 步差分比對全部相同（見 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md) 7.12） |
+
+現在的結構：
+
+- **節點**：`src/mower_rs/crates/mower_coverage/src/lib.rs`（`contours.rs` 是邊界環用的 `cv2.findContours` 移植）。它是唯一的 coverage 規劃器，沒有 `rust_coverage` / `RUST_COVERAGE` 開關，永遠啟動：`mission.launch.py` 起獨立 binary，`robot.launch.py rust_daemon:=true` 時改成 `mower_rsd` 的 `coverage` 模組。服務、topic、參數與訊息和原本的 `coverage_node.py` 相同；final `validate_path` 仍在節點層，發布前一定會做。
+- **演算法**：`src/mower_coverage_core` 是純 Rust library crate，沒有 PyO3、maturin 或 colcon 套件，由 `mower_rs` 以 cargo path 依賴連結。`cell_decomposition.rs` 已移植，但還沒接進節點。
+- **測試與 parity oracle**：在 `src/mower_coverage_core/tests`，用 `cargo test --locked` 執行，不需要 ROS。`python_reference_oracle.rs` 拿 `tests/data/python_reference_oracle.json` 比對。這份 JSON 是用 `dff480b` 的 Python 實作錄下的輸出。原本 `mower_mission/test` 的規劃器 pytest（path_validator、safe_map_filter、connector_planner、zigzag、zigzag_segment_boundaries、spiral、cell_decomposition、backend_api、backend_parity）已逐一改寫成 Rust 測試；`test_coverage_cancel_tracking.py`（`coverage_node` 取消追蹤的行為測試）在 Rust 節點還沒有對應的單元測試，見 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md) 7.12 補記的「測試缺口」。
+
 ## 1. 目的
 
 目前 coverage path 規劃核心以 Python 實作，主要包含：

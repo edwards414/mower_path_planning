@@ -1,11 +1,15 @@
 """Source-level regression checks for snapshot-topic QoS compatibility."""
 
 import ast
+import re
 from pathlib import Path
 
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
-COVERAGE_NODE = PACKAGE_DIR / 'mower_mission/coverage_node.py'
+# The only coverage planner (the rclpy coverage_node.py was removed).
+COVERAGE_RS = (
+    PACKAGE_DIR.parent / 'mower_rs/crates/mower_coverage/src/lib.rs'
+)
 MAP_MANAGE_NODE = PACKAGE_DIR / 'mower_mission/map_manage_node.py'
 FLUTTER_ADAPTER = (
     PACKAGE_DIR / 'mower_mission/adapters/flutter_adapter_node.py'
@@ -27,25 +31,38 @@ WAYPOINT_ACTION = PACKAGE_DIR.parent / 'mower_interface/action/Waypoint.action'
 
 
 def _publisher_qos_for(topic: str) -> str:
-    tree = ast.parse(COVERAGE_NODE.read_text(encoding='utf-8'))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function = node.func
-        if not (
-            isinstance(function, ast.Attribute)
-            and function.attr == 'create_publisher'
-            and len(node.args) >= 3
-        ):
-            continue
-        topic_arg = node.args[1]
-        if isinstance(topic_arg, ast.Constant) and topic_arg.value == topic:
-            return ast.unparse(node.args[2])
-    raise AssertionError(f'publisher for {topic} not found')
+    """The QoS expression the Rust coverage node creates `topic` with."""
+    match = re.search(
+        r'create_publisher::<[\w:]+>\(\s*"' + re.escape(topic)
+        + r'",\s*([^?]*?)\)\?',
+        COVERAGE_RS.read_text(encoding='utf-8'),
+    )
+    assert match is not None, f'publisher for {topic} not found'
+    return match.group(1).strip()
+
+
+def _rust_fn(source: str, name: str) -> str:
+    """Body of the Rust fn `name` (up to the next item at its level)."""
+    start = re.search(
+        rf'^\s*(?:pub )?(?:async )?fn {name}\b', source, flags=re.MULTILINE
+    )
+    assert start is not None, f'fn {name} not found'
+    rest = source[start.end():]
+    first_line_end = rest.index('\n') + 1
+    end = re.compile(
+        r'^(?:    (?:///|#\[|(?:pub )?(?:async )?fn )|\S)',
+        flags=re.MULTILINE,
+    ).search(rest, first_line_end)
+    return rest[:end.start()] if end else rest
 
 
 def test_coverage_snapshot_publishers_offer_transient_local_qos():
     """Every current-plan/map snapshot must match late-joining consumers."""
+    source = COVERAGE_RS.read_text(encoding='utf-8')
+    assert (
+        'fn latched() -> QosProfile {\n'
+        '    QosProfile::default().keep_last(1).reliable().transient_local()'
+    ) in source
     for topic in (
         '/coverage_path',
         '/coverage_path_markers',
@@ -54,7 +71,7 @@ def test_coverage_snapshot_publishers_offer_transient_local_qos():
         '/free_space_inflated',
         '/risk_map_inflated',
     ):
-        assert _publisher_qos_for(topic) == 'qos_tl'
+        assert _publisher_qos_for(topic) == 'latched()', topic
 
 
 def test_fixed_map_datum_fallback_is_opt_in():
@@ -108,15 +125,21 @@ def test_navigation_and_mutation_admission_share_a_central_lock():
 
 def test_navigation_dispatch_requires_a_correlated_confirmation():
     server = NAV_SERVER.read_text(encoding='utf-8')
-    coverage = COVERAGE_NODE.read_text(encoding='utf-8')
+    coverage = COVERAGE_RS.read_text(encoding='utf-8')
     interface = DISPATCH_CONFIRM_SRV.read_text(encoding='utf-8')
     action = WAYPOINT_ACTION.read_text(encoding='utf-8')
     assert 'string dispatch_id' in interface
     assert 'string dispatch_id' in action
     assert 'dispatch_id != self._pending_dispatch_id' in server
     assert "self._nav_state = 'pending_confirmation'" in server
-    assert 'self._track_and_cancel_navigation_goal(' in coverage
+    assert 'self.track_and_cancel_goal(' in coverage
     assert 'navigation may be active' in coverage
+    # the coverage node stamps every goal and confirms that same id
+    assert 'dispatch_id: dispatch_id.clone() };' in coverage
+    assert (
+        'ConfirmNavigationDispatch::Request { dispatch_id: '
+        'dispatch_id.clone() }'
+    ) in coverage
 
 
 def test_mutation_release_failure_is_never_acknowledged_as_success():
@@ -312,34 +335,57 @@ def test_map_inflation_cannot_start_or_change_below_safety_envelope():
     assert 'next_inflate_radius_m < MIN_SAFE_INFLATE_RADIUS_M' in source
 
 
+def test_cancel_tracking_shares_attempts_and_stops_before_teardown():
+    """Source-level stand-in for the deleted Python tracker tests
+    (test_coverage_cancel_tracking.py): the Rust tracker has no behavioural
+    #[test] yet (docs/RUST_REFACTOR_PLAN.md 7.12, 測試缺口). One correlated
+    cancel attempt per dispatch id, only the current attempt may clear
+    itself, no fallback after shutdown, and tracking stops before the node
+    stops spinning."""
+    source = COVERAGE_RS.read_text(encoding='utf-8')
+    fallback = _rust_fn(source, 'request_nav2_cancel_fallback')
+    finish = _rust_fn(source, 'finish_attempt')
+    assert re.search(r'if tr\.shutdown \{\s*return None;', fallback)
+    assert 'tr.attempts.get(dispatch_id).cloned()' in fallback
+    assert 'Arc::ptr_eq(a, attempt)' in finish
+    assert source.index('tr.shutdown = true;') < source.index(
+        'running.store(false, Ordering::Relaxed);'
+    )
+
+
 def test_zone_sequence_stop_tracks_the_exact_goal_outside_the_lock():
-    source = COVERAGE_NODE.read_text(encoding='utf-8')
-    tree = ast.parse(source)
-    methods = {
-        node.name: ast.unparse(node)
-        for class_node in tree.body
-        if isinstance(class_node, ast.ClassDef)
-        and class_node.name == 'CoveragePlanner'
-        for node in class_node.body
-        if isinstance(node, ast.FunctionDef)
-    }
-    stop = methods['stop_zone_sequence_srv']
-    cancel = methods['_cancel_sequence_active_goal']
-    clear = methods['_clear_active_navigation_goal']
-    send = methods['_send_follow_path']
-    assert 'self._sequence_cancel.set()' in stop
-    assert 'self._cancel_sequence_active_goal' in stop
-    assert 'active[3]' in cancel
-    assert cancel.index('with self._goal_tracking_lock') < cancel.index(
-        'self._track_and_cancel_navigation_goal'
+    source = COVERAGE_RS.read_text(encoding='utf-8')
+    stop = source.split(
+        '"/stop_zone_sequence", QosProfile::services_default())', 1
+    )[1].split('\n    }\n', 1)[0]
+    cancel = _rust_fn(source, 'cancel_sequence_active_goal')
+    clear = _rust_fn(source, 'clear_active_goal')
+    send = _rust_fn(source, 'send_follow_path')
+    sequence = _rust_fn(source, 'run_sequence')
+    # stop: flag the sequence first, then cancel its exact active goal
+    assert 'ctx.sequence_cancel.store(true, Ordering::SeqCst);' in stop
+    assert stop.index('ctx.sequence_cancel.store(true') < stop.index(
+        'ctx.cancel_sequence_active_goal('
     )
-    assert 'active[1] == dispatch_id' in clear
-    assert 'active[2] is result_future' in clear
-    assert send.index('handle.get_result_async()') < send.index(
-        'ConfirmNavigationDispatch.Request()'
+    # cancel once per goal, and track it only after the lock is released
+    assert 'Some(a) if a.cancel_marked => return false,' in cancel
+    assert 'a.cancel_marked = true;' in cancel
+    assert (
+        cancel.index('self.tracking.lock()')
+        < cancel.index('};')
+        < cancel.index('self.track_and_cancel_goal(')
     )
-    assert "sequence_owned=True" in source
-    assert 'result callback could not be installed' in source
+    # only the matching generation (handle, dispatch id, result) is cleared
+    assert (
+        'active.handle_id == handle_id && active.dispatch_id == dispatch_id '
+        '&& active.slot.id == slot_id'
+    ) in clear
+    # the result is captured before the dispatch is confirmed
+    assert send.index('handles.adopt(self, goal, result)') < send.index(
+        'ConfirmNavigationDispatch::Request {'
+    )
+    # both zone and channel legs of a sequence are sequence-owned goals
+    assert sequence.count(', true, true).await') == 2
 
 
 def test_nav2_dispatch_is_bounded_and_terminal_evidence_is_strict():

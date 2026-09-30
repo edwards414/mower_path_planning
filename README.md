@@ -28,9 +28,10 @@ legacy ROS node names and service names remain for compatibility; see
 | Package | Purpose |
 | --- | --- |
 | `mower_bringup` | Main launch files, Nav2, localization, RViz, Gazebo simulation, rosbridge config |
-| `mower_mission` | Zone/path recording, map management, coverage planning, navigation action wrapper, Flutter adapter |
+| `mower_mission` | Zone/path recording, map management, auto-coverage sequencing, navigation action wrapper, Flutter adapter |
 | `mower_interface` | Custom ROS messages, services, and actions |
-| `mower_coverage_core` | Optional Rust/PyO3 coverage-planning backend |
+| `mower_rs` | Rust (r2r) nodes: the coverage planner `mower_coverage` (ROS node `boustrophedon_coverage`, always on), the u-blox GPS driver `mower_gps`, and switchable replacements for rclpy/C++ nodes (`rust_*` launch arguments); see [src/mower_rs/README.md](src/mower_rs/README.md) |
+| `mower_coverage_core` | Rust coverage-planning library (safe-map filter, path validator, A* connector, zigzag/spiral generators) linked into the `mower_rs` coverage node through a cargo path dependency; a plain cargo crate, not a colcon package, no PyO3 |
 | `mower_hardware` | Real robot `ros2_control` hardware interface for the STM32 base over UART (protocol in `firmware/UART_OPEN_LOOP_PROTOCOL.md`) |
 | `mower_controller` | Legacy STM32 hardware interface (superseded by `mower_hardware`; still hosts the diff-drive controller config and launch) |
 | `mower_description` | URDF/Xacro robot description and mesh assets |
@@ -45,7 +46,8 @@ legacy ROS node names and service names remain for compatibility; see
 - Ubuntu 24.04 recommended for native ROS 2 Jazzy development
 - Docker / Docker Compose for containerized development and runtime builds
 - Python 3.10+
-- Rust toolchain and `maturin` if building `mower_coverage_core`
+- Rust toolchain (`cargo`) and `libclang-dev` to build `mower_rs`; the coverage
+  planner is one of its nodes, so every workspace that plans coverage needs it
 
 ## Build
 
@@ -67,7 +69,8 @@ Build a release workspace:
 make build-release
 ```
 
-Build a simulation-focused workspace while skipping real hardware/Rust packages:
+Build a simulation-focused workspace while skipping the legacy `mower_controller`
+hardware package (`mower_rs`, which hosts the coverage planner, is still built):
 
 ```bash
 make build-sim
@@ -296,7 +299,10 @@ ros2 service call /zone_exec_path mower_interface/srv/ZoneExecPath "{zone_id: 1}
 ```
 
 Coverage parameters are owned by the `boustrophedon_coverage` node name for
-backward compatibility:
+backward compatibility. That node is the Rust `mower_rs` `mower_coverage`
+binary, or the `coverage` module of `mower_rsd` with `rust_daemon:=true`; it is
+the only coverage planner (the Python `coverage_node` was removed on
+2026-09-30) and has no on/off switch:
 
 - `strip_width_m`: mower cutting strip width, default `0.8`
 - `waypoint_spacing_m`: generated waypoint spacing, default `0.2`
@@ -304,8 +310,10 @@ backward compatibility:
 - `unknown_as_obstacle`: treat unknown cells as obstacles, default `true`
 - `min_safe_component_area_m2`: minimum retained safe component area, default `0.05`
 - `coverage_pattern`: `zigzag` or `spiral`
-- `coverage_backend`: `python` or `rust`
-- `allow_backend_fallback`: fall back to Python if Rust backend is unavailable
+- `coverage_backend`: legacy, still accepted (`python` or `rust`, default
+  `rust`) but has no effect: planning always runs in `mower_coverage_core`
+- `allow_backend_fallback`: legacy, still accepted but has no effect: there is
+  no Python planner left to fall back to
 
 Map inflation parameters are owned by `map_manage`:
 
@@ -321,12 +329,12 @@ names remain available until callers are migrated.
 
 | Preferred name | Legacy/current compatibility name | Notes |
 | --- | --- | --- |
-| `mower_mission` package | `boustrophedon_coverage`, `path_record`, `maphub` | Old package concepts were merged into `mower_mission`; `boustrophedon_coverage` remains a node/executable alias. |
+| `mower_mission` package | `boustrophedon_coverage`, `path_record`, `maphub` | Old package concepts were merged into `mower_mission`. `boustrophedon_coverage` remains the coverage node name, now served by `mower_rs`'s `mower_coverage`; the `mower_mission` `boustrophedon_coverage` / `coverage_node` executables were removed with the Python planner. |
 | `mower_bringup` package | `nav2_gps_waypoint_follower` | Launch/config assets now live under `mower_bringup`. |
 | `mower_interface` package | `boustrophedon_coverage_interfaces`, `path_record_interface`, `nav2_action_interfaces` | Use `mower_interface` in new code. |
 | Channel | `chennal` | Some ROS services, topics, and fields still use the old spelling during migration. |
 | Cancel | `cencel` | Prefer `/cancel_nav2`; keep `/cencel_nav2` only as a legacy alias. |
-| Spiral | `speiral.py` | Use `path_generators/spiral.py`; the misspelled module is legacy compatibility only. |
+| Spiral | `speiral.py` | The Python `path_generators/` modules, including the misspelled `speiral.py`, were removed; the spiral generator is `src/mower_coverage_core/src/spiral.rs`. |
 
 ## Docker
 
@@ -365,7 +373,13 @@ one is wired).
 
 ## Testing
 
-Run the coverage planner unit tests:
+Run the coverage planner unit tests (plain cargo, no ROS needed):
+
+```bash
+cd src/mower_coverage_core && cargo test --locked
+```
+
+Run the Python mission unit tests:
 
 ```bash
 pytest src/mower_mission/test
@@ -391,11 +405,12 @@ mower_path_planning/
 │   ├── mower_bringup/              # Launch, Nav2, localization, simulation, docking
 │   ├── mower_controller/           # Legacy hardware interface + diff-drive config
 │   ├── mower_hardware/             # Real robot ros2_control hardware interface
-│   ├── mower_coverage_core/        # Rust coverage backend
+│   ├── mower_coverage_core/        # Rust coverage-planning library (used by mower_rs)
 │   ├── mower_description/          # Robot model and assets
 │   ├── mower_interface/            # ROS interfaces
-│   ├── mower_mission/              # Mission logic and coverage planner
+│   ├── mower_mission/              # Mission logic, maps, navigation wrapper
 │   ├── mower_qt/                   # Operator panel
+│   ├── mower_rs/                   # Rust (r2r) nodes, incl. the coverage planner
 │   ├── mower_teleop/               # Teleoperation tools
 │   ├── turtlebot3_mapviz/          # Mapviz support
 │   └── wit_ros2_imu/               # IMU node

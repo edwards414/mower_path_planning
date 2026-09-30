@@ -1,5 +1,7 @@
 # Flutter Frontend Function Spec
 
+> **2026-09-30 補記：** 下文的 `coverage_node`（`mower_mission`）已移除。同名節點 `boustrophedon_coverage` 現在由 `mower_rs` 的 `mower_coverage` 提供，service、topic 與參數都不變，前端呼叫方式不用改。
+
 本文件整理目前 mower path planning 專案已存在的後端功能，給 Flutter 前端設計頁面與資料流使用。內容以目前程式碼為準，主要範圍包含：
 
 - `mower_mission`: 區域記錄、地圖生成、coverage path 生成與執行

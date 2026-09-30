@@ -124,7 +124,7 @@ map_manage:
   ros__parameters:
     use_sim_time: false
 
-# --- coverage (rust_coverage) ------------------------------------------------
+# --- coverage (always on: no rclpy version, no rust_* switch) ----------------
 boustrophedon_coverage:
   ros__parameters:
     use_sim_time: false

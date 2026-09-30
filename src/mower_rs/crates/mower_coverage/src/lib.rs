@@ -1,6 +1,10 @@
-//! mower_coverage: the coverage planner node (port of
-//! `mower_mission/coverage_node.py`, node name `boustrophedon_coverage`,
-//! same services, latched topics, parameters, messages and logs).
+//! mower_coverage: the coverage planner node, node name
+//! `boustrophedon_coverage`. It is the only coverage planner: a 1:1 port of
+//! the former rclpy `mower_mission/coverage_node.py` (removed; see git history
+//! for the Python names referenced below), with the same services, latched
+//! topics, parameters, messages and logs. `coverage_backend` and
+//! `allow_backend_fallback` are still accepted as startup-only legacy
+//! parameters; the planning always runs in `mower_coverage_core`.
 //!
 //! * `/generate_coverage_path` -- for every zone map (`/get_zone_map_list_srv`)
 //!   build the safe map (inflated mask AND inflated risk, resampled when the
@@ -16,7 +20,7 @@
 //! unreadable result, a failed confirmation or a stop request all enter the
 //! same tracker, which cancels the action, retries the correlated
 //! `/cancel_navigation_dispatch` every two seconds and only forgets the goal
-//! once a terminal state is proven -- exactly the Python node's
+//! once a terminal state is proven -- exactly the former Python node's
 //! `_track_and_cancel_navigation_goal` / `_request_nav2_cancel_fallback`.
 
 mod contours;
@@ -1420,7 +1424,7 @@ impl Ctx {
         }
         let immutable: Vec<&str> = params.iter().filter(|p| p.name == "coverage_backend" || p.name == "allow_backend_fallback").map(|p| p.name.as_str()).collect();
         if !immutable.is_empty() {
-            return reject(format!("{} is startup-only; restart coverage_node with the desired backend", immutable.join(", ")));
+            return reject(format!("{} is a legacy startup-only parameter; coverage always plans with mower_coverage_core", immutable.join(", ")));
         }
         let guarded = ["strip_width_m", "waypoint_spacing_m", "zigzag_angle_deg", "unknown_as_obstacle", "min_safe_component_area_m2", "coverage_pattern", "boundary_ring"];
         if params.iter().any(|p| guarded.contains(&p.name.as_str())) {
@@ -1536,6 +1540,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     };
     if params_v.coverage_backend != "rust" && params_v.coverage_backend != "python" {
         return Err(format!("Unknown coverage_backend \"{}\"; expected \"python\" or \"rust\"", params_v.coverage_backend).into());
+    }
+    // coverage_backend / allow_backend_fallback are kept only so existing
+    // parameter files and clients stay valid: the Python backend is gone and
+    // planning always uses mower_coverage_core.
+    if params_v.coverage_backend == "python" {
+        r2r::log_warn!(&logger, "coverage_backend \"python\" no longer exists (the Python planner was removed); planning with mower_coverage_core");
     }
     r2r::log_info!(&logger, "coverage backend: RustBackend");
 

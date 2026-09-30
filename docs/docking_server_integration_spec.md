@@ -26,7 +26,7 @@
 | Low-level docking | 接收 dock goal、導航到 staging pose、最後慢速靠 dock、undock | Nav2 `opennav_docking` 的 `docking_server` |
 | Mission wrapper | 給 mower 任務與 Flutter 使用的高階 API、狀態整理、安全前置檢查 | 新增 `mower_mission.docking_manager_node` |
 
-不要把 docking 邏輯塞進 `coverage_node.py` 或 `nav_action_server.py`。Coverage 是「割草路徑任務」，Nav action server 是「follow path 執行器」，Docking 是另一種長時間任務，應該和 coverage 平行存在。
+不要把 docking 邏輯塞進 coverage 節點（2026-09-30 起是 `src/mower_rs/crates/mower_coverage`，原本的 `coverage_node.py` 已移除）或 `nav_action_server.py`。Coverage 是「割草路徑任務」，Nav action server 是「follow path 執行器」，Docking 是另一種長時間任務，應該和 coverage 平行存在。
 
 MVP 建議分兩步做：
 

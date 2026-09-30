@@ -1,8 +1,3 @@
-#[cfg(feature = "python")]
-use numpy::PyReadonlyArray2;
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
 use crate::path_validator::validate_path_rs;
 use crate::types::SafeMap;
 
@@ -388,32 +383,4 @@ pub fn generate_coverage_zigzag_path_rs(
 
     let invalid_segments = find_invalid_segments(&points, &sm);
     (points, split_points, invalid_segments)
-}
-
-// ── PyO3 binding ──────────────────────────────────────────────────────────────
-
-#[cfg(feature = "python")]
-#[pyfunction]
-#[pyo3(signature = (grid, strip_width_m, waypoint_spacing_m, res, h, w, origin_x, origin_y, angle_deg=0.0))]
-pub fn py_generate_coverage_zigzag_path(
-    grid: PyReadonlyArray2<bool>,
-    strip_width_m: f64,
-    waypoint_spacing_m: f64,
-    res: f64,
-    h: usize,
-    w: usize,
-    origin_x: f64,
-    origin_y: f64,
-    angle_deg: f64,
-) -> (Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(usize, usize)>) {
-    let safe = grid.as_array();
-    generate_coverage_zigzag_path_rs(
-        safe, strip_width_m, waypoint_spacing_m, res, h, w, origin_x, origin_y, angle_deg,
-    )
-}
-
-#[cfg(feature = "python")]
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_generate_coverage_zigzag_path, m)?)?;
-    Ok(())
 }

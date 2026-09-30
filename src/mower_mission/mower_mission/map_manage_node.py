@@ -590,9 +590,10 @@ class MapManage(Node, NavigationActivityGuard):
             res.zone_id = zone_map.zone_id
             res.area_m2 = 0.0
             return res
-        # CoveragePlanner consumes mask_map_inflated. Keep the same production
-        # clearance as /free_space_inflated; the uploaded outline is a range
-        # limit, not permission for the robot footprint to touch its edge.
+        # The coverage planner consumes mask_map_inflated. Keep the same
+        # production clearance as /free_space_inflated; the uploaded outline
+        # is a range limit, not permission for the robot footprint to touch
+        # its edge.
         zone_map.mask_map_inflated = copy.deepcopy(free_space_inflated)
 
         # The image is only a RANGE LIMITER. zone_map.mask_map already holds
@@ -697,8 +698,9 @@ class MapManage(Node, NavigationActivityGuard):
         self.base_map = self.collected_free_space
         self._free_zone_backup = None
         self._free_risk_backup = None
-        # Republish the freespace risk so coverage_node resamples it (the image
-        # risk was published on /risk_map_inflated during the import).
+        # Republish the freespace risk so the coverage planner (mower_rs
+        # mower_coverage) resamples it (the image risk was published on
+        # /risk_map_inflated during the import).
         self.risk_map_pub.publish(self.risk_map)
         self.risk_map_inflated_pub.publish(risk_inflated)
         self._commit_navigation_maps(local_map, global_map)
@@ -747,7 +749,8 @@ class MapManage(Node, NavigationActivityGuard):
 
         # Clip the imported mask to the robot-collected freespace so the mowable
         # region is image_free ∩ collected_freespace (risk is removed later by
-        # coverage_node). No-op when no freespace was ever collected.
+        # the coverage planner, mower_rs mower_coverage). No-op when no
+        # freespace was ever collected.
         had_collected = self.collected_free_space is not None
         free_grid = self._clip_free_grid_to_collected(
             free_grid, origin_x, origin_y, resolution
@@ -790,7 +793,8 @@ class MapManage(Node, NavigationActivityGuard):
         free (0) only where it is free in BOTH grids; everything else becomes 100.
         The grids may differ in origin/resolution, so the collected grid is
         nearest-cell resampled into the image grid (same pattern as
-        coverage_node._resample_risk_map_to_zone): each image cell centre ->
+        resample_risk_map_to_zone in src/mower_rs/crates/mower_coverage):
+        each image cell centre ->
         world metres -> floor into the collected grid. Out-of-bounds or unknown
         (value != 0) collected cells are treated as occupied / not-free.
 

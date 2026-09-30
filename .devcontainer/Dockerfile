@@ -120,15 +120,16 @@ RUN \
 # Add user to video group to allow access to webcam
 RUN sudo usermod --append --groups video $USER_NAME
 
-# Install Rust toolchain (system-wide) and maturin for PyO3/maturin builds
+# Install the Rust toolchain (system-wide) for the r2r nodes in src/mower_rs,
+# which include the coverage planner (mower_coverage, linking the
+# src/mower_coverage_core library through a cargo path dependency).
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain stable --no-modify-path && \
-    chown -R $USER_NAME:$USER_NAME /usr/local/rustup /usr/local/cargo && \
-    pip3 install --break-system-packages maturin
+    chown -R $USER_NAME:$USER_NAME /usr/local/rustup /usr/local/cargo
 
 RUN rosdep update
 

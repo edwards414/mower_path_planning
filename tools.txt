@@ -111,7 +111,7 @@ node[boustrophedon_coverage]:
 
   executable:
     [生成路徑] 
-    ros2 run boustrophedon_coverage boustrophedon_coverage
+    ros2 run mower_rs mower_coverage
 
 
   launch:

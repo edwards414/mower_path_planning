@@ -54,26 +54,34 @@ jobs:
           PYTHONPATH: .
         run: |
           python -m pytest -q \
-            test/test_backend_api.py \
-            test/test_backend_parity.py \
             test/test_battery_simulator.py \
-            test/test_cell_decomposition.py \
-            test/test_connector_planner.py \
             test/test_controller_configuration.py \
-            test/test_coverage_cancel_tracking.py \
             test/test_flutter_adapter_dto.py \
             test/test_image_mask_import.py \
             test/test_map_safety.py \
             test/test_nav_map_fusion.py \
             test/test_pairing.py \
-            test/test_path_validator.py \
             test/test_qos_configuration.py \
             test/test_robot_info.py \
-            test/test_safe_map_filter.py \
-            test/test_site_store.py \
-            test/test_spiral_generator.py \
-            test/test_zigzag_generator.py \
-            test/test_zigzag_segment_boundaries.py
+            test/test_site_store.py
+
+  coverage-core-tests:
+    # The coverage planner library (safe-map filter, path validator, A*
+    # connector, zigzag / spiral generators, cell decomposition). A plain Rust
+    # crate linked into the mower_rs coverage node through a cargo path
+    # dependency, so its unit tests need neither ROS nor r2r.
+    name: mower_coverage_core tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: cargo test
+        working-directory: src/mower_coverage_core
+        run: cargo test --locked
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`
@@ -141,7 +149,7 @@ jobs:
     # minutes like ubuntu-latest). Both images are arm64-only for the robot;
     # building them under QEMU on x86 took 82 min, native is ~10 min.
     runs-on: ubuntu-24.04-arm
-    needs: [python-tests, firmware, driver-tests]
+    needs: [python-tests, coverage-core-tests, firmware, driver-tests]
 
     # Only the image something actually pulls from GHCR:
     #   runtime  deploy/docker-compose.yaml  (robot, arm64); it also carries
@@ -315,6 +323,8 @@ jobs:
             ros2 pkg prefix mower_hardware >/dev/null
             # GPS receiver driver lives in this image (mower.launch.py enable_gps)
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_gps"
+            # the only coverage planner (no rclpy version any more)
+            test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_coverage"
             test -s "$(ros2 pkg prefix mower_bringup)/share/mower_bringup/config/gps.yaml"
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
             ros2 launch mower_bringup robot.launch.py --show-args >/tmp/robot_launch_args.txt
@@ -334,8 +344,10 @@ jobs:
               test -f "$lib" || { echo "missing component library: $lib"; exit 1; }
               if ldd "$lib" | grep -q "not found"; then echo "missing shared libs: $lib"; exit 1; fi
             done
-            python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server, rosapi, mower_coverage_core; from nav2_simple_commander.robot_navigator import BasicNavigator"
-            for b in /opt/ros/${ROS_DISTRO}/lib/{nav2_*,robot_localization,controller_manager,joy,twist_mux,topic_tools,opennav_docking,apriltag_ros}/* /opt/ros/${ROS_DISTRO}/lib/libnav2_*.so "${WORKSPACE}"/install/mower_hardware/lib/*.so; do
+            python3 -c "import cv2, boto3, rclpy, cv_bridge, rosbridge_server, rosapi; from nav2_simple_commander.robot_navigator import BasicNavigator"
+            # the removed Python planner must not ship from a stale build cache
+            if python3 -c "import mower_mission.coverage_node" 2>/dev/null; then echo "stale mower_mission.coverage_node in the image"; exit 1; fi
+            for b in /opt/ros/${ROS_DISTRO}/lib/{nav2_*,robot_localization,controller_manager,joy,twist_mux,topic_tools,opennav_docking,apriltag_ros}/* /opt/ros/${ROS_DISTRO}/lib/libnav2_*.so "${WORKSPACE}"/install/mower_hardware/lib/*.so "${WORKSPACE}"/install/mower_rs/lib/mower_rs/*; do
               if ldd "$b" 2>/dev/null | grep -q "not found"; then echo "missing shared libs: $b"; ldd "$b" | grep "not found"; exit 1; fi
             done
             test -n "${MOWER_VERSION}"

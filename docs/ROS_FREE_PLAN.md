@@ -112,6 +112,8 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
 
 待辦：真機開 `rust_daemon:=true` 跑一輪（含監督試車，因為 guards 在裡面），並在同一份量測腳本下記錄 LubanCat 的數字。
 
+2026-09-30 補記：Python coverage 已移除（見 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md) 7.12 補記），`coverage` 模組不再有 `rust_coverage` 開關。`rust_daemon:=true` 時 `robot.launch.py` 永遠把它放進模組集合；`rust_daemon:=false` 時由 `mission.launch.py` 起獨立的 `mower_coverage`。其餘模組仍照各自的 `rust_*` 開關。
+
 
 ### Phase B：Rust base driver 取代 ros2_control（3–4 天，預估 -20）
 

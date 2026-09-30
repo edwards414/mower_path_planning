@@ -52,9 +52,11 @@ def _enforce_production_safety(context):
 # The module set is derived from the same rust_* switches the separate
 # binaries use, so a roll-back is `rust_daemon:=false` and nothing else. The
 # rclpy fallbacks are untouched: a module whose rust_* switch is false still
-# runs as its Python node.
+# runs as its Python node. A module with no switch (None) has no rclpy
+# fallback at all and is always part of the set: mission.launch.py starts its
+# separate binary whenever rust_daemon is off.
 _DAEMON_MODULES = (
-    # module id      launch switch
+    # module id      launch switch (None: always on)
     ('base', 'rust_base'),
     ('status', 'rust_status'),
     ('guards', 'rust_guards'),
@@ -62,7 +64,7 @@ _DAEMON_MODULES = (
     ('gps', 'enable_gps'),
     ('localize', 'rust_localize'),
     ('map', 'rust_map'),
-    ('coverage', 'rust_coverage'),
+    ('coverage', None),
     ('nav', 'rust_nav'),
     ('record', 'rust_record'),
     ('adapter', 'rust_adapter'),
@@ -120,11 +122,16 @@ def _rust_daemon_node(context):
         return []
     modules = [
         module for module, switch in _DAEMON_MODULES
-        if _truthy(LaunchConfiguration(switch).perform(context))
+        if switch is None
+        or _truthy(LaunchConfiguration(switch).perform(context))
     ]
+    # The always-on modules keep this set non-empty; the guard is a backstop
+    # should the table ever lose them, so launch says why instead of starting
+    # a mower_rsd that refuses an empty --modules.
     if not modules:
         raise RuntimeError(
-            'rust_daemon:=true but no rust_* switch is on: nothing to run'
+            'rust_daemon:=true but no rust_* switch is on and no module is '
+            'always on: nothing to run'
         )
 
     bringup = get_package_share_directory('mower_bringup')
@@ -222,7 +229,6 @@ def generate_launch_description():
     rust_battery = LaunchConfiguration('rust_battery')
     rust_pid_autotune = LaunchConfiguration('rust_pid_autotune')
     rust_map = LaunchConfiguration('rust_map')
-    rust_coverage = LaunchConfiguration('rust_coverage')
     rust_agent = LaunchConfiguration('rust_agent')
     rust_guards = LaunchConfiguration('rust_guards')
     rust_imu = LaunchConfiguration('rust_imu')
@@ -278,7 +284,6 @@ def generate_launch_description():
             'rust_battery': rust_battery,
             'rust_pid_autotune': rust_pid_autotune,
             'rust_map': rust_map,
-            'rust_coverage': rust_coverage,
             'rust_agent': rust_agent,
             'rust_bridge': rust_bridge,
             # mower_base / mower_localize publish /odom_slow and
@@ -437,12 +442,6 @@ def generate_launch_description():
                         'map_manage_node',
         ),
         DeclareLaunchArgument(
-            'rust_coverage',
-            default_value='false',
-            description='mower_rs mower_coverage instead of the rclpy '
-                        'coverage_node',
-        ),
-        DeclareLaunchArgument(
             'rust_agent',
             default_value='false',
             description='mower_rs mower_agent instead of the Python fleet agent',
@@ -496,8 +495,9 @@ def generate_launch_description():
                         'mower_rsd process (one r2r Context / DDS '
                         'participant) instead of one binary each. The module '
                         'set is derived from the rust_* switches above plus '
-                        'enable_gps; node names, topics, services and '
-                        'parameters are unchanged.',
+                        'enable_gps, and always includes the coverage '
+                        'planner (no rclpy version); node names, topics, '
+                        'services and parameters are unchanged.',
         ),
         DeclareLaunchArgument(
             'rust_daemon_params_file',

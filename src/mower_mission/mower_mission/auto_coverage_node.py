@@ -122,8 +122,9 @@ class AutoCoverage(Node):
         if not self._wait(self._risk_map_seen, '/risk_map_inflated'):
             return False
         # /risk_map_inflated arriving on OUR subscription doesn't guarantee
-        # coverage_node has processed it yet (separate subscriber). Retry
-        # generate_coverage_path until coverage_node has the map.
+        # the coverage planner (boustrophedon_coverage, mower_rs
+        # mower_coverage) has processed it yet (separate subscriber). Retry
+        # generate_coverage_path until the planner has the map.
         for attempt in range(8):
             time.sleep(1.5)
             if not self.cli_cov.wait_for_service(timeout_sec=self._timeout):

@@ -1,8 +1,3 @@
-#[cfg(feature = "python")]
-use numpy::PyReadonlyArray2;
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
 use crate::types::{SafeMap, ValidationResult, world_to_grid};
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
@@ -88,56 +83,4 @@ pub fn validate_path_rs(points: &[(f64, f64)], sm: &SafeMap) -> ValidationResult
         invalid_segments.len()
     );
     ValidationResult { valid, invalid_points, invalid_segments, message: msg }
-}
-
-// ── PyO3 bindings ──────────────────────────────────────────────────────────────
-
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn py_is_point_safe(
-    x: f64,
-    y: f64,
-    grid: PyReadonlyArray2<bool>,
-    resolution: f64,
-    origin_x: f64,
-    origin_y: f64,
-) -> bool {
-    let sm = SafeMap { grid: grid.as_array(), resolution, origin_x, origin_y };
-    is_point_safe_rs(x, y, &sm)
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn py_is_segment_safe(
-    p0: (f64, f64),
-    p1: (f64, f64),
-    grid: PyReadonlyArray2<bool>,
-    resolution: f64,
-    origin_x: f64,
-    origin_y: f64,
-) -> bool {
-    let sm = SafeMap { grid: grid.as_array(), resolution, origin_x, origin_y };
-    is_segment_safe_rs(p0, p1, &sm)
-}
-
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn py_validate_path(
-    points: Vec<(f64, f64)>,
-    grid: PyReadonlyArray2<bool>,
-    resolution: f64,
-    origin_x: f64,
-    origin_y: f64,
-) -> (bool, Vec<usize>, Vec<(usize, usize)>, String) {
-    let sm = SafeMap { grid: grid.as_array(), resolution, origin_x, origin_y };
-    let r = validate_path_rs(&points, &sm);
-    (r.valid, r.invalid_points, r.invalid_segments, r.message)
-}
-
-#[cfg(feature = "python")]
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_is_point_safe, m)?)?;
-    m.add_function(wrap_pyfunction!(py_is_segment_safe, m)?)?;
-    m.add_function(wrap_pyfunction!(py_validate_path, m)?)?;
-    Ok(())
 }

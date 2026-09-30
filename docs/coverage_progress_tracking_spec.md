@@ -1,5 +1,7 @@
 # Coverage Progress Tracking Spec
 
+> **2026-09-30 補記：** 本文寫作時 coverage 節點是 Python 的 `mower_mission/coverage_node.py`，這個檔案已在 2026-09-30 移除。同一個節點（node 名 `boustrophedon_coverage`，服務與 topic 不變）現在是 `mower_rs` 的 `mower_coverage`，程式在 `src/mower_rs/crates/mower_coverage/src/lib.rs`。下文要改 `coverage_node.py` 的項目，現在要改那個檔案。現況描述保留原文。
+
 本文件規劃如何在目前割草 coverage path 執行時，記錄、發布、查詢目前工作進度。目標是讓前端能顯示割草進度，也讓後續中斷恢復任務有可靠基礎。
 
 ## 1. 背景與現況

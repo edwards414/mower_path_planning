@@ -50,8 +50,8 @@ PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tunin
 MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
 MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/lib.rs'
 MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
-COVERAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/coverage_node.py'
 COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/lib.rs'
+MISSION_SETUP = SRC_DIR / 'mower_mission/setup.py'
 AGENT_PY = SRC_DIR / 'mower_mission/mower_mission/mower_agent.py'
 AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/lib.rs'
 AGENT_RS_RELAY = SRC_DIR / 'mower_rs/crates/mower_agent/src/relay.rs'
@@ -276,10 +276,14 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
     assert "executable='mower_rsd'" in robot_launch
     # derived from the existing switches, not a second source of truth
     for switch in ('rust_status', 'rust_guards', 'rust_imu', 'enable_gps',
-                   'rust_map', 'rust_coverage', 'rust_nav', 'rust_record',
+                   'rust_map', 'rust_nav', 'rust_record',
                    'rust_adapter', 'rust_battery', 'rust_pid_autotune',
                    'rust_bridge', 'rust_agent'):
         assert f"'{switch}')," in robot_launch, switch
+    # ... except the coverage planner, which has no rclpy version and
+    # therefore no switch: always in the set
+    assert "('coverage', None)," in robot_launch
+    assert 'if switch is None' in robot_launch
     # a bare __node:= would rename every node in the process, so the Node
     # action must not carry a name= at all
     node_block = robot_launch.split("executable='mower_rsd',", 1)[1].split(
@@ -448,9 +452,13 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert "condition=UnlessCondition(rust_guards)" in mux_launch
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
     deploy_compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_coverage', 'rust_agent', 'rust_guards', 'rust_imu', 'rust_bridge'):
+    for switch in ('rust_status', 'rust_adapter', 'rust_record', 'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map', 'rust_agent', 'rust_guards', 'rust_imu', 'rust_bridge'):
         assert f"'{switch}': {switch}," in robot_launch
         assert f"{switch}:=${{{switch.upper()}:-false}}" in deploy_compose
+    # the coverage planner is Rust-only: no switch left anywhere
+    for text in (robot_launch, deploy_compose, MISSION_LAUNCH.read_text(encoding='utf-8'),
+                 ENV_EXAMPLE.read_text(encoding='utf-8')):
+        assert 'rust_coverage' not in text.lower()
     assert "parameters=[{'require_command_session': True}]" in mux_launch
     assert 'command_timeout_s", 0.20' in main
     assert 'max_input_age_s", 0.25' in main
@@ -620,17 +628,77 @@ def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
     assert 'make_parameter_handler' not in main
 
 
-def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
-    """rust_coverage:=true swaps in mower_rs mower_coverage for coverage_node:
-    same node name, services, action, topics, parameter defaults, dispatch
-    deadlines, retry cadence and user-facing messages."""
+# Frozen from the removed rclpy coverage_node.py (git show
+# dff480b:src/mower_mission/mower_mission/coverage_node.py) with the regexes
+# this test used to run on it: every declare_parameter default, written the
+# way the Rust node declares it ...
+COVERAGE_PARAMETER_DEFAULTS = (
+    ('strip_width_m', '0.8'),
+    ('waypoint_spacing_m', '0.2'),
+    ('zigzag_angle_deg', '0.0'),
+    ('unknown_as_obstacle', 'true'),
+    ('min_safe_component_area_m2', '0.05'),
+    ('coverage_pattern', '"zigzag"'),
+    # legacy, startup-only: still accepted (and validated), planning is Rust
+    ('coverage_backend', '"rust"'),
+    ('allow_backend_fallback', 'true'),
+    ('fallback_cancel_request_timeout_s', '5.0'),
+    ('boundary_ring', 'false'),
+)
+# ... and every Chinese user-facing message without a format field.
+COVERAGE_USER_MESSAGES = (
+    'boustrophedon_coverage 初始化',
+    '收到 risk_map 地圖',
+    '收到 risk_map_inflated 地圖',
+    '缺少 risk_map_inflated 地圖數據',
+    '覆蓋路徑生成成功',
+    '覆蓋路徑生成失敗',
+    '沒有可用的 zone map',
+    '已有任務序列執行中，請先呼叫 /stop_zone_sequence',
+    '前一序列的導航終止狀態尚未確認，拒絕啟動新序列',
+    'zone_ids 不可為空',
+    '已立即送出目前導航目標的取消請求；正追蹤至終止狀態',
+    '目前導航目標的取消已在追蹤中',
+    '已送出取消請求；序列尚未派送或正在步驟間切換',
+    '目前無執行中的任務序列',
+    '服務呼叫超時',
+    'Service 不可用',
+)
+
+
+def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
+    """mower_rs mower_coverage is the only coverage planner (the rclpy
+    coverage_node is gone): it always runs, as its own binary or as the
+    daemon's 'coverage' module, with the same node name, services, action,
+    topics, parameter defaults, dispatch deadlines, retry cadence and
+    user-facing messages the Python node had."""
     main = COVERAGE_RS_MAIN.read_text(encoding='utf-8')
-    py_node = COVERAGE_NODE.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
+    robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    # the Python planner and its entry points are gone
+    assert not (SRC_DIR / 'mower_mission/mower_mission/coverage_node.py').exists()
+    assert 'mower_mission.coverage_node' not in MISSION_SETUP.read_text(encoding='utf-8')
+    assert "executable='coverage_node'" not in mission_launch
+    # one Node, off only while mower_rsd hosts it
     assert "executable='mower_coverage'" in mission_launch
-    assert "condition=_rust_binary(rust_coverage, rust_daemon)" in mission_launch
-    assert "condition=UnlessCondition(rust_coverage)" in mission_launch
-    assert mission_launch.count("name='boustrophedon_coverage'") == 2
+    assert "condition=_rust_only_binary(rust_daemon)" in mission_launch
+    assert mission_launch.count("name='boustrophedon_coverage'") == 1
+    assert "('coverage', None)," in robot_launch
+    coverage_module = daemon_main.split('id: "coverage",', 1)[1].split('},', 1)[0]
+    assert 'switch: ALWAYS,' in coverage_module
+    assert 'node: "boustrophedon_coverage"' in coverage_module
+    assert 'rust_coverage' not in daemon_main
+    # the sim graphs start the same binary under its own default node name
+    assert 'module_main("boustrophedon_coverage"' in (
+        COVERAGE_RS_MAIN.parent / 'main.rs').read_text(encoding='utf-8')
+    for launch in (SYSTEM_TEST_LAUNCH, SMALL_TEST_LAUNCH):
+        text = launch.read_text(encoding='utf-8')
+        assert "'ros2', 'run', 'mower_rs', 'mower_coverage'" in text, launch.name
+        assert "'coverage_node'" not in text, launch.name
+        assert 'coverage_backend' not in text, launch.name
+    assert "['zigzag_angle_deg:=', zigzag_angle_deg]" in SYSTEM_TEST_LAUNCH.read_text(
+        encoding='utf-8')
     assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     for name in ('/generate_coverage_path', '/zone_exec_path', '/run_zone_sequence', '/stop_zone_sequence',
                  '/get_zone_map_list_srv', '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
@@ -638,27 +706,47 @@ def test_rust_coverage_node_keeps_the_same_safety_rules_and_wiring():
                  '/coverage_path', '/coverage_path_markers', '/coverage_invalid_segments', '/coverage_connectors',
                  '/risk_map', '/risk_map_inflated', '/nav_operation_active'):
         assert f'"{name}"' in main, name
-    for name, default in re.findall(r"self\.declare_parameter\('(\w+)', ([^)]+)\)", py_node):
-        rust_default = default.replace("'", '"').replace('True', 'true').replace('False', 'false')
-        assert f'"{name}", {rust_default}' in main, (name, default)
+    for name, default in COVERAGE_PARAMETER_DEFAULTS:
+        assert f'"{name}", {default}' in main, (name, default)
     # the bounded dispatch: 3 s acceptance, 600 s result, 2 s confirmation, 2 s cancel cadence, 0.25 s fallback wait
     assert 'let acceptance_timeout_s = 3.0;' in main and 'let timeout_s = 600.0;' in main
     assert 'Duration::from_secs(2)' in main and 'Duration::from_millis(250)' in main
     assert '(0.5..=30.0).contains(&t)' in main
-    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
-        if '{' in text or text.endswith(': '):
-            continue
+    for text in COVERAGE_USER_MESSAGES:
         assert text in main, text
     for text in ('Navigation action goal accepted', 'Zone not found', 'Zone coverage path is empty',
                  'Navigation action server unavailable', 'busy or a safety precondition failed',
                  'A previous zone-sequence goal is not terminal; the new accepted goal is being canceled',
                  'Zone sequence was canceled before goal dispatch', 'Navigation action completed unsuccessfully',
-                 'is startup-only; restart coverage_node with the desired backend',
+                 'is a legacy startup-only parameter; coverage always plans with mower_coverage_core',
                  'coverage parameters cannot change while navigation or coverage generation is active/unknown',
                  'action is still not terminal; retrying correlated cancel',
                  'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
         assert text in main, text
     assert 'make_parameter_handler' not in main
+
+
+def test_coverage_binary_and_daemon_module_are_exact_complements():
+    """The coverage planner has no switch, so exactly one copy must run for
+    every rust_daemon value: robot.launch.py's _truthy accepts yes/on and
+    surrounding blanks, and a plain UnlessCondition would abort the whole
+    launch on those."""
+    assert 'UnlessCondition(rust_daemon)' not in MISSION_LAUNCH.read_text(
+        encoding='utf-8')
+    pytest.importorskip('launch')
+    pytest.importorskip('launch_ros')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    mission = _load_launch_module(MISSION_LAUNCH)
+    robot = _load_launch_module(ROBOT_LAUNCH)
+    assert ('coverage', None) in robot._DAEMON_MODULES
+    for value in ('true', 'True', ' on', 'ON', 'yes', '1',
+                  'false', 'FALSE', '0', 'off', 'no', 'maybe', ''):
+        context = LaunchContext()
+        daemon_hosts_it = robot._truthy(value)
+        assert mission._rust_only_binary(value).evaluate(context) is (
+            not daemon_hosts_it), repr(value)
 
 
 def test_rust_agent_keeps_the_same_backend_protocol_and_wiring():

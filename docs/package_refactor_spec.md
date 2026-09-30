@@ -1,5 +1,7 @@
 # Mower Package Refactor Specification
 
+> **2026-09-30 補記：** 本文是 package 重構當時的規格。其中的 `mower_mission/coverage_node.py`、`path_generators/` 與 `coverage_node` / `boustrophedon_coverage` 兩個 executable 已隨 Python coverage 一起移除。coverage 規劃節點現在是 `mower_rs` 的 `mower_coverage`（`ros2 run mower_rs mower_coverage`，node 名仍是 `boustrophedon_coverage`，服務不變），`mission.launch.py` 會自動啟動它（`rust_daemon:=true` 時改由 `mower_rsd` 的 `coverage` 模組提供），所以下文的 `ros2 run mower_mission coverage_node` 已不適用。其餘內容保留原文。
+
 ## 1. 目的
 
 目前專案中任務、地圖、路徑記錄、bringup、interface 分散在多個 package：

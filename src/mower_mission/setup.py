@@ -21,14 +21,13 @@ setup(
     zip_safe=True,
     maintainer='fxrbindi',
     maintainer_email='edwards940428@gmail.com',
-    description='Mower mission logic: coverage path, map management, path recording',
+    description='Mower mission logic: map management, path recording, navigation, auto-coverage sequencing',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'apriltag_dock_pose_publisher = '
             'mower_mission.apriltag_dock_pose_publisher:main',
-            'coverage_node = mower_mission.coverage_node:main',
             'docking_manager_node = mower_mission.docking_manager_node:main',
             'flutter_adapter_node = '
             'mower_mission.adapters.flutter_adapter_node:main',
@@ -49,7 +48,6 @@ setup(
             'nav_action_server = mower_mission.navigation.nav_action_server:main',
             'zone_map_client = mower_mission.utils.zone_map_client:main',
             # legacy aliases
-            'boustrophedon_coverage = mower_mission.coverage_node:main',
             'map_manage = mower_mission.map_manage_node:main',
             'path_record = mower_mission.path_record_node:main',
         ],

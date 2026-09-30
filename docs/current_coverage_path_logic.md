@@ -1,5 +1,18 @@
 # 當前覆蓋式路徑邏輯算法
 
+> **2026-09-30 補記：** 本文描述的 Python 實作（`coverage_node.py`、`path_generators/`、`coverage/`）已在 2026-09-30 移除，現在的邏輯在 Rust：
+>
+> - `coverage/path_validator.py` → `src/mower_coverage_core/src/path_validator.rs`
+> - `coverage/safe_map_filter.py` → `src/mower_coverage_core/src/safe_map_filter.rs`
+> - `coverage/connector_planner.py` → `src/mower_coverage_core/src/connector_planner.rs`
+> - `path_generators/zigzag.py` → `src/mower_coverage_core/src/zigzag.rs`
+> - `path_generators/spiral.py`（舊名 `speiral.py`）→ `src/mower_coverage_core/src/spiral.rs`
+> - `coverage/cell_decomposition.py` → `src/mower_coverage_core/src/cell_decomposition.rs`（已移植，尚未接進節點）
+> - `coverage/types.py`：`CoverageCell` → `src/mower_coverage_core/src/cell_decomposition.rs`；`SpiralCoveragePlan` / `SpiralSegment` / `CoverageSegment` / `ConnectorSegment` / `RoutePlan` 沒有移植（Rust spiral 只回傳 `(points, split_points, invalid_segments)`）；`SafeMap` / `ValidationResult`（原本在 `coverage/path_validator.py`）→ `src/mower_coverage_core/src/types.rs`
+> - `coverage_node.py` → `src/mower_rs/crates/mower_coverage/src/lib.rs`（`mower_rs` 的 `mower_coverage`，node 名仍是 `boustrophedon_coverage`，服務與參數不變）
+>
+> 下面的分析保留原文，檔名、行號與程式片段以當時的 Python 程式碼為準。
+
 本文件描述目前專案中實際運作的覆蓋式路徑生成流程。內容以目前程式碼為準，主要來源包含：
 
 - `src/mower_mission/mower_mission/map_manage_node.py`
