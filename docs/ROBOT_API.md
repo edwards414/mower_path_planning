@@ -96,18 +96,18 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 
 ## `/battery_state`（sensor_msgs/BatteryState，1 Hz）
 
-真機上由 `mower_mission` `battery_state_node` 發（`src/mower_mission/launch/mission.launch.py`），資料來源是 STM32 `0x8A` 的主電池電壓與 `0x89` 的充電模組狀態，SOC 是 6S 鋰電 OCV 查表加濾波（設計與限制見 `docs/BATTERY.md`）。模擬環境仍由 `battery_simulator_node` 發同一個 topic。
+真機上由 `battery_state` 節點發（預設 `mower_mission` `battery_state_node`，`rust_battery:=true` 時為 mower_rs `mower_battery`；`src/mower_mission/launch/mission.launch.py`），資料來源是 STM32 `0x89` 的 RS485 電池電表電壓（裝在電池側；`0x8A` 已退役），充電器在不在以電壓 ≥ 25.0 V（`charger_present_min_v`）判斷，SOC 是 6S 鋰電 OCV 查表加濾波（設計與限制見 `docs/BATTERY.md`）。模擬環境仍由 `battery_simulator_node` 發同一個 topic。
 
 | 欄位 | 內容 |
 |---|---|
 | `present` | STM32 5 s 內有回報有效電壓才 `true`；`false` 時其他欄位是 NaN / UNKNOWN，App 應顯示「--」 |
 | `voltage` | 濾波後的電池組電壓（V） |
 | `percentage` | `0.0 ~ 1.0`；負載下誤差約 ±10 %，靜置較準 |
-| `current` | 充電時 = 充電模組輸出電流（A，正值）；沒接充電器時 NaN（目前沒有放電電流感測） |
+| `current` | 電表電流端子未接（`meter_current_wired=false`，預設）時一律 NaN；接上後為電池組電流（A），充電正、放電負 |
 | `power_supply_status` | `CHARGING` / `FULL` / `NOT_CHARGING`（接著充電器但沒電流）/ `DISCHARGING` |
 | `cell_voltage` | 6 個平均值（沒有逐 cell 量測） |
 
-`/aon_battery_state` 同格式，是維持 STM32 常開的 3.7 V 小電池，App 目前不顯示。
+`/aon_battery_state` 同格式，是維持 STM32 常開的 3.7 V 小電池；目前沒有量測來源（`0x8A` 已退役），`present` 永遠 false，App 不顯示。
 
 ## `/pid_autotune`（mower_interface/srv/PidAutotune）、`/pid_autotune/status`（std_msgs/String，JSON，latched）
 

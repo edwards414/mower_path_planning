@@ -522,7 +522,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | 項目 | `.ioc` 目前規劃 | 目前產生碼狀態 |
 | --- | --- | --- |
 | BTS7960 shared EN | `PA4` 一條線接左右 BTS7960 的 `L_EN/R_EN` | 應用層已固定使用 `PA4` shared EN；`PA5` = RS485 DE、`PA6` = 下限開關、`PA7` 空著 |
-| RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，尚未有實物測試 |
+| RS485 充電模組 | `PA11/PA12` = `USART6` 9600 8N1 | `.ioc`、`usart.c`、`stm32f4xx_it.c` 已同步；`charger_rs485` 模組與 `0x89` 已接上，2026-09-19 實測電壓 / 溫度正確（見上文與 `docs/BATTERY.md`）；電流端子未接進主線 |
 | MG996 servo control | `PB10` GPIO + `TIM10`（1 µs tick、20 ms period、CH1 compare no output） | 已改成 TIM10 中斷產生脈波，jitter = 中斷延遲；`0x07` 命令 / `0x88` 狀態已接上；2026-09-20 加入脈寬斜率與 `PB2/PA6` 限位開關，尚未接實物測 |
 | Analog monitor ADC mux（已移除） | 從未裝上 | 2026-09-20 移除：`analog_monitor.*`、`Core/Src/adc.c`、`HAL_ADC_MODULE_ENABLED`、`.ioc` ADC1、`0x8A` 全部拿掉；`PB1` 空著 |
 | Wheel PID settings | internal Flash sector 7 at `0x08060000` | 已新增 C++ storage module；需實車調 PID |
@@ -533,7 +533,7 @@ STM32 需要接在 always-on 的 `AON_3V3`，關機後由 3.7 V 小電池經電�
 | Power button / low power | `PB0` EXTI pull-up, `PC14` `LEBANCAT_WAKE`, `PC15` `MAIN_POWER_EN` | 已新增 polling 狀態機 wrapper；實際 STOP low-power 進入點仍需接 task |
 | Board module runtime | module init / 10ms maintenance | 已新增 `BoardModules_Init()` / `BoardModules_Update10ms()`，接上蜂鳴器、電源按鍵、MG996 限位開關 / 斜率 |
 | WS2812 狀態燈 protocol | LED index `0-2` 保留給狀態燈 | 已新增狀態燈 wrapper；尚未自動接入 10ms runtime，避免和 UART 燈效搶 DMA |
-| ros2_control 對接 | `ros2/mower_hardware` SystemInterface；`0x85` 改回累積 encoder 計數供里程計 | 韌體已改 `total_counts`；plugin、diff_drive 設定、xacro、launch 已加入 repo，尚未在 LebanCat 上 colcon build 驗證；`wheel_radius`/`wheel_separation` 待量 |
+| ros2_control 對接 | `src/mower_hardware` SystemInterface；`0x85` 改回累積 encoder 計數供里程計 | 韌體已改 `total_counts`；plugin、diff_drive 設定、xacro、launch 已在 LebanCat 真機上執行（載入 `mower_controller/controllers/diff_drive_controller.yaml`）；`wheel_radius`/`wheel_separation` 待量 |
 | WS2812 開機動畫 | `boot_animation.cpp`，約 1.9 s：點火後轉成白光常亮，直到 UART 燈效命令覆蓋；蜂鳴器點火時兩短聲、白光亮起一長聲 | 已接入 MotorTask 的 20 ms 燈條迴圈，`main.c` 在 init 完成後啟動；動畫期間 UART 燈效命令暫緩，結束後自動套用；亮度上限 110/255 |
 
 ## 待確認清單

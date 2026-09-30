@@ -1,26 +1,26 @@
 # 電池電量估計（SOC）
 
 主電池：6S 鋰電，滿電 `25.2 V`（4.2 V/cell），截止 `18.0 V`（3.0 V/cell），沒有會回報的 BMS。
-小電池：3.7 V 1S，維持 STM32 常開，自帶充電 IC；目前沒有量測（STM32 ADC 分壓未裝）。
+小電池：3.7 V 1S，維持 STM32 常開，自帶充電 IC；沒有量測（ADC mux 從未裝上，2026-09-20 已從韌體移除，`0x8A` 退役），`/aon_battery_state` 永遠 `present=false`。
 
 ## 資料鏈
 
 ```
 RS485 電池電表（電池主線上）電壓 / 電流 / 溫度 ──0x89 CHARGER_STATUS (500 ms 輪詢)──┐
-STM32 ADC mux（目前未裝，ANALOG_MONITOR_CHANNEL_MASK=0）──0x8A ANALOG_STATUS──────┤
                                                                                    ▼
-                                    mower_hardware  →  /mower_base/telemetry {charger, analog}
+          mower_hardware（rust_base:=true 時為 mower_rs mower_base）→  /mower_base/telemetry {charger}
                                                                                    ▼
-                              mower_mission battery_state_node  →  /battery_state, /aon_battery_state
+     battery_state 節點（battery_state_node.py；rust_battery:=true 時為 mower_rs mower_battery）
+                                                        →  /battery_state, /aon_battery_state
                                                                                    ▼
                                                       rosbridge → App / mower_recorder bag
 ```
 
 - 電表：`firmware/wire.md`「RS485 電池電表」——裝在電池側，電壓永遠是電池端電壓，電流端子 **還沒接進主線**（讀 0）
-- 韌體：`firmware/Module/charger_rs485`（0x89）、`firmware/Module/analog_monitor`（0x8A，通道由 `hardware_pins.hpp` `ANALOG_MONITOR_CHANNEL_MASK` 決定）
-- Host 解碼：`src/mower_hardware/src/mower_protocol.cpp` `decode_charger_status` / `decode_analog_status`
+- 韌體：`firmware/Module/charger_rs485`（0x89）。`0x8A` ANALOG_STATUS 已於 2026-09-20 退役（ADC mux 從未裝上，`analog_monitor` 與 ADC 設定一起移除）
+- Host 解碼：`src/mower_hardware/src/mower_protocol.cpp` `decode_charger_status`（Rust：`src/mower_rs/crates/mower_base_core/src/protocol.rs`）
 - 估計：`src/mower_mission/mower_mission/battery_estimator.py`（純 Python，`test/test_battery_estimator.py`）
-- 節點：`src/mower_mission/mower_mission/battery_state_node.py`，參數見檔頭與 `launch/mission.launch.py`
+- 節點：`src/mower_mission/mower_mission/battery_state_node.py`（預設），或 `rust_battery:=true` 時的 `src/mower_rs/crates/mower_battery`（同一估算器、同一節點名 `battery_state`）；參數見檔頭與 `launch/mission.launch.py`
 
 ## 現況（2026-09-19）：電表只有電壓
 
@@ -28,7 +28,7 @@ STM32 ADC mux（目前未裝，ANALOG_MONITOR_CHANNEL_MASK=0）──0x8A ANALOG
 
 | 量 | 來源 | 現在 |
 |---|---|---|
-| 電池電壓 | `charger.voltage_v`（電表在線）→ 否則 `analog.main_battery_v`（ADC 有裝時） | 電表，25.64 V 插充電器 / 24.04 V 靜置 |
+| 電池電壓 | `charger.voltage_v`（電表在線）；`analog.main_battery_v` 備援的程式碼還在，但 0x8A 退役後不會有資料 | 電表，25.64 V 插充電器 / 24.04 V 靜置 |
 | 充電器在不在 | 電池端電壓 `>= charger_present_min_v`（25.0 V）。電表看不到充電器，但充電器插著會把端電壓頂到它的 CV，比任何靜置 OCV（≤ 25.2 V 滿電）都高 | 用電壓判 |
 | 電池電流 | `charger.current_a`，`meter_current_wired=true` 才吃 | 未接，NaN |
 
@@ -75,4 +75,4 @@ STM32 ADC mux（目前未裝，ANALOG_MONITOR_CHANNEL_MASK=0）──0x8A ANALOG
 - [ ] 電表電流端子接進電池主線，確認放電時 `current_a` 不是 0、看 raw 有沒有正負號
 - [ ] 填 `capacity_ah`、`charge_rate_pct_per_min`（電池 Ah、充電器 A）
 - [ ] 接上充電器跑一次完整充電，看 tail current（0.2 A）與 `full_min_cell_v`（4.10 V）門檻是否合理
-- [ ] STM32 ADC mux / 分壓若之後補上，`ANALOG_MONITOR_CHANNEL_MASK` 改回 `0x0F`，並用電表電壓校正 `MAIN_BATTERY_DIVIDER_GAIN`
+- [ ] 若要量小電池 / 備援電壓：需重新加 ADC 硬體與韌體（`0x8A`、`analog_monitor`、ADC 設定已於 2026-09-20 移除）

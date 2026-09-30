@@ -37,6 +37,7 @@ legacy ROS node names and service names remain for compatibility; see
 | `mower_description` | URDF/Xacro robot description and mesh assets |
 | `mower_teleop` | Keyboard and joystick teleoperation helpers |
 | `mower_qt` | PyQt operator panel and STM32 UART monitor |
+| `mower_recorder` | Field bag recorder: curated rosbag2 (mcap) + graph snapshot + run metadata, driven from the app |
 | `wit_ros2_imu` | WIT IMU ROS 2 node |
 | `turtlebot3_mapviz` | Mapviz support package |
 
@@ -298,6 +299,21 @@ ros2 service call /generate_coverage_path std_srvs/srv/Trigger {}
 ros2 service call /zone_exec_path mower_interface/srv/ZoneExecPath "{zone_id: 1}"
 ```
 
+While it runs, the navigation server publishes the execution progress on the
+latched `/coverage_progress` (`mower_interface/msg/CoverageProgress`: status,
+segment i/n, distance-weighted percentage, distances) and answers
+`/coverage_progress_status`. It also keeps a checkpoint on disk
+(`progress_checkpoint_path`, default `~/.ros/mower_mission/coverage_progress.json`);
+an interrupted or canceled zone continues from its first unfinished segment
+with:
+
+```bash
+ros2 service call /resume_coverage mower_interface/srv/ResumeCoverage "{zone_id: -1}"
+```
+
+The zone's path must be unchanged since the checkpoint (a regenerated path is
+refused). Details: [docs/coverage_progress_tracking_spec.md](docs/coverage_progress_tracking_spec.md).
+
 Coverage parameters are owned by the `boustrophedon_coverage` node name for
 backward compatibility. That node is the Rust `mower_rs` `mower_coverage`
 binary, or the `coverage` module of `mower_rsd` with `rust_daemon:=true`; it is
@@ -419,6 +435,7 @@ mower_path_planning/
 │   ├── mower_interface/            # ROS interfaces
 │   ├── mower_mission/              # Mission logic, maps, navigation wrapper
 │   ├── mower_qt/                   # Operator panel
+│   ├── mower_recorder/             # Field bag recorder
 │   ├── mower_rs/                   # Rust (r2r) nodes, incl. the coverage planner
 │   ├── mower_teleop/               # Teleoperation tools
 │   ├── turtlebot3_mapviz/          # Mapviz support
