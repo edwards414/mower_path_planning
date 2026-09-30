@@ -731,8 +731,21 @@ def test_coverage_binary_and_daemon_module_are_exact_complements():
     every rust_daemon value: robot.launch.py's _truthy accepts yes/on and
     surrounding blanks, and a plain UnlessCondition would abort the whole
     launch on those."""
-    assert 'UnlessCondition(rust_daemon)' not in MISSION_LAUNCH.read_text(
-        encoding='utf-8')
+    mission_src = MISSION_LAUNCH.read_text(encoding='utf-8')
+    robot_src = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    assert 'UnlessCondition(rust_daemon)' not in mission_src
+    # ROS-free half (runs in the python-tests job): both files accept the
+    # same spellings, and the helper strips blanks like _truthy does.
+    mission_true = ast.literal_eval(
+        re.search(r'^_TRUE = "(.*)"$', mission_src, re.M).group(1))
+    robot_true = ast.literal_eval(re.search(
+        r"return value\.strip\(\)\.lower\(\) in (\{[^}]*\})",
+        robot_src).group(1))
+    assert set(mission_true) == robot_true
+    helper = mission_src.split('def _rust_only_binary(', 1)[1].split(
+        '\ndef ', 1)[0]
+    assert '''"'.strip().lower() not in ", _TRUE''' in helper
+    # the behavioural half needs ROS launch
     pytest.importorskip('launch')
     pytest.importorskip('launch_ros')
     pytest.importorskip('ament_index_python')
