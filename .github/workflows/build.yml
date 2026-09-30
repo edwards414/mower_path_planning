@@ -159,9 +159,12 @@ jobs:
           source install/setup.bash
           cd src/mower_rs
           cargo build --locked -p mower_nav
-          python3 tools/nav_progress_check.py -- target/debug/mower_nav
-          PYTHONPATH="$GITHUB_WORKSPACE/src/mower_mission:$PYTHONPATH" \
-            python3 tools/nav_progress_check.py -- python3 -m mower_mission.navigation.nav_action_server
+          # each run restarts into the other server halfway, so both servers
+          # run every scenario and each resumes the other's checkpoint
+          export PYTHONPATH="$GITHUB_WORKSPACE/src/mower_mission:$PYTHONPATH"
+          PY_NAV='python3 -m mower_mission.navigation.nav_action_server'
+          python3 tools/nav_progress_check.py --restart-as "$PY_NAV" -- target/debug/mower_nav
+          python3 tools/nav_progress_check.py --restart-as target/debug/mower_nav -- $PY_NAV
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`

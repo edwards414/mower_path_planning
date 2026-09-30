@@ -790,6 +790,7 @@ dependencies = [
  "mower_rs_common",
  "r2r",
  "serde_json",
+ "sha2",
  "tokio",
  "uuid",
 ]

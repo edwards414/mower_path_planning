@@ -38,7 +38,9 @@ use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped};
 use r2r::mower_interface::action::Waypoint;
 use r2r::mower_interface::msg::ZoneMap;
-use r2r::mower_interface::srv::{CancelNavigationDispatch, ChannelRoute, ConfirmNavigationDispatch, MissionOperationLock, ZoneExecPath, ZoneMapList, ZoneSequence};
+use r2r::mower_interface::srv::{
+    CancelNavigationDispatch, ChannelRoute, ConfirmNavigationDispatch, GetCoverageProgress, MissionOperationLock, ResumeCoverage, ZoneExecPath, ZoneMapList, ZoneSequence,
+};
 use r2r::nav_msgs::msg::{MapMetaData, OccupancyGrid, Path};
 use r2r::rcl_interfaces::msg::{ListParametersResult, Parameter, ParameterDescriptor, ParameterValue, SetParametersResult};
 use r2r::rcl_interfaces::srv::{DescribeParameters, GetParameterTypes, GetParameters, ListParameters, SetParameters, SetParametersAtomically};
@@ -413,6 +415,7 @@ struct Ctx {
     confirm_client: r2r::Client<ConfirmNavigationDispatch::Service>,
     cancel_client: r2r::Client<CancelNavigationDispatch::Service>,
     nav_status_client: r2r::Client<Trigger::Service>,
+    progress_client: r2r::Client<GetCoverageProgress::Service>,
     channel_route_client: r2r::Client<ChannelRoute::Service>,
     follow_client: r2r::ActionClient<Waypoint::Action>,
 }
@@ -1262,9 +1265,41 @@ impl Ctx {
 
     // ------------------------------------------------------- dispatching
 
+    /// `/resume_coverage`.
+    async fn resume_coverage(self: &Arc<Self>, handles: &Handles, requested_zone: i32) -> (bool, String) {
+        if let Some(message) = self.guard.lock().await.reject_reason("resume a coverage mission") {
+            return (false, message);
+        }
+        let Some(status) = self.blocking_call(&self.progress_client, &GetCoverageProgress::Request::default(), 2.0).await else {
+            return (false, "Navigation server did not answer /coverage_progress_status".into());
+        };
+        let c = status.checkpoint;
+        if !c.checkpoint_available {
+            return (false, format!("No resumable coverage checkpoint ({})", c.message));
+        }
+        let zone_id = if requested_zone < 0 { c.zone_id } else { requested_zone };
+        if zone_id != c.zone_id {
+            return (false, format!("The checkpoint is for zone {}, not zone {zone_id}", c.zone_id));
+        }
+        let zone = match self.get_zone_map(zone_id).await {
+            None => return (false, "Zone not found".into()),
+            Some(z) if z.path.poses.is_empty() => return (false, "Zone coverage path is empty".into()),
+            Some(z) => z,
+        };
+        let index = c.completed_segments + 1;
+        self.info(format!("resume_coverage: zone {zone_id} from segment {index}/{}", c.total_segments));
+        if self.send_follow_path(handles, zone_id, index, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await {
+            (true, format!("Resuming zone {zone_id} at segment {index}/{}", c.total_segments))
+        } else {
+            (false, self.last_error())
+        }
+    }
+
     /// `_send_follow_path`: dispatch a goal and wait at least for acceptance.
-    /// `zone_id` is echoed in /coverage_progress (-1 for a channel route).
-    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
+    /// `zone_id` is echoed in /coverage_progress (-1 for a channel route);
+    /// `resume_segment_index > 0` continues the navigation server's checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, resume_segment_index: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
         let timeout_s = 600.0;
         let acceptance_timeout_s = 3.0;
         self.set_error("");
@@ -1287,7 +1322,7 @@ impl Ctx {
             return false;
         }
         let dispatch_id = uuid_hex();
-        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone(), zone_id };
+        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone(), zone_id, resume_segment_index };
         let fut = match self.follow_client.send_goal_request(goal) {
             Ok(f) => f,
             Err(e) => {
@@ -1450,7 +1485,7 @@ impl Ctx {
                 }
             };
             self.info(format!("[{}/{}] 執行 zone {zone_id} 覆蓋路徑，共 {} 個路徑點", i + 1, zone_ids.len(), zone.path.poses.len()));
-            let ok = self.send_follow_path(&handles, zone.zone_id, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
+            let ok = self.send_follow_path(&handles, zone.zone_id, 0, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
             if !ok {
                 self.error(format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止"));
                 return;
@@ -1472,7 +1507,7 @@ impl Ctx {
                 }
             };
             self.info(format!("走通道 #{} (zone {zone_id} → zone {next_zone_id})，共 {} 個路徑點", route.matched_channel_id, route.channel_path.poses.len()));
-            let ok = self.send_follow_path(&handles, -1, route.channel_path, Vec::new(), true, true).await;
+            let ok = self.send_follow_path(&handles, -1, 0, route.channel_path, Vec::new(), true, true).await;
             if !ok {
                 self.error(format!("通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止"));
                 return;
@@ -1652,6 +1687,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         confirm_client: node.create_client::<ConfirmNavigationDispatch::Service>("/confirm_navigation_dispatch", QosProfile::services_default())?,
         cancel_client: node.create_client::<CancelNavigationDispatch::Service>("/cancel_navigation_dispatch", QosProfile::services_default())?,
         nav_status_client: node.create_client::<Trigger::Service>("/check_nav_status", QosProfile::services_default())?,
+        progress_client: node.create_client::<GetCoverageProgress::Service>("/coverage_progress_status", QosProfile::services_default())?,
         channel_route_client: node.create_client::<ChannelRoute::Service>("/get_channel_route", QosProfile::services_default())?,
         follow_client: node.create_action_client::<Waypoint::Action>("nav_action_follow_path")?,
     });
@@ -1744,13 +1780,33 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                                 None => ZoneExecPath::Response { success: false, message: "Zone not found".into() },
                                 Some(zone) if zone.path.poses.is_empty() => ZoneExecPath::Response { success: false, message: "Zone coverage path is empty".into() },
                                 Some(zone) => {
-                                    let dispatched = ctx.send_follow_path(&handles, zone.zone_id, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
+                                    let dispatched = ctx.send_follow_path(&handles, zone.zone_id, 0, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
                                     ZoneExecPath::Response { success: dispatched, message: if dispatched { "Navigation action goal accepted".into() } else { ctx.last_error() } }
                                 }
                             }
                         }
                     };
                     let _ = req.respond(response);
+                });
+            }
+        });
+    }
+    {
+        // Continue the navigation server's checkpoint from its first unfinished
+        // segment; the server itself refuses a path that changed since.
+        let mut stream = node.create_service::<ResumeCoverage::Service>("/resume_coverage", QosProfile::services_default())?;
+        let ctx = ctx.clone();
+        let handles = handles.clone();
+        tokio::spawn(async move {
+            while let Some(req) = stream.next().await {
+                let ctx = ctx.clone();
+                let handles = handles.clone();
+                tokio::spawn(async move {
+                    let (success, message) = ctx.resume_coverage(&handles, req.message.zone_id).await;
+                    if !success {
+                        ctx.warn(format!("resume_coverage: {message}"));
+                    }
+                    let _ = req.respond(ResumeCoverage::Response { success, message });
                 });
             }
         });

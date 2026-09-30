@@ -16,20 +16,36 @@ Scenarios (a straight 6 m path with split points at 2 m and 4 m, i.e. three
   B  no zone id, the action is canceled halfway through segment 2:
      canceling is published, then canceled with 1 completed segment and the
      overall progress between 1/3 and 2/3 (kept, not reset).
+  E  the server restarts (as --restart-as, if given: the checkpoint file is
+     shared by both servers): /coverage_progress_status restores B's
+     execution from the checkpoint file and reports it resumable at
+     segment 2; D and C then run against the restarted server.
+  D  resume goals the checkpoint does not cover are rejected: a different
+     path, and a segment past the first unfinished one.
+  C  resume at segment 2: Nav2 is sent to the start of segment 2 (x = 2 m),
+     only segments 2 and 3 are followed, progress starts at 1/3 and ends
+     succeeded; the checkpoint is then no longer resumable.
 
+The checkpoint goes to a temporary directory (progress_checkpoint_path).
 Needs a sourced ROS 2 Jazzy environment with mower_interface and nav2_msgs:
 
   python3 src/mower_rs/tools/nav_progress_check.py -- <path to mower_nav>
   python3 src/mower_rs/tools/nav_progress_check.py -- \\
       python3 -m mower_mission.navigation.nav_action_server
+  python3 src/mower_rs/tools/nav_progress_check.py \\
+      --restart-as 'python3 -m mower_mission.navigation.nav_action_server' \\
+      -- <path to mower_nav>
 
 Exits 1 on the first failed expectation.
 """
 
 import argparse
 import math
+import os
+import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -83,6 +99,7 @@ class FakeNav2(Node):
         group = ReentrantCallbackGroup()
         self.follow_count = 0
         self.hold_segment = None  # FollowPath goal that stops halfway
+        self.navigate_goals = []
         self.create_service(GetState, 'bt_navigator/get_state', self._state, callback_group=group)
         ActionServer(
             self, NavigateToPose, 'navigate_to_pose', self._navigate,
@@ -103,6 +120,7 @@ class FakeNav2(Node):
         return res
 
     def _navigate(self, goal_handle):
+        self.navigate_goals.append(goal_handle.request.pose)
         time.sleep(0.2)
         goal_handle.succeed()
         return NavigateToPose.Result()
@@ -162,10 +180,45 @@ def wait(future, timeout_s):
     return future.result() if future.done() else None
 
 
+class Server:
+    """The navigation server process, restartable."""
+
+    def __init__(self, command, checkpoint_path, restart_as=None):
+        self.args = [
+            '--ros-args',
+            '-p', 'require_navigation_health:=false',
+            '-p', f'progress_checkpoint_path:={checkpoint_path}',
+        ]
+        self.command = command
+        self.restart_as = restart_as
+        self.process = None
+
+    def start(self):
+        self.process = subprocess.Popen(self.command + self.args)
+
+    def restart(self):
+        self.stop()
+        if self.restart_as:
+            print(f'  restarting as: {" ".join(self.restart_as)}', flush=True)
+            self.command = self.restart_as
+        self.start()
+
+    def stop(self):
+        if self.process is None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+        self.process = None
+
+
 class Check:
-    def __init__(self, fake, caller):
+    def __init__(self, fake, caller, server):
         self.fake = fake
         self.caller = caller
+        self.server = server
         self.failures = []
 
     def expect(self, ok, what):
@@ -174,20 +227,77 @@ class Check:
             self.failures.append(what)
         return ok
 
-    def dispatch(self, zone_id=None):
+    def dispatch(self, zone_id=None, resume=0, length_m=6.0, expect_accept=True):
         goal = Waypoint.Goal()
-        goal.path = straight_path()
+        goal.path = straight_path(length_m)
         goal.coverage_split_points = [split_point(2.0), split_point(4.0)]
         goal.dispatch_id = uuid.uuid4().hex
         if zone_id is not None:
             goal.zone_id = zone_id
+        goal.resume_segment_index = resume
         handle = wait(self.caller.action.send_goal_async(goal), 5.0)
-        if not self.expect(handle is not None and handle.accepted, 'goal accepted'):
+        accepted = handle is not None and handle.accepted
+        if not expect_accept:
+            self.expect(handle is not None and not accepted, 'goal rejected')
+            return None, None
+        if not self.expect(accepted, 'goal accepted'):
             return None, None
         req = ConfirmNavigationDispatch.Request()
         req.dispatch_id = goal.dispatch_id
         wait(self.caller.confirm.call_async(req), 5.0)
         return goal.dispatch_id, handle
+
+    def scenario_e(self):
+        print('scenario E: restart, the checkpoint is restored', flush=True)
+        before = self.final_status()
+        self.server.restart()
+        if not self.expect(self.caller.action.wait_for_server(timeout_sec=20.0), 'server back'):
+            return
+        # the service can come up a little after the action server
+        status = None
+        deadline = time.monotonic() + 10.0
+        while status is None and time.monotonic() < deadline:
+            if self.caller.status.wait_for_service(timeout_sec=1.0):
+                status = self.final_status()
+        if not self.expect(status is not None, '/coverage_progress_status answers'):
+            return
+        c = status.checkpoint
+        self.expect(before is not None and c.mission_id == before.progress.mission_id, 'checkpoint of the last execution')
+        self.expect(c.checkpoint_available, f'resumable ({c.message})')
+        self.expect((c.completed_segments, c.total_segments, c.status_text) == (1, 3, 'canceled'), f'1/3 segments, canceled ({c.completed_segments}/{c.total_segments} {c.status_text})')
+        self.expect(status.progress.mission_id == c.mission_id and status.progress.checkpoint_available, 'progress restored from it')
+
+    def scenario_d(self):
+        print('scenario D: resume goals outside the checkpoint are rejected', flush=True)
+        self.dispatch(resume=2, length_m=7.0, expect_accept=False)
+        self.dispatch(resume=3, expect_accept=False)
+        status = self.final_status()
+        self.expect(status is not None and status.checkpoint.checkpoint_available, 'checkpoint still resumable')
+
+    def scenario_c(self):
+        print('scenario C: resume at segment 2', flush=True)
+        self.fake.hold_segment = None
+        self.fake.follow_count = 0
+        self.fake.navigate_goals.clear()
+        mission, handle = self.dispatch(resume=2)
+        if handle is None:
+            return
+        result = wait(handle.get_result_async(), 30.0)
+        self.expect(result is not None and result.result.success, 'action succeeded')
+        time.sleep(0.3)
+        self.expect(self.fake.follow_count == 2, f'2 segments followed ({self.fake.follow_count})')
+        starts = [p.pose.position.x for p in self.fake.navigate_goals]
+        self.expect(len(starts) == 1 and abs(starts[0] - 2.0) < 1e-6, f'navigated to x = 2 m ({starts})')
+        msgs = self.caller.of(mission)
+        if not self.expect(bool(msgs), 'progress published'):
+            return
+        running = [m for m in msgs if m.status == CoverageProgress.STATUS_RUNNING]
+        self.expect(bool(running) and running[0].current_segment_index == 2, 'first running segment is 2')
+        self.expect(bool(running) and abs(running[0].overall_progress - 1.0 / 3.0) < 0.02, 'starts at 1/3')
+        last = msgs[-1]
+        self.expect(last.status == CoverageProgress.STATUS_SUCCEEDED and last.completed_segments == 3, 'ends succeeded, 3/3')
+        status = self.final_status()
+        self.expect(status is not None and not status.checkpoint.checkpoint_available, 'nothing left to resume')
 
     def final_status(self):
         return wait(self.caller.status.call_async(GetCoverageProgress.Request()), 5.0)
@@ -265,7 +375,8 @@ class Check:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--only', default='ab', help='scenarios to run, e.g. "a"')
+    ap.add_argument('--only', default='abedc', help='scenarios to run, in order, e.g. "a"')
+    ap.add_argument('--restart-as', help='server command line to restart into in scenario E')
     ap.add_argument('command', nargs='+', help='navigation server command line')
     args = ap.parse_args()
 
@@ -277,10 +388,14 @@ def main():
     executor.add_node(caller)
     threading.Thread(target=executor.spin, daemon=True).start()
 
-    server = subprocess.Popen(
-        args.command + ['--ros-args', '-p', 'require_navigation_health:=false'],
+    tmp = tempfile.TemporaryDirectory()
+    server = Server(
+        args.command,
+        os.path.join(tmp.name, 'coverage_progress.json'),
+        shlex.split(args.restart_as) if args.restart_as else None,
     )
-    check = Check(fake, caller)
+    server.start()
+    check = Check(fake, caller, server)
     try:
         if not caller.action.wait_for_server(timeout_sec=20.0):
             check.expect(False, 'nav_action_follow_path is up')
@@ -288,11 +403,8 @@ def main():
             for s in args.only:
                 getattr(check, f'scenario_{s}')()
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
+        server.stop()
+        tmp.cleanup()
         executor.shutdown()
         rclpy.try_shutdown()
     if check.failures:

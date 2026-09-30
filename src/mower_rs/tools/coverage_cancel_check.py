@@ -22,6 +22,10 @@ Scenarios (times from the dispatch):
      result proves the terminal state, no fallback request at all.
   D  tracking is in progress (cancel service hangs) and the node gets
      SIGINT: it exits promptly, and nothing is sent after the signal.
+  E  /resume_coverage: refused without a resumable checkpoint and for a
+     zone other than the checkpoint's; otherwise it sends the zone's path
+     with zone_id and resume_segment_index = completed segments + 1
+     (/zone_exec_path goals carry the zone id and no resume index).
 
 Needs a sourced ROS 2 Jazzy environment with mower_interface built:
 
@@ -50,7 +54,9 @@ from mower_interface.msg import ZoneMap
 from mower_interface.srv import (
     CancelNavigationDispatch,
     ConfirmNavigationDispatch,
+    GetCoverageProgress,
     MissionOperationLock,
+    ResumeCoverage,
     ZoneExecPath,
     ZoneMapList,
 )
@@ -108,6 +114,8 @@ class FakeNavigation(Node):
                             self.on_confirm, callback_group=group)
         self.create_service(Trigger, '/check_nav_status',
                             self.on_status, callback_group=group)
+        self.create_service(GetCoverageProgress, '/coverage_progress_status',
+                            self.on_progress, callback_group=group)
         self.risk = self.create_publisher(OccupancyGrid, '/risk_map_inflated', latched)
         self.risk.publish(grid([0] * (N * N)))
         self.nav_active = self.create_publisher(Bool, '/nav_operation_active', latched)
@@ -133,6 +141,8 @@ class FakeNavigation(Node):
             self.dispatch_requests = []   # (time, dispatch_id)
             self.action_cancels = []      # time
             self.goals = []               # (time accepted, dispatch_id)
+            self.goal_fields = []         # (zone_id, resume_segment_index)
+            self.checkpoint = behaviour.get('checkpoint')  # (zone, done, total)
 
     # ---- services
     def on_zone_list(self, req, res):
@@ -147,6 +157,17 @@ class FakeNavigation(Node):
     def on_status(self, req, res):
         res.success = True
         res.message = '{}'
+        return res
+
+    def on_progress(self, req, res):
+        res.success = True
+        res.checkpoint.zone_id = -1
+        if self.checkpoint is not None:
+            zone, done, total = self.checkpoint
+            res.checkpoint.checkpoint_available = True
+            res.checkpoint.zone_id = zone
+            res.checkpoint.completed_segments = done
+            res.checkpoint.total_segments = total
         return res
 
     def on_confirm(self, req, res):
@@ -173,6 +194,7 @@ class FakeNavigation(Node):
         time.sleep(self.accept_delay_s)
         with self.lock:
             self.goals.append((time.monotonic(), goal.dispatch_id))
+            self.goal_fields.append((goal.zone_id, goal.resume_segment_index))
         return GoalResponse.ACCEPT
 
     def on_action_cancel(self, goal_handle):
@@ -208,8 +230,13 @@ class Check:
         if not gen.wait_for_service(timeout_sec=15.0):
             proc.kill()
             raise RuntimeError('mower_coverage did not come up')
-        future = gen.call_async(Trigger.Request())
-        self.wait(lambda: future.done(), 20.0)
+        # the node refuses until the latched /nav_operation_active reached it
+        for _ in range(20):
+            future = gen.call_async(Trigger.Request())
+            self.wait(lambda: future.done(), 20.0)
+            if not (future.done() and 'navigation state is not available' in future.result().message):
+                break
+            time.sleep(0.25)
         if not (future.done() and future.result().success):
             proc.kill()
             detail = future.result().message if future.done() else 'no answer'
@@ -317,10 +344,46 @@ class Check:
         self.expect(late == [], f'nothing sent after the signal ({late})')
 
 
+    def resume(self, zone_id):
+        client = self.caller.create_client(ResumeCoverage, '/resume_coverage')
+        client.wait_for_service(timeout_sec=5.0)
+        future = client.call_async(ResumeCoverage.Request(zone_id=zone_id))
+        self.wait(lambda: future.done(), 15.0)
+        self.caller.destroy_client(client)
+        return future.result() if future.done() else None
+
+    def scenario_e(self):
+        print('E: /resume_coverage')
+        self.fake.reset()
+        proc = self.start_node()
+        res = self.resume(-1)
+        self.expect(res is not None and not res.success, f'refused without a checkpoint ({res and res.message})')
+        self.fake.checkpoint = (1, 2, 5)
+        res = self.resume(2)
+        self.expect(res is not None and not res.success and 'zone 1' in res.message,
+                    f'refused for another zone ({res and res.message})')
+        self.expect(self.fake.goal_fields == [], 'no goal sent for a refused resume')
+        res = self.resume(-1)
+        self.expect(res is not None and res.success, f'resumed ({res and res.message})')
+        self.wait(lambda: len(self.fake.goal_fields) >= 1, 5.0)
+        self.expect(self.fake.goal_fields == [(1, 3)], f'goal names zone 1, segment 3 ({self.fake.goal_fields})')
+        self.fake.end_goal_now = True
+        time.sleep(1.0)
+        self.stop(proc)
+        self.fake.reset()
+        proc = self.start_node()
+        self.dispatch()
+        self.wait(lambda: len(self.fake.goal_fields) >= 1, 5.0)
+        self.expect(self.fake.goal_fields == [(1, 0)], f'/zone_exec_path goal: zone 1, no resume ({self.fake.goal_fields})')
+        self.fake.end_goal_now = True
+        time.sleep(1.0)
+        self.stop(proc)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--binary', required=True, help='path to the mower_coverage binary')
-    ap.add_argument('--only', default='abcd', help='scenarios to run, e.g. "ab"')
+    ap.add_argument('--only', default='abcde', help='scenarios to run, e.g. "ab"')
     args = ap.parse_args()
 
     rclpy.init()

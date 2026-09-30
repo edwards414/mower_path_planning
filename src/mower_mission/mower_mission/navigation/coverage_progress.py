@@ -4,9 +4,19 @@ Backs ``/coverage_progress`` and ``/coverage_progress_status``
 (``mower_interface/msg/CoverageProgress``). Progress is weighted by the
 length of each split segment handed to Nav2 FollowPath; driving to the
 coverage start counts as 0 %. ``mower_rs/crates/mower_nav/src/progress.rs``
-is the Rust twin and must stay in step.
+is the Rust twin and must stay in step, including the path hash and the
+checkpoint JSON, so a checkpoint written by one server can be resumed by the
+other.
+
+Checkpoint (M2) and resume (M3): the node writes a checkpoint as the
+execution advances; a later goal with ``resume_segment_index > 0`` is only
+admitted when :func:`resume_block_reason` finds the same path (hash over
+zone, poses, split points and split parameters, i.e. the same segments) and
+a segment no further than the first unfinished one.
 """
 
+import hashlib
+import json
 import math
 
 STATUS_IDLE = 0
@@ -50,6 +60,7 @@ class CoverageProgressTracker:
         self.current_segment_start = None
         self.current_segment_goal = None
         self.message = ''
+        self.path_hash = ''
         self._segment_distances = []
         self._completed_before_m = 0.0
 
@@ -86,6 +97,33 @@ class CoverageProgressTracker:
         ]
         self.total_distance_m = sum(self._segment_distances)
         self._recompute(0.0)
+
+    def resume_from(self, index: int) -> None:
+        """Resumed execution: segments before ``index`` count as done."""
+        done = min(max(index - 1, 0), self.total_segments)
+        self.completed_segments = done
+        self._completed_before_m = sum(self._segment_distances[:done])
+        self.message = (
+            f'Resuming at coverage segment {index}/{self.total_segments}'
+        )
+        self._recompute(0.0)
+
+    def checkpoint(self, updated_at: float) -> dict:
+        """The durable part, for the checkpoint file."""
+        return {
+            'version': CHECKPOINT_VERSION,
+            'mission_id': self.mission_id,
+            'zone_id': self.zone_id,
+            'status': self.status_text,
+            'current_segment_index': self.current_segment_index,
+            'total_segments': self.total_segments,
+            'completed_segments': self.completed_segments,
+            'completed_distance_m': float(self.completed_distance_m),
+            'total_distance_m': float(self.total_distance_m),
+            'overall_progress': float(self.overall_progress),
+            'path_hash': self.path_hash,
+            'updated_at': float(updated_at),
+        }
 
     def start_segment(self, index: int, start, goal) -> None:
         if self.status == STATUS_CANCELING:
@@ -166,3 +204,139 @@ class CoverageProgressTracker:
             )
         else:
             self.overall_progress = 0.0
+
+
+CHECKPOINT_VERSION = 1
+
+
+def path_hash(zone_id, split_params, poses, split_points) -> str:
+    """Identity of an executed coverage plan (same text as the Rust twin).
+
+    ``v1;zone=<id>;tol=..;max=..;turn=..;min=..;|x,y,z;...|x,y;...`` with
+    every number as ``{:.4f}``, SHA-256, lowercase hex.
+    """
+    tol, max_len, turn, min_len = split_params
+    parts = [
+        f'v1;zone={int(zone_id)};tol={tol:.4f};max={max_len:.4f};'
+        f'turn={turn:.4f};min={min_len:.4f};|'
+    ]
+    parts.extend(f'{x:.4f},{y:.4f},{z:.4f};' for x, y, z in poses)
+    parts.append('|')
+    parts.extend(f'{x:.4f},{y:.4f};' for x, y in split_points)
+    return hashlib.sha256(''.join(parts).encode()).hexdigest()
+
+
+_CHECKPOINT_INTS = (
+    'zone_id', 'current_segment_index', 'total_segments', 'completed_segments',
+)
+_CHECKPOINT_FLOATS = (
+    'completed_distance_m', 'total_distance_m', 'overall_progress',
+)
+
+
+def checkpoint_to_json(checkpoint: dict) -> str:
+    return json.dumps(checkpoint)
+
+
+def checkpoint_from_json(text: str):
+    """Return the checkpoint dict, or None unless a well-formed version 1."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get('version') != CHECKPOINT_VERSION:
+        return None
+    out = {'version': CHECKPOINT_VERSION}
+    for key in ('mission_id', 'status', 'path_hash'):
+        if not isinstance(data.get(key), str):
+            return None
+        out[key] = data[key]
+    for key in _CHECKPOINT_INTS:
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        out[key] = value
+    for key in _CHECKPOINT_FLOATS:
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(value):
+            return None
+        out[key] = float(value)
+    updated_at = data.get('updated_at', 0.0)
+    out['updated_at'] = (
+        float(updated_at)
+        if isinstance(updated_at, (int, float)) and not isinstance(
+            updated_at, bool)
+        else 0.0
+    )
+    return out
+
+
+def checkpoint_resumable(checkpoint) -> bool:
+    """Unfinished work that a resume could pick up."""
+    return (
+        checkpoint is not None
+        and checkpoint['status'] != STATUS_TEXT[STATUS_SUCCEEDED]
+        and bool(checkpoint['path_hash'])
+        and checkpoint['total_segments'] > 0
+        and 0 <= checkpoint['completed_segments'] < checkpoint['total_segments']
+    )
+
+
+def resume_segment_index(checkpoint) -> int:
+    """First unfinished segment (1-based)."""
+    return checkpoint['completed_segments'] + 1
+
+
+def resume_block_reason(checkpoint, hash_value: str, index: int):
+    """Why a goal for ``hash_value`` may not start at ``index``; None = ok."""
+    if not checkpoint_resumable(checkpoint):
+        return 'no unfinished coverage checkpoint to resume'
+    if checkpoint['path_hash'] != hash_value:
+        return (
+            'coverage path or split parameters changed since the '
+            'checkpoint; regenerate and start over'
+        )
+    first_unfinished = resume_segment_index(checkpoint)
+    if index < 1 or index > first_unfinished:
+        return (
+            f'resume segment {index} is outside 1..={first_unfinished} '
+            f'(segments {checkpoint["completed_segments"]} of '
+            f'{checkpoint["total_segments"]} were completed)'
+        )
+    return None
+
+
+def restored_tracker(checkpoint) -> CoverageProgressTracker:
+    """Progress to report after a restart (running = interrupted)."""
+    p = CoverageProgressTracker()
+    p.status = {
+        'succeeded': STATUS_SUCCEEDED,
+        'canceled': STATUS_CANCELED,
+    }.get(checkpoint['status'], STATUS_FAILED)
+    p.mission_id = checkpoint['mission_id']
+    p.zone_id = checkpoint['zone_id']
+    p.current_segment_index = checkpoint['current_segment_index']
+    p.completed_segments = checkpoint['completed_segments']
+    p.completed_distance_m = checkpoint['completed_distance_m']
+    p.total_distance_m = checkpoint['total_distance_m']
+    p.remaining_distance_m = max(
+        checkpoint['total_distance_m'] - checkpoint['completed_distance_m'],
+        0.0,
+    )
+    p.overall_progress = checkpoint['overall_progress']
+    p.path_hash = checkpoint['path_hash']
+    # total_segments without the lengths: equal parts are enough to report
+    n = max(checkpoint['total_segments'], 0)
+    p._segment_distances = [
+        checkpoint['total_distance_m'] / n if n else 0.0
+    ] * n
+    if p.status == STATUS_FAILED and checkpoint['status'] != 'failed':
+        p.message = (
+            'Restored from checkpoint; the execution was interrupted while '
+            f'{checkpoint["status"]}'
+        )
+    else:
+        p.message = 'Restored from checkpoint'
+    return p

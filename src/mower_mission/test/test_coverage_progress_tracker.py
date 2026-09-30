@@ -5,7 +5,14 @@ import math
 import pytest
 
 from mower_mission.navigation.coverage_progress import (
+    checkpoint_from_json,
+    checkpoint_resumable,
+    checkpoint_to_json,
     CoverageProgressTracker,
+    path_hash,
+    restored_tracker,
+    resume_block_reason,
+    resume_segment_index,
     STATUS_CANCELED,
     STATUS_CANCELING,
     STATUS_FAILED,
@@ -121,3 +128,107 @@ def test_zero_length_plans_do_not_divide_by_zero():
     assert p.overall_progress == 0.0
     p.finish(STATUS_SUCCEEDED, 'done')
     assert p.overall_progress == 1.0
+
+
+def test_resume_counts_the_earlier_segments_as_done():
+    p = _three_segments()
+    p.resume_from(3)
+    assert p.completed_segments == 2
+    assert p.completed_distance_m == pytest.approx(30.0)
+    assert p.overall_progress == pytest.approx(0.30)
+    p.start_segment(3, 'a', 'b')
+    p.update_remaining(35.0)
+    assert p.overall_progress == pytest.approx(0.65)
+    q = _three_segments()
+    q.resume_from(1)
+    assert q.completed_segments == 0
+    q.resume_from(9)
+    assert q.completed_segments == 3
+
+
+def test_path_hash_matches_the_rust_twin_and_every_input():
+    poses = [(0.0, 0.0, 0.0), (1.0, 0.5, 0.0), (2.0, -0.25, 0.0)]
+    splits = [(1.0, 0.5)]
+    params = (0.1, 5.0, 0.8, 0.25)
+    h = path_hash(3, params, poses, splits)
+    # pinned in mower_nav/src/progress.rs too
+    assert h == (
+        '068606bf6d49b4059c29ad4ebc76d2cc15a146329e9fade2f9e6f14745c9b79a'
+    )
+    assert h != path_hash(4, params, poses, splits)
+    assert h != path_hash(3, (0.1, 6.0, 0.8, 0.25), poses, splits)
+    assert h != path_hash(3, params, poses[:2], splits)
+    assert h != path_hash(3, params, poses, [])
+    assert h == path_hash(
+        3, params, [(0.00001, 0.0, 0.0), poses[1], poses[2]], splits
+    )
+
+
+def _checkpoint_after_segment_one():
+    p = _three_segments()
+    p.path_hash = 'abc'
+    p.start_segment(1, 'a', 'b')
+    p.complete_segment()
+    p.start_segment(2, 'b', 'c')
+    p.update_remaining(10.0)
+    p.finish(STATUS_CANCELED, 'stop')
+    return p.checkpoint(1790000000.5)
+
+
+def test_checkpoint_json_round_trips_and_rejects_garbage():
+    c = _checkpoint_after_segment_one()
+    assert checkpoint_from_json(checkpoint_to_json(c)) == c
+    assert c['status'] == 'canceled'
+    assert (
+        c['completed_segments'], c['current_segment_index'],
+        c['total_segments'],
+    ) == (1, 2, 3)
+    assert checkpoint_from_json('') is None
+    assert checkpoint_from_json('{"version": 2}') is None
+    assert checkpoint_from_json('[1]') is None
+    assert checkpoint_from_json(checkpoint_to_json({**c, 'version': 2})) is None
+    broken = dict(c)
+    del broken['path_hash']
+    assert checkpoint_from_json(checkpoint_to_json(broken)) is None
+    assert checkpoint_from_json(
+        checkpoint_to_json({**c, 'total_segments': 'x'})
+    ) is None
+
+
+def test_the_rust_checkpoint_json_is_readable():
+    text = (
+        '{"completed_distance_m":25.0,"completed_segments":1,'
+        '"current_segment_index":2,"mission_id":"d-1",'
+        '"overall_progress":0.25,"path_hash":"abc","status":"canceled",'
+        '"total_distance_m":100.0,"total_segments":3,'
+        '"updated_at":1790000000.5,"version":1,"zone_id":3}'
+    )
+    c = checkpoint_from_json(text)
+    assert c is not None and c['total_distance_m'] == 100.0
+    assert resume_segment_index(c) == 2
+
+
+def test_resume_needs_the_same_path_and_no_skipped_segment():
+    c = _checkpoint_after_segment_one()
+    assert checkpoint_resumable(c)
+    assert resume_segment_index(c) == 2
+    assert resume_block_reason(c, 'abc', 2) is None
+    assert resume_block_reason(c, 'abc', 1) is None
+    assert resume_block_reason(c, 'abc', 3) is not None
+    assert resume_block_reason(c, 'abc', 0) is not None
+    assert 'changed' in resume_block_reason(c, 'xyz', 2)
+    done = {**c, 'status': 'succeeded', 'completed_segments': 3}
+    assert not checkpoint_resumable(done)
+    assert resume_block_reason(done, 'abc', 1) is not None
+    assert not checkpoint_resumable(None)
+
+
+def test_a_restored_running_checkpoint_reads_as_interrupted():
+    c = {**_checkpoint_after_segment_one(), 'status': 'running'}
+    p = restored_tracker(c)
+    assert p.status == STATUS_FAILED
+    assert 'interrupted' in p.message
+    assert (p.total_segments, p.completed_segments, p.zone_id) == (3, 1, 3)
+    assert p.overall_progress == pytest.approx(c['overall_progress'])
+    canceled = restored_tracker(_checkpoint_after_segment_one())
+    assert canceled.status == STATUS_CANCELED

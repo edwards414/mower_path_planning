@@ -42,7 +42,7 @@ use r2r::{ActionServerGoal, QosProfile};
 use tokio::sync::Notify;
 
 use crate::nav2::{terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
-use crate::progress::{Progress, Status as ProgressStatus};
+use crate::progress::{Checkpoint, Progress, Status as ProgressStatus};
 use crate::state::{NavState, SafetyParams, TaskResult};
 
 const CONTROLLER_ID: &str = "FollowPath";
@@ -60,6 +60,39 @@ struct ExecParams {
     nav2_action_server_timeout_s: f64,
     nav2_goal_response_timeout_s: f64,
     dispatch_confirmation_timeout_s: f64,
+    /// Coverage progress checkpoint file; `None` = disabled.
+    checkpoint_path: Option<std::path::PathBuf>,
+    checkpoint_interval_s: f64,
+}
+
+impl ExecParams {
+    fn split_params(&self) -> [f64; 4] {
+        [self.split_tolerance_m, self.max_follow_segment_length_m, self.turn_split_angle_rad, self.turn_split_min_segment_length_m]
+    }
+
+    /// [`progress::path_hash`] of a goal under the current split parameters.
+    fn path_hash(&self, zone_id: i32, path: &Path, split_points: &[Pose]) -> String {
+        let poses: Vec<[f64; 3]> = path.poses.iter().map(|p| [p.pose.position.x, p.pose.position.y, p.pose.position.z]).collect();
+        let splits: Vec<[f64; 2]> = split_points.iter().map(|p| [p.position.x, p.position.y]).collect();
+        progress::path_hash(zone_id, self.split_params(), &poses, &splits)
+    }
+}
+
+fn expand_user(path: &str) -> std::path::PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into())).join(rest),
+        None => path.into(),
+    }
+}
+
+/// Write via a temporary file and rename, so a power cut never leaves half a checkpoint.
+fn write_checkpoint(path: &std::path::Path, json: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)
 }
 
 struct Ctx {
@@ -92,9 +125,35 @@ struct ProgressState {
     /// Latest `/adapter/robot_pose`, reported as `current_pose`.
     robot_pose: PoseStamped,
     last_published: Option<Instant>,
+    /// The checkpoint on disk (loaded at start, then the last one written).
+    checkpoint: Option<Checkpoint>,
+    last_checkpoint_write: Option<Instant>,
 }
 
 impl ProgressState {
+    /// The checkpoint as a message, for `/coverage_progress_status`.
+    fn checkpoint_msg(&self) -> CoverageProgress {
+        match &self.checkpoint {
+            None => {
+                let mut msg = CoverageProgress::default();
+                msg.zone_id = -1;
+                msg.message = "No coverage checkpoint".into();
+                msg
+            }
+            Some(c) => {
+                let restored = ProgressState { progress: c.restored_progress(), checkpoint: Some(c.clone()), ..Default::default() };
+                let mut msg = restored.to_msg();
+                msg.status_text = c.status.clone();
+                msg.message = if c.resumable() {
+                    format!("Resumable at segment {}/{}", c.resume_segment_index(), c.total_segments)
+                } else {
+                    "Checkpoint is not resumable".into()
+                };
+                msg
+            }
+        }
+    }
+
     fn to_msg(&self) -> CoverageProgress {
         let p = &self.progress;
         let mut msg = CoverageProgress::default();
@@ -116,7 +175,8 @@ impl ProgressState {
         msg.current_pose = self.robot_pose.clone();
         msg.current_segment_start = p.current_segment_start.clone();
         msg.current_segment_goal = p.current_segment_goal.clone();
-        msg.checkpoint_available = false;
+        msg.checkpoint_available = !p.path_hash.is_empty()
+            && self.checkpoint.as_ref().is_some_and(|c| c.resumable() && c.path_hash == p.path_hash && c.mission_id == p.mission_id);
         msg.message = p.message.clone();
         msg
     }
@@ -195,8 +255,10 @@ impl Ctx {
 
     /// Apply `f` to the coverage progress and publish it (feedback-driven
     /// updates, `force == false`, at most every PROGRESS_FEEDBACK_PERIOD).
+    /// A checkpoint is written with every forced update once the plan is
+    /// known, and from feedback at most every `checkpoint_interval_s`.
     fn update_progress(&self, force: bool, f: impl FnOnce(&mut Progress<PoseStamped>) -> bool) {
-        let msg = {
+        let (msg, checkpoint) = {
             let mut ps = self.progress.lock().unwrap();
             if !f(&mut ps.progress) {
                 return;
@@ -206,9 +268,25 @@ impl Ctx {
                 return;
             }
             ps.last_published = Some(now);
-            ps.to_msg()
+            let interval = Duration::from_secs_f64(self.exec.checkpoint_interval_s.max(0.0));
+            let due = force || ps.last_checkpoint_write.is_none_or(|t| now.duration_since(t) >= interval);
+            let checkpoint = if self.exec.checkpoint_path.is_some() && !ps.progress.path_hash.is_empty() && due {
+                let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                let c = ps.progress.checkpoint(unix);
+                ps.checkpoint = Some(c.clone());
+                ps.last_checkpoint_write = Some(now);
+                Some(c)
+            } else {
+                None
+            };
+            (ps.to_msg(), checkpoint)
         };
         let _ = self.progress_pub.lock().unwrap().publish(&msg);
+        if let (Some(c), Some(path)) = (checkpoint, &self.exec.checkpoint_path) {
+            if let Err(e) = write_checkpoint(path, &c.to_json()) {
+                self.warn(&format!("coverage checkpoint {} not written: {e}", path.display()));
+            }
+        }
     }
 
     /// Atomically match a goal, request cancel, and revoke its velocity.
@@ -964,9 +1042,9 @@ impl Execution {
             return o;
         }
         self.ctx.info("執行目標");
-        let (mut path, split_points) = {
+        let (mut path, split_points, zone_id, resume_index) = {
             let g = self.goal.lock().unwrap();
-            (g.goal.path.clone(), g.goal.coverage_split_points.clone())
+            (g.goal.path.clone(), g.goal.coverage_split_points.clone(), g.goal.zone_id, g.goal.resume_segment_index)
         };
         self.ctx.info(&format!("path 長度: {}", path.poses.len()));
         self.ctx.info(&format!("coverage_split_points 長度: {}", split_points.len()));
@@ -1013,16 +1091,36 @@ impl Execution {
         if let Some(reason) = geometry::coverage_segments_block_reason(&split_paths, 0.15) {
             return self.abort(&reason);
         }
+        if resume_index > split_paths.len() as i32 {
+            return self.abort(&format!("resume segment {resume_index} does not exist ({} segments)", split_paths.len()));
+        }
+        let first = resume_index.max(1) as usize;
         let distances = split_paths.iter().map(geometry::path_distance).collect();
+        let hash = self.ctx.exec.path_hash(zone_id, &path, &split_points);
         self.ctx.update_progress(true, |p| {
             p.set_segments(distances);
-            p.message = "Navigating to the coverage start".into();
+            p.path_hash = hash;
+            if resume_index > 0 {
+                p.resume_from(resume_index);
+            }
+            p.message = if resume_index > 0 {
+                format!("Resuming: navigating to the start of segment {resume_index}")
+            } else {
+                "Navigating to the coverage start".into()
+            };
             true
         });
 
         Self::stamp_path_for_execution(&mut path);
-        self.ctx.info("導航到覆蓋路徑起點");
-        let navigate_goal = NavigateToPose::Goal { pose: path.poses[0].clone(), behavior_tree: String::new() };
+        let mut start_pose = path.poses[0].clone();
+        if first > 1 {
+            self.ctx.info(&format!("從檢查點續割：導航到第 {first} 段起點"));
+            start_pose = split_paths[first - 1].poses[0].clone();
+            start_pose.header = path.poses[0].header.clone();
+        } else {
+            self.ctx.info("導航到覆蓋路徑起點");
+        }
+        let navigate_goal = NavigateToPose::Goal { pose: start_pose, behavior_tree: String::new() };
         match self.ctx.dispatch_navigate(navigate_goal).await {
             Ok(true) => {}
             Ok(false) => return self.abort("Nav2 rejected navigation to the coverage start"),
@@ -1036,7 +1134,7 @@ impl Execution {
             split_paths.len()
         ));
         let total = split_paths.len();
-        for (i, split_path) in split_paths.iter_mut().enumerate() {
+        for (i, split_path) in split_paths.iter_mut().enumerate().skip(first - 1) {
             let idx = i + 1;
             if self.cancel_requested() {
                 return self.canceled_before_task();
@@ -1129,6 +1227,16 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
         let _ = req.reject();
         return;
     };
+    if goal.resume_segment_index != 0 {
+        let hash = ctx.exec.path_hash(goal.zone_id, &goal.path, &goal.coverage_split_points);
+        let reason = match &ctx.progress.lock().unwrap().checkpoint {
+            None => Some("no coverage checkpoint to resume".to_string()),
+            Some(c) => c.resume_block_reason(&hash, goal.resume_segment_index),
+        };
+        if let Some(reason) = reason {
+            return reject(&ctx, &format!("cannot resume: {reason}"), req);
+        }
+    }
     {
         let mut st = ctx.state.lock().unwrap();
         if let Some(reason) = st.navigation_admission_block_reason(&ctx.safety, Instant::now()) {
@@ -1263,7 +1371,20 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         nav2_action_server_timeout_s: params::f64(&node, "nav2_action_server_timeout_s", 3.0),
         nav2_goal_response_timeout_s: params::f64(&node, "nav2_goal_response_timeout_s", 3.0),
         dispatch_confirmation_timeout_s: params::f64(&node, "dispatch_confirmation_timeout_s", 5.0),
+        checkpoint_path: params::bool(&node, "progress_checkpoint_enabled", true)
+            .then(|| expand_user(&params::string(&node, "progress_checkpoint_path", "~/.ros/mower_mission/coverage_progress.json"))),
+        checkpoint_interval_s: params::f64(&node, "progress_checkpoint_interval_sec", 1.0),
     };
+    let restored = exec.checkpoint_path.as_ref().and_then(|path| {
+        let c = Checkpoint::from_json(&std::fs::read_to_string(path).ok()?);
+        if c.is_none() {
+            r2r::log_warn!(&logger, "ignoring unreadable coverage checkpoint {}", path.display());
+        }
+        c
+    });
+    if let Some(c) = &restored {
+        r2r::log_info!(&logger, "coverage checkpoint: mission {} zone {} {} ({}/{} segments){}", c.mission_id, c.zone_id, c.status, c.completed_segments, c.total_segments, if c.resumable() { ", resumable" } else { "" });
+    }
     let gps_fix_topic = {
         let t = params::string(&node, "gps_fix_topic", "/fix");
         if t.trim().is_empty() { "/fix".to_string() } else { t.trim().to_string() }
@@ -1289,7 +1410,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         coordinator_lock_pub: Mutex::new(node.create_publisher::<Bool>("/navigation_coordinator_lock", QosProfile::default())?),
         split_path_pub: Mutex::new(node.create_publisher::<Path>("/split_path", QosProfile::default().keep_last(1))?),
         split_points_pub: Mutex::new(node.create_publisher::<Marker>("/coverage_split_points", QosProfile::default().keep_last(1))?),
-        progress: Mutex::new(ProgressState::default()),
+        progress: Mutex::new(ProgressState {
+            progress: restored.as_ref().map(Checkpoint::restored_progress).unwrap_or_default(),
+            checkpoint: restored,
+            ..Default::default()
+        }),
         progress_pub: Mutex::new(node.create_publisher::<CoverageProgress>("/coverage_progress", latched())?),
         navigate_client: node.create_action_client::<NavigateToPose::Action>("navigate_to_pose")?,
         follow_client: node.create_action_client::<FollowPath::Action>("follow_path")?,
@@ -1469,9 +1594,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
-                let progress = ctx.progress.lock().unwrap().to_msg();
+                let (progress, checkpoint) = {
+                    let ps = ctx.progress.lock().unwrap();
+                    (ps.to_msg(), ps.checkpoint_msg())
+                };
                 let message = if progress.mission_id.is_empty() { "No coverage execution yet".to_string() } else { progress.status_text.clone() };
-                let _ = req.respond(GetCoverageProgress::Response { success: true, message, progress });
+                let _ = req.respond(GetCoverageProgress::Response { success: true, message, progress, checkpoint });
             }
         });
     }

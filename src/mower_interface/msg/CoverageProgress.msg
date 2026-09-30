@@ -41,6 +41,6 @@ geometry_msgs/PoseStamped current_pose
 geometry_msgs/PoseStamped current_segment_start
 geometry_msgs/PoseStamped current_segment_goal
 
-# Reserved for checkpoint/resume; always false for now.
+# A checkpoint of this execution is on disk and /resume_coverage can continue it.
 bool checkpoint_available
 string message

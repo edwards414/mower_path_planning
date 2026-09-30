@@ -4,6 +4,9 @@ geometry_msgs/Pose[] coverage_split_points
 string dispatch_id
 # Zone being covered, reported back in /coverage_progress; -1 = none.
 int32 zone_id -1
+# 1-based segment to start at, resuming the navigation server's checkpoint of
+# this same path (same split segments); 0 = run the whole path.
+int32 resume_segment_index 0
 ---
 # Result
 bool success
