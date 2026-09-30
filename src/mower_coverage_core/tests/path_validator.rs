@@ -113,3 +113,16 @@ fn validate_path_u_shape_crossing_detected() {
     assert!(!result.valid);
     assert!(result.invalid_segments.contains(&(0, 1)));
 }
+
+/// A point in the one-cell band left of or below the grid is outside, not
+/// row/column 0 (the Python reference truncated towards zero and passed it).
+#[test]
+fn points_just_left_of_or_below_the_grid_are_unsafe() {
+    let g = ones(10, 10);
+    let sm = safe_map(&g);
+    for p in [(-0.05, 0.5), (0.5, -0.05), (-0.01, -0.01)] {
+        let r = validate_path_rs(&[p], &sm);
+        assert!(!r.valid, "{p:?} passed");
+    }
+    assert!(validate_path_rs(&[(0.0, 0.0), (0.99, 0.99)], &sm).valid);
+}

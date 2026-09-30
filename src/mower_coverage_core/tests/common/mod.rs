@@ -236,15 +236,47 @@ pub fn check_filter(case: &Value) -> Vec<String> {
     errs
 }
 
+/// Deliberate change after the Python reference: `world_to_grid` rounds down
+/// instead of truncating towards zero, so a point in the one-cell band left of
+/// or below the grid is outside (unsafe) instead of row/column 0. Cases whose
+/// points are all at x, y >= origin must match Python exactly; a case with a
+/// point in that band may only add invalid points that lie there and invalid
+/// segments with such an endpoint.
 pub fn check_validate(case: &Value) -> Vec<String> {
     let ctx = case["id"].as_str().unwrap_or("?");
     let m = case_map(case);
-    let r = validate_path_rs(&points(&case["points"]), &m.sm());
+    let pts = points(&case["points"]);
+    let r = validate_path_rs(&pts, &m.sm());
     let mut errs = Vec::new();
-    cmp_eq(ctx, "valid", &r.valid, &boolean(&case["valid"]), &mut errs);
-    cmp_eq(ctx, "invalid_points", &r.invalid_points, &uints(&case["invalid_points"]), &mut errs);
-    cmp_eq(ctx, "invalid_segments", &r.invalid_segments, &pairs(&case["invalid_segments"]), &mut errs);
-    cmp_eq(ctx, "message", &r.message.as_str(), &case["message"].as_str().expect("message"), &mut errs);
+    let below = |p: (f64, f64)| p.0 < m.ox || p.1 < m.oy;
+    if !pts.iter().any(|&p| below(p)) {
+        cmp_eq(ctx, "valid", &r.valid, &boolean(&case["valid"]), &mut errs);
+        cmp_eq(ctx, "invalid_points", &r.invalid_points, &uints(&case["invalid_points"]), &mut errs);
+        cmp_eq(ctx, "invalid_segments", &r.invalid_segments, &pairs(&case["invalid_segments"]), &mut errs);
+        cmp_eq(ctx, "message", &r.message.as_str(), &case["message"].as_str().expect("message"), &mut errs);
+        return errs;
+    }
+    let (py_pts, py_segs) = (uints(&case["invalid_points"]), pairs(&case["invalid_segments"]));
+    for i in &py_pts {
+        if !r.invalid_points.contains(i) {
+            errs.push(format!("{ctx}: point {i} unsafe in Python but not in Rust"));
+        }
+    }
+    for s in &py_segs {
+        if !r.invalid_segments.contains(s) {
+            errs.push(format!("{ctx}: segment {s:?} unsafe in Python but not in Rust"));
+        }
+    }
+    for &i in r.invalid_points.iter().filter(|i| !py_pts.contains(i)) {
+        if !below(pts[i]) {
+            errs.push(format!("{ctx}: point {i} {:?} newly unsafe but inside the grid", pts[i]));
+        }
+    }
+    for &(a, b) in r.invalid_segments.iter().filter(|s| !py_segs.contains(s)) {
+        if !below(pts[a]) && !below(pts[b]) {
+            errs.push(format!("{ctx}: segment ({a}, {b}) newly unsafe with both ends inside the grid"));
+        }
+    }
     errs
 }
 

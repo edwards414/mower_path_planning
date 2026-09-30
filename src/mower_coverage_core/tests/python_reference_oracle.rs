@@ -14,7 +14,11 @@
 //! reproduces it byte for byte from a checkout of dff480b (usage in its
 //! docstring); each map's `source` field names its construction.
 //!
-//! Integers, bools and strings must match exactly; floats within 1e-9. The
+//! One deliberate change since: `world_to_grid` rounds down (Python
+//! truncated), so validate cases with a point just left of or below the grid
+//! may report it unsafe; `check_validate` (tests/common) spells out what may
+//! differ. Everything else:
+//! integers, bools and strings must match exactly; floats within 1e-9. The
 //! Python and Rust implementations agreed on every recorded case when the file
 //! was generated, so a mismatch means a behaviour change (or a harness bug),
 //! not float noise: investigate rather than loosen the tolerance.
