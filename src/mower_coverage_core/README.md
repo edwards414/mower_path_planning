@@ -50,6 +50,11 @@ cargo test --locked
   are ports of the former `mower_mission/test/test_*.py` unit tests. Each
   file's header names the pytest file it came from and any test that has no
   Rust equivalent.
+- `tests/boustrophedon.rs` checks the planner's properties (valid,
+  deterministic, coverage, splits the navigation server accepts, lanes that
+  stay whole along and across slanted edges). `tests/data/robot_rotated_rect_safe.json`
+  is a safe map captured from the robot: a 22 x 10 m zone at 30 deg whose
+  irregular raster edges split one lane into a hundred cells before the fix.
 
 No ROS installation is needed. CI runs the same command (job
 `coverage-core-tests` in `.github/workflows/build.yml`).
