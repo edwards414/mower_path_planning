@@ -167,7 +167,7 @@ Hub 只帶 `Content-Type / Accept / If-Match` 過去、只帶 `Content-Type / Lo
 |---|---|---|
 | 0 | D1 註冊表、agent 註冊與心跳、`status` API | App 能看多台在線狀態，遠端連線仍走舊路 |
 | 1 | RobotHub 中繼、agent 對接本機 auth proxy、App 走 relay 與 `mrelay1` 分片 | 拿掉 `control.fxrbindi.com → 10.77.0.2`，多台皆可遠端 |
-| 2 | 帳號、實體確認配對、每支手機獨立金鑰、撤銷、一次性 provision token | 貼紙不再帶 secret，api_version 升 3 |
+| 2 | 帳號、實體確認配對、每支手機獨立金鑰、撤銷、一次性 provision token（設計稿：[BACKEND_PHASE2_DESIGN.md](BACKEND_PHASE2_DESIGN.md)，待審） | 貼紙不再帶 secret，api_version 升 3 |
 | 3 | WHEP 加 TURN（已實作，§8）、後台管 OTA 通道 | WireGuard 與家裡主機退役 |
 
 階段 0 與 1 的程式碼一起做（同一個 Worker、同一個 agent），部署時先只開心跳也可以。
