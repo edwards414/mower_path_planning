@@ -37,6 +37,7 @@ COVERAGE_PARAMETER_DEFAULTS = {
     'strip_width_m': 0.8,
     'waypoint_spacing_m': 0.2,
     'zigzag_angle_deg': 0.0,
+    'zigzag_auto_angle': False,
     'unknown_as_obstacle': True,
     'inflate_radius_m': 0.75,
     'coverage_pattern': 'zigzag',
@@ -483,6 +484,14 @@ class MowerQtWindow(QMainWindow):
         param_layout.addRow("Zigzag 角度 angle_deg (°):",
                             self.zigzag_angle_spinbox)
 
+        self.zigzag_auto_angle_checkbox = QCheckBox(
+            "自動選掃描角度（忽略上面的角度）")
+        self.zigzag_auto_angle_checkbox.setChecked(
+            COVERAGE_PARAMETER_DEFAULTS['zigzag_auto_angle'])
+        self.zigzag_auto_angle_checkbox.setFont(QFont('Arial', 10))
+        param_layout.addRow("zigzag_auto_angle:",
+                            self.zigzag_auto_angle_checkbox)
+
         layout.addWidget(param_widget)
 
         button_widget = QWidget()
@@ -628,6 +637,11 @@ class MowerQtWindow(QMainWindow):
                 'value': self.zigzag_angle_spinbox.value(),
             },
             {
+                'name': 'zigzag_auto_angle',
+                'type': 'bool',
+                'value': self.zigzag_auto_angle_checkbox.isChecked(),
+            },
+            {
                 'name': 'unknown_as_obstacle',
                 'type': 'bool',
                 'value': self.unknown_as_obstacle_checkbox.isChecked(),
@@ -691,6 +705,8 @@ class MowerQtWindow(QMainWindow):
             COVERAGE_PARAMETER_DEFAULTS['waypoint_spacing_m'])
         self.zigzag_angle_spinbox.setValue(
             COVERAGE_PARAMETER_DEFAULTS['zigzag_angle_deg'])
+        self.zigzag_auto_angle_checkbox.setChecked(
+            COVERAGE_PARAMETER_DEFAULTS['zigzag_auto_angle'])
         self.inflate_radius_spinbox.setValue(
             COVERAGE_PARAMETER_DEFAULTS['inflate_radius_m'])
         self.unknown_as_obstacle_checkbox.setChecked(

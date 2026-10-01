@@ -15,9 +15,10 @@
 # limitations under the License.
 import json
 import math
+import os
 import threading
 from collections import deque
-from time import monotonic, sleep
+from time import monotonic, sleep, time
 from uuid import UUID
 
 from geometry_msgs.msg import Point, Pose, PoseStamped, TwistStamped
@@ -25,11 +26,14 @@ from lifecycle_msgs.srv import GetState
 from action_msgs.msg import GoalStatus
 
 from mower_interface.action import Waypoint
+from mower_interface.msg import CoverageProgress
 from mower_interface.srv import (
     CancelNavigationDispatch,
     ConfirmNavigationDispatch,
+    GetCoverageProgress,
     MissionOperationLock,
 )
+from mower_mission.navigation import coverage_progress
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from nav2_msgs.action import FollowPath, NavigateToPose
 from nav_msgs.msg import Odometry, Path
@@ -56,6 +60,10 @@ from std_msgs.msg import Bool, ColorRGBA
 from std_srvs.srv import Trigger
 
 from visualization_msgs.msg import Marker
+
+# Minimum spacing of feedback-driven /coverage_progress messages; state
+# transitions publish immediately.
+PROGRESS_FEEDBACK_PERIOD_S = 0.5
 
 
 def _path_frame_id(path: Path) -> str:
@@ -511,6 +519,12 @@ class NavActionServer(Node):
         self.declare_parameter('nav2_action_server_timeout_s', 3.0)
         self.declare_parameter('nav2_goal_response_timeout_s', 3.0)
         self.declare_parameter('dispatch_confirmation_timeout_s', 5.0)
+        self.declare_parameter('progress_checkpoint_enabled', True)
+        self.declare_parameter(
+            'progress_checkpoint_path',
+            '~/.ros/mower_mission/coverage_progress.json',
+        )
+        self.declare_parameter('progress_checkpoint_interval_sec', 1.0)
         def immutable_safety_parameter(description):
             return ParameterDescriptor(
                 read_only=True,
@@ -609,6 +623,30 @@ class NavActionServer(Node):
             10,
         )
         self._publish_nav_operation_active(False)
+        self._progress_lock = threading.Lock()
+        self._progress = coverage_progress.CoverageProgressTracker()
+        self._progress_robot_pose = PoseStamped()
+        self._progress_last_published = None
+        self._checkpoint_path = None
+        if bool(self.get_parameter('progress_checkpoint_enabled').value):
+            self._checkpoint_path = os.path.expanduser(str(
+                self.get_parameter('progress_checkpoint_path').value
+            ))
+        self._checkpoint_interval_s = float(
+            self.get_parameter('progress_checkpoint_interval_sec').value
+        )
+        self._checkpoint = self._load_checkpoint()
+        self._checkpoint_last_write = None
+        if self._checkpoint is not None:
+            self._progress = coverage_progress.restored_tracker(
+                self._checkpoint
+            )
+        self._coverage_progress_pub = self.create_publisher(
+            CoverageProgress,
+            '/coverage_progress',
+            nav_active_qos,
+        )
+        self._update_progress(lambda progress: True)
         for topic in ('/joy_cmd', '/physical_joy_cmd', '/keyboard_cmd_vel'):
             self.create_subscription(
                 TwistStamped,
@@ -669,6 +707,12 @@ class NavActionServer(Node):
             Trigger,
             '/cencel_nav2',
             self.cancel_nav2_srv,
+            callback_group=self._control_callback_group,
+        )
+        self.create_service(
+            GetCoverageProgress,
+            '/coverage_progress_status',
+            self.coverage_progress_status_srv,
             callback_group=self._control_callback_group,
         )
         self.create_service(
@@ -759,6 +803,25 @@ class NavActionServer(Node):
                 'Rejecting navigation goal without a valid dispatch_id'
             )
             return GoalResponse.REJECT
+        resume_index = int(getattr(goal_request, 'resume_segment_index', 0))
+        if resume_index != 0:
+            try:
+                hash_value = self._goal_path_hash(
+                    goal_request.zone_id,
+                    goal_request.path,
+                    goal_request.coverage_split_points,
+                )
+            except (TypeError, ValueError, OverflowError):
+                hash_value = ''
+            with self._progress_lock:
+                resume_reason = coverage_progress.resume_block_reason(
+                    self._checkpoint, hash_value, resume_index
+                )
+            if resume_reason is not None:
+                self.get_logger().warn(
+                    f'Rejecting navigation goal: cannot resume: {resume_reason}'
+                )
+                return GoalResponse.REJECT
 
         with self._state_lock:
             reason = self._navigation_admission_block_reason_locked()
@@ -851,6 +914,9 @@ class NavActionServer(Node):
                 msg.header.stamp,
                 'robot pose',
             )
+        if reason is None:
+            with self._progress_lock:
+                self._progress_robot_pose = msg
         with self._state_lock:
             if reason is None:
                 self._last_robot_pose_received_at = monotonic()
@@ -1315,6 +1381,9 @@ class NavActionServer(Node):
             self._dispatch_confirmation_event.set()
             self._nav_state = 'canceling'
             self._last_status_message = message
+        self._update_progress(
+            lambda progress: progress.canceling(message) or True
+        )
         self._publish_nav_operation_active(True)
         self._publish_safety_zero()
         self._publish_safety_stop_if_needed()
@@ -1337,10 +1406,203 @@ class NavActionServer(Node):
         self.get_logger().warn('Navigation action cancel requested')
         return CancelResponse.ACCEPT
 
+    def _progress_message(self) -> CoverageProgress:
+        """Snapshot of the tracker as a message (caller holds _progress_lock)."""
+        p = self._progress
+        msg = CoverageProgress()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.status = p.status
+        msg.status_text = p.status_text
+        msg.mission_id = p.mission_id
+        msg.zone_id = p.zone_id
+        msg.current_segment_index = p.current_segment_index
+        msg.total_segments = p.total_segments
+        msg.completed_segments = p.completed_segments
+        msg.current_segment_progress = float(p.current_segment_progress)
+        msg.overall_progress = float(p.overall_progress)
+        msg.current_segment_distance_m = float(p.current_segment_distance_m)
+        msg.completed_distance_m = float(p.completed_distance_m)
+        msg.total_distance_m = float(p.total_distance_m)
+        msg.remaining_distance_m = float(p.remaining_distance_m)
+        msg.current_pose = self._progress_robot_pose
+        if p.current_segment_start is not None:
+            msg.current_segment_start = p.current_segment_start
+        if p.current_segment_goal is not None:
+            msg.current_segment_goal = p.current_segment_goal
+        checkpoint = self._checkpoint
+        msg.checkpoint_available = bool(
+            p.path_hash
+            and coverage_progress.checkpoint_resumable(checkpoint)
+            and checkpoint['path_hash'] == p.path_hash
+            and checkpoint['mission_id'] == p.mission_id
+        )
+        msg.message = p.message
+        return msg
+
+    def _checkpoint_message(self) -> CoverageProgress:
+        """The checkpoint on disk as a message (caller holds _progress_lock)."""
+        checkpoint = self._checkpoint
+        if checkpoint is None:
+            msg = CoverageProgress()
+            msg.zone_id = -1
+            msg.message = 'No coverage checkpoint'
+            return msg
+        saved = self._progress
+        self._progress = coverage_progress.restored_tracker(checkpoint)
+        try:
+            msg = self._progress_message()
+        finally:
+            self._progress = saved
+        msg.status_text = checkpoint['status']
+        if coverage_progress.checkpoint_resumable(checkpoint):
+            msg.message = (
+                'Resumable at segment '
+                f'{coverage_progress.resume_segment_index(checkpoint)}/'
+                f'{checkpoint["total_segments"]}'
+            )
+        else:
+            msg.message = 'Checkpoint is not resumable'
+        return msg
+
+    def _load_checkpoint(self):
+        if self._checkpoint_path is None:
+            return None
+        try:
+            with open(self._checkpoint_path, encoding='utf-8') as f:
+                text = f.read()
+        except OSError:
+            return None
+        checkpoint = coverage_progress.checkpoint_from_json(text)
+        if checkpoint is None:
+            self.get_logger().warn(
+                'ignoring unreadable coverage checkpoint '
+                f'{self._checkpoint_path}'
+            )
+            return None
+        resumable = coverage_progress.checkpoint_resumable(checkpoint)
+        self.get_logger().info(
+            f'coverage checkpoint: mission {checkpoint["mission_id"]} '
+            f'zone {checkpoint["zone_id"]} {checkpoint["status"]} '
+            f'({checkpoint["completed_segments"]}/'
+            f'{checkpoint["total_segments"]} segments)'
+            + (', resumable' if resumable else '')
+        )
+        return checkpoint
+
+    def _write_checkpoint(self, checkpoint) -> None:
+        """Write via a temporary file and rename (never half a file)."""
+        path = self._checkpoint_path
+        try:
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(coverage_progress.checkpoint_to_json(checkpoint))
+            os.replace(tmp, path)
+        except OSError as exc:
+            self.get_logger().warn(
+                f'coverage checkpoint {path} not written: {exc}'
+            )
+
+    def _split_params(self):
+        return tuple(float(self.get_parameter(name).value) for name in (
+            'split_tolerance_m',
+            'max_follow_segment_length_m',
+            'turn_split_angle_rad',
+            'turn_split_min_segment_length_m',
+        ))
+
+    def _goal_path_hash(self, zone_id, path, split_points) -> str:
+        return coverage_progress.path_hash(
+            zone_id,
+            self._split_params(),
+            [
+                (p.pose.position.x, p.pose.position.y, p.pose.position.z)
+                for p in path.poses
+            ],
+            [(p.position.x, p.position.y) for p in split_points],
+        )
+
+    def _update_progress(self, update, force: bool = True) -> None:
+        """Apply ``update(tracker) -> changed`` and publish the result.
+
+        Feedback-driven updates (``force=False``) publish at most every
+        PROGRESS_FEEDBACK_PERIOD_S. A checkpoint is written with every forced
+        update once the plan is known, and from feedback at most every
+        ``progress_checkpoint_interval_sec``.
+        """
+        checkpoint = None
+        with self._progress_lock:
+            if not update(self._progress):
+                return
+            now = monotonic()
+            if (
+                not force
+                and self._progress_last_published is not None
+                and now - self._progress_last_published
+                < PROGRESS_FEEDBACK_PERIOD_S
+            ):
+                return
+            self._progress_last_published = now
+            due = force or self._checkpoint_last_write is None or (
+                now - self._checkpoint_last_write
+                >= max(self._checkpoint_interval_s, 0.0)
+            )
+            if (
+                self._checkpoint_path is not None
+                and self._progress.path_hash
+                and due
+            ):
+                checkpoint = self._progress.checkpoint(time())
+                self._checkpoint = checkpoint
+                self._checkpoint_last_write = now
+            msg = self._progress_message()
+        self._coverage_progress_pub.publish(msg)
+        if checkpoint is not None:
+            self._write_checkpoint(checkpoint)
+
+    def _finish_progress(self, succeeded: bool) -> None:
+        """Final /coverage_progress of an execution."""
+        with self._state_lock:
+            nav_state = self._nav_state
+            message = self._last_status_message
+        if succeeded:
+            status = coverage_progress.STATUS_SUCCEEDED
+        elif nav_state == 'canceled':
+            status = coverage_progress.STATUS_CANCELED
+        else:
+            status = coverage_progress.STATUS_FAILED
+        self._update_progress(
+            lambda progress: progress.finish(status, message) or True
+        )
+
+    def coverage_progress_status_srv(self, req, res):
+        with self._progress_lock:
+            res.progress = self._progress_message()
+            res.checkpoint = self._checkpoint_message()
+        res.success = True
+        res.message = (
+            res.progress.status_text
+            if res.progress.mission_id
+            else 'No coverage execution yet'
+        )
+        return res
+
     def _run_reserved_goal(self, goal_handle, callback):
         """Run an accepted goal and always release the shared busy guard."""
+        with self._state_lock:
+            mission_id = self._pending_dispatch_id or ''
+        zone_id = getattr(
+            getattr(goal_handle, 'request', None), 'zone_id', -1
+        )
+        self._update_progress(
+            lambda progress: progress.begin(mission_id, zone_id) or True
+        )
+        succeeded = False
         try:
-            return callback(goal_handle)
+            result = callback(goal_handle)
+            succeeded = bool(getattr(result, 'success', False))
+            return result
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(
                 f'Unhandled navigation action error: {exc!r}'
@@ -1374,6 +1636,7 @@ class NavActionServer(Node):
             result.success = False
             return result
         finally:
+            self._finish_progress(succeeded)
             with self._state_lock:
                 finished_dispatch_id = self._pending_dispatch_id
                 self._goal_reserved = False
@@ -2423,6 +2686,12 @@ class NavActionServer(Node):
                 feedback = self.navigator.getFeedback()
             if feedback:
                 last_feedback = feedback
+                # FollowPath's distance_to_goal is the path length left.
+                remaining = getattr(feedback, 'distance_to_goal', None)
+                self._update_progress(
+                    lambda progress: progress.update_remaining(remaining),
+                    force=False,
+                )
                 with self._state_lock:
                     self._last_feedback_message = self._feedback_summary(
                         feedback
@@ -2523,6 +2792,10 @@ class NavActionServer(Node):
         self.get_logger().info('執行目標')
         path = goal_handle.request.path
         coverage_split_points = goal_handle.request.coverage_split_points
+        zone_id = int(getattr(goal_handle.request, 'zone_id', -1))
+        resume_index = int(
+            getattr(goal_handle.request, 'resume_segment_index', 0)
+        )
 
         self.get_logger().info(f'path 長度: {len(path.poses)}')
         self.get_logger().info(
@@ -2606,11 +2879,44 @@ class NavActionServer(Node):
         segment_block_reason = _coverage_segments_block_reason(split_paths)
         if segment_block_reason is not None:
             return self._abort_goal(goal_handle, segment_block_reason)
+        if resume_index > len(split_paths):
+            return self._abort_goal(
+                goal_handle,
+                f'resume segment {resume_index} does not exist '
+                f'({len(split_paths)} segments)',
+            )
+        first = max(resume_index, 1)
+        distances = [_path_distance(p) for p in split_paths]
+        hash_value = self._goal_path_hash(
+            zone_id, path, coverage_split_points
+        )
+
+        def start_navigating(progress):
+            progress.set_segments(distances)
+            progress.path_hash = hash_value
+            if resume_index > 0:
+                progress.resume_from(resume_index)
+                progress.message = (
+                    'Resuming: navigating to the start of segment '
+                    f'{resume_index}'
+                )
+            else:
+                progress.message = 'Navigating to the coverage start'
+            return True
+
+        self._update_progress(start_navigating)
 
         self._stamp_path_for_execution(path)
-        self.get_logger().info('導航到覆蓋路徑起點')
         navigate_goal = NavigateToPose.Goal()
         navigate_goal.pose = path.poses[0]
+        if first > 1:
+            self.get_logger().info(f'從檢查點續割：導航到第 {first} 段起點')
+            start = PoseStamped()
+            start.header = path.poses[0].header
+            start.pose = split_paths[first - 1].poses[0].pose
+            navigate_goal.pose = start
+        else:
+            self.get_logger().info('導航到覆蓋路徑起點')
         nav_started = self._start_nav2_dispatch(
             lambda: self._send_nav2_goal_bounded(
                 self._navigate_to_pose_client,
@@ -2636,12 +2942,22 @@ class NavActionServer(Node):
         )
 
         for idx, split_path in enumerate(split_paths, start=1):
+            if idx < first:
+                continue
             canceled_result = self._cancel_before_nav_task(goal_handle)
             if canceled_result is not None:
                 return canceled_result
             self._stamp_path_for_execution(split_path)
             self.split_path_pub.publish(split_path)
             distance = _path_distance(split_path)
+            self._update_progress(
+                lambda progress, idx=idx, split_path=split_path: (
+                    progress.start_segment(
+                        idx, split_path.poses[0], split_path.poses[-1]
+                    )
+                    or True
+                )
+            )
             start = split_path.poses[0].pose.position
             goal = split_path.poses[-1].pose.position
             self.get_logger().info(
@@ -2672,6 +2988,9 @@ class NavActionServer(Node):
                 result = Waypoint.Result()
                 result.success = False
                 return result
+            self._update_progress(
+                lambda progress: progress.complete_segment() or True
+            )
 
         canceled_result = self._cancel_before_nav_task(goal_handle)
         if canceled_result is not None:

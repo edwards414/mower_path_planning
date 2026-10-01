@@ -24,6 +24,16 @@ def _rust_binary(flag, rust_daemon):
     ]))
 
 
+def _rust_only_binary(rust_daemon):
+    """Run a mower_rs binary that has no rclpy fallback (so no rust_* switch)
+    as its own process unless mower_rsd already hosts it: the exact
+    complement of robot.launch.py's _truthy(rust_daemon), which always puts
+    such a module in the daemon's set."""
+    return IfCondition(PythonExpression([
+        "'", rust_daemon, "'.strip().lower() not in ", _TRUE,
+    ]))
+
+
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     rosbridge_address = LaunchConfiguration('rosbridge_address')
@@ -87,11 +97,14 @@ def generate_launch_description():
     declare_rust_daemon = DeclareLaunchArgument(
         'rust_daemon',
         default_value='false',
-        description='The enabled mower_rs modules run inside one mower_rsd '
-                    'process started by robot.launch.py (one r2r Context, one '
-                    'DDS participant), so the separate binaries stay down '
-                    'here; the rclpy fallbacks still follow their own rust_* '
-                    'switch. See src/mower_rs/README.md.',
+        description='The enabled mower_rs modules, plus the always-on '
+                    'coverage planner, run inside one mower_rsd process '
+                    'started by robot.launch.py (one r2r Context, one DDS '
+                    'participant), so the separate binaries stay down here; '
+                    'the rclpy fallbacks still follow their own rust_* '
+                    'switch. Only meaningful when robot.launch.py includes '
+                    'this file: standalone, true leaves those modules '
+                    '(coverage included) unhosted. See src/mower_rs/README.md.',
     )
 
     rust_status = LaunchConfiguration('rust_status')
@@ -154,16 +167,6 @@ def generate_launch_description():
         description='Run the mower_rs (Rust) mower_map process instead of '
                     'the rclpy map_manage_node (same services, latched maps, '
                     'parameters and occupancy bytes).',
-    )
-
-    rust_coverage = LaunchConfiguration('rust_coverage')
-
-    declare_rust_coverage = DeclareLaunchArgument(
-        'rust_coverage',
-        default_value='false',
-        description='Run the mower_rs (Rust) mower_coverage process instead '
-                    'of the rclpy coverage_node (same services, markers, '
-                    'parameters and dispatch / cancel tracking).',
     )
 
     declare_rust_agent = DeclareLaunchArgument(
@@ -353,26 +356,20 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
-    coverage_node = Node(
-        package='mower_mission',
-        executable='coverage_node',
-        # Node name must stay 'boustrophedon_coverage': the flutter_adapter
-        # (/boustrophedon_coverage/get_parameters), the Flutter app + mower_qt
-        # (/boustrophedon_coverage/set_parameters) and system_test all target it.
-        name='boustrophedon_coverage',
-        output='screen',
-        condition=UnlessCondition(rust_coverage),
-        parameters=[{'use_sim_time': use_sim_time}],
-    )
-
-    # rust_coverage:=true -- the same planner node as an r2r process linked
-    # directly against mower_coverage_core (src/mower_rs/crates/mower_coverage).
+    # The coverage planner: an r2r process linked directly against the
+    # mower_coverage_core Rust library (src/mower_rs/crates/mower_coverage).
+    # There is no rclpy version, so it has no rust_* switch: it always runs,
+    # as this binary or, with rust_daemon:=true, as the 'coverage' module of
+    # mower_rsd. Node name must stay 'boustrophedon_coverage': the
+    # flutter_adapter (/boustrophedon_coverage/get_parameters), the Flutter
+    # app + mower_qt (/boustrophedon_coverage/set_parameters) and system_test
+    # all target it.
     mower_coverage_rs = Node(
         package='mower_rs',
         executable='mower_coverage',
         name='boustrophedon_coverage',
         output='screen',
-        condition=_rust_binary(rust_coverage, rust_daemon),
+        condition=_rust_only_binary(rust_daemon),
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -612,7 +609,6 @@ def generate_launch_description():
         declare_rust_battery,
         declare_rust_pid_autotune,
         declare_rust_map,
-        declare_rust_coverage,
         declare_rust_agent,
         declare_rust_bridge,
         declare_rust_base,
@@ -631,7 +627,6 @@ def generate_launch_description():
         mower_record_rs,
         map_manage_node,
         mower_map_rs,
-        coverage_node,
         mower_coverage_rs,
         nav_action_server,
         mower_nav_rs,

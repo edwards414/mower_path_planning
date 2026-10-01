@@ -4,11 +4,11 @@ CONTAINER_ROS_ENV := cd $(CONTAINER_WS) && source /opt/ros/$${ROS_DISTRO:-jazzy}
 # Raise CycloneDDS participant-index limit (default ~9 exhausts domain 0 once
 # the full stack + gazebo run). Respects an externally-set CYCLONEDDS_URI.
 LOCAL_ROS_ENV := export CYCLONEDDS_URI=$${CYCLONEDDS_URI:-file://$$(pwd)/.devcontainer/cyclonedds.xml} && source /opt/ros/$${ROS_DISTRO:-jazzy}/setup.bash && source install/setup.bash
-SIM_PACKAGES_SKIP := mower_controller mower_coverage_core
+SIM_PACKAGES_SKIP := mower_controller
 ZIGZAG_ANGLE_DEG ?= 0.0
 
 .PHONY: \
-	build build-release build-sim build-rust-core clean rviz open_rviz run \
+	build build-release build-sim clean rviz open_rviz run \
 	bringup component-bringup mower_qt mission mission-coverage record replay mission-docking-temp apriltag-docking mower_teleop \
 	teleop-keyboard sim-containers sim-prefetch-gazebo-models \
 	sim-gazebo sim-gazebo-empty sim-coverage-system sim-coverage-system-rust \
@@ -22,9 +22,6 @@ build-release:
 
 build-sim:
 	MOWER_BUILD_TARGET=sim colcon build --symlink-install --packages-skip $(SIM_PACKAGES_SKIP)
-
-build-rust-core:
-	bash -lc '$(LOCAL_ROS_ENV) && colcon build --symlink-install --packages-select mower_coverage_core'
 
 clean:
 ifeq ($(OS),Windows_NT)
@@ -103,11 +100,13 @@ sim-gazebo:
 sim-gazebo-empty:
 	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup sim_with_nav.launch.py use_sim_time:=true use_rviz:=true enable_localization:=true enable_navigation:=true world:=empty.world'
 
+# The coverage planner is the mower_rs mower_coverage node (built by
+# build-sim with the rest of mower_rs).
 sim-coverage-system:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true use_rviz:=false coverage_backend:=python zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
+	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true use_rviz:=false zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
 
-sim-coverage-system-rust:
-	bash -lc '$(LOCAL_ROS_ENV) && ros2 launch mower_bringup system_test.launch.py launch_sim:=true use_sim_time:=true use_rviz:=false coverage_backend:=rust zigzag_angle_deg:=$(ZIGZAG_ANGLE_DEG)'
+# Legacy name from when a Python planner existed; same run as sim-coverage-system.
+sim-coverage-system-rust: sim-coverage-system
 
 sim-coverage-test: sim-coverage-system
 

@@ -1,10 +1,12 @@
 //! Coverage path planning core: safe-map filtering, zigzag / spiral
-//! generation, path validation and A* connectors. Used from Python through
-//! the PyO3 module (feature `python`, the default) and directly from the
-//! mower_rs coverage node.
-
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
+//! generation, path validation, A* connectors and boustrophedon cell
+//! decomposition.
+//!
+//! A plain Rust library used by the mower_rs coverage node
+//! (`src/mower_rs/crates/mower_coverage`, node `boustrophedon_coverage`).
+//! The functions are ports of the former Python implementation in
+//! `mower_mission` (removed after commit dff480b); `tests/` pins them to the
+//! recorded Python outputs.
 
 pub mod types;
 pub mod path_validator;
@@ -12,21 +14,6 @@ pub mod safe_map_filter;
 pub mod connector_planner;
 pub mod zigzag;
 pub mod spiral;
-
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_health_check() -> &'static str {
-    "ok"
-}
-
-#[cfg(feature = "python")]
-#[pymodule]
-fn mower_coverage_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_health_check, m)?)?;
-    path_validator::register(m)?;
-    safe_map_filter::register(m)?;
-    connector_planner::register(m)?;
-    zigzag::register(m)?;
-    spiral::register(m)?;
-    Ok(())
-}
+pub mod cell_decomposition;
+pub mod boustrophedon;
+pub mod nav_split;

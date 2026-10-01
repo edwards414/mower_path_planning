@@ -2,11 +2,7 @@ use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::cmp::Reverse;
 
 use ndarray::{Array2, ArrayView2};
-#[cfg(feature = "python")]
-use numpy::PyReadonlyArray2;
 use ordered_float::OrderedFloat;
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
 
 use crate::types::{SafeMap, world_to_grid, grid_to_world};
 
@@ -52,7 +48,10 @@ fn is_boundary_cell(r: usize, c: usize, grid: ArrayView2<bool>) -> bool {
     false
 }
 
-fn boundary_distance(grid: ArrayView2<bool>) -> Array2<f64> {
+/// Distance (in cells, BFS) of every cell to the nearest safe-region boundary
+/// cell: the cost map A* adds. Depends only on the grid, so a caller planning
+/// many connectors on one map computes it once ([`plan_connector_with_bdist_rs`]).
+pub fn boundary_distance(grid: ArrayView2<bool>) -> Array2<f64> {
     let h = grid.nrows();
     let w = grid.ncols();
     let mut dist = Array2::from_elem((h, w), f64::INFINITY);
@@ -113,6 +112,28 @@ pub fn plan_connector_rs(
     sm: &SafeMap,
     boundary_weight: f64,
 ) -> Option<Vec<(f64, f64)>> {
+    plan_connector_impl(start, end, sm, boundary_weight, None)
+}
+
+/// [`plan_connector_rs`] with a precomputed [`boundary_distance`] of `sm.grid`
+/// (the O(cells) pass otherwise repeated for every connector).
+pub fn plan_connector_with_bdist_rs(
+    start: (f64, f64),
+    end: (f64, f64),
+    sm: &SafeMap,
+    boundary_weight: f64,
+    bdist: &Array2<f64>,
+) -> Option<Vec<(f64, f64)>> {
+    plan_connector_impl(start, end, sm, boundary_weight, Some(bdist))
+}
+
+fn plan_connector_impl(
+    start: (f64, f64),
+    end: (f64, f64),
+    sm: &SafeMap,
+    boundary_weight: f64,
+    bdist: Option<&Array2<f64>>,
+) -> Option<Vec<(f64, f64)>> {
     // Check start/end safety
     let h = sm.grid.nrows();
     let w = sm.grid.ncols();
@@ -133,7 +154,14 @@ pub fn plan_connector_rs(
         return Some(vec![start, end]);
     }
 
-    let bdist = boundary_distance(sm.grid);
+    let owned;
+    let bdist = match bdist {
+        Some(b) => b,
+        None => {
+            owned = boundary_distance(sm.grid);
+            &owned
+        }
+    };
 
     let heuristic = |r: usize, c: usize| -> f64 {
         ((r1 as f64 - r as f64).powi(2) + (c1 as f64 - c as f64).powi(2)).sqrt()
@@ -185,28 +213,4 @@ pub fn plan_connector_rs(
     }
 
     None
-}
-
-// ── PyO3 bindings ──────────────────────────────────────────────────────────────
-
-#[cfg(feature = "python")]
-#[pyfunction]
-#[pyo3(signature = (start, end, grid, resolution, origin_x, origin_y, boundary_weight=0.2))]
-pub fn py_plan_connector(
-    start: (f64, f64),
-    end: (f64, f64),
-    grid: PyReadonlyArray2<bool>,
-    resolution: f64,
-    origin_x: f64,
-    origin_y: f64,
-    boundary_weight: f64,
-) -> Option<Vec<(f64, f64)>> {
-    let sm = SafeMap { grid: grid.as_array(), resolution, origin_x, origin_y };
-    plan_connector_rs(start, end, &sm, boundary_weight)
-}
-
-#[cfg(feature = "python")]
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_plan_connector, m)?)?;
-    Ok(())
 }

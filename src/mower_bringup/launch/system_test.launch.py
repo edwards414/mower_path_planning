@@ -53,8 +53,8 @@ def generate_launch_description():
     launch_sim = LaunchConfiguration('launch_sim')
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
-    coverage_backend = LaunchConfiguration('coverage_backend')
     zigzag_angle_deg = LaunchConfiguration('zigzag_angle_deg')
+    zigzag_auto_angle = LaunchConfiguration('zigzag_auto_angle')
 
     declare_launch_sim = DeclareLaunchArgument(
         'launch_sim',
@@ -71,15 +71,15 @@ def generate_launch_description():
         default_value='true',
         description='Launch RViz when launch_sim is true',
     )
-    declare_coverage_backend = DeclareLaunchArgument(
-        'coverage_backend',
-        default_value='rust',
-        description='Coverage algorithm backend: "python" or "rust"',
-    )
     declare_zigzag_angle_deg = DeclareLaunchArgument(
         'zigzag_angle_deg',
         default_value='0.0',
         description='Zigzag scan angle in degrees, from 0 to 180',
+    )
+    declare_zigzag_auto_angle = DeclareLaunchArgument(
+        'zigzag_auto_angle',
+        default_value='false',
+        description='Search the sweep angle (ignores zigzag_angle_deg)',
     )
 
     mower_bringup_dir = get_package_share_directory('mower_bringup')
@@ -123,13 +123,15 @@ def generate_launch_description():
         ],
         output='screen'
     )
+    # The coverage planner (src/mower_rs/crates/mower_coverage). The binary's
+    # own node name is boustrophedon_coverage, the name the adapter, the app
+    # and auto_coverage address, so no __node remap is needed.
     boustrophedon_coverage = ExecuteProcess(
         cmd=[
-            'ros2', 'run', 'mower_mission', 'coverage_node',
+            'ros2', 'run', 'mower_rs', 'mower_coverage',
             '--ros-args',
-            '-p', ['coverage_backend:=', coverage_backend],
             '-p', ['zigzag_angle_deg:=', zigzag_angle_deg],
-            '-p', 'allow_backend_fallback:=false',
+            '-p', ['zigzag_auto_angle:=', zigzag_auto_angle],
             '-p', ['use_sim_time:=', use_sim_time],
         ],
         output='screen'
@@ -253,8 +255,8 @@ def generate_launch_description():
         declare_use_sim_time,
         OpaqueFunction(function=_require_sim_time),
         declare_use_rviz,
-        declare_coverage_backend,
         declare_zigzag_angle_deg,
+        declare_zigzag_auto_angle,
         rosbridge_launch,
         manual_velocity_guard,
         twist_mux,

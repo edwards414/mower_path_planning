@@ -19,3 +19,6 @@ ros-$ROS_DISTRO-opennav-docking
 ros-$ROS_DISTRO-twist-mux
 ros-$ROS_DISTRO-joy
 ros-$ROS_DISTRO-teleop-twist-joy
+# bindgen (r2r) needs libclang to build src/mower_rs, which now includes the
+# only coverage planner; the root Dockerfile builder installs the same package.
+libclang-dev

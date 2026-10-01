@@ -18,7 +18,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_battery` | `battery_state_node` + `battery_estimator` (`/battery_state`, `/aon_battery_state` from the `charger` / `analog` objects of `/mower_base/telemetry`) | `mission.launch.py rust_battery:=true` |
 | `mower_pid_autotune` | `pid_autotune_node` + `pid_tuning` (`/pid_autotune` start/abort/apply/discard, latched `/pid_autotune/status` JSON, open-loop FOPDT identification + SIMC PI, closed-loop verification, `/mower_base/pid_command` / `wheel_override` / `led_command`, mutation lock) | `mission.launch.py rust_pid_autotune:=true` |
 | `mower_map` | `map_manage_node` (`/create_free_space`, `/create_risk_map`, `/create_chennal_map`, `/import_image_mask`, `/restore_free_space_coverage`, `/get_zone_map_list_srv`, the eight latched map topics, `/map_manage/{get,set,list,describe}_parameters` with the 0.75 m `inflate_radius_m` floor) | `mission.launch.py rust_map:=true` |
-| `mower_coverage` | `coverage_node` (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | `mission.launch.py rust_coverage:=true` |
+| `mower_coverage` | the former rclpy `coverage_node`, removed on 2026-09-30, so this is the only coverage planner (`/generate_coverage_path` with the zigzag / spiral planner, A* connectors, validation and boundary ring; `/zone_exec_path`, `/run_zone_sequence`, `/stop_zone_sequence`, `/resume_coverage` through the `nav_action_follow_path` action with bounded acceptance, dispatch confirmation and correlated cancel tracking; `/boustrophedon_coverage/*_parameters`) | none, always on: `mission.launch.py` starts it, or `robot.launch.py rust_daemon:=true` runs it as the `coverage` module of `mower_rsd` (the `rust_coverage` switch was removed with the Python node) |
 | `mower_base` | the whole `ros2_control` chain: `ros2_control_node` (`controller_manager`), `mower_hardware::MowerSystem` and its `mower_hardware_info` node, `diff_drive_controller` (`diff_controller`), `joint_state_broadcaster` and the two `spawner` processes (`/odom`, `/joint_states`, `/mower_base/telemetry`, `/mower_base/firmware_info` and the five `/mower_base/*_command` channels); also `mission.launch.py`'s `odom_throttle` (`/odom_slow`) | `mower.launch.py rust_base:=true` (+ `mission.launch.py rust_base:=true` for the throttle; `robot.launch.py` passes both) |
 | `mower_localize` | `robot_localization`'s two `ekf_node`s and `navsat_transform_node` (`/odometry/local`, `/odometry/global`, `/odometry/gps`, `/gps/filtered`, the `odom -> base_footprint` and `map -> odom` broadcasts, `/toLL`, `/fromLL`, `/fromLLArray`, `/datum`); also `mission.launch.py`'s `global_odom_throttle` (`/odometry/global_slow`) | `dual_ekf_navsat.launch.py rust_localize:=true` (+ `mission.launch.py rust_localize:=true` for the throttle; `robot.launch.py` passes both) |
 | `mower_rsd` | nothing: it *is* the binaries below, as modules of one process on one r2r Context (one DDS participant). See the section after this table. | `robot.launch.py rust_daemon:=true` |
@@ -40,8 +40,9 @@ driver — can be enabled last, after a supervised drive.
 Each crate above is a library (`run(ctx, ModuleCtx)`) plus a three-line
 binary, so the same code runs either as its own process or as a module of
 `mower_rsd`. `rust_daemon:=true` on `robot.launch.py` starts one `mower_rsd`
-with the module set derived from the `rust_*` switches (plus `enable_gps`)
-and holds the separate binaries down; `rust_daemon:=false` is the roll-back
+with the module set derived from the `rust_*` switches (plus `enable_gps`,
+plus `coverage`, which has no switch and is always in the set) and holds the
+separate binaries down; `rust_daemon:=false` is the roll-back
 and changes nothing else. Background: `docs/ROS_FREE_PLAN.md` Phase A5.
 
 ```bash
@@ -50,7 +51,7 @@ mower_rsd --modules status,guards,adapter,battery \
           [--worker-threads 4] [--stop-timeout 10] \
           --ros-args --params-file config/mower_rsd.yaml \
                      -r imu:imu/data_raw:=imu/data
-mower_rsd --list-modules      # module id, launch switch, node name(s)
+mower_rsd --list-modules      # module id, launch switch ("(always)" for coverage), node name(s)
 ```
 
 Why one process: `r2r::Context::create()` is a process-wide `OnceLock`, so
@@ -821,18 +822,25 @@ node computes the same indices (and the same bytes).
 
 ## mower_coverage
 
-`crates/mower_coverage` links `mower_coverage_core` directly (the crate now
-builds without PyO3: feature `python`, on by default for the wheel, off for
-this node), so the planner is the same code the Python node calls through
-the extension. `contours.rs` is `cv2.findContours(RETR_EXTERNAL,
+`crates/mower_coverage` is the only coverage planner: there is no rclpy
+version and no `rust_coverage` / `RUST_COVERAGE` switch any more (the Python
+`coverage_node`, its `coverage/` and `path_generators/` modules and the PyO3
+backend were removed on 2026-09-30). It links `mower_coverage_core`, a plain
+Rust library crate with no PyO3 and no `python` feature, through a cargo path
+dependency (`src/mower_coverage_core`, built by this workspace's `cargo
+build`, not a colcon package; its own tests run with `cargo test` in that
+directory). `contours.rs` is `cv2.findContours(RETR_EXTERNAL,
 CHAIN_APPROX_NONE)` + `contourArea` from OpenCV 4.6.0's `contours.cpp`
 (Suzuki border following, newest-first output) for the boundary ring,
-checked against 160 masks rendered by that build. `main.rs` keeps the node
+checked against 160 masks rendered by that build. `lib.rs` keeps the node
 name `boustrophedon_coverage`, every service, parameter default and
-message, the marker layout (colours, ids, arrow every fifth pose), the
-risk resampling with `unknown_as_obstacle`, the mission guard, and the
-whole dispatch protocol of `_send_follow_path`: 3 s acceptance deadline
-with the late-acceptance cancel, `/check_nav_status` reason on rejection,
+message (`coverage_backend` and `allow_backend_fallback` are still accepted
+as startup-only legacy parameters, but the planning always runs in
+`mower_coverage_core`), the marker layout (colours, ids, arrow every fifth
+pose), the risk resampling with `unknown_as_obstacle`, the mission guard,
+and the whole dispatch protocol of `_send_follow_path`: 3 s acceptance
+deadline with the late-acceptance cancel, `/check_nav_status` reason on
+rejection,
 `/confirm_navigation_dispatch`, background or blocking (600 s) result,
 zone sequences with `/get_channel_route`, and the tracker that cancels the
 action, watches the acknowledgment and retries `/cancel_navigation_dispatch`

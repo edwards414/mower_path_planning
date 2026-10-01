@@ -1,5 +1,30 @@
 # 當前覆蓋式路徑邏輯算法
 
+> **2026-09-30 補記：** 本文描述的 Python 實作（`coverage_node.py`、`path_generators/`、`coverage/`）已在 2026-09-30 移除，現在的邏輯在 Rust：
+>
+> - `coverage/path_validator.py` → `src/mower_coverage_core/src/path_validator.rs`
+> - `coverage/safe_map_filter.py` → `src/mower_coverage_core/src/safe_map_filter.rs`
+> - `coverage/connector_planner.py` → `src/mower_coverage_core/src/connector_planner.rs`
+> - `path_generators/zigzag.py` → `src/mower_coverage_core/src/zigzag.rs`
+> - `path_generators/spiral.py`（舊名 `speiral.py`）→ `src/mower_coverage_core/src/spiral.rs`
+> - `coverage/cell_decomposition.py` → `src/mower_coverage_core/src/cell_decomposition.rs`（已移植，尚未接進節點）
+> - `coverage/types.py`：`CoverageCell` → `src/mower_coverage_core/src/cell_decomposition.rs`；`SpiralCoveragePlan` / `SpiralSegment` / `CoverageSegment` / `ConnectorSegment` / `RoutePlan` 沒有移植（Rust spiral 只回傳 `(points, split_points, invalid_segments)`）；`SafeMap` / `ValidationResult`（原本在 `coverage/path_validator.py`）→ `src/mower_coverage_core/src/types.rs`
+> - `coverage_node.py` → `src/mower_rs/crates/mower_coverage/src/lib.rs`（`mower_rs` 的 `mower_coverage`，node 名仍是 `boustrophedon_coverage`，服務與參數不變）
+>
+> 下面的分析保留原文，檔名、行號與程式片段以當時的 Python 程式碼為準。
+
+> **2026-09-30 補記二（演算法最佳化）：** `coverage_pattern=zigzag` 改由 `src/mower_coverage_core/src/boustrophedon.rs` 規劃，節點不再呼叫舊的 `zigzag.rs`（它只留給 oracle 測試）。已做：
+>
+> - 任何角度都是直線 lane（舊的旋轉分支會在條帶內左右來回）；lane 從安全區自己的範圍排（最外兩條貼著最外側的格子，間距 ≤ `strip_width_m`），不再對齊地圖格線，邊緣不會漏割。
+> - 在掃描座標系做 BCD：每次 free space 分裂或合併就開新的 cell，每個 cell 各自來回割；cell 順序與每個 cell 的進入角用 DP（4 種進入方式）加 2-opt 最佳化（超過 80 個 cell 改用最近鄰）。模擬退火沒做，2-opt 在實測地圖上已足夠。
+> - `zigzag_auto_angle`（預設 false）：每 5° 粗搜、前 4 名用最佳化後的順序重算、再在最佳角度 ±4° 每 1° 細搜，成本 = 路徑長 + 每次轉彎 3 m + 10 × 未覆蓋面積 / 條帶寬。
+> - A* connector 會拉直（`simplify_path_rs`），節點的 connector 修補也一樣；規劃器的直線檢查用 supercover（線段碰到的每一格，含剛好穿過格角時的兩側格子），拉直不會穿過 A* 禁止的對角縫隙，路點也用 floor 規則檢查，不會出現在格子外（共用的 validator 用 Bresenham + 截斷，會把格子左/下方一格內的點算成第 0 格）。A* 的邊界距離圖每次規劃只算一次。
+> - 導航伺服器會在 split point 0.1 m 內的每個內部點、以及急轉彎處切段，任何一段 ≤ 0.15 m 就拒絕整個任務。`nav_split.rs` 照 `mower_nav/src/geometry.rs` 模擬這個切法，`coalesce_for_navigation` 移除會切出過短段落的 split point（或路徑兩端幾公分），節點對 zigzag 與 spiral 的最終路徑都會跑這一步。
+> - 規劃在 `spawn_blocking` 裡跑，不佔 `mower_rsd` 共用的 async 執行緒。
+> - 每個 zone 在 log 記錄角度、lane / cell / 轉彎數、長度、覆蓋率與規劃時間；`/coverage_path` 發布實際路徑（以前只發空的）。
+>
+> 沒做：一個 zone 內不相連的安全區（它們之間隔著膨脹後的障礙，機器人本來就過不去，節點仍只割最大的一塊並記 warning）、各 cell 各自的角度、帶轉彎成本的邊界 connector、分型別的路徑輸出（PathElement）、spiral 的改善。
+
 本文件描述目前專案中實際運作的覆蓋式路徑生成流程。內容以目前程式碼為準，主要來源包含：
 
 - `src/mower_mission/mower_mission/map_manage_node.py`

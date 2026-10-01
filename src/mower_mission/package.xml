@@ -3,7 +3,7 @@
 <package format="3">
   <name>mower_mission</name>
   <version>0.0.0</version>
-  <description>Mower mission logic: coverage path, map management, path recording</description>
+  <description>Mower mission logic: map management, path recording, navigation, auto-coverage sequencing</description>
   <maintainer email="edwards940428@gmail.com">fxrbindi</maintainer>
   <license>Apache-2.0</license>
 
@@ -13,6 +13,8 @@
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>topic_tools</exec_depend>
+  <!-- mission.launch.py always starts the coverage planner, mower_rs mower_coverage -->
+  <exec_depend>mower_rs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <!-- rosbridge_auth_proxy (pairing gate in front of rosbridge) -->
   <exec_depend>python3-websockets</exec_depend>

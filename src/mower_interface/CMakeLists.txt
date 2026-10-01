@@ -15,6 +15,7 @@ find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ZoneMap.msg"
+  "msg/CoverageProgress.msg"
   "srv/GetZoneList.srv"
   "srv/ZoneMapList.srv"
   "srv/ZoneExecPath.srv"
@@ -29,6 +30,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ConfirmNavigationDispatch.srv"
   "srv/CancelNavigationDispatch.srv"
   "srv/PidAutotune.srv"
+  "srv/GetCoverageProgress.srv"
+  "srv/ResumeCoverage.srv"
   "action/Waypoint.action"
   DEPENDENCIES std_msgs geometry_msgs nav_msgs visualization_msgs action_msgs
 )

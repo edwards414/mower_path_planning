@@ -1,10 +1,6 @@
 use std::collections::VecDeque;
 
 use ndarray::{Array2, ArrayView2};
-#[cfg(feature = "python")]
-use numpy::{PyArray2, PyReadonlyArray2, ToPyArray};
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
 
 // 4-connectivity matches the spiral planner's own component decomposition,
 // preventing a mismatch where an 8-connected "pinch point" region appears as
@@ -88,26 +84,4 @@ pub fn filter_safe_components_rs(
     kept_sizes.sort_by(|a, b| b.cmp(a));
 
     (filtered, all_sizes, kept_sizes)
-}
-
-// ── PyO3 bindings ──────────────────────────────────────────────────────────────
-
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn py_filter_safe_components(
-    py: Python<'_>,
-    grid: PyReadonlyArray2<bool>,
-    resolution: f64,
-    min_area_m2: f64,
-    keep_largest_only: bool,
-) -> PyResult<(Py<PyArray2<bool>>, Vec<usize>, Vec<usize>)> {
-    let (filtered, all_sizes, kept_sizes) =
-        filter_safe_components_rs(grid.as_array(), resolution, min_area_m2, keep_largest_only);
-    Ok((filtered.to_pyarray_bound(py).unbind(), all_sizes, kept_sizes))
-}
-
-#[cfg(feature = "python")]
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_filter_safe_components, m)?)?;
-    Ok(())
 }

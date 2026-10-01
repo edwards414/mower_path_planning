@@ -1,5 +1,21 @@
 # Spiral / Zigzag Coverage Pattern Plan
 
+> **Note (2026-09-30):** the Python implementation this plan describes
+> (`coverage_node.py`, `path_generators/`, `coverage/`) was removed on
+> 2026-09-30. The logic now lives in Rust:
+>
+> - `coverage/path_validator.py` → `src/mower_coverage_core/src/path_validator.rs`
+> - `coverage/safe_map_filter.py` → `src/mower_coverage_core/src/safe_map_filter.rs`
+> - `coverage/connector_planner.py` → `src/mower_coverage_core/src/connector_planner.rs`
+> - `path_generators/zigzag.py` → `src/mower_coverage_core/src/zigzag.rs`
+> - `path_generators/spiral.py` (legacy name `speiral.py`) → `src/mower_coverage_core/src/spiral.rs`
+> - `coverage/cell_decomposition.py` → `src/mower_coverage_core/src/cell_decomposition.rs` (ported, not wired into the node yet)
+> - `coverage/types.py`: `CoverageCell` → `src/mower_coverage_core/src/cell_decomposition.rs`; `SpiralCoveragePlan` / `SpiralSegment` / `CoverageSegment` / `ConnectorSegment` / `RoutePlan` were not ported (the Rust spiral returns `(points, split_points, invalid_segments)`); `SafeMap` / `ValidationResult` (from `coverage/path_validator.py`) → `src/mower_coverage_core/src/types.rs`
+> - `coverage_node.py` → `src/mower_rs/crates/mower_coverage/src/lib.rs` (`mower_rs`'s `mower_coverage`; the node name is still `boustrophedon_coverage`, with the same services and parameters)
+>
+> The decisions below are kept as written; file names refer to the Python code
+> of that time.
+
 ## Decision
 
 Use `zigzag` as the UI-facing and generator-facing name for the

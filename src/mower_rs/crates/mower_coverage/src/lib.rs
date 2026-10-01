@@ -1,6 +1,10 @@
-//! mower_coverage: the coverage planner node (port of
-//! `mower_mission/coverage_node.py`, node name `boustrophedon_coverage`,
-//! same services, latched topics, parameters, messages and logs).
+//! mower_coverage: the coverage planner node, node name
+//! `boustrophedon_coverage`. It is the only coverage planner: a 1:1 port of
+//! the former rclpy `mower_mission/coverage_node.py` (removed; see git history
+//! for the Python names referenced below), with the same services, latched
+//! topics, parameters, messages and logs. `coverage_backend` and
+//! `allow_backend_fallback` are still accepted as startup-only legacy
+//! parameters; the planning always runs in `mower_coverage_core`.
 //!
 //! * `/generate_coverage_path` -- for every zone map (`/get_zone_map_list_srv`)
 //!   build the safe map (inflated mask AND inflated risk, resampled when the
@@ -16,7 +20,7 @@
 //! unreadable result, a failed confirmation or a stop request all enter the
 //! same tracker, which cancels the action, retries the correlated
 //! `/cancel_navigation_dispatch` every two seconds and only forgets the goal
-//! once a terminal state is proven -- exactly the Python node's
+//! once a terminal state is proven -- exactly the former Python node's
 //! `_track_and_cancel_navigation_goal` / `_request_nav2_cancel_fallback`.
 
 mod contours;
@@ -34,7 +38,9 @@ use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped};
 use r2r::mower_interface::action::Waypoint;
 use r2r::mower_interface::msg::ZoneMap;
-use r2r::mower_interface::srv::{CancelNavigationDispatch, ChannelRoute, ConfirmNavigationDispatch, MissionOperationLock, ZoneExecPath, ZoneMapList, ZoneSequence};
+use r2r::mower_interface::srv::{
+    CancelNavigationDispatch, ChannelRoute, ConfirmNavigationDispatch, GetCoverageProgress, MissionOperationLock, ResumeCoverage, ZoneExecPath, ZoneMapList, ZoneSequence,
+};
 use r2r::nav_msgs::msg::{MapMetaData, OccupancyGrid, Path};
 use r2r::rcl_interfaces::msg::{ListParametersResult, Parameter, ParameterDescriptor, ParameterValue, SetParametersResult};
 use r2r::rcl_interfaces::srv::{DescribeParameters, GetParameterTypes, GetParameters, ListParameters, SetParameters, SetParametersAtomically};
@@ -44,12 +50,13 @@ use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use r2r::{GoalStatus, QosProfile};
 use tokio::sync::Mutex;
 
-use mower_coverage_core::connector_planner::plan_connector_rs;
+use mower_coverage_core::connector_planner::{boundary_distance, plan_connector_with_bdist_rs};
+use mower_coverage_core::nav_split::coalesce_for_navigation;
 use mower_coverage_core::path_validator::validate_path_rs;
 use mower_coverage_core::safe_map_filter::filter_safe_components_rs;
 use mower_coverage_core::spiral::plan_spiral_coverage_rs;
 use mower_coverage_core::types::{SafeMap, ValidationResult};
-use mower_coverage_core::zigzag::generate_coverage_zigzag_path_rs;
+use mower_coverage_core::boustrophedon::{coverage_ratio_rs, plan_boustrophedon_rs, simplify_path_rs};
 
 // visualization_msgs/Marker constants (r2r does not export them)
 const MARKER_ARROW: i32 = 0;
@@ -180,6 +187,7 @@ struct Params {
     strip_width_m: f64,
     waypoint_spacing_m: f64,
     zigzag_angle_deg: f64,
+    zigzag_auto_angle: bool,
     unknown_as_obstacle: bool,
     min_safe_component_area_m2: f64,
     coverage_pattern: String,
@@ -191,7 +199,7 @@ struct Params {
     start_type_description_service: bool,
 }
 
-const PARAM_NAMES: [&str; 12] = [
+const PARAM_NAMES: [&str; 13] = [
     "allow_backend_fallback",
     "boundary_ring",
     "coverage_backend",
@@ -204,12 +212,13 @@ const PARAM_NAMES: [&str; 12] = [
     "use_sim_time",
     "waypoint_spacing_m",
     "zigzag_angle_deg",
+    "zigzag_auto_angle",
 ];
 
 fn declared_type(name: &str) -> Option<u8> {
     match name {
         "strip_width_m" | "waypoint_spacing_m" | "zigzag_angle_deg" | "min_safe_component_area_m2" | "fallback_cancel_request_timeout_s" => Some(PARAMETER_DOUBLE),
-        "unknown_as_obstacle" | "allow_backend_fallback" | "boundary_ring" | "use_sim_time" | "start_type_description_service" => Some(PARAMETER_BOOL),
+        "unknown_as_obstacle" | "allow_backend_fallback" | "boundary_ring" | "zigzag_auto_angle" | "use_sim_time" | "start_type_description_service" => Some(PARAMETER_BOOL),
         "coverage_pattern" | "coverage_backend" => Some(PARAMETER_STRING),
         _ => None,
     }
@@ -255,6 +264,7 @@ impl Params {
             "unknown_as_obstacle" => b(&mut v, self.unknown_as_obstacle),
             "allow_backend_fallback" => b(&mut v, self.allow_backend_fallback),
             "boundary_ring" => b(&mut v, self.boundary_ring),
+            "zigzag_auto_angle" => b(&mut v, self.zigzag_auto_angle),
             "use_sim_time" => b(&mut v, self.use_sim_time),
             "start_type_description_service" => b(&mut v, self.start_type_description_service),
             "coverage_pattern" => s(&mut v, &self.coverage_pattern),
@@ -275,6 +285,7 @@ impl Params {
             "unknown_as_obstacle" => self.unknown_as_obstacle = v.bool_value,
             "allow_backend_fallback" => self.allow_backend_fallback = v.bool_value,
             "boundary_ring" => self.boundary_ring = v.bool_value,
+            "zigzag_auto_angle" => self.zigzag_auto_angle = v.bool_value,
             "use_sim_time" => self.use_sim_time = v.bool_value,
             "start_type_description_service" => self.start_type_description_service = v.bool_value,
             "coverage_pattern" => self.coverage_pattern = v.string_value.clone(),
@@ -404,6 +415,7 @@ struct Ctx {
     confirm_client: r2r::Client<ConfirmNavigationDispatch::Service>,
     cancel_client: r2r::Client<CancelNavigationDispatch::Service>,
     nav_status_client: r2r::Client<Trigger::Service>,
+    progress_client: r2r::Client<GetCoverageProgress::Service>,
     channel_route_client: r2r::Client<ChannelRoute::Service>,
     follow_client: r2r::ActionClient<Waypoint::Action>,
 }
@@ -533,12 +545,17 @@ impl Ctx {
         let mut new_points = Vec::with_capacity(points.len());
         let mut viz = Vec::new();
         let mut unresolved = Vec::new();
+        // A*'s boundary-distance map depends only on the grid: once per call
+        let mut bdist = None;
         for (i, &pt) in points.iter().enumerate() {
             new_points.push(pt);
             if i + 1 >= points.len() || !invalid_set.contains(&(i, i + 1)) {
                 continue;
             }
-            match plan_connector_rs(pt, points[i + 1], sm, 0.2) {
+            // A* gives one waypoint per cell: pull it straight (endpoints and
+            // safety kept) before inserting it.
+            let bdist = bdist.get_or_insert_with(|| boundary_distance(sm.grid));
+            match plan_connector_with_bdist_rs(pt, points[i + 1], sm, 0.2, bdist).map(|c| simplify_path_rs(&c, sm)) {
                 Some(connector) if connector.len() > 2 => {
                     for cp in &connector[1..connector.len() - 1] {
                         new_points.push(*cp);
@@ -673,13 +690,54 @@ impl Ctx {
             let risk_cells = risk_data.iter().filter(|&&v| v != 0).count();
             self.info(format!("zone {zone_id}: safe_cells={safe_cells}, risk_cells={risk_cells}"));
 
-            let (mut coverage_pts, split_pts, invalid_segs) = if pattern == "spiral" {
-                plan_spiral_coverage_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy)
-            } else {
-                generate_coverage_zigzag_path_rs(safe.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy, zigzag_angle_deg)
-            };
             let sm = SafeMap { grid: safe.view(), resolution: res, origin_x: ox, origin_y: oy };
             let frame_id = if zones[i].mask_map.header.frame_id.is_empty() { "map".to_string() } else { zones[i].mask_map.header.frame_id.clone() };
+            let started = std::time::Instant::now();
+            // CPU-bound (angle search, A* connectors): off the async workers,
+            // which mower_rsd shares with every other module
+            let angle = if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) };
+            enum Planned {
+                Spiral((Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(usize, usize)>)),
+                Boustrophedon(mower_coverage_core::boustrophedon::BoustrophedonPlan),
+            }
+            let (safe_owned, spiral) = (safe.clone(), pattern == "spiral");
+            let planned = tokio::task::spawn_blocking(move || {
+                if spiral {
+                    Planned::Spiral(plan_spiral_coverage_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy))
+                } else {
+                    // straight lanes at any angle, cell decomposition,
+                    // optimised cell order; None searches the sweep angle
+                    Planned::Boustrophedon(plan_boustrophedon_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle))
+                }
+            })
+            .await;
+            let planned = match planned {
+                Ok(v) => v,
+                Err(e) => {
+                    self.error(format!("zone {zone_id}: coverage planning failed: {e}"));
+                    return false;
+                }
+            };
+            // every connector of this zone, published once (one marker id range)
+            let mut connectors_viz: Vec<Vec<(f64, f64)>> = Vec::new();
+            let (mut coverage_pts, split_pts, invalid_segs) = match planned {
+                Planned::Spiral(spiral_plan) => spiral_plan,
+                Planned::Boustrophedon(plan) => {
+                    self.info(format!(
+                        "zone {zone_id}: boustrophedon angle={:.1} deg ({}), lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
+                        plan.angle_deg,
+                        if angle.is_none() { "auto" } else { "fixed" },
+                        plan.lanes,
+                        plan.cells,
+                        plan.turns,
+                        plan.length_m,
+                        plan.connectors.len()
+                    ));
+                    connectors_viz.extend(plan.connectors);
+                    (plan.points, plan.split_points, plan.invalid_segments)
+                }
+            };
+            let planning_ms = started.elapsed().as_secs_f64() * 1000.0;
 
             if !invalid_segs.is_empty() {
                 self.warn(format!("zone {zone_id}: {} unsafe segment(s) — running ConnectorPlanner", invalid_segs.len()));
@@ -691,9 +749,7 @@ impl Ctx {
                     self.error(format!("zone {zone_id}: {} unsafe connector(s) unresolved; coverage path not published", unresolved.len()));
                     return false;
                 }
-                if !viz.is_empty() {
-                    self.publish_connectors(&viz, i, &frame_id);
-                }
+                connectors_viz.extend(viz);
             }
             let final_validation: ValidationResult = validate_path_rs(&coverage_pts, &sm);
             if !final_validation.valid {
@@ -701,6 +757,13 @@ impl Ctx {
                 self.error(format!("zone {zone_id}: final path is unsafe: {}; coverage path not published", final_validation.message));
                 return false;
             }
+
+            self.info(format!(
+                "zone {zone_id}: {} points, coverage {:.1}% of the safe area, planned in {:.0} ms",
+                coverage_pts.len(),
+                coverage_ratio_rs(&coverage_pts, &sm, strip_width_m) * 100.0,
+                planning_ms
+            ));
 
             if p.boundary_ring {
                 let safe_u8: Vec<u8> = safe.iter().map(|&v| v as u8).collect();
@@ -720,9 +783,7 @@ impl Ctx {
                             self.error(format!("zone {zone_id}: {} unsafe boundary-ring connector(s) unresolved; coverage path not published", unresolved.len()));
                             return false;
                         }
-                        if !viz.is_empty() {
-                            self.publish_connectors(&viz, i, &frame_id);
-                        }
+                        connectors_viz.extend(viz);
                     }
                     let ring_final = validate_path_rs(&coverage_pts, &sm);
                     if !ring_final.valid {
@@ -733,6 +794,15 @@ impl Ctx {
                 }
             }
 
+            if !connectors_viz.is_empty() {
+                self.publish_connectors(&connectors_viz, i, &frame_id);
+            }
+            // The navigation server cuts at every pose within 0.1 m of a split
+            // point and at sharp turns, and refuses a run with any piece of
+            // 0.15 m or less: drop the split points (or the few centimetres at
+            // a path end) that would do that. Only end poses can go, so the
+            // validated path stays valid.
+            let (coverage_pts, split_pts) = coalesce_for_navigation(&coverage_pts, &split_pts);
             zones[i].path = path_from_points(&coverage_pts, &zones[i].mask_map.header);
             zones[i].coverage_split_points = split_poses(&split_pts);
         }
@@ -780,6 +850,15 @@ impl Ctx {
             color_i += 1;
         }
         let n = arr.markers.len();
+        // /coverage_path: every zone's path in one Path, in zone order (it
+        // used to be published only empty, by clear_path_visuals)
+        if let Some(first) = zones.iter().find(|z| !z.path.poses.is_empty()) {
+            let mut all = Path { header: first.path.header.clone(), poses: Vec::new() };
+            for z in &zones {
+                all.poses.extend(z.path.poses.iter().cloned());
+            }
+            let _ = self.pubs.lock().unwrap().path.publish(&all);
+        }
         let _ = self.pubs.lock().unwrap().path_markers.publish(&arr);
         self.info(format!("發布了 {n} 個路徑markers"));
         *self.zone_map_list.lock().await = zones;
@@ -1186,8 +1265,41 @@ impl Ctx {
 
     // ------------------------------------------------------- dispatching
 
+    /// `/resume_coverage`.
+    async fn resume_coverage(self: &Arc<Self>, handles: &Handles, requested_zone: i32) -> (bool, String) {
+        if let Some(message) = self.guard.lock().await.reject_reason("resume a coverage mission") {
+            return (false, message);
+        }
+        let Some(status) = self.blocking_call(&self.progress_client, &GetCoverageProgress::Request::default(), 2.0).await else {
+            return (false, "Navigation server did not answer /coverage_progress_status".into());
+        };
+        let c = status.checkpoint;
+        if !c.checkpoint_available {
+            return (false, format!("No resumable coverage checkpoint ({})", c.message));
+        }
+        let zone_id = if requested_zone < 0 { c.zone_id } else { requested_zone };
+        if zone_id != c.zone_id {
+            return (false, format!("The checkpoint is for zone {}, not zone {zone_id}", c.zone_id));
+        }
+        let zone = match self.get_zone_map(zone_id).await {
+            None => return (false, "Zone not found".into()),
+            Some(z) if z.path.poses.is_empty() => return (false, "Zone coverage path is empty".into()),
+            Some(z) => z,
+        };
+        let index = c.completed_segments + 1;
+        self.info(format!("resume_coverage: zone {zone_id} from segment {index}/{}", c.total_segments));
+        if self.send_follow_path(handles, zone_id, index, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await {
+            (true, format!("Resuming zone {zone_id} at segment {index}/{}", c.total_segments))
+        } else {
+            (false, self.last_error())
+        }
+    }
+
     /// `_send_follow_path`: dispatch a goal and wait at least for acceptance.
-    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
+    /// `zone_id` is echoed in /coverage_progress (-1 for a channel route);
+    /// `resume_segment_index > 0` continues the navigation server's checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, resume_segment_index: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
         let timeout_s = 600.0;
         let acceptance_timeout_s = 3.0;
         self.set_error("");
@@ -1210,7 +1322,7 @@ impl Ctx {
             return false;
         }
         let dispatch_id = uuid_hex();
-        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone() };
+        let goal = Waypoint::Goal { path, coverage_split_points: split_points, dispatch_id: dispatch_id.clone(), zone_id, resume_segment_index };
         let fut = match self.follow_client.send_goal_request(goal) {
             Ok(f) => f,
             Err(e) => {
@@ -1373,7 +1485,7 @@ impl Ctx {
                 }
             };
             self.info(format!("[{}/{}] 執行 zone {zone_id} 覆蓋路徑，共 {} 個路徑點", i + 1, zone_ids.len(), zone.path.poses.len()));
-            let ok = self.send_follow_path(&handles, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
+            let ok = self.send_follow_path(&handles, zone.zone_id, 0, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
             if !ok {
                 self.error(format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止"));
                 return;
@@ -1395,7 +1507,7 @@ impl Ctx {
                 }
             };
             self.info(format!("走通道 #{} (zone {zone_id} → zone {next_zone_id})，共 {} 個路徑點", route.matched_channel_id, route.channel_path.poses.len()));
-            let ok = self.send_follow_path(&handles, route.channel_path, Vec::new(), true, true).await;
+            let ok = self.send_follow_path(&handles, -1, 0, route.channel_path, Vec::new(), true, true).await;
             if !ok {
                 self.error(format!("通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止"));
                 return;
@@ -1420,9 +1532,9 @@ impl Ctx {
         }
         let immutable: Vec<&str> = params.iter().filter(|p| p.name == "coverage_backend" || p.name == "allow_backend_fallback").map(|p| p.name.as_str()).collect();
         if !immutable.is_empty() {
-            return reject(format!("{} is startup-only; restart coverage_node with the desired backend", immutable.join(", ")));
+            return reject(format!("{} is a legacy startup-only parameter; coverage always plans with mower_coverage_core", immutable.join(", ")));
         }
-        let guarded = ["strip_width_m", "waypoint_spacing_m", "zigzag_angle_deg", "unknown_as_obstacle", "min_safe_component_area_m2", "coverage_pattern", "boundary_ring"];
+        let guarded = ["strip_width_m", "waypoint_spacing_m", "zigzag_angle_deg", "zigzag_auto_angle", "unknown_as_obstacle", "min_safe_component_area_m2", "coverage_pattern", "boundary_ring"];
         if params.iter().any(|p| guarded.contains(&p.name.as_str())) {
             let g = self.guard.lock().await;
             if g.blocked() || g.busy() {
@@ -1524,6 +1636,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         strip_width_m: params::f64(&node, "strip_width_m", 0.8),
         waypoint_spacing_m: params::f64(&node, "waypoint_spacing_m", 0.2),
         zigzag_angle_deg: params::f64(&node, "zigzag_angle_deg", 0.0),
+        zigzag_auto_angle: params::bool(&node, "zigzag_auto_angle", false),
         unknown_as_obstacle: params::bool(&node, "unknown_as_obstacle", true),
         min_safe_component_area_m2: params::f64(&node, "min_safe_component_area_m2", 0.05),
         coverage_pattern: params::string(&node, "coverage_pattern", "zigzag"),
@@ -1536,6 +1649,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     };
     if params_v.coverage_backend != "rust" && params_v.coverage_backend != "python" {
         return Err(format!("Unknown coverage_backend \"{}\"; expected \"python\" or \"rust\"", params_v.coverage_backend).into());
+    }
+    // coverage_backend / allow_backend_fallback are kept only so existing
+    // parameter files and clients stay valid: the Python backend is gone and
+    // planning always uses mower_coverage_core.
+    if params_v.coverage_backend == "python" {
+        r2r::log_warn!(&logger, "coverage_backend \"python\" no longer exists (the Python planner was removed); planning with mower_coverage_core");
     }
     r2r::log_info!(&logger, "coverage backend: RustBackend");
 
@@ -1568,6 +1687,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         confirm_client: node.create_client::<ConfirmNavigationDispatch::Service>("/confirm_navigation_dispatch", QosProfile::services_default())?,
         cancel_client: node.create_client::<CancelNavigationDispatch::Service>("/cancel_navigation_dispatch", QosProfile::services_default())?,
         nav_status_client: node.create_client::<Trigger::Service>("/check_nav_status", QosProfile::services_default())?,
+        progress_client: node.create_client::<GetCoverageProgress::Service>("/coverage_progress_status", QosProfile::services_default())?,
         channel_route_client: node.create_client::<ChannelRoute::Service>("/get_channel_route", QosProfile::services_default())?,
         follow_client: node.create_action_client::<Waypoint::Action>("nav_action_follow_path")?,
     });
@@ -1660,13 +1780,33 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                                 None => ZoneExecPath::Response { success: false, message: "Zone not found".into() },
                                 Some(zone) if zone.path.poses.is_empty() => ZoneExecPath::Response { success: false, message: "Zone coverage path is empty".into() },
                                 Some(zone) => {
-                                    let dispatched = ctx.send_follow_path(&handles, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
+                                    let dispatched = ctx.send_follow_path(&handles, zone.zone_id, 0, zone.path.clone(), zone.coverage_split_points.clone(), false, false).await;
                                     ZoneExecPath::Response { success: dispatched, message: if dispatched { "Navigation action goal accepted".into() } else { ctx.last_error() } }
                                 }
                             }
                         }
                     };
                     let _ = req.respond(response);
+                });
+            }
+        });
+    }
+    {
+        // Continue the navigation server's checkpoint from its first unfinished
+        // segment; the server itself refuses a path that changed since.
+        let mut stream = node.create_service::<ResumeCoverage::Service>("/resume_coverage", QosProfile::services_default())?;
+        let ctx = ctx.clone();
+        let handles = handles.clone();
+        tokio::spawn(async move {
+            while let Some(req) = stream.next().await {
+                let ctx = ctx.clone();
+                let handles = handles.clone();
+                tokio::spawn(async move {
+                    let (success, message) = ctx.resume_coverage(&handles, req.message.zone_id).await;
+                    if !success {
+                        ctx.warn(format!("resume_coverage: {message}"));
+                    }
+                    let _ = req.respond(ResumeCoverage::Response { success, message });
                 });
             }
         });

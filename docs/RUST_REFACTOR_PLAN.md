@@ -204,6 +204,10 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 驗證：兩個節點各對同一組假件（zone map 服務、latched 風險地圖、假 Waypoint action server 含 succeed / fail / reject / hang / 4.5 s 慢接受模式、確認 / 取消 / 狀態 / 通道 / 鎖服務）跑 48 個步驟（無風險、zigzag / spiral / 錯誤 pattern / 邊界環 / 30° / 對齊與重取樣風險 / unknown_as_obstacle / 壞參數 / 無 zone、參數型別與 startup-only、zone 執行成功 / 失敗 / 被拒 / 確認失敗 / 慢接受、導航中拒絕、序列成功 / 執行中拒絕 / hang 後 stop / 通道失敗 / 導航失敗 / 單 zone）：**每個 service 回應、每筆 marker（ns、id、顏色、每個點）與路徑、假件事件序列（goal、confirm、cancel_dispatch、route、lock）全部相同**。開關 `rust_coverage`（compose `RUST_COVERAGE`）。
 
+**2026-09-30 補記：Python coverage 整套移除，`mower_coverage` 成為唯一的 coverage 規劃器（使用者決定）。** 刪掉的是 `mower_mission` 的 `coverage_node.py`、`coverage/`（path_validator、safe_map_filter、connector_planner、types、cell_decomposition）、`path_generators/`（zigzag、spiral、speiral）與 `coverage_backend/`（facade 與 Python / PyO3 兩個後端），以及 `coverage_node` / `boustrophedon_coverage` 兩個 console script。`mower_coverage_core` 改成純 Rust library crate：沒有 PyO3、沒有 `python` feature、不再出 maturin wheel、也不再是 colcon 套件，只由 `mower_rs` 以 cargo path 依賴連結；原本的 pytest 改成 `src/mower_coverage_core/tests` 的 `cargo test`（含用 dff480b 的 Python 實作錄下輸出的 oracle `tests/data/python_reference_oracle.json`）。開關 `rust_coverage`（compose `RUST_COVERAGE`）一併拿掉：coverage 永遠跑 `mower_coverage`，`mission.launch.py` 起獨立 binary，`rust_daemon:=true` 時改成 `mower_rsd` 的 `coverage` 模組（模組表裡沒有開關，永遠在集合內），沒有可回滾的 Python 版。節點名 `boustrophedon_coverage`、服務、topic、訊息與參數都不變；`coverage_backend` / `allow_backend_fallback` 仍接受（啟動時讀），但規劃一律在 `mower_coverage_core`。上面「開關 `rust_coverage`」一句與 48 步比對保留為當時的紀錄。
+
+測試缺口（照實記錄）：刪掉的 `test_coverage_cancel_tracking.py` 是 Python 取消追蹤器的行為測試（直接 fallback 與遲到的 goal tracker 共用同一個 dispatch_id 的 cancel 請求、5 s 逾時後取消並重送、逾時請求的遲到回覆不能清掉後繼、終態 / shutdown 時清理一次且可重入、`terminal_confirmed` 的 fallback 回覆只清理一次、result callback 裝不上時仍啟動追蹤、`destroy_node` 先停追蹤再毀 ROS 實體）。`mower_coverage` 的同一套邏輯（`request_nav2_cancel_fallback`、`track_and_cancel_goal`、`finish_attempt`、shutdown drain）沒有對應的 `#[test]`：它和 r2r 型別綁在一起，只經過 7.12 那次 48 步比對驗證，而且 CI 不跑 `mower_rs` 的 `cargo test`。要補需先把追蹤狀態機抽成不依賴 r2r 的模組，再用 `tokio::time::pause()` 改寫這些測試；這次沒動節點邏輯，列為後續工作。**2026-09-30 補上（黑箱）：** `src/mower_rs/tools/coverage_cancel_check.py` 對真的 `mower_coverage` binary 跑四個情境（確認失敗時 2 s retry 只送一次、晚接受的 goal 共用 3 s 時的那次請求、5 s 逾時後才重送、action 結束後不再送、追蹤中 SIGINT 立即退出），CI 的 mower_rs tests job 會跑；刻意讓節點不共用 attempt 時它會失敗。節點程式碼沒有改。另外 `coverage_backend:=python` 現在只記一行警告後照樣用 Rust 規劃，執行期改這兩個舊參數的回覆改成「legacy startup-only parameter」。
+
 ### 7.13 `mower_agent` 執行紀錄（mower_agent 移植，使用者要求）
 
 `crates/mower_agent`：無 r2r，tokio + tokio-tungstenite（rustls）處理 relay / gate / loopback bridge 三種 WebSocket，ureq（rustls）在 blocking 執行緒做後端與 MediaMTX 的 HTTP（對應 Python 的 `run_in_executor`）。`relay.rs` 移植 `relay_protocol.py`（分塊、重組、pytest 向量）；`main.rs` 保留每一行 log、每個控制訊息、X-Mower-* 簽章與 `mower-agent/<api>` User-Agent、WHEP 路徑規則與 64 KiB 上限、header 過濾、1..60 s 重連退避與被拒後重註冊、30 s 註冊重試、TURN 更新排程、0600 原子寫入 device_key。
@@ -222,7 +226,7 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 
 ### 8.2 `mower_rsd`（把上面全部合成一個 process，2026-09-23）
 
-所有 crate 拆成 library + 三行 binary，新增 `mower_rsd --modules a,b,c`：同一個 `r2r::Context`（一個 DDS participant），每個模組仍各自 `Node::create` 保留 node 名與參數服務。參數走一份 `--params-file`（以 node 名分節，`mower_bringup/config/mower_rsd.yaml`），remap 走 rcl 的 `-r <node>:<from>:=<to>`。開關 `rust_daemon`（`robot.launch.py`，預設 false，模組集合由既有的 `rust_*` + `enable_gps` 推得）。細節、影子比對與 CPU 數字見 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md) 的「A5 執行紀錄」。
+所有 crate 拆成 library + 三行 binary，新增 `mower_rsd --modules a,b,c`：同一個 `r2r::Context`（一個 DDS participant），每個模組仍各自 `Node::create` 保留 node 名與參數服務。參數走一份 `--params-file`（以 node 名分節，`mower_bringup/config/mower_rsd.yaml`），remap 走 rcl 的 `-r <node>:<from>:=<to>`。開關 `rust_daemon`（`robot.launch.py`，預設 false，模組集合由既有的 `rust_*` + `enable_gps` 推得；2026-09-30 起另加沒有開關、永遠在內的 `coverage`，見 7.12 補記）。細節、影子比對與 CPU 數字見 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md) 的「A5 執行紀錄」。
 
 ## 7. Phase 1–2：搬運節點移植（依價值/風險排序）
 
@@ -251,7 +255,7 @@ r2r 的兩個細節：(1) `spin` 與 action server 共用 node 執行緒，goal 
 | 節點 | 理由 |
 |---|---|
 | ~~nav_action_server（2715 行）~~ | 原判斷「邏輯還在變，移植風險大於收益」；使用者要求後已移植為 `mower_nav`（7.8），真機切換待監督導航 |
-| ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、~~coverage_node（1898）~~、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）、coverage_node 已移植為 `mower_coverage`（7.12）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3） |
+| ~~path_record_node（2124 行）~~、~~map_manage（1470）~~、~~coverage_node（1898）~~、auto_coverage、docking | path_record 已移植為 `mower_record`（7.7）、battery_state_node 已移植為 `mower_battery`（7.9）、pid_autotune_node 已移植為 `mower_pid_autotune`（7.10）、map_manage 已移植為 `mower_map`（7.11）、coverage_node 已移植為 `mower_coverage`（7.12）；其餘為幾何/任務邏輯，閒置時 < 4%；coverage 的重運算已經在 `mower_coverage_core`（Rust PyO3）。2026-09-30：Python coverage 整套移除，`mower_coverage` 是唯一的 coverage 規劃器、沒有 `rust_coverage` 開關，`mower_coverage_core` 不再有 PyO3（見 7.12 補記） |
 | ~~mower_agent~~ | 已移植為 `mower_agent`（7.13） |
 | nav2、robot_localization、ros2_control、topic_tools | 已是 C++；只調參數（Phase 0.5、0.6） |
 

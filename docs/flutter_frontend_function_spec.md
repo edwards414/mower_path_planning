@@ -1,5 +1,7 @@
 # Flutter Frontend Function Spec
 
+> **2026-09-30 補記：** 下文的 `coverage_node`（`mower_mission`）已移除。同名節點 `boustrophedon_coverage` 現在由 `mower_rs` 的 `mower_coverage` 提供，service、topic 與參數都不變，前端呼叫方式不用改。
+
 本文件整理目前 mower path planning 專案已存在的後端功能，給 Flutter 前端設計頁面與資料流使用。內容以目前程式碼為準，主要範圍包含：
 
 - `mower_mission`: 區域記錄、地圖生成、coverage path 生成與執行
@@ -248,9 +250,13 @@ Flutter 顯示建議：
 | UI | Service / Action | Type | Request | 說明 |
 |---|---|---|---|---|
 | Execute Zone | `/zone_exec_path` | `mower_interface/srv/ZoneExecPath` | `zone_id: int32` | 執行指定 zone path |
+| Run Zone Sequence | `/run_zone_sequence` | `mower_interface/srv/ZoneSequence` | `zone_ids: int32[]`, `channel_proximity_m: float32`（0 用預設 1.5 m） | 依序執行多個 zone，zone 之間走錄好的通道（`/get_channel_route`）；2026-09-30 起在 app 白名單 |
+| Stop Zone Sequence | `/stop_zone_sequence` | `std_srvs/srv/Trigger` | 無 | 停止序列並取消目前那個 zone 的導航 |
 | Cancel Navigation | `/cencel_nav2` | `std_srvs/Trigger` | 無 | 取消 Nav2 任務 |
 | Check Nav Status | `/check_nav_status` | `std_srvs/Trigger` | 無 | 查詢 BasicNavigator 狀態 |
-| Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 由後端內部呼叫 |
+| Coverage Progress | `/coverage_progress_status` | `mower_interface/srv/GetCoverageProgress` | 無 | `progress`：目前（或最後一次，重啟後由檢查點還原）執行的進度快照，平常訂閱 latched topic `/coverage_progress` 即可，這個給重連後補查；`checkpoint`：磁碟上的檢查點，`checkpoint.checkpoint_available` 為 true 時可續割（`zone_id`、`completed_segments`/`total_segments`）。2026-09-30 加入 |
+| Resume Coverage | `/resume_coverage` | `mower_interface/srv/ResumeCoverage` | `zone_id: int32`（-1 = 檢查點上的 zone） | 從檢查點第一個未完成的段落續割（先導航到該段起點）；該 zone 的路徑重新生成過、或切段參數變了，會被拒絕。2026-09-30 加入 |
+| Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points`, `dispatch_id`, `zone_id` | 由後端內部呼叫 |
 | Nav Action | `/nav_action` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 舊版逐段 path action |
 
 `ZoneExecPath` request：
@@ -267,6 +273,9 @@ Flutter 顯示建議：
 # Goal
 nav_msgs/Path path
 geometry_msgs/Pose[] coverage_split_points
+string dispatch_id
+int32 zone_id -1
+int32 resume_segment_index 0
 ---
 # Result
 bool success
@@ -289,8 +298,8 @@ Execution 頁建議欄位：
 - Zone selector：從 `/get_zone_map_list_srv` 或 coverage result 建立。
 - Start button：呼叫 `/zone_exec_path`。
 - Cancel button：呼叫 `/cencel_nav2`。
-- Current segment：由 `/split_path` 更新。
-- Distance remaining / speed：若 adapter 能接 Nav2 feedback，顯示。
+- Progress bar / current segment / distance remaining：訂閱 `/coverage_progress`（`mower_interface/msg/CoverageProgress`，latched）。`overall_progress` 0–1 以各段長度加權；`status_text` 為 `navigating_to_start` / `running` / `canceling` / `canceled` / `succeeded` / `failed`；`mission_id` 換了就是新任務；`zone_id` 是正在割的 zone（通道為 -1）。取消與失敗會保留最後進度。`checkpoint_available` 為 true 時可顯示「繼續上次」按鈕，呼叫 `/resume_coverage`。欄位定義見 `docs/coverage_progress_tracking_spec.md`。
+- Current segment path：由 `/split_path` 更新。
 - Error panel：顯示 `/rosout` 中 `controller_server`、`planner_server`、`bt_navigator`、`behavior_server` 錯誤。
 
 ### 5.6 Manual
@@ -372,8 +381,12 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/get_zone_map_list_srv` | `mower_interface/ZoneMapList` | `map_manage` | 取得 ZoneMap[] | 使用 |
 | `/generate_coverage_path` | `std_srvs/Trigger` | `boustrophedon_coverage` | 生成 coverage path | 使用 |
 | `/zone_exec_path` | `mower_interface/ZoneExecPath` | `boustrophedon_coverage` | 執行 zone path | 使用 |
+| `/run_zone_sequence` | `mower_interface/ZoneSequence` | `boustrophedon_coverage` | 依序執行多個 zone（中間走通道） | 可用（2026-09-30 加入白名單） |
+| `/stop_zone_sequence` | `std_srvs/Trigger` | `boustrophedon_coverage` | 停止 zone 序列 | 可用（2026-09-30 加入白名單） |
 | `/cencel_nav2` | `std_srvs/Trigger` | `boustrophedon_coverage` | 取消導航 | 使用 |
 | `/check_nav_status` | `std_srvs/Trigger` | `boustrophedon_coverage` | 查詢導航狀態 | 使用 |
+| `/coverage_progress_status` | `mower_interface/GetCoverageProgress` | `nav_action_server` | 割草進度快照與檢查點 | 可用（2026-09-30 加入白名單） |
+| `/resume_coverage` | `mower_interface/ResumeCoverage` | `boustrophedon_coverage` | 從檢查點續割 | 可用（2026-09-30 加入白名單） |
 | `/risk_zone_save` | `std_srvs/Trigger` | 未註冊 | 函式存在但 service 不存在 | 不使用 |
 | `/risk_zone_load` | `std_srvs/Trigger` | 未註冊 | 函式存在但 service 不存在 | 不使用 |
 | `/record_path_status` | `std_srvs/SetBool` | 未註冊 | coverage_node 有 client / callback，但未建立 service | 不使用 |
@@ -401,6 +414,7 @@ Flutter 若要直接控制刀盤，建議新增專用安全 service，而不是�
 | `/coverage_invalid_segments` | `visualization_msgs/MarkerArray` | `coverage_node` | unsafe segment |
 | `/coverage_connectors` | `visualization_msgs/MarkerArray` | `coverage_node` | A* connector |
 | `/split_path` | `nav_msgs/Path` | `nav_action_server` | 目前執行中的切段 |
+| `/coverage_progress` | `mower_interface/CoverageProgress` | `nav_action_server` | 割草進度（latched；狀態變化即發，執行中約 2 Hz）；2026-09-30 加入白名單 |
 | `/coverage_split_points` | `visualization_msgs/Marker` | `nav_action_server` | 分段點 |
 | `/rosout` | `rcl_interfaces/Log` | ROS | 診斷與錯誤 |
 | `/app_joy_cmd` | `geometry_msgs/TwistStamped` | Flutter App | 未信任的手動命令入口 |

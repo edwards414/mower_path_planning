@@ -75,10 +75,16 @@ struct Instance {
 struct Module {
     /// What `--modules` and the `rust_*` launch switches call it.
     id: &'static str,
-    /// The launch argument that selects this module today.
+    /// The launch argument that selects this module today, or [`ALWAYS`]
+    /// for a module with no rclpy fallback that robot.launch.py always puts
+    /// in the set. Only printed by `--list-modules`.
     switch: &'static str,
     instances: &'static [Instance],
 }
+
+/// `Module::switch` of a module that has no launch switch: it always runs
+/// (coverage: the Python planner it replaced is gone).
+const ALWAYS: &str = "(always)";
 
 /// Every module `mower_rsd` can run. The order is the start order.
 const MODULES: &[Module] = &[
@@ -137,7 +143,7 @@ const MODULES: &[Module] = &[
     },
     Module {
         id: "coverage",
-        switch: "rust_coverage",
+        switch: ALWAYS,
         instances: &[Instance { node: "boustrophedon_coverage", run: |c, m| Box::pin(mower_coverage::run(c, m)) }],
     },
     Module {

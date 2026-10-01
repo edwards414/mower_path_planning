@@ -57,17 +57,17 @@ FROM base AS builder
 ARG ROS_DISTRO
 ARG WORKSPACE
 
-# Rust toolchain + maturin, required to build the PyO3 package mower_coverage_core
-# and the r2r nodes in src/mower_rs (bindgen needs libclang-dev, above).
-# Builder-only: the compiled wheel / binaries are installed into the workspace,
-# so the runtime stage never needs cargo. Placed before COPY so source edits
-# don't bust this layer.
+# Rust toolchain, required to build the r2r nodes in src/mower_rs (bindgen
+# needs libclang-dev, above), including the coverage planner, which links the
+# plain Rust library src/mower_coverage_core through a cargo path dependency.
+# Builder-only: the compiled binaries are installed into the workspace, so the
+# runtime stage never needs cargo. Placed before COPY so source edits don't
+# bust this layer.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --no-modify-path \
-    && pip3 install --no-cache-dir --break-system-packages maturin
+        | sh -s -- -y --default-toolchain stable --no-modify-path
 
 # rosdep only needs the package manifests. Copying them on their own (the
 # `manifests` stage below strips everything else) keeps this apt layer
@@ -94,6 +94,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 # natively in the driver-tests job, not in the image.
 # Do not use --symlink-install here, otherwise the runtime stage will
 # inherit broken links after copying only the install tree.
+# The build tree is a cache and setuptools never prunes build/lib, so a module
+# deleted from mower_mission would still be copied into install/: its Python
+# build dir is rebuilt from scratch (cheap). build/mower_coverage_core and
+# cargo-target/{release,wheels} are leftovers of the former PyO3/maturin build
+# (mower_rs builds in cargo-target/mower_rs); nothing reads them any more.
 ENV CCACHE_DIR=/root/.ccache \
     CARGO_TARGET_DIR=${WORKSPACE}/build/cargo-target \
     MAKEFLAGS=-j4
@@ -102,6 +107,9 @@ RUN --mount=type=cache,target=${WORKSPACE}/build \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && rm -rf ${WORKSPACE}/build/mower_mission/build \
+        ${WORKSPACE}/build/mower_coverage_core \
+        ${CARGO_TARGET_DIR}/release ${CARGO_TARGET_DIR}/wheels \
     && colcon build --parallel-workers 4 \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \

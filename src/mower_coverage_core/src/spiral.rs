@@ -2,10 +2,6 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::cmp::Reverse;
 
 use ndarray::{Array2, ArrayView2};
-#[cfg(feature = "python")]
-use numpy::PyReadonlyArray2;
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
 
 use crate::path_validator::validate_path_rs;
 use crate::types::SafeMap;
@@ -625,29 +621,4 @@ pub fn plan_spiral_coverage_rs(
 
     let invalid_segs = find_invalid_segs(&all_points, safe, res, origin_x, origin_y);
     (all_points, split_points, invalid_segs)
-}
-
-// ── PyO3 binding ──────────────────────────────────────────────────────────────
-
-#[cfg(feature = "python")]
-#[pyfunction]
-pub fn py_generate_coverage_spiral_path(
-    grid: PyReadonlyArray2<bool>,
-    strip_width_m: f64,
-    waypoint_spacing_m: f64,
-    res: f64,
-    h: usize,
-    w: usize,
-    origin_x: f64,
-    origin_y: f64,
-) -> (Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(usize, usize)>) {
-    plan_spiral_coverage_rs(
-        grid.as_array(), strip_width_m, waypoint_spacing_m, res, h, w, origin_x, origin_y,
-    )
-}
-
-#[cfg(feature = "python")]
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(py_generate_coverage_spiral_path, m)?)?;
-    Ok(())
 }

@@ -65,7 +65,7 @@ def generate_launch_description():
     )
     boustrophedon_coverage = ExecuteProcess(
         cmd=[
-            'ros2', 'run', 'mower_mission', 'coverage_node',
+            'ros2', 'run', 'mower_rs', 'mower_coverage',
             '--ros-args', '-p', ['use_sim_time:=', use_sim_time],
         ],
         output='screen'

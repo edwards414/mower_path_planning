@@ -14,11 +14,14 @@ pub struct ValidationResult {
     pub message: String,
 }
 
-/// Convert world (x, y) → grid (row, col).  Matches Python `int(...)` truncation.
+/// Convert world (x, y) → grid (row, col), rounding down. (The Python planner
+/// truncated towards zero, which put a point up to one cell left of or below
+/// the grid into row/column 0 and so passed it as safe; inside the grid the
+/// two agree.)
 #[inline]
 pub fn world_to_grid(x: f64, y: f64, sm: &SafeMap) -> (i64, i64) {
-    let col = ((x - sm.origin_x) / sm.resolution) as i64;
-    let row = ((y - sm.origin_y) / sm.resolution) as i64;
+    let col = ((x - sm.origin_x) / sm.resolution).floor() as i64;
+    let row = ((y - sm.origin_y) / sm.resolution).floor() as i64;
     (row, col)
 }
 

@@ -3,8 +3,10 @@ project(mower_rs NONE)
 
 find_package(ament_cmake REQUIRED)
 
-# Same toolchain lookup as mower_coverage_core: colcon subprocesses do not
-# always inherit the login-shell PATH.
+# Look for cargo in the usual rustup locations too: colcon subprocesses do not
+# always inherit the login-shell PATH. (mower_coverage_core, the coverage
+# planner library, is a plain cargo path dependency built by this same cargo
+# invocation, not a colcon package.)
 find_program(CARGO_EXECUTABLE cargo
   HINTS /usr/local/cargo/bin $ENV{CARGO_HOME}/bin $ENV{HOME}/.cargo/bin
 )

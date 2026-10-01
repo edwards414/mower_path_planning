@@ -118,6 +118,7 @@ pub fn params_to_coverage_settings(coverage: &Map<String, Value>, map: &Map<Stri
         "stripWidthM": get(coverage, "strip_width_m"),
         "waypointSpacingM": get(coverage, "waypoint_spacing_m"),
         "zigzagAngleDeg": get(coverage, "zigzag_angle_deg"),
+        "zigzagAutoAngle": get(coverage, "zigzag_auto_angle"),
         "inflateRadiusM": get(map, "inflate_radius_m"),
         "unknownAsObstacle": get(coverage, "unknown_as_obstacle"),
         "coveragePattern": get(coverage, "coverage_pattern"),
@@ -215,6 +216,7 @@ mod tests {
         assert_eq!(dto["coveragePattern"], json!("zigzag"));
         assert_eq!(dto["inflateRadiusM"], Value::Null);
         assert_eq!(dto["boundaryRing"], Value::Null);
+        assert_eq!(dto["zigzagAutoAngle"], Value::Null);
     }
 
     #[test]

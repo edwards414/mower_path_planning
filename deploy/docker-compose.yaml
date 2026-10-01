@@ -61,7 +61,6 @@ services:
       - rust_battery:=${RUST_BATTERY:-false}
       - rust_pid_autotune:=${RUST_PID_AUTOTUNE:-false}
       - rust_map:=${RUST_MAP:-false}
-      - rust_coverage:=${RUST_COVERAGE:-false}
       - rust_agent:=${RUST_AGENT:-false}
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}

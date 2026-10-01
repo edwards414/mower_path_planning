@@ -8,20 +8,17 @@
 ## 一句話現況
 
 **ROS 2 還在，沒有拿掉。** 計畫的 Phase A（減少程序數）已經在真機上量過並還原；
-Phase B（Rust 底盤驅動）和 Phase C（Rust EKF/navsat）程式寫完、容器裡測過，
-**從來沒在真機上跑過**。真正拿掉 ROS 是 Phase D–E，還沒開始。
+Phase B（Rust 底盤驅動）已在真機監督試車兩次（2026-09-28、09-29，見下文），
+Phase C（Rust EKF/navsat）程式寫完、容器裡測過，還沒上機。真正拿掉 ROS 是 Phase D–E，還沒開始。
 
 ## 分支與 PR
 
 | | |
 |---|---|
 | 工作目錄 | `~/work/mpp-port`（worktree，branch `feat/ros-free`） |
-| PR | [#20](https://github.com/edwards414/mower_path_planning/pull/20)，OPEN、mergeable、28 commits |
-| CI | **一次都沒跑過**。GitHub 回 `recent account payments have failed or your spending limit needs to be increased`，所有 job 直接 skip。要先處理帳務，否則沒有 CI 映像 |
-| main | 完全沒動 |
-
-`docs/ROS_FREE_PLAN.md` 只存在於 `feat/ros-free` 及其子分支。
-`~/Desktop/project/mower/mower_path_planning` 那個 checkout 在別的分支上，沒有這份計畫。
+| PR | [#20](https://github.com/edwards414/mower_path_planning/pull/20)，已合併進 main（`44c5a4b`） |
+| CI | 2026-09-30 起 repo 公開，GitHub-hosted runner 正常執行（含 mower_rs 單元測試與黑箱檢查）；先前帳務問題造成的 skip 已不存在 |
+| main | 已含 `feat/ros-free` 的全部內容（`rust_base`／`rust_localize`／`rust_daemon` 開關、`mower_rsd`、`docs/ROS_FREE_PLAN.md`） |
 
 ## 已完成
 
@@ -183,10 +180,9 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
   那段安靜**不算**停止：要等 `cmd_vel: publisher in the graph ... after activation`
   之後再 2 s（`publisher_settle_s`）才開始算 0.5 s 的靜默，所以閒置重生後大約 2.8 s
   才自己解鎖；一直送 0/0（搖桿放著）的話 0.5 s 後解鎖。
-- **B、C 一定要用分支的 `deploy/docker-compose.yaml`**，不能用 `switch.sh ... keep`：
-  機器上還原後的 compose 是 main 的，沒有 `rust_base`／`rust_localize`，
-  `RUST_BASE=true` 會被默默忽略，試車測到的其實是 ros2_control。開車前先
-  `docker exec` 看一下跑的是 `mower_base` 還是 `ros2_control_node`。
+- main 的 `deploy/docker-compose.yaml` 已帶 `RUST_BASE`／`RUST_LOCALIZE`／`RUST_DAEMON`
+  （合併前的舊 compose 沒有，`RUST_BASE=true` 會被默默忽略）；機器上的 compose 要是合併後的版本。
+  開車前仍先 `docker exec` 看一下跑的是 `mower_base` 還是 `ros2_control_node`。
 
 真機基準是 ros2_control 28 %、定位鏈 23 %，容器裡分別降到 6.5 % 和 4.4 %，
 真機能省多少還沒量。

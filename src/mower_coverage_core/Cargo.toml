@@ -3,23 +3,18 @@ name = "mower_coverage_core"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Coverage path planning core for autonomous lawn mower (PyO3 extension)"
+description = "Coverage path planning core for the autonomous lawn mower: safe-map filter, path validator, A* connector, zigzag / spiral generators and boustrophedon cell decomposition. Linked into the mower_rs coverage node."
+publish = false
 
 [lib]
 name = "mower_coverage_core"
-crate-type = ["cdylib", "rlib"]
-
-[features]
-default = ["python"]
-# The PyO3 module for the Python coverage backend; off when the crate is
-# linked into the mower_rs coverage node.
-python = ["dep:pyo3", "dep:numpy"]
+crate-type = ["rlib"]
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
-numpy = { version = "0.21", optional = true }
 ndarray = "0.15"
 ordered-float = "4"
 
 [dev-dependencies]
-approx = "0.5"
+# Only for reading tests/data/python_reference_oracle.json; float_roundtrip
+# parses every recorded float to the exact f64 the Python reference used.
+serde_json = { version = "1", features = ["float_roundtrip"] }

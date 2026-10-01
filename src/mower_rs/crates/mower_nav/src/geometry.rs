@@ -152,7 +152,9 @@ fn segment_heading(a: &PoseStamped, b: &PoseStamped) -> f64 {
 }
 
 /// Split a coverage path at the planner's split points, always preserving
-/// the final segment.
+/// the final segment. The coverage planner mirrors this, the turn split and
+/// the 0.15 m refusal in mower_coverage_core/src/nav_split.rs so it never
+/// sends a path this server refuses: keep the two in step.
 pub fn split_path_by_coverage_points(path: &Path, split_points: &[Pose], tolerance_m: f64) -> Vec<Path> {
     if path.poses.len() < 2 {
         return Vec::new();
