@@ -1,5 +1,6 @@
 """Launch tests for path_record_node ROS service integration."""
 
+import json
 import tempfile
 import time
 
@@ -25,7 +26,7 @@ from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from visualization_msgs.msg import MarkerArray
@@ -248,3 +249,36 @@ class TestPathRecordLaunch:
         )
         assert zone_info.success
         assert zone_info.zone_list.markers == []
+
+    def test_recording_drives_the_rear_light(self):
+        """Recording lights the rear light; cancelling turns it off."""
+        qos = QoSProfile(depth=8)
+        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos.reliability = QoSReliabilityPolicy.RELIABLE
+        seen = []
+        self.node.create_subscription(
+            String, '/mower_base/rear_light',
+            lambda m: seen.append(json.loads(m.data)), qos)
+
+        def wait_for(effect, timeout_sec=3.0):
+            deadline = time.monotonic() + timeout_sec
+            while time.monotonic() < deadline:
+                if any(m.get('effect') == effect for m in seen):
+                    return
+                rclpy.spin_once(self.node, timeout_sec=0.05)
+            raise AssertionError(f'no rear light {effect!r}, got {seen}')
+
+        assert _call_trigger(self.node, '/record_zone_start').success
+        wait_for('recording')
+        assert seen[-1] == {'effect': 'recording', 'source': 'path_record'}
+        # the keepalive is re-sent while recording (the driver drops it
+        # after 6 s without one)
+        count = len(seen)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and len(seen) == count:
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+        assert len(seen) > count and seen[-1]['effect'] == 'recording'
+
+        assert _call_trigger(self.node, '/record_cancel').success
+        wait_for('off')
+        assert seen[-1] == {'effect': 'off', 'source': 'path_record'}

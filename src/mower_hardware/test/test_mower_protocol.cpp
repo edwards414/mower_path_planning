@@ -188,6 +188,42 @@ TEST(Ws2812, CommandFrameLayout)
   EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
 }
 
+TEST(Ws2812, RearRecordingOverlayByte)
+{
+  // steady white base with the rear recording breath on top
+  auto f = build_ws2812_command(3, kLedAllOn, 110, 110, 110, 0, kLedOverlayRearRecording);
+  ASSERT_EQ(f.size(), kFrameOverhead + 8);
+  EXPECT_EQ(f[6], kLedAllOn);
+  EXPECT_EQ(f[12], kLedOverlayRearRecording);
+  EXPECT_EQ(f[13], 0);
+  EXPECT_EQ(crc16_ccitt_false(f.data() + 2, 4 + 8), static_cast<uint16_t>(f[14] | (f[15] << 8)));
+}
+
+TEST(RearLight, AnySourceKeepsItOnAndOffClearsOnlyItsOwn)
+{
+  constexpr int64_t kS = 1000000000;
+  RearLightSources r;
+  EXPECT_EQ(r.update("path_record", false, 0, 6 * kS), 0);  // idle "off"
+  EXPECT_EQ(r.update("path_record", true, 1 * kS, 6 * kS), 7 * kS);
+  // the bag recorder's routine "off" does not cut the zone recording
+  EXPECT_EQ(r.update("bag", false, 2 * kS, 6 * kS), 7 * kS);
+  EXPECT_EQ(r.update("bag", true, 3 * kS, 6 * kS), 9 * kS);
+  EXPECT_EQ(r.update("path_record", true, 4 * kS, 6 * kS), 10 * kS);
+  EXPECT_EQ(r.update("path_record", false, 5 * kS, 6 * kS), 9 * kS);  // bag still on
+  EXPECT_EQ(r.update("bag", false, 6 * kS, 6 * kS), 0);
+}
+
+TEST(RearLight, SilentSourceExpires)
+{
+  constexpr int64_t kS = 1000000000;
+  RearLightSources r;
+  EXPECT_EQ(r.update("", true, 1 * kS, 6 * kS), 7 * kS);  // no source key: old publishers
+  // a dead publisher never sends "off": its deadline passes and a later
+  // "off" from someone else leaves only that past deadline
+  const int64_t until = r.update("bag", false, 20 * kS, 6 * kS);
+  EXPECT_LT(until, 20 * kS);
+}
+
 TEST(Ws2812, DecodeStatus)
 {
   // mode=flow, r/g/b=10/20/30, period=1600, flags=1, seq=7

@@ -5,7 +5,7 @@ usage:
   mower_uart.py PORT monitor [SECONDS]
   mower_uart.py PORT wheel L R [SECONDS]        # permille -1000..1000
   mower_uart.py PORT lawer DUTY [SECONDS]       # permille 0..1000 (blade is single-direction)
-  mower_uart.py PORT led MODE [R G B PERIOD_MS] # mode 0..5
+  mower_uart.py PORT led MODE [R G B PERIOD_MS [OVERLAY]] # mode 0..6; OVERLAY 1 = rear recording breath
   mower_uart.py PORT pid KP KI [KD] [--save]    # both wheels, RAM only unless --save
   mower_uart.py PORT info                        # ask for the 0x87 firmware info frame
   mower_uart.py PORT servo PULSE_US [HOLD_MS] [SECONDS]  # 500..2500, 0 = release; HOLD_MS 0 = hold forever
@@ -169,8 +169,9 @@ def run(port, cmd, args):
         mode = int(args[0])
         r, g, b = (int(x) for x in args[1:4]) if len(args) >= 4 else (0, 0, 0)
         per = int(args[4]) if len(args) > 4 else 100
+        overlay = int(args[5]) if len(args) > 5 else 0
         duration = 1.0
-        tx = lambda s: build(0x03, s, struct.pack("<BBBBHBB", mode, r, g, b, per, 0, 0))
+        tx = lambda s: build(0x03, s, struct.pack("<BBBBHBB", mode, r, g, b, per, overlay, 0))
         period = 0.2
     elif cmd == "info":
         duration = 1.0

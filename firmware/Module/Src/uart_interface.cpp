@@ -50,6 +50,7 @@ typedef struct {
   uint8_t g;
   uint8_t b;
   uint16_t effect_period_ms;
+  uint8_t overlay;
   bool valid;
   uint8_t last_rx_seq;
   uint32_t last_update_ms;
@@ -278,6 +279,7 @@ void ws2812_set_command(const ws2812_command_payload_t *payload, uint8_t rx_seq)
                  ? (uint16_t)LED_EFFECTS_ORBIT_DEFAULT_PERIOD_MS
                  : payload->effect_period_ms)
           : ws2812_sanitize_period(payload->effect_period_ms);
+  g_ws2812_command.overlay = payload->overlay;
   g_ws2812_command.valid = true;
   g_ws2812_command.last_rx_seq = rx_seq;
   g_ws2812_command.last_update_ms = HAL_GetTick();
@@ -377,10 +379,15 @@ void update_ws2812_control(void) {
   command_snapshot.g = g_ws2812_command.g;
   command_snapshot.b = g_ws2812_command.b;
   command_snapshot.effect_period_ms = g_ws2812_command.effect_period_ms;
+  command_snapshot.overlay = g_ws2812_command.overlay;
   command_snapshot.valid = g_ws2812_command.valid;
   command_snapshot.last_rx_seq = g_ws2812_command.last_rx_seq;
   command_snapshot.last_update_ms = g_ws2812_command.last_update_ms;
   uart_exit_critical(primask);
+
+  const bool rear_recording =
+      command_snapshot.valid &&
+      ((command_snapshot.overlay & UART_WS2812_OVERLAY_REAR_RECORDING) != 0U);
 
   /* Power-on / shutdown light shows own the strips until they finish; a
    * UART command received meanwhile is applied as soon as they end. While
@@ -427,11 +434,14 @@ void update_ws2812_control(void) {
       g_ws2812_last_static_seq = command_snapshot.last_rx_seq;
       g_ws2812_static_applied = true;
     }
+    /* rear overlay rides on top of whichever base mode is running */
+    LedEffects_SetRearRecording(rear_recording);
     (void)LedEffects_Update();
   } else if (strips_locked) {
     /* boot / sleep shows own the strips; drop any effect so it cannot
      * fight them, it is re-created from the command when they end */
     LedEffects_Stop();
+    LedEffects_ResetRear();
   }
 
   ws2812_runtime_status_t status = {};
@@ -441,6 +451,9 @@ void update_ws2812_control(void) {
   status.b = command_snapshot.b;
   status.effect_period_ms = command_snapshot.effect_period_ms;
   status.flags = command_snapshot.valid ? MOTOR_STATUS_FLAG_COMMAND_VALID : 0U;
+  if (rear_recording) {
+    status.flags |= UART_WS2812_STATUS_FLAG_REAR_RECORDING;
+  }
   status.last_rx_seq = command_snapshot.last_rx_seq;
 
   primask = uart_enter_critical();

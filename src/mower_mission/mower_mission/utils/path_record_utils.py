@@ -93,3 +93,17 @@ def path_to_marker(path, ns='chennal_path', marker_id=0,
         marker.points.append(p)
 
     return marker
+
+
+def rear_light_update(recording, light_on, since_sent_s, period_s):
+    """Return the rear-light effect to publish on this tick, or None.
+
+    The recording overlay (mower_hardware -> STM32 0x03) drops after ~6 s
+    without a refresh, so while recording it is re-sent every period_s;
+    'off' goes out once, on the first tick after the recording ends.
+    """
+    if recording:
+        if not light_on or since_sent_s >= period_s:
+            return 'recording'
+        return None
+    return 'off' if light_on else None
