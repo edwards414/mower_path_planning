@@ -30,7 +30,8 @@ install -m 644 "$here/docker-compose.yaml" "$here/mediamtx.yml" /opt/mower/
 # The u-blox driver runs inside the main image now (config in
 # mower_bringup); the old `--profile gps` service kept its yaml here.
 rm -rf /opt/mower/gps
-install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" /opt/mower/host/
+install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" \
+  "$here/host/mower-lte.sh" "$here/host/mower-lte-dhcp.sh" /opt/mower/host/
 install -m 755 "$here/host/mower-pair" /opt/mower/host/
 ln -sf /opt/mower/host/mower-pair /usr/local/bin/mower-pair
 if [ ! -f /opt/mower/.env ]; then
@@ -46,6 +47,11 @@ if ! command -v qrencode >/dev/null 2>&1; then
 fi
 /opt/mower/host/mower-pair --state-dir "$state_dir" --owner "$user" --env /opt/mower/.env --no-qr | sed 's/^/   /'
 echo "   sudo mower-pair   # prints the pairing QR code for the app"
+
+echo "== lte (Quectel EC25 over QMI)"
+if ! command -v qmicli >/dev/null 2>&1 || ! command -v udhcpc >/dev/null 2>&1; then
+  apt-get install -y -qq libqmi-utils udhcpc >/dev/null 2>&1 || echo "   (libqmi-utils/udhcpc install failed; mower-lte.service will keep retrying)"
+fi
 
 echo "== camera (USB MJPG -> Rockchip MPP H.264 -> mediamtx)"
 # gstreamer1.0-rockchip1 (mpph264enc/mppjpegdec) ships with the vendor image;
@@ -72,7 +78,7 @@ for dev in stmcom imu_usb gps_rtk lte_at; do
 done
 
 echo "== systemd"
-for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-update-check.service mower-update-check.timer mower-link-status.service mower-camera.service; do
+for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-update-check.service mower-update-check.timer mower-link-status.service mower-camera.service mower-lte.service; do
   sed "s#/home/cat/.mower#$state_dir#g; s#/home/cat#$home#g; s#^User=cat#User=$user#" "$here/host/$unit" > "/etc/systemd/system/$unit"
 done
 # no RTC battery: ntpd is the only thing that sets the clock, so it must not
@@ -86,11 +92,13 @@ systemctl enable --now mower-update.timer >/dev/null
 systemctl enable --now mower-update-check.timer >/dev/null
 systemctl enable --now mower-link-status.service >/dev/null
 systemctl enable --now mower-camera.service >/dev/null
+systemctl enable --now mower-lte.service >/dev/null
 echo "   enabled mower.service (stack on boot), mower-host-request.path (app-triggered update/restart/poweroff),"
 echo "           mower-update.timer (hourly channel check, MOWER_AUTO_UPDATE=0 in .env disables),"
 echo "           mower-update-check.timer (registry check every 5 min -> /robot/info update.available),"
 echo "           mower-link-status.service (LTE/Wi-Fi signal -> link_status.json for /robot/telemetry),"
-echo "           mower-camera.service (front USB camera -> MPP H.264 -> mediamtx, CAMERA_* in .env)"
+echo "           mower-camera.service (front USB camera -> MPP H.264 -> mediamtx, CAMERA_* in .env),"
+echo "           mower-lte.service (EC25 QMI dial-up, wwan0 fallback uplink at metric 200, MOWER_LTE_* in .env)"
 
 echo "== docker"
 if ! docker info >/dev/null 2>&1; then

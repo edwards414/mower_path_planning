@@ -22,6 +22,11 @@ Three planes (see the package README):
 Lifecycle: autostart on launch, plus /mower_recorder/{start,stop,snapshot}
 services. Recorders are stopped with SIGINT so the mcap is finalized/indexed.
 A fault (Bool on fault_topic) flushes the snapshot buffer of heavy topics.
+
+Profiles (record_profile.py): the always-on ``record_topics.yaml`` keeps its
+original single recorder. ``data_collection.yaml`` (launch/data_collection.
+launch.py) adds a second, uncompressed camera recorder, MCAP chunk compression
+for telemetry, the spec 1.6 run metadata and a copy of the calibration.
 """
 import datetime
 import json
@@ -41,8 +46,10 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-FULL_RECORDER_NODE = 'mower_full_recorder'
-SNAPSHOT_RECORDER_NODE = 'mower_snapshot_recorder'
+from mower_recorder import record_profile
+
+FULL_RECORDER_NODE = record_profile.FULL_RECORDER_NODE
+SNAPSHOT_RECORDER_NODE = record_profile.SNAPSHOT_RECORDER_NODE
 
 
 def _latched():
@@ -69,6 +76,14 @@ class RecorderManager(Node):
         # red breathing rear light while recording (mower_hardware driver ->
         # STM32 0x03 overlay); '' disables
         self.declare_parameter('rear_light_topic', '/mower_base/rear_light')
+        # Profile runs only (data_collection.launch.py); '' = not used.
+        self.declare_parameter('session_file', '')        # operator YAML (1.6)
+        self.declare_parameter('run_info', '')            # YAML mapping overrides
+        self.declare_parameter('camera_params', '')       # JSON from the launch
+        self.declare_parameter('intrinsics_file', '')
+        self.declare_parameter('intrinsics_placeholder', False)
+        self.declare_parameter('extrinsics_file', '')
+        self.declare_parameter('extrinsics_derived', '')  # JSON from the launch
 
         self._robot_id = self.get_parameter('robot_id').value
         self._output_root = os.path.expanduser(
@@ -79,8 +94,7 @@ class RecorderManager(Node):
             n for n in self.get_parameter('params_dump_nodes').value if n]
         self._cfg = self._load_config(self.get_parameter('config_file').value)
 
-        self._full_proc = None
-        self._snap_proc = None
+        self._procs = {}              # recorder name -> Popen (see record_profile)
         self._run_id = None
         self._run_dir = None
         self._last_fix = None
@@ -118,24 +132,16 @@ class RecorderManager(Node):
 
     # ── config ───────────────────────────────────────────────────────────────
     def _load_config(self, path):
-        cfg = {
-            'topics': [],
-            'snapshot_topics': [],
-            'compression': True,
-            'max_bag_size_mb': 512,
-            'max_bag_duration_s': 3600,
-            'enable_snapshot': True,
-            'snapshot_max_cache_mb': 256,
-        }
-        if path and os.path.isfile(path):
-            try:
-                with open(path) as f:
-                    cfg.update(yaml.safe_load(f) or {})
-            except Exception as e:
-                self.get_logger().error(f'load config failed: {e}')
-        else:
-            self.get_logger().warn(f'config_file not found: {path!r}')
-        return cfg
+        return record_profile.load_config(
+            path, log_warn=self.get_logger().warn,
+            log_error=self.get_logger().error)
+
+    def _proc_alive(self, name):
+        proc = self._procs.get(name)
+        return bool(proc and proc.poll() is None)
+
+    def _recording(self):
+        return any(self._proc_alive(n) for n in record_profile.DATA_RECORDERS)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def _autostart_once(self):
@@ -145,7 +151,7 @@ class RecorderManager(Node):
             f'autostart: {msg}')
 
     def _start_recording(self):
-        if self._full_proc and self._full_proc.poll() is None:
+        if self._recording():
             return False, '已在錄製中'
         if not self._cfg['topics']:
             return False, 'record_topics.yaml 沒有指定 topics'
@@ -157,52 +163,33 @@ class RecorderManager(Node):
         self._start_time = datetime.datetime.now()
         self._write_metadata()
 
-        bag_dir = os.path.join(self._run_dir, 'bag')
-        cmd = ['ros2', 'bag', 'record', '-s', 'mcap', '-o', bag_dir,
-               '--node-name', FULL_RECORDER_NODE]
-        if self._cfg.get('compression', True):
-            cmd += ['--compression-mode', 'message',
-                    '--compression-format', 'zstd']
-        cmd += ['--max-bag-size',
-                str(int(self._cfg['max_bag_size_mb']) * 1024 * 1024)]
-        cmd += ['--max-bag-duration', str(int(self._cfg['max_bag_duration_s']))]
-        if self._qos_path and os.path.isfile(self._qos_path):
-            cmd += ['--qos-profile-overrides-path', self._qos_path]
-        cmd += list(self._cfg['topics'])  # positional topics must come last
-        self._full_proc = subprocess.Popen(cmd)
-        self.get_logger().info(
-            f'full record -> {bag_dir} ({len(self._cfg["topics"])} topics)')
-
-        if self._cfg.get('enable_snapshot', True) and self._cfg.get(
-                'snapshot_topics'):
-            snap_dir = os.path.join(self._run_dir, 'snapshots')
-            scmd = ['ros2', 'bag', 'record', '-s', 'mcap', '-o', snap_dir,
-                    '--node-name', SNAPSHOT_RECORDER_NODE, '--snapshot-mode',
-                    '--max-cache-size',
-                    str(int(self._cfg['snapshot_max_cache_mb']) * 1024 * 1024)]
-            if self._qos_path and os.path.isfile(self._qos_path):
-                scmd += ['--qos-profile-overrides-path', self._qos_path]
-            scmd += list(self._cfg['snapshot_topics'])  # positional topics last
-            self._snap_proc = subprocess.Popen(scmd)
+        # full (bag/), [camera (camera/)], [snapshot (snapshots/)]; the command
+        # lines of the always-on profile are unchanged (test_record_profile.py).
+        for spec in record_profile.recorder_specs(
+                self._cfg, self._run_dir, self._qos_path):
+            self._procs[spec['name']] = subprocess.Popen(spec['cmd'])
             self.get_logger().info(
-                f'snapshot buffer -> {snap_dir} '
-                f'({len(self._cfg["snapshot_topics"])} topics)')
+                f'{spec["name"]} record -> {spec["out_dir"]} '
+                f'({len(spec["topics"])} topics)')
 
         self._publish_status()
         return True, f'開始錄製 run={self._run_id}'
 
     def _stop_recording(self):
+        # Signal every recorder first so all bags end at the same moment,
+        # then wait for each to finalize + index its mcap.
+        running = [(n, p) for n, p in self._procs.items()
+                   if p and p.poll() is None]
+        for _name, proc in running:
+            proc.send_signal(signal.SIGINT)  # finalize + index the mcap
         stopped = []
-        for name, proc in (('full', self._full_proc), ('snapshot', self._snap_proc)):
-            if proc and proc.poll() is None:
-                proc.send_signal(signal.SIGINT)  # finalize + index the mcap
-                try:
-                    proc.wait(timeout=20)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                stopped.append(name)
-        self._full_proc = None
-        self._snap_proc = None
+        for name, proc in running:
+            try:
+                proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            stopped.append(name)
+        self._procs = {}
         self._start_time = None
         self._publish_status()
         if stopped:
@@ -210,11 +197,13 @@ class RecorderManager(Node):
         return False, '目前沒有在錄製'
 
     def _publish_status(self):
-        recording = bool(self._full_proc and self._full_proc.poll() is None)
+        recording = self._recording()
         elapsed, bag_bytes = 0.0, 0
         if recording and self._start_time is not None:
             elapsed = (datetime.datetime.now() - self._start_time).total_seconds()
-            bag_bytes = self._dir_size(os.path.join(self._run_dir, 'bag'))
+            bag_bytes = sum(self._dir_size(os.path.join(self._run_dir, d))
+                            for d in ('bag', 'camera'))
+        cam = self._cfg.get('camera_recorder') or {}
         st = {
             'recording': recording,
             'run_id': self._run_id if recording else None,
@@ -222,7 +211,9 @@ class RecorderManager(Node):
                            if recording and self._start_time else None),
             'elapsed_s': round(elapsed, 1),
             'bag_bytes': bag_bytes,
-            'num_topics': len(self._cfg.get('topics', [])),
+            'num_topics': len(self._cfg.get('topics', [])) + (
+                len(cam.get('topics') or []) if cam.get('enabled') else 0),
+            'profile': self._cfg.get('profile') or 'default',
         }
         m = String()
         m.data = json.dumps(st, ensure_ascii=False)
@@ -255,6 +246,9 @@ class RecorderManager(Node):
             'recorded_topics': list(self._cfg['topics']),
             'snapshot_topics': list(self._cfg.get('snapshot_topics', [])),
         }
+        profile = self._cfg.get('profile')
+        if profile:  # data_collection: spec 1.6 fields + calib/ copy
+            meta = self._profile_metadata(meta, str(profile))
         path = os.path.join(self._run_dir, 'run_metadata.yaml')
         try:
             with open(path, 'w') as f:
@@ -263,6 +257,42 @@ class RecorderManager(Node):
         except Exception as e:
             self.get_logger().error(f'write metadata failed: {e}')
         self._dump_params()
+
+    def _profile_metadata(self, meta, profile):
+        """Spec 1.6 fields; problems are logged, never block the recording."""
+        log = self.get_logger()
+
+        def _param(name):
+            return self.get_parameter(name).value
+
+        def _safe(what, fn, default):
+            try:
+                return fn()
+            except Exception as e:  # noqa: BLE001
+                log.error(f'{what}: {e}')
+                return default
+
+        session = _safe('session_file', lambda: record_profile.load_yaml_file(
+            os.path.expanduser(_param('session_file'))), {})
+        run_info = _safe('run_info', lambda: record_profile.parse_mapping(
+            _param('run_info'), 'run_info'), {})
+        camera = _safe('camera_params', lambda: record_profile.json_param(
+            _param('camera_params'), 'camera_params'), {})
+        derived = _safe('extrinsics_derived', lambda: record_profile.json_param(
+            _param('extrinsics_derived'), 'extrinsics_derived'), {})
+        calib = _safe('calib copy', lambda: record_profile.copy_calibration(
+            self._run_dir, os.path.expanduser(_param('intrinsics_file')),
+            os.path.expanduser(_param('extrinsics_file')),
+            derived=derived.get('block'),
+            intrinsics_placeholder=bool(_param('intrinsics_placeholder'))), {})
+        for problem in calib.get('problems', []):
+            log.warn(f'calib: {problem}')
+        cam_rec = self._cfg.get('camera_recorder') or {}
+        return record_profile.build_run_metadata(
+            meta, profile, session=session, run_info=run_info,
+            camera_params=camera, extrinsics=derived.get('summary'),
+            calibration=calib,
+            camera_topics=cam_rec.get('topics') if cam_rec.get('enabled') else None)
 
     def _git_info(self):
         if not self._git_dir:
@@ -301,7 +331,7 @@ class RecorderManager(Node):
             self._trigger_snapshot()
 
     def _trigger_snapshot(self):
-        if not (self._snap_proc and self._snap_proc.poll() is None):
+        if not self._proc_alive('snapshot'):
             self.get_logger().warn('no snapshot recorder running')
             return False
         try:

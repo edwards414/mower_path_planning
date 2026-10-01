@@ -30,6 +30,12 @@ Upload runs to R2 (S3 API via boto3) only when a good network is up (a WiFi
 interface has an IPv4, or an optional dock Bool topic is true). 4G runs stay
 queued on disk and go up when the robot is back on WiFi / docked.
 
+Upload contract (run_manifest.py, spec 2.1): all files first, then
+``_manifest.json`` (key/size/sha256 + topic counts) as the completion marker;
+an interrupted upload resumes from ``<run>/.upload_state.json`` on the next
+tick. A run whose bag has no metadata.yaml (recorder not finalized) is not
+uploaded; its reason shows up as ``upload_error`` in /mower_recorder/bags.
+
 R2 credentials come from env vars (optionally loaded from a gitignored file):
   R2_ACCOUNT_ID  R2_BUCKET  R2_ACCESS_KEY_ID  R2_SECRET_ACCESS_KEY  R2_PREFIX
 """
@@ -49,7 +55,9 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 from std_msgs.msg import Bool, String
 
-UPLOADED_MARKER = '.uploaded'
+from mower_recorder import run_manifest
+
+UPLOADED_MARKER = run_manifest.UPLOADED_MARKER
 
 
 def _latched(depth=1):
@@ -82,6 +90,7 @@ class BagStore(Node):
         self._recording_run = None    # run_id currently being written (do not touch)
         self._docked = False
         self._uploading = set()       # run_ids mid-upload
+        self._upload_errors = {}      # run_id -> last reason (retried next tick)
         self._lock = threading.Lock()
 
         os.makedirs(self._root, exist_ok=True)
@@ -183,6 +192,8 @@ class BagStore(Node):
                 'uploaded': os.path.isfile(os.path.join(run_dir, UPLOADED_MARKER)),
                 'uploading': name in self._uploading,
                 'recording': name == self._recording_run,
+                'profile': meta.get('profile') or 'default',
+                'upload_error': self._upload_errors.get(name),
             })
         return runs
 
@@ -246,13 +257,17 @@ class BagStore(Node):
         run_dir = self._safe_run_dir(run_id)
         if not run_dir:
             return False, f'找不到 run: {run_id}'
-        uploaded = os.path.isfile(os.path.join(run_dir, UPLOADED_MARKER))
+        # .upload_state.json = a partial upload may have left objects on R2.
+        on_r2 = any(os.path.isfile(os.path.join(run_dir, f)) for f in (
+            UPLOADED_MARKER, run_manifest.UPLOAD_STATE))
+        base_key = self._base_key(run_id, run_dir)  # before the dir is gone
         try:
             shutil.rmtree(run_dir)
         except Exception as e:
             return False, f'刪除本機失敗: {e}'
-        if uploaded:
-            self._delete_r2(run_id)
+        if on_r2:
+            self._delete_r2(base_key)
+        self._upload_errors.pop(run_id, None)
         self._publish_bags()
         return True, f'已刪除 {run_id}'
 
@@ -296,39 +311,46 @@ class BagStore(Node):
             try:
                 self._publish_bags()
                 self._upload_run(client, rid)
+                self._upload_errors.pop(rid, None)
+            except run_manifest.RunNotReady as e:
+                if self._upload_errors.get(rid) != str(e):
+                    self.get_logger().warn(f'not uploading {rid}: {e}')
+                self._upload_errors[rid] = str(e)
+            except Exception as e:  # noqa: BLE001 — network etc.: retry next tick
+                self.get_logger().error(
+                    f'upload {rid} interrupted ({type(e).__name__}: {e}); '
+                    'will resume on the next tick')
+                self._upload_errors[rid] = f'{type(e).__name__}: {e}'
             finally:
                 self._uploading.discard(rid)
             self._publish_bags()
 
+    def _base_key(self, run_id, run_dir=None):
+        meta = self._read_meta(run_dir or os.path.join(self._root, run_id))
+        return run_manifest.run_key(
+            self._r2['prefix'], meta.get('robot_id') or self._robot_id, run_id)
+
     def _upload_run(self, client, run_id):
         run_dir = os.path.join(self._root, run_id)
-        base_key = f'{self._r2["prefix"]}/{self._robot_id}/{run_id}'
-        n = 0
-        for dirpath, _dirs, files in os.walk(run_dir):
-            for f in files:
-                if f == UPLOADED_MARKER:
-                    continue
-                local = os.path.join(dirpath, f)
-                rel = os.path.relpath(local, run_dir)
-                key = f'{base_key}/{rel}'
-                client.upload_file(local, self._r2['bucket'], key)
-                n += 1
-        with open(os.path.join(run_dir, UPLOADED_MARKER), 'w') as fh:
-            fh.write(json.dumps({'r2_prefix': base_key, 'files': n}))
-        self.get_logger().info(f'uploaded {run_id} -> r2://{self._r2["bucket"]}/'
-                               f'{base_key} ({n} files)')
+        base_key = self._base_key(run_id, run_dir)
+        meta = self._read_meta(run_dir)
+        res = run_manifest.upload_run(
+            client, self._r2['bucket'], base_key, run_dir, run_id,
+            meta.get('robot_id') or self._robot_id,
+            log=self.get_logger().debug)
+        self.get_logger().info(
+            f'uploaded {run_id} -> r2://{self._r2["bucket"]}/{base_key} '
+            f'({res["files"]} files, {res["uploaded"]} new, '
+            f'{res["skipped"]} resumed) + {run_manifest.MANIFEST_NAME}')
 
-    def _delete_r2(self, run_id):
+    def _delete_r2(self, base_key):
         client = self._r2_client()
         if client is None:
             return
-        base_key = f'{self._r2["prefix"]}/{self._robot_id}/{run_id}'
         try:
-            resp = client.list_objects_v2(
-                Bucket=self._r2['bucket'], Prefix=base_key + '/')
-            for obj in resp.get('Contents', []):
-                client.delete_object(Bucket=self._r2['bucket'], Key=obj['Key'])
-            self.get_logger().info(f'deleted r2 {base_key}')
+            n = run_manifest.delete_run_objects(
+                client, self._r2['bucket'], base_key)  # manifest first
+            self.get_logger().info(f'deleted r2 {base_key} ({n} objects)')
         except Exception as e:
             self.get_logger().error(f'delete r2 failed: {e}')
 

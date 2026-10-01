@@ -1,0 +1,16 @@
+# Dials the Quectel EC25 (QMI) and keeps wwan0 up as a fallback uplink at
+# route metric 200; the app relay (mower_agent) and Tailscale then work over
+# 4G when Ethernet / Wi-Fi are gone. APN and metric come from /opt/mower/.env.
+[Unit]
+Description=Mower LTE uplink (Quectel EC25 via QMI)
+After=network.target
+Wants=network.target
+
+[Service]
+EnvironmentFile=-/opt/mower/.env
+ExecStart=/opt/mower/host/mower-lte.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

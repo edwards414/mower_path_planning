@@ -1,0 +1,69 @@
+# Data collection (mower_recorder data_collection profile): front camera into
+# ROS + MCAP recording + R2 upload with _manifest.json (GrassVision spec 1/2).
+#
+# A separate compose *project*, so mower.service / mower-update.sh
+# (`docker compose up -d --remove-orphans` on docker-compose.yaml) never touch
+# it. Runs next to the normal stack (lawan_node, record:=false, GPS=true for
+# /fix and /gps/status); same image, same DDS domain. Normally driven by
+# host/mower-data-collection.sh; procedure in docs/資料收集錄製程序.md.
+#
+#   sudo systemctl stop mower-camera.service     # it holds /dev/video0
+#   docker compose -f /opt/mower/docker-compose.data-collection.yaml up -d
+#   ... /mower_recorder/start | stop (service calls) ...
+#   docker compose -f /opt/mower/docker-compose.data-collection.yaml down
+#   sudo systemctl start mower-camera.service
+#
+# Needs an image built from a commit that contains
+# src/mower_recorder/launch/data_collection.launch.py (gscam and the GStreamer
+# plugins come in through mower_recorder/package.xml).
+#
+# Robot-local files under MOWER_STATE_DIR (host ~/.mower = /home/mower/.mower):
+#   calib/camera_front.yaml            camera_info_manager intrinsics
+#   calib/extrinsics.yaml              measured extrinsics (see config template)
+#   data_collection_session.yaml       grass height, weather, camera model ...
+#   r2.env                             R2_* credentials (chmod 600, never in git)
+name: mower-data-collection
+
+services:
+  data_collection:
+    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    pull_policy: missing
+    restart: "no"
+    # `ros2 launch` shuts its nodes down only on SIGINT; on docker's default
+    # SIGTERM it dies at once and the recorders are killed before the mcap is
+    # finalized (no metadata.yaml, telemetry chunk lost; P-100). Stopping with
+    # /mower_recorder/stop first is still the rule (the helper does it).
+    stop_signal: SIGINT
+    stop_grace_period: 60s
+    command:
+      - ros2
+      - launch
+      - mower_recorder
+      - data_collection.launch.py
+      - robot_id:=${MOWER_ROBOT_ID:-}
+      - output_root:=/home/mower/.mower/bags
+      - calib_dir:=/home/mower/.mower/calib
+      - session_file:=/home/mower/.mower/data_collection_session.yaml
+      - r2_env_file:=/home/mower/.mower/r2.env
+      - upload_policy:=${DATA_COLLECTION_UPLOAD_POLICY:-wifi_or_dock}
+      - start_camera:=${DATA_COLLECTION_CAMERA:-true}
+      - camera_device:=${CAMERA_DEVICE:-/dev/video0}
+      - camera_size:=${CAMERA_SIZE:-1280x720}
+      - camera_fps:=${CAMERA_FPS:-25}
+      - record_fps:=${CAMERA_RECORD_FPS:-10}
+      - autostart:=false
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
+      - MOWER_STATE_DIR=/home/mower/.mower
+      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
+      # Never flash the STM32 from this container (no /dev/stmcom anyway).
+      - MOWER_FIRMWARE_SYNC=0
+    network_mode: host
+    ipc: host
+    pid: host
+    devices:
+      - ${CAMERA_DEVICE:-/dev/video0}:${CAMERA_DEVICE:-/dev/video0}
+    group_add:
+      - video
+    volumes:
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower

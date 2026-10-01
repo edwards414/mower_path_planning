@@ -89,5 +89,40 @@ ros2 topic pub -1 /mower_recorder/fault std_msgs/msg/Bool "{data: true}"
   ignores that, the snapshot service path (`/mower_snapshot_recorder/snapshot`)
   changes — adjust `SNAPSHOT_RECORDER_NODE` in `recorder_manager_node.py`.
 - Do not add camera/point-cloud topics to the always-on list — record video via
-  the WebRTC/MediaMTX pipeline and correlate by timestamp.
+  the WebRTC/MediaMTX pipeline and correlate by timestamp. For camera data use
+  the `data_collection` profile below instead.
 - Write to eMMC/SSD, not microSD.
+
+## data_collection profile (camera + localization for GrassVision)
+
+A second, opt-in profile for offline mapping data (GrassVision spec
+`doc/Robot_Recording_R2_Pipeline_Spec.md` §1–2). The always-on profile above
+is unchanged (the app replays it).
+
+```bash
+ros2 launch mower_recorder data_collection.launch.py \
+    robot_id:=mower-03 output_root:=~/.mower/bags calib_dir:=~/.mower/calib
+ros2 service call /mower_recorder/start std_srvs/srv/Trigger {}
+ros2 service call /mower_recorder/stop  std_srvs/srv/Trigger {}   # finalizes both mcaps
+```
+
+| | |
+| --- | --- |
+| camera | gscam passes the USB camera's MJPEG through as `/camera/front/image_raw/compressed` (no re-encode), 10 Hz via `videorate drop-only` (keeps capture stamps), `camera_info` from `calib/camera_front.yaml`, frame `camera_front_optical_frame` (`mower_recorder/camera_launch.py`) |
+| TF | `base_link → camera_front_link → camera_front_optical_frame` static TF computed from measured extrinsics (`config/camera_front_extrinsics.yaml` template, `camera_extrinsics.py`) |
+| `bag/` | telemetry incl. `/gps/status` (mower_gps: carrier solution, satellites) and the three EKF outputs, MCAP `zstd_fast` chunk compression (no per-message zstd) |
+| `camera/` | image + camera_info + `/tf_static`, uncompressed, 256 MB splits |
+| metadata | spec 1.6 fields in `run_metadata.yaml` (`config/data_collection_session.yaml` + launch values), `calib/` copied into the run |
+| upload | `bag_store` uploads every file, then `_manifest.json` (key/size/sha256 + topic counts) last; interrupted uploads resume (`run_manifest.py`) |
+| check | `mower-check-run <run_dir>` (pure Python, also runs off-robot) |
+
+`mower-bag upload --all` / `mower-bag verify <run_id>` do the same upload and a
+remote check from the command line. Deployment: `deploy/docker-compose.data-collection.yaml`
++ `deploy/host/mower-data-collection.sh`; field procedure (Chinese):
+`docs/資料收集錄製程序.md`.
+
+Tests (no ROS needed):
+
+```bash
+python -m pytest src/mower_recorder/test -q   # needs pytest pyyaml mcap mcap-ros2-support zstandard moto boto3 pillow
+```

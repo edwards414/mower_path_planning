@@ -18,6 +18,16 @@
   <exec_depend>rosbag2_interfaces</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-boto3</exec_depend>
+  <!-- data_collection profile (launch/data_collection.launch.py, P-097):
+       gscam 2.0.2 (Jazzy binary) does not pull the GStreamer plugins it needs
+       (v4l2src = plugins-good, videorate = plugins-base). -->
+  <exec_depend>gscam</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>mower_description</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
