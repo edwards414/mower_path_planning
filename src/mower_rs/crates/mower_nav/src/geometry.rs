@@ -151,6 +151,43 @@ fn segment_heading(a: &PoseStamped, b: &PoseStamped) -> f64 {
     (b.pose.position.y - a.pose.position.y).atan2(b.pose.position.x - a.pose.position.x)
 }
 
+/// Insert poses so that consecutive poses are at most `max_step_m` apart
+/// (inserted poses face along their stretch; the given poses are kept).
+///
+/// Nav2's controller trims the plan to the poses near the robot inside its
+/// local costmap. The planner's lane-to-lane connectors arrive as 2-3 poses
+/// a metre or more apart, and one that leads back past the mower (a long
+/// lane joined to a shorter one) was trimmed to nothing: "Resulting plan has
+/// 0 poses in it" and the mission failed. Lanes, at ~0.2 m spacing, never did.
+pub fn densify_path(path: &Path, max_step_m: f64) -> Path {
+    if !(max_step_m > 0.0) || path.poses.len() < 2 {
+        return path.clone();
+    }
+    let mut out = new_path_like(path);
+    out.poses.push(path.poses[0].clone());
+    for w in path.poses.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        let steps = (pose_distance(a, b) / max_step_m).ceil() as usize;
+        if steps > 1 {
+            let yaw = segment_heading(a, b);
+            for k in 1..steps {
+                let t = k as f64 / steps as f64;
+                let mut p = b.clone();
+                p.pose.position.x = a.pose.position.x + (b.pose.position.x - a.pose.position.x) * t;
+                p.pose.position.y = a.pose.position.y + (b.pose.position.y - a.pose.position.y) * t;
+                p.pose.position.z = a.pose.position.z + (b.pose.position.z - a.pose.position.z) * t;
+                p.pose.orientation.x = 0.0;
+                p.pose.orientation.y = 0.0;
+                p.pose.orientation.z = (yaw / 2.0).sin();
+                p.pose.orientation.w = (yaw / 2.0).cos();
+                out.poses.push(p);
+            }
+        }
+        out.poses.push(b.clone());
+    }
+    out
+}
+
 /// Split a coverage path at the planner's split points, always preserving
 /// the final segment. The coverage planner mirrors this, the turn split and
 /// the 0.15 m refusal in mower_coverage_core/src/nav_split.rs so it never
@@ -253,6 +290,26 @@ pub fn split_paths_by_max_distance(paths: &[Path], max_distance_m: f64) -> Vec<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn densify_fills_sparse_connectors_and_keeps_the_given_poses() {
+        let sparse = path(&[(6.519, 11.284), (7.171, 8.871)]);
+        let dense = densify_path(&sparse, 0.1);
+        let n = dense.poses.len();
+        assert_eq!(n, 26, "2.50 m at <= 0.1 m: 25 steps, 24 inserted poses + the two ends");
+        assert_eq!(dense.poses[0].pose.position, sparse.poses[0].pose.position);
+        assert_eq!(dense.poses[n - 1].pose.position, sparse.poses[1].pose.position);
+        for w in dense.poses.windows(2) {
+            assert!(pose_distance(&w[0], &w[1]) <= 0.1 + 1e-9);
+        }
+        let mid = &dense.poses[n / 2].pose.orientation;
+        let yaw = 2.0 * mid.z.atan2(mid.w);
+        assert!((yaw - (8.871f64 - 11.284).atan2(7.171 - 6.519)).abs() < 1e-9, "inserted poses face along the stretch");
+        assert!((path_distance(&dense) - path_distance(&sparse)).abs() < 1e-9, "same path, more poses");
+        // already dense enough: unchanged
+        let lane = path(&[(0.0, 0.0), (0.0, 0.05), (0.0, 0.1)]);
+        assert_eq!(densify_path(&lane, 0.1).poses.len(), 3);
+    }
 
     fn path(points: &[(f64, f64)]) -> Path {
         let mut p = Path::default();
