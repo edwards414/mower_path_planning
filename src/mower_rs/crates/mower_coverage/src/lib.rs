@@ -167,6 +167,25 @@ fn path_from_points(points: &[(f64, f64)], map_header: &Header) -> Path {
     path
 }
 
+/// How long a zone-sequence leg waits for its result before it gives the
+/// goal up and cancels it: a 10 min floor (once the whole limit, which
+/// cancelled every zone that takes longer, e.g. the last lane of an
+/// 8 x 12 m zone) plus the path at 0.05 m/s, a fifth of the controller's
+/// 0.26 m/s. Single-zone execution (/zone_exec_path) waits without a limit.
+fn sequence_leg_timeout_s(path: &Path) -> f64 {
+    const FLOOR_S: f64 = 600.0;
+    const SLOWEST_M_PER_S: f64 = 0.05;
+    let length_m: f64 = path
+        .poses
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (&w[0].pose.position, &w[1].pose.position);
+            (b.x - a.x).hypot(b.y - a.y)
+        })
+        .sum();
+    FLOOR_S + length_m / SLOWEST_M_PER_S
+}
+
 /// `_transform_coverage_split_points`.
 fn split_poses(points: &[(f64, f64)]) -> Vec<Pose> {
     points
@@ -1300,7 +1319,7 @@ impl Ctx {
     /// `resume_segment_index > 0` continues the navigation server's checkpoint.
     #[allow(clippy::too_many_arguments)]
     async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, resume_segment_index: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
-        let timeout_s = 600.0;
+        let timeout_s = sequence_leg_timeout_s(&path);
         let acceptance_timeout_s = 3.0;
         self.set_error("");
         if sequence_owned && self.sequence_cancel.load(Ordering::SeqCst) {
@@ -1980,4 +1999,21 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sequence_legs_wait_in_proportion_to_their_path() {
+        let header = Header::default();
+        // a 100 m lane: 600 s + 100 m at 0.05 m/s
+        let lane: Vec<(f64, f64)> = (0..=1000).map(|i| (i as f64 * 0.1, 0.0)).collect();
+        assert!((sequence_leg_timeout_s(&path_from_points(&lane, &header)) - 2600.0).abs() < 1e-6);
+        // a short channel keeps the 10 min floor
+        let channel = [(7.0, 4.0), (9.5, 4.0), (12.0, 4.0)];
+        assert!((sequence_leg_timeout_s(&path_from_points(&channel, &header)) - 700.0).abs() < 1e-6);
+        assert_eq!(sequence_leg_timeout_s(&path_from_points(&[], &header)), 600.0);
+    }
 }
