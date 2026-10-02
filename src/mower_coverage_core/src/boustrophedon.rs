@@ -6,8 +6,12 @@
 //! - lanes are straight lines at every angle (the legacy rotated branch
 //!   zig-zagged sideways inside each band);
 //! - lanes are placed from the safe region's own extent (first and last lane
-//!   on its outermost cells, spacing <= strip width), not on a fixed grid
-//!   stride, so the band along the edges is not skipped;
+//!   just inside its outermost cells, spacing <= strip width), not on a fixed
+//!   grid stride, so the band along the edges is not skipped;
+//! - a lane that grazes the staircase of a raster edge is cleaned up: the
+//!   outermost lanes move in until they clear an edge they run along, and
+//!   the crumbs a lane leaves where it crosses an edge at a shallow angle
+//!   are dropped (each was a cell, a turn and a few jogs of its own);
 //! - the lane intervals are grouped into boustrophedon cells (a cell ends
 //!   wherever an obstacle splits or merges the free space), each cell is
 //!   mowed back and forth on its own, and the cell order and each cell's
@@ -42,9 +46,16 @@ const UNCOVERED_WEIGHT: f64 = 10.0;
 /// Coarse angle search step, then a fine search around the best one.
 const COARSE_STEP_DEG: f64 = 5.0;
 const FINE_STEP_DEG: f64 = 1.0;
-const REFINE_TOP: usize = 4;
+const REFINE_TOP: usize = 6;
 /// Above this many cells the order is built greedily instead of by 2-opt.
 const MAX_CELLS_FOR_2OPT: usize = 80;
+/// A gap of fewer cells between two safe stretches of one lane, next to a
+/// wide unsafe region, is a raster artefact (the lane grazes the staircase of
+/// that region's edge), never an obstacle: obstacles reach the planner
+/// inflated by the robot's footprint.
+const GRAZE_GAP_CELLS: f64 = 4.0;
+/// Stretches shorter than this next to a graze are crumbs.
+const CRUMB_CELLS: f64 = 4.0;
 const SAME_POINT_TOL: f64 = 1e-9;
 
 /// Result of [`plan_boustrophedon_rs`].
@@ -289,6 +300,128 @@ struct Interval {
     b1: f64,
 }
 
+/// Where the lanes of one angle start along `b` and how many half-cell
+/// samples each has.
+#[derive(Clone, Copy)]
+struct LaneSampling {
+    b_start: f64,
+    samples: usize,
+}
+
+/// Safe stretches of the lane at offset `a`: a sample every half cell, and a
+/// new stretch wherever a sample, or the step to it, is unsafe.
+fn sample_lane(sm: &SafeMap, frame: Frame, ls: LaneSampling, lane: usize, a: f64) -> Vec<Interval> {
+    let step = sm.resolution * 0.5;
+    let mut out = Vec::new();
+    // current run: (b0, b_last, last point). A single sample is a corner the
+    // lane only grazes: still a (zero-length) interval, or that corner is
+    // never mowed.
+    let mut run: Option<(f64, f64, (f64, f64))> = None;
+    for s in 0..ls.samples {
+        let b = ls.b_start + s as f64 * step;
+        let p = frame.xy(a, b);
+        if !point_ok(p, sm) {
+            if let Some((b0, b1, _)) = run.take() {
+                out.push(Interval { lane, a, b0, b1 });
+            }
+            continue;
+        }
+        run = match run {
+            Some((b0, _, q)) if segment_ok(q, p, sm) => Some((b0, b, p)),
+            other => {
+                if let Some((b0, b1, _)) = other {
+                    out.push(Interval { lane, a, b0, b1 });
+                }
+                Some((b, b, p))
+            }
+        };
+    }
+    if let Some((b0, b1, _)) = run {
+        out.push(Interval { lane, a, b0, b1 });
+    }
+    out
+}
+
+/// Whether the gap between two stretches of the lane at `a` (from `b0` to
+/// `b1`) is a graze: short, and with every cell from one to four cells to one
+/// side of it unsafe. Then what the lane touches there is the staircase of a
+/// wide unsafe region's edge. A speck in the free space leaves a safe cell on
+/// both sides: such a gap splits the lane like an obstacle.
+fn is_graze(sm: &SafeMap, frame: Frame, a: f64, b0: f64, b1: f64) -> bool {
+    let res = sm.resolution;
+    if b1 - b0 >= GRAZE_GAP_CELLS * res {
+        return false;
+    }
+    let b = (b0 + b1) / 2.0;
+    [1.0, -1.0].iter().any(|side| (1..=4).all(|k| !point_ok(frame.xy(a + side * k as f64 * res, b), sm)))
+}
+
+/// Drop the crumbs a lane leaves where it grazes a raster edge: past the
+/// outermost long stretch of a group of stretches separated by grazes, the
+/// short pieces that alternate with unsafe samples. A lane crossing an edge
+/// at a few degrees grazes its staircase for metres; every crumb was a cell
+/// of its own (a turn, a connector and a few jogs apiece) for a few
+/// centimetres of lane a straight pass cannot join up anyway. Short pieces
+/// between two long stretches stay: there the lane rides an edge parallel to
+/// it, and only moving the lane helps (see `edge_lane_offset`).
+fn drop_crumbs(sm: &SafeMap, frame: Frame, ivs: Vec<Interval>) -> Vec<Interval> {
+    let crumb = CRUMB_CELLS * sm.resolution;
+    let mut keep = vec![true; ivs.len()];
+    let mut i = 0;
+    while i < ivs.len() {
+        let mut j = i + 1;
+        while j < ivs.len() && is_graze(sm, frame, ivs[j].a, ivs[j - 1].b1, ivs[j].b0) {
+            j += 1;
+        }
+        let long: Vec<usize> = (i..j).filter(|&m| ivs[m].b1 - ivs[m].b0 >= crumb).collect();
+        if let (Some(&first), Some(&last)) = (long.first(), long.last()) {
+            for k in (i..first).chain(last + 1..j) {
+                keep[k] = false;
+            }
+        }
+        i = j;
+    }
+    ivs.into_iter().zip(keep).filter_map(|(iv, k)| k.then_some(iv)).collect()
+}
+
+/// Grazes between consecutive stretches of a lane: raster artefacts, each a
+/// split of the free space for the cell builder.
+fn graze_gaps(sm: &SafeMap, frame: Frame, ivs: &[Interval]) -> usize {
+    ivs.windows(2).filter(|p| is_graze(sm, frame, p[1].a, p[0].b1, p[1].b0)).count()
+}
+
+/// A lane's stretches, crumbs dropped.
+fn lane_at(sm: &SafeMap, frame: Frame, ls: LaneSampling, lane: usize, a: f64) -> Vec<Interval> {
+    drop_crumbs(sm, frame, sample_lane(sm, frame, ls, lane, a))
+}
+
+/// Offset of an outermost lane: `edge` is the outermost cell centre, `dir`
+/// points inwards. The lane starts 0.75 cell inside it and moves in by
+/// quarter cells while it grazes the staircase of a raster edge: at an edge
+/// parallel to the lanes, or a few tenths of a degree off, 0.75 cell left
+/// the lane in a hundred pieces, each a cell with its own turn. Moving in
+/// costs no coverage while the outermost cells stay within half a strip, so
+/// it may go as far as `max_inset`; it takes the offset with the fewest graze
+/// gaps, the outermost one among equals.
+fn edge_lane_offset(sm: &SafeMap, frame: Frame, ls: LaneSampling, edge: f64, dir: f64, max_inset: f64) -> f64 {
+    let res = sm.resolution;
+    let first = (res * 0.75).min(max_inset);
+    let mut best: Option<(usize, f64)> = None;
+    let mut inset = first;
+    while inset <= max_inset + 1e-9 {
+        let a = edge + dir * inset;
+        let g = graze_gaps(sm, frame, &lane_at(sm, frame, ls, 0, a));
+        if g == 0 {
+            return a;
+        }
+        if best.map_or(true, |(bg, _)| g < bg) {
+            best = Some((g, a));
+        }
+        inset += res * 0.25;
+    }
+    best.map_or(edge + dir * first, |(_, a)| a)
+}
+
 /// Lane intervals for one angle; `None` when the map has no safe cell.
 fn lane_intervals(sm: &SafeMap, frame: Frame, strip: f64) -> Option<(usize, Vec<Vec<Interval>>)> {
     let res = sm.resolution;
@@ -311,50 +444,24 @@ fn lane_intervals(sm: &SafeMap, frame: Frame, strip: f64) -> Option<(usize, Vec<
     if !amin.is_finite() {
         return None;
     }
-    // The outermost lanes sit just inside the outermost cell centres: a lane
-    // exactly on them would ride the staircase of a raster edge parallel to
-    // it and fall apart into one-sample pieces.
-    let inset = (res * 0.75).min((amax - amin) / 2.0);
-    let (amin, amax) = (amin + inset, amax - inset);
-    let span = amax - amin;
-    let n = if span < 1e-9 { 1 } else { (span / strip - 1e-9).ceil() as usize + 1 };
     let step = res * 0.5;
     // offset by a quarter cell so no sample lies on a cell boundary at 0/90 deg
     let b_start = bmin - res + res * 0.25;
     let samples = ((bmax + res - b_start) / step).ceil() as usize + 1;
+    let ls = LaneSampling { b_start, samples };
+    // the outermost cells stay within half a strip (less two cells) of a lane
+    let max_inset = (strip / 2.0 - 2.0 * res).max(res * 0.75).min((amax - amin) / 2.0);
+    let lo = edge_lane_offset(sm, frame, ls, amin, 1.0, max_inset);
+    let hi = edge_lane_offset(sm, frame, ls, amax, -1.0, max_inset).max(lo);
+    let span = hi - lo;
+    let n = if span < 1e-9 { 1 } else { (span / strip - 1e-9).ceil() as usize + 1 };
 
-    let mut lanes = Vec::with_capacity(n);
-    for k in 0..n {
-        let a = if n == 1 { (amin + amax) / 2.0 } else { amin + span * k as f64 / (n - 1) as f64 };
-        let mut out = Vec::new();
-        // current run: (b0, b_last, samples, last point)
-        let mut run: Option<(f64, f64, usize, (f64, f64))> = None;
-        let close = |run: Option<(f64, f64, usize, (f64, f64))>, out: &mut Vec<Interval>| {
-            if let Some((b0, b1, cnt, _)) = run {
-                // a single sample is a corner the lane only grazes: still a
-                // (zero-length) interval, or that corner is never mowed
-                let _ = cnt;
-                out.push(Interval { lane: k, a, b0, b1 });
-            }
-        };
-        for s in 0..samples {
-            let b = b_start + s as f64 * step;
-            let p = frame.xy(a, b);
-            if !point_ok(p, sm) {
-                close(run.take(), &mut out);
-                continue;
-            }
-            run = match run {
-                Some((b0, _, cnt, q)) if segment_ok(q, p, sm) => Some((b0, b, cnt + 1, p)),
-                other => {
-                    close(other, &mut out);
-                    Some((b, b, 1, p))
-                }
-            };
-        }
-        close(run, &mut out);
-        lanes.push(out);
-    }
+    let lanes = (0..n)
+        .map(|k| {
+            let a = if n == 1 { (lo + hi) / 2.0 } else { lo + span * k as f64 / (n - 1) as f64 };
+            lane_at(sm, frame, ls, k, a)
+        })
+        .collect();
     Some((n, lanes))
 }
 

@@ -261,3 +261,64 @@ fn simplify_keeps_the_no_corner_cut_rule() {
     assert!(s.len() > 2, "pulled straight through the corner gap: {s:?}");
     assert!(validate_path_rs(&s, &sm).valid);
 }
+
+/// The robot's safe map of a 22 x 10 m zone whose long side points at 30 deg
+/// (`tests/data/robot_rotated_rect_safe.json`): OpenCV's fillPoly and erosion
+/// leave its slanted edges an irregular staircase, unlike `rotated_rect`.
+fn robot_rotated_rect() -> (Array2<bool>, f64, f64, f64) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/robot_rotated_rect_safe.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let dim = |k: &str| v[k].as_u64().unwrap() as usize;
+    let mut g = Array2::from_elem((dim("height"), dim("width")), false);
+    for run in v["runs"].as_array().unwrap() {
+        let at = |i: usize| run[i].as_u64().unwrap() as usize;
+        for c in at(1)..at(2) {
+            g[[at(0), c]] = true;
+        }
+    }
+    let num = |k: &str| v[k].as_f64().unwrap();
+    (g, num("resolution"), num("origin_x"), num("origin_y"))
+}
+
+/// Lanes parallel to a slanted edge of that map (120 deg) rode the edge's
+/// staircase: on the robot, 12 lanes made 109 cells, 118 turns and 231 jogs
+/// a few centimetres long. Lanes half a degree off fared no better. Each
+/// lane is one stretch now, and the searched angle follows the long side.
+#[test]
+fn lanes_along_a_slanted_edge_stay_whole() {
+    let (g, res, ox, oy) = robot_rotated_rect();
+    let sm = SafeMap { grid: g.view(), resolution: res, origin_x: ox, origin_y: oy };
+    for ang in [119.5, 120.0, 120.5] {
+        let p = plan_boustrophedon_rs(g.view(), STRIP, SPACING, res, ox, oy, Some(ang));
+        assert_eq!(p.cells, 1, "{ang}: {} cells", p.cells);
+        assert_eq!(p.turns + 1, p.lanes, "{ang}: {} turns for {} lanes", p.turns, p.lanes);
+        assert!(validate_path_rs(&p.points, &sm).valid, "{ang}");
+        let cov = coverage_ratio_rs(&p.points, &sm, STRIP);
+        assert!(cov > 0.99, "{ang}: coverage {cov:.3}");
+    }
+    let auto = plan_boustrophedon_rs(g.view(), STRIP, SPACING, res, ox, oy, None);
+    let lane_dir = (auto.angle_deg + 90.0).rem_euclid(180.0);
+    assert!((lane_dir - 30.0).abs() <= 1.0, "chose {} (lanes at {lane_dir})", auto.angle_deg);
+}
+
+/// A lane crossing an edge at a degree or two grazes its staircase for
+/// metres; every crumb it left between unsafe samples was a cell of its own
+/// (16-100 cells and 21-105 turns for these 9 lanes; 1-5 cells now). Coverage stays where it was (0.95-0.97
+/// before, mostly 0.99 now): at 2 deg the outermost lane still crosses the
+/// edge and leaves a wedge no straight lane reaches; the crumbs mowed a
+/// sliver of it for a dozen extra turns.
+#[test]
+fn lanes_crossing_an_edge_at_a_shallow_angle_leave_no_crumbs() {
+    for long_axis in [17.0, 30.0, 63.0, 141.0] {
+        let g = rotated_rect(300, 0.05, 12.0, 6.0, long_axis);
+        let sm = SafeMap { grid: g.view(), resolution: 0.05, origin_x: 0.0, origin_y: 0.0 };
+        for off in [-2.0, -0.5, 0.5, 2.0] {
+            let ang = (long_axis + 90.0 + off).rem_euclid(180.0);
+            let p = plan_boustrophedon_rs(g.view(), STRIP, SPACING, 0.05, 0.0, 0.0, Some(ang));
+            assert!(p.cells <= 5 && p.turns <= p.lanes + 3, "axis {long_axis}, {ang}: {} cells, {} turns for {} lanes", p.cells, p.turns, p.lanes);
+            assert!(validate_path_rs(&p.points, &sm).valid, "axis {long_axis}, {ang}");
+            let cov = coverage_ratio_rs(&p.points, &sm, STRIP);
+            assert!(cov > 0.93, "axis {long_axis}, {ang}: coverage {cov:.3}");
+        }
+    }
+}
