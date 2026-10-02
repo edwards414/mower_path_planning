@@ -25,3 +25,7 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 data-encoding = "2"
+
+[dev-dependencies]
+# paused clock for the throttle tests (hub.rs)
+tokio = { workspace = true, features = ["test-util"] }
