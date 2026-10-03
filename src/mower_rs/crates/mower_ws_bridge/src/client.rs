@@ -40,6 +40,11 @@ impl ClientHandle {
     fn send_json(&self, v: &Value) {
         self.send(v.to_string().into());
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(id: u64, tx: mpsc::Sender<Arc<str>>) -> Self {
+        ClientHandle { id, tx, closed: Arc::new(AtomicBool::new(false)) }
+    }
 }
 
 pub struct Client {

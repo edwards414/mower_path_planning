@@ -3,6 +3,8 @@
 //! section 7). Pure functions over the generated r2r message structs so the
 //! JSON layout is unit tested without a ROS graph.
 
+use std::collections::HashMap;
+
 use base64::Engine;
 use r2r::mower_interface::msg::ZoneMap;
 use r2r::nav_msgs::msg::OccupancyGrid;
@@ -77,13 +79,37 @@ pub fn empty_marker_layer(name: &str) -> Value {
     json!({"name": name, "markers": []})
 }
 
+/// Points of each zone's planned coverage path in a `/coverage_path_markers`
+/// snapshot: mower_coverage draws zone N's path as LINE_STRIP markers in
+/// namespace `zone_N_path` (arrows and connectors live in other namespaces).
+/// A snapshot without them (no plan yet, or a DELETEALL) yields no zones.
+pub fn coverage_points_by_zone(msg: &MarkerArray) -> HashMap<i32, usize> {
+    const LINE_STRIP: i32 = 4;
+    const ADD: i32 = 0;
+    let mut out = HashMap::new();
+    for m in &msg.markers {
+        if m.type_ != LINE_STRIP || m.action != ADD {
+            continue;
+        }
+        let zone = m.ns.strip_prefix("zone_").and_then(|s| s.strip_suffix("_path")).and_then(|s| s.parse::<i32>().ok());
+        if let Some(zone) = zone {
+            *out.entry(zone).or_insert(0) += m.points.len();
+        }
+    }
+    out
+}
+
 /// mower_interface/ZoneMap[] -> ZoneSummary[].
-pub fn zone_map_list_to_summaries(zone_map_list: &[ZoneMap]) -> Value {
+///
+/// map_manage's ZoneMap.path is never filled (the planner keeps its paths to
+/// itself), so the planned path of a zone is taken from the coverage
+/// markers ([`coverage_points_by_zone`]); a path in the ZoneMap still counts.
+pub fn zone_map_list_to_summaries(zone_map_list: &[ZoneMap], coverage_points: &HashMap<i32, usize>) -> Value {
     Value::Array(
         zone_map_list
             .iter()
             .map(|zm| {
-                let point_count = zm.path.poses.len();
+                let point_count = zm.path.poses.len().max(coverage_points.get(&zm.zone_id).copied().unwrap_or(0));
                 json!({
                     "zoneId": zm.zone_id,
                     "pointCount": point_count,
@@ -202,7 +228,7 @@ mod tests {
         zm.path.poses.push(Default::default());
         zm.path.poses.push(Default::default());
         let empty = ZoneMap::default();
-        let s = zone_map_list_to_summaries(&[zm, empty]);
+        let s = zone_map_list_to_summaries(&[zm, empty], &HashMap::new());
         assert_eq!(s, json!([
             {"zoneId": 3, "pointCount": 2, "hasMap": true, "hasCoveragePath": true},
             {"zoneId": 0, "pointCount": 0, "hasMap": false, "hasCoveragePath": false},
@@ -254,5 +280,47 @@ mod tests {
         assert!(!is_navsat_datum_point(f64::NAN, f64::NAN));
         assert!(!is_navsat_datum_point(23.694, f64::NAN));
         assert!(!is_navsat_datum_point(f64::INFINITY, 120.0));
+    }
+
+    #[test]
+    fn coverage_markers_mark_their_zone_as_planned() {
+        use r2r::visualization_msgs::msg::Marker;
+        let marker = |ns: &str, type_: i32, action: i32, n: usize| {
+            let mut m = Marker::default();
+            m.ns = ns.into();
+            m.type_ = type_;
+            m.action = action;
+            m.points = vec![Default::default(); n];
+            m
+        };
+        let mut msg = MarkerArray::default();
+        msg.markers = vec![
+            marker("zone_1_path", 4, 0, 40),
+            marker("zone_1_path", 4, 0, 8),
+            marker("zone_1_arrows", 0, 0, 2),
+            marker("zone_1_connector", 4, 0, 5),
+            marker("zone_12_path", 4, 0, 3),
+            marker("zone_x_path", 4, 0, 9),
+            marker("zone_2_path", 4, 2, 9),
+        ];
+        let points = coverage_points_by_zone(&msg);
+        assert_eq!(points.get(&1), Some(&48));
+        assert_eq!(points.get(&12), Some(&3));
+        assert_eq!(points.len(), 2);
+
+        let mut z1 = ZoneMap::default();
+        z1.zone_id = 1;
+        z1.mask_map_inflated.data = vec![0];
+        let mut z2 = ZoneMap::default();
+        z2.zone_id = 2;
+        z2.mask_map_inflated.data = vec![0];
+        assert_eq!(zone_map_list_to_summaries(&[z1, z2], &points), json!([
+            {"zoneId": 1, "pointCount": 48, "hasMap": true, "hasCoveragePath": true},
+            {"zoneId": 2, "pointCount": 0, "hasMap": true, "hasCoveragePath": false},
+        ]));
+        // a cleared plan (DELETEALL only) leaves no zone planned
+        let mut cleared = MarkerArray::default();
+        cleared.markers = vec![marker("", 4, 3, 0)];
+        assert!(coverage_points_by_zone(&cleared).is_empty());
     }
 }

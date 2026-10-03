@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from mower_mission.adapters.dto import (
+    coverage_points_by_zone,
     color_rgba_to_hex,
     is_navsat_datum_point,
     marker_array_to_marker_layer,
@@ -224,6 +225,35 @@ def test_zone_summaries_no_map_no_path():
 
 def test_zone_summaries_empty_list():
     assert zone_map_list_to_summaries([]) == []
+
+
+def _marker(ns, type_=4, action=0, n=0):
+    return SimpleNamespace(ns=ns, type=type_, action=action, points=[object()] * n)
+
+
+def test_coverage_markers_mark_their_zone_as_planned():
+    """map_manage never fills ZoneMap.path; the planner's markers do it."""
+    markers = SimpleNamespace(markers=[
+        _marker('zone_1_path', n=40),
+        _marker('zone_1_path', n=8),
+        _marker('zone_1_arrows', type_=0, n=2),
+        _marker('zone_1_connector', n=5),
+        _marker('zone_12_path', n=3),
+        _marker('zone_x_path', n=9),
+        _marker('zone_2_path', action=2, n=9),
+    ])
+    points = coverage_points_by_zone(markers)
+    assert points == {1: 48, 12: 3}
+    summaries = zone_map_list_to_summaries([
+        _make_zone_map(zone_id=1, inflated_data=[0]),
+        _make_zone_map(zone_id=2, inflated_data=[0]),
+    ], points)
+    assert summaries == [
+        {'zoneId': 1, 'pointCount': 48, 'hasMap': True, 'hasCoveragePath': True},
+        {'zoneId': 2, 'pointCount': 0, 'hasMap': True, 'hasCoveragePath': False},
+    ]
+    cleared = SimpleNamespace(markers=[_marker('', action=3)])
+    assert coverage_points_by_zone(cleared) == {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

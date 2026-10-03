@@ -29,6 +29,7 @@ from visualization_msgs.msg import MarkerArray
 
 from mower_mission.adapters.dto import (
     is_navsat_datum_point,
+    coverage_points_by_zone,
     marker_array_to_marker_layer,
     occupancy_grid_to_map_layer,
     params_to_coverage_settings,
@@ -149,6 +150,8 @@ class FlutterAdapter(Node):
         )
         self.create_timer(1.0, self._publish_coverage_settings)
 
+        # zone id -> points of its planned path (latest /coverage_path_markers)
+        self._coverage_points: dict[int, int] = {}
         self._zone_summary_pub = self.create_publisher(
             String, '/adapter/zone_summaries', latched
         )
@@ -189,6 +192,8 @@ class FlutterAdapter(Node):
     def _make_marker_cb(self, name: str):
         def cb(msg: MarkerArray) -> None:
             try:
+                if name == 'coverage_path':
+                    self._coverage_points = coverage_points_by_zone(msg)
                 dto = marker_array_to_marker_layer(name, msg)
                 self._marker_pubs[name].publish(String(data=json.dumps(dto)))
             except Exception as exc:  # noqa: BLE001
@@ -325,7 +330,9 @@ class FlutterAdapter(Node):
             return
         if response is None:
             return
-        summaries = zone_map_list_to_summaries(response.zone_map_list)
+        summaries = zone_map_list_to_summaries(
+            response.zone_map_list, self._coverage_points
+        )
         self._zone_summary_pub.publish(String(data=json.dumps(summaries)))
 
     # ── map datum (satellite geo-reference) ──────────────────────────────────

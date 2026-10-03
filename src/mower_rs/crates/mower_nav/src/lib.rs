@@ -46,6 +46,8 @@ use crate::progress::{Checkpoint, Progress, Status as ProgressStatus};
 use crate::state::{NavState, SafetyParams, TaskResult};
 
 const CONTROLLER_ID: &str = "FollowPath";
+/// Pose spacing of every FollowPath goal (see geometry::densify_path).
+const FOLLOW_PATH_MAX_STEP_M: f64 = 0.1;
 const GOAL_CHECKER_ID: &str = "general_goal_checker";
 
 struct ExecParams {
@@ -1139,6 +1141,7 @@ impl Execution {
             if self.cancel_requested() {
                 return self.canceled_before_task();
             }
+            *split_path = geometry::densify_path(split_path, FOLLOW_PATH_MAX_STEP_M);
             Self::stamp_path_for_execution(split_path);
             let _ = self.ctx.split_path_pub.lock().unwrap().publish(split_path);
             let distance = geometry::path_distance(split_path);
