@@ -11,7 +11,8 @@
 //! * `/get_zone_map_list_srv`, `/map_manage/{get,set,list,describe}_parameters`
 //!
 //! Every generated map has an inflated twin (`inflate_radius_m`, never below
-//! 0.75 m) and the two Nav2 snapshots `/map_grid` (raw geometry) and
+//! 0.75 m; an image zone's drawn outline on collected grass keeps only
+//! [`IMAGE_OUTLINE_INSET_M`]) and the two Nav2 snapshots `/map_grid` (raw geometry) and
 //! `/map_grid_global` (configuration space) are rebuilt fail-closed on each
 //! change: held fully occupied until a matching risk map exists. Mutations go
 //! through the nav server's mission operation lock ([`mower_rs_common::guard`]).
@@ -45,6 +46,14 @@ use tokio::sync::Mutex;
 use crate::grid::Geometry;
 
 const MIN_SAFE_INFLATE_RADIUS_M: f64 = 0.75;
+
+/// How far an image mission's path keeps from the drawn outline where that
+/// outline lies on collected grass: about the blade's reach (half a 0.6 m
+/// strip), so the cut ends at the outline and the shape survives. The
+/// collected free space's own edges keep `inflate_radius_m` and no-go areas
+/// their dilation; without collected free space the outline is the only edge
+/// known and keeps `inflate_radius_m` too.
+const IMAGE_OUTLINE_INSET_M: f64 = 0.3;
 
 // rcl_interfaces/msg/ParameterType
 const PARAMETER_NOT_SET: u8 = 0;
@@ -575,7 +584,9 @@ impl App {
     }
 
     /// `_create_image_mask_maps`.
-    fn create_image_mask_maps(&self, req: &ImportImageMask::Request) -> Result<(Map, Map, Zone, f64), String> {
+    /// Returns the zone's free map (image AND collected free space), its risk
+    /// map, the unclipped image raster on the same grid, the zone and its area.
+    fn create_image_mask_maps(&self, req: &ImportImageMask::Request) -> Result<(Map, Map, Map, Zone, f64), String> {
         if req.mask_encoding != "base64_u8_row_major" {
             return Err("mask_encoding must be base64_u8_row_major".into());
         }
@@ -606,7 +617,7 @@ impl App {
         let had_collected = self.collected_free_space.is_some();
         let free_grid = match &self.collected_free_space {
             Some(c) => grid::clip_free_grid_to_collected(&r.free_grid, r.width, r.height, r.min_x, r.min_y, resolution, c.data(), &geometry_of(c)),
-            None => r.free_grid,
+            None => r.free_grid.clone(),
         };
         if had_collected && !free_grid.iter().any(|&v| v == 0) {
             return Err("圖片與採集的 freespace 沒有重疊，無法產生路徑".into());
@@ -618,25 +629,38 @@ impl App {
         }
         header.stamp = stamp_now();
         let free_map = occupancy_grid(header.clone(), resolution, r.width, r.height, r.min_x, r.min_y, free_grid);
+        let image_map = free_map.with_data(r.free_grid);
         let risk_map = occupancy_grid(header.clone(), resolution, r.width, r.height, r.min_x, r.min_y, r.risk_grid);
         let mut zone = ZoneMap::default();
         zone.header = header;
         zone.zone_id = if req.zone_id > 0 { req.zone_id } else { 9001 };
         zone.mask_map = free_map.msg.clone();
         let area_m2 = free_cells(&free_map) as f64 * resolution * resolution;
-        Ok((free_map, risk_map, Zone { msg: zone, res: resolution }, area_m2))
+        Ok((free_map, risk_map, image_map, Zone { msg: zone, res: resolution }, area_m2))
+    }
+
+    /// `_image_zone_safe_map`: the image zone's `mask_map_inflated`, see
+    /// [`IMAGE_OUTLINE_INSET_M`].
+    fn image_zone_safe_map(&self, free_map: &Map, image_map: &Map) -> Result<Map, String> {
+        let Some(collected) = &self.collected_free_space else {
+            return self.create_free_space_inflated(free_map, None);
+        };
+        let collected_safe = self.create_free_space_inflated(collected, None)?;
+        let g = geometry_of(image_map);
+        let safe = grid::image_safe_grid(image_map.data(), g.width, g.height, g.origin_x, g.origin_y, g.resolution, IMAGE_OUTLINE_INSET_M, collected_safe.data(), &geometry_of(&collected_safe))?;
+        Ok(free_map.with_data(safe))
     }
 
     /// `import_image_mask_srv` body (inside the mutation guard).
     fn import_image_mask(&mut self, req: &ImportImageMask::Request) -> ImportImageMask::Response {
         let fail = |message: &str, zone_id: i32, area_m2: f64| ImportImageMask::Response { success: false, message: message.into(), zone_id, area_m2 };
-        let (free_map, risk_map, mut zone_map, area_m2) = match self.create_image_mask_maps(req) {
+        let (free_map, risk_map, image_map, mut zone_map, area_m2) = match self.create_image_mask_maps(req) {
             Ok(v) => v,
             Err(e) => return fail(&e, req.zone_id, 0.0),
         };
         // An erosion error means impossible geometry: the Python node's
         // generic "unexpected error" answer.
-        let free_space_inflated = match self.create_free_space_inflated(&free_map, None) {
+        let free_space_inflated = match self.image_zone_safe_map(&free_map, &image_map) {
             Ok(m) => m,
             Err(e) => {
                 self.error(format!("import image mask failed: {e:?}"));

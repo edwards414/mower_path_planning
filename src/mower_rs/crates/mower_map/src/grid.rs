@@ -332,6 +332,27 @@ pub fn clip_free_grid_to_collected(
     out
 }
 
+/// `_image_safe_grid`: the safe area of an image zone inside collected free
+/// space. The image is eroded by `outline_inset_m` from its own outline and
+/// kept only where `collected_safe` (the collected free space already eroded
+/// by `inflate_radius_m`) is free: the drawn outline lies on grass and only
+/// needs the blade's reach, the real edges keep their full clearance.
+#[allow(clippy::too_many_arguments)]
+pub fn image_safe_grid(
+    image_free: &[i8],
+    img_w: u32,
+    img_h: u32,
+    origin_x: f64,
+    origin_y: f64,
+    resolution: f64,
+    outline_inset_m: f64,
+    collected_safe: &[i8],
+    cg: &Geometry,
+) -> Result<Vec<i8>, String> {
+    let inset = erode_free_space_grid(image_free, img_w, img_h, resolution, outline_inset_m)?;
+    Ok(clip_free_grid_to_collected(&inset, img_w, img_h, origin_x, origin_y, resolution, collected_safe, cg))
+}
+
 /// `_generate_risk_map` data: every polygon filled (>= 3 vertices) and
 /// outlined (closed when its ends are within 1 m), clamped into the base grid.
 pub fn risk_map_data(g: &Geometry, zones: &[Vec<(f64, f64)>]) -> Vec<i8> {
@@ -541,6 +562,40 @@ mod tests {
         assert_eq!(out[20 * 41 + 20], 0);
         let narrow = erode_free_space_grid(&vec![0i8; 100], 10, 10, 0.1, 0.75).unwrap();
         assert!(narrow.iter().all(|&v| v != 0));
+    }
+
+    #[test]
+    fn image_zone_keeps_the_blade_inset_from_its_outline_and_the_full_margin_from_real_edges() {
+        // collected free space: world [0, 4]^2 at 0.05 m, and its 0.75 m twin
+        let cg = geom(100, 100, 0.05, -0.5, -0.5, 0.0);
+        let collected: Vec<i8> = (0..100 * 100)
+            .map(|i| {
+                let (x, y) = (-0.5 + ((i % 100) as f64 + 0.5) * 0.05, -0.5 + ((i / 100) as f64 + 0.5) * 0.05);
+                if (0.0..4.0).contains(&x) && (0.0..4.0).contains(&y) { 0 } else { 100 }
+            })
+            .collect();
+        let collected_safe = erode_free_space_grid(&collected, 100, 100, 0.05, 0.75).unwrap();
+        // an all-free 8 m image at 0.1 m from (2, 2): its outline at x = 2 and
+        // y = 2 lies on collected grass, its far side beyond the collected edge
+        let image = vec![0i8; 80 * 80];
+        let extent = |grid: &[i8]| {
+            let cols: Vec<usize> = (0..80 * 80).filter(|&i| grid[i] == 0).map(|i| i % 80).collect();
+            let rows: Vec<usize> = (0..80 * 80).filter(|&i| grid[i] == 0).map(|i| i / 80).collect();
+            let edge = |v: &[usize]| (2.0 + *v.iter().min().unwrap() as f64 * 0.1, 2.0 + (*v.iter().max().unwrap() + 1) as f64 * 0.1);
+            (edge(&cols), edge(&rows))
+        };
+
+        let safe = image_safe_grid(&image, 80, 80, 2.0, 2.0, 0.1, 0.3, &collected_safe, &cg).unwrap();
+        let ((x0, x1), (y0, y1)) = extent(&safe);
+        for (lo, hi) in [(x0, x1), (y0, y1)] {
+            assert!((lo - 2.3).abs() < 0.051, "0.3 m from the drawn outline, got {lo}");
+            assert!((hi - 3.25).abs() < 0.11, "0.75 m from the collected edge, got {hi}");
+        }
+        // before: the clipped image eroded by 0.75 m everywhere
+        let clipped = clip_free_grid_to_collected(&image, 80, 80, 2.0, 2.0, 0.1, &collected, &cg);
+        let old = erode_free_space_grid(&clipped, 80, 80, 0.1, 0.75).unwrap();
+        let ((old_x0, _), _) = extent(&old);
+        assert!((old_x0 - 2.8).abs() < 0.051, "{old_x0}");
     }
 
     #[test]
