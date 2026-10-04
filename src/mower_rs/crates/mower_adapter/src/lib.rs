@@ -15,6 +15,7 @@
 
 mod dto;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -192,6 +193,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             }
         });
     }
+    // Points of the planned path per zone, from the latest coverage markers;
+    // the zone summaries below report them (see dto::coverage_points_by_zone).
+    let coverage_points: Arc<Mutex<HashMap<i32, usize>>> = Arc::default();
     for (src, name) in MARKER_TOPICS {
         // Marker arrays are complete layer snapshots. Keep both relay legs
         // latched so an adapter or app that starts later receives the same
@@ -200,8 +204,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let mut stream = node.subscribe::<MarkerArray>(src, latched())?;
         publisher.publish(&json_string(&dto::empty_marker_layer(name)))?;
         let logger = logger.clone();
+        let coverage_points = (src == "/coverage_path_markers").then(|| coverage_points.clone());
         tokio::spawn(async move {
             while let Some(markers) = stream.next().await {
+                if let Some(points) = &coverage_points {
+                    *points.lock().unwrap() = dto::coverage_points_by_zone(&markers);
+                }
                 let dto = dto::marker_array_to_marker_layer(name, &markers);
                 if let Err(e) = publisher.publish(&json_string(&dto)) {
                     r2r::log_warn!(&logger, "failed to publish markers {}: {:?}", name, e);
@@ -282,6 +290,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let client = node.create_client::<ZoneMapList::Service>("/get_zone_map_list_srv", QosProfile::services_default())?;
         let ready = r2r::Node::is_available(&client)?;
         let logger = logger.clone();
+        let coverage_points = coverage_points.clone();
         tokio::spawn(async move {
             if ready.await.is_err() {
                 return;
@@ -290,7 +299,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 if let Ok(fut) = client.request(&ZoneMapList::Request::default()) {
                     match tokio::time::timeout(SERVICE_TIMEOUT, fut).await {
                         Ok(Ok(resp)) => {
-                            let dto = dto::zone_map_list_to_summaries(&resp.zone_map_list);
+                            let points = coverage_points.lock().unwrap().clone();
+                            let dto = dto::zone_map_list_to_summaries(&resp.zone_map_list, &points);
                             let _ = publisher.publish(&json_string(&dto));
                         }
                         Ok(Err(e)) => r2r::log_warn!(&logger, "zone_map_list call failed: {:?}", e),

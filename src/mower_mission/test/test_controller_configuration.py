@@ -708,8 +708,12 @@ def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
         assert f'"{name}"' in main, name
     for name, default in COVERAGE_PARAMETER_DEFAULTS:
         assert f'"{name}", {default}' in main, (name, default)
-    # the bounded dispatch: 3 s acceptance, 600 s result, 2 s confirmation, 2 s cancel cadence, 0.25 s fallback wait
-    assert 'let acceptance_timeout_s = 3.0;' in main and 'let timeout_s = 600.0;' in main
+    # the bounded dispatch: 3 s acceptance, a sequence leg's result within
+    # 600 s + its path at 0.05 m/s, 2 s confirmation, 2 s cancel cadence,
+    # 0.25 s fallback wait
+    assert 'let acceptance_timeout_s = 3.0;' in main
+    assert 'let timeout_s = sequence_leg_timeout_s(&path);' in main
+    assert 'const FLOOR_S: f64 = 600.0;' in main and 'const SLOWEST_M_PER_S: f64 = 0.05;' in main
     assert 'Duration::from_secs(2)' in main and 'Duration::from_millis(250)' in main
     assert '(0.5..=30.0).contains(&t)' in main
     for text in COVERAGE_USER_MESSAGES:

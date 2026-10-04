@@ -167,6 +167,53 @@ fn path_from_points(points: &[(f64, f64)], map_header: &Header) -> Path {
     path
 }
 
+/// How long a zone-sequence leg waits for its result before it gives the
+/// goal up and cancels it: a 10 min floor (once the whole limit, which
+/// cancelled every zone that takes longer, e.g. the last lane of an
+/// 8 x 12 m zone) plus the path at 0.05 m/s, a fifth of the controller's
+/// 0.26 m/s. Single-zone execution (/zone_exec_path) waits without a limit.
+fn sequence_leg_timeout_s(path: &Path) -> f64 {
+    const FLOOR_S: f64 = 600.0;
+    const SLOWEST_M_PER_S: f64 = 0.05;
+    let length_m: f64 = path
+        .poses
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (&w[0].pose.position, &w[1].pose.position);
+            (b.x - a.x).hypot(b.y - a.y)
+        })
+        .sum();
+    FLOOR_S + length_m / SLOWEST_M_PER_S
+}
+
+/// `/zone_sequence_status` (latched JSON), where a `/run_zone_sequence` is:
+/// `state` idle | running | completed | failed | canceled; while running,
+/// `leg` zone (mowing `zone_id`) or channel (from `zone_id` to
+/// `next_zone_id`); `index` into `zone_ids`. Between two legs the navigation
+/// server reports its last leg as completed; this says the sequence goes on.
+struct SequenceStatus<'a> {
+    state: &'a str,
+    zone_ids: &'a [i32],
+    index: usize,
+    leg: &'a str,
+    message: String,
+}
+
+fn sequence_status_json(s: &SequenceStatus) -> String {
+    let zone_id = if s.leg.is_empty() { None } else { s.zone_ids.get(s.index).copied() };
+    let next_zone_id = if s.leg == "channel" { s.zone_ids.get(s.index + 1).copied() } else { None };
+    serde_json::json!({
+        "state": s.state,
+        "zone_ids": s.zone_ids,
+        "index": s.index,
+        "leg": s.leg,
+        "zone_id": zone_id,
+        "next_zone_id": next_zone_id,
+        "message": s.message,
+    })
+    .to_string()
+}
+
 /// `_transform_coverage_split_points`.
 fn split_poses(points: &[(f64, f64)]) -> Vec<Pose> {
     points
@@ -396,6 +443,7 @@ struct Pubs {
     free_space_inflated: r2r::Publisher<OccupancyGrid>,
     #[allow(dead_code)]
     risk_map_inflated: r2r::Publisher<OccupancyGrid>,
+    sequence_status: r2r::Publisher<r2r::std_msgs::msg::String>,
 }
 
 struct Ctx {
@@ -1300,7 +1348,7 @@ impl Ctx {
     /// `resume_segment_index > 0` continues the navigation server's checkpoint.
     #[allow(clippy::too_many_arguments)]
     async fn send_follow_path(self: &Arc<Self>, handles: &Handles, zone_id: i32, resume_segment_index: i32, path: Path, split_points: Vec<Pose>, block: bool, sequence_owned: bool) -> bool {
-        let timeout_s = 600.0;
+        let timeout_s = sequence_leg_timeout_s(&path);
         let acceptance_timeout_s = 3.0;
         self.set_error("");
         if sequence_owned && self.sequence_cancel.load(Ordering::SeqCst) {
@@ -1465,29 +1513,50 @@ impl Ctx {
 
     // --------------------------------------------------------- sequence
 
+    fn publish_sequence_status(&self, status: &SequenceStatus) {
+        let msg = r2r::std_msgs::msg::String { data: sequence_status_json(status) };
+        let _ = self.pubs.lock().unwrap().sequence_status.publish(&msg);
+    }
+
     async fn get_zone_map(&self, zone_id: i32) -> Option<ZoneMap> {
         self.zone_map_list.lock().await.iter().find(|z| z.zone_id == zone_id).cloned()
     }
 
-    /// `_run_sequence`: coverage, channel, coverage, ...
+    /// `_run_sequence`: coverage, channel, coverage, ... Every step is also
+    /// published on `/zone_sequence_status`.
     async fn run_sequence(self: Arc<Self>, handles: Handles, zone_ids: Vec<i32>, channel_proximity_m: f64) {
         self.info(format!("任務序列開始: zones={}", py_int_list(&zone_ids)));
+        let status = |state: &str, index: usize, leg: &str, message: String| {
+            self.publish_sequence_status(&SequenceStatus { state, zone_ids: &zone_ids, index, leg, message });
+        };
+        // A sequence that stops early was canceled when a stop was requested.
+        let end = |index: usize, leg: &str, message: String| {
+            let state = if self.sequence_cancel.load(Ordering::SeqCst) { "canceled" } else { "failed" };
+            status(state, index, leg, message);
+        };
         for (i, &zone_id) in zone_ids.iter().enumerate() {
             if self.sequence_cancel.load(Ordering::SeqCst) {
-                self.warn(format!("任務序列在 zone {zone_id} 前已取消"));
+                let msg = format!("任務序列在 zone {zone_id} 前已取消");
+                self.warn(&msg);
+                end(i, "zone", msg);
                 return;
             }
             let zone = match self.get_zone_map(zone_id).await {
                 Some(z) => z,
                 None => {
-                    self.error(format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止"));
+                    let msg = format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止");
+                    self.error(&msg);
+                    end(i, "zone", msg);
                     return;
                 }
             };
             self.info(format!("[{}/{}] 執行 zone {zone_id} 覆蓋路徑，共 {} 個路徑點", i + 1, zone_ids.len(), zone.path.poses.len()));
+            status("running", i, "zone", format!("[{}/{}] 割 zone {zone_id}", i + 1, zone_ids.len()));
             let ok = self.send_follow_path(&handles, zone.zone_id, 0, zone.path.clone(), zone.coverage_split_points.clone(), true, true).await;
             if !ok {
-                self.error(format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止"));
+                let msg = format!("Zone {zone_id} 覆蓋路徑執行失敗或被取消，任務序列中止");
+                self.error(&msg);
+                end(i, "zone", msg);
                 return;
             }
             self.info(format!("Zone {zone_id} 覆蓋完成"));
@@ -1496,25 +1565,32 @@ impl Ctx {
             }
             let next_zone_id = zone_ids[i + 1];
             self.info(format!("尋找通道: zone {zone_id} → zone {next_zone_id}"));
+            status("running", i, "channel", format!("走通道 zone {zone_id} → zone {next_zone_id}"));
             let req = ChannelRoute::Request { zone_from_id: zone_id, zone_to_id: next_zone_id, proximity_m: channel_proximity_m as f32 };
             let route = self.blocking_call(&self.channel_route_client, &req, 10.0).await;
             let route = match route {
                 Some(r) if r.success => r,
                 other => {
                     let msg = other.map(|r| r.message).unwrap_or_else(|| "服務呼叫超時".into());
-                    self.error(format!("取得通道路徑失敗: {msg}，任務序列中止"));
+                    let msg = format!("取得通道路徑失敗: {msg}，任務序列中止");
+                    self.error(&msg);
+                    end(i, "channel", msg);
                     return;
                 }
             };
             self.info(format!("走通道 #{} (zone {zone_id} → zone {next_zone_id})，共 {} 個路徑點", route.matched_channel_id, route.channel_path.poses.len()));
             let ok = self.send_follow_path(&handles, -1, 0, route.channel_path, Vec::new(), true, true).await;
             if !ok {
-                self.error(format!("通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止"));
+                let msg = format!("通道 {zone_id}→{next_zone_id} 導航失敗或被取消，任務序列中止");
+                self.error(&msg);
+                end(i, "channel", msg);
                 return;
             }
             self.info(format!("通道 zone {zone_id} → zone {next_zone_id} 完成"));
         }
-        self.info(format!("任務序列全部完成: zones={}", py_int_list(&zone_ids)));
+        let msg = format!("任務序列全部完成: zones={}", py_int_list(&zone_ids));
+        self.info(&msg);
+        status("completed", zone_ids.len().saturating_sub(1), "", msg);
     }
 
     // ------------------------------------------------------- parameters
@@ -1669,6 +1745,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         connectors: node.create_publisher::<MarkerArray>("/coverage_connectors", latched())?,
         free_space_inflated: node.create_publisher::<OccupancyGrid>("/free_space_inflated", latched())?,
         risk_map_inflated: node.create_publisher::<OccupancyGrid>("/risk_map_inflated", latched())?,
+        sequence_status: node.create_publisher::<r2r::std_msgs::msg::String>("/zone_sequence_status", latched())?,
     };
     let ctx = Arc::new(Ctx {
         logger: logger.clone(),
@@ -1692,6 +1769,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         follow_client: node.create_action_client::<Waypoint::Action>("nav_action_follow_path")?,
     });
     // `/record_path_status` client of the Python node (never used) is not created.
+    ctx.publish_sequence_status(&SequenceStatus { state: "idle", zone_ids: &[], index: 0, leg: "", message: String::new() });
     let handles = Handles(Arc::new(StdMutex::new(HashMap::new())));
 
     // ---- subscriptions ----------------------------------------------------
@@ -1980,4 +2058,35 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sequence_legs_wait_in_proportion_to_their_path() {
+        let header = Header::default();
+        // a 100 m lane: 600 s + 100 m at 0.05 m/s
+        let lane: Vec<(f64, f64)> = (0..=1000).map(|i| (i as f64 * 0.1, 0.0)).collect();
+        assert!((sequence_leg_timeout_s(&path_from_points(&lane, &header)) - 2600.0).abs() < 1e-6);
+        // a short channel keeps the 10 min floor
+        let channel = [(7.0, 4.0), (9.5, 4.0), (12.0, 4.0)];
+        assert!((sequence_leg_timeout_s(&path_from_points(&channel, &header)) - 700.0).abs() < 1e-6);
+        assert_eq!(sequence_leg_timeout_s(&path_from_points(&[], &header)), 600.0);
+    }
+
+    #[test]
+    fn sequence_status_names_the_zone_or_the_channel_being_driven() {
+        let ids = [3, 1];
+        let json = |state, index, leg| -> serde_json::Value {
+            serde_json::from_str(&sequence_status_json(&SequenceStatus { state, zone_ids: &ids, index, leg, message: "m".into() })).unwrap()
+        };
+        let zone = json("running", 0, "zone");
+        assert_eq!((zone["state"].as_str(), zone["zone_id"].as_i64(), zone["next_zone_id"].is_null()), (Some("running"), Some(3), true));
+        let channel = json("running", 0, "channel");
+        assert_eq!((channel["leg"].as_str(), channel["zone_id"].as_i64(), channel["next_zone_id"].as_i64()), (Some("channel"), Some(3), Some(1)));
+        let done = json("completed", 1, "");
+        assert_eq!((done["state"].as_str(), done["zone_id"].is_null(), done["zone_ids"].as_array().unwrap().len()), (Some("completed"), true, 2));
+    }
 }

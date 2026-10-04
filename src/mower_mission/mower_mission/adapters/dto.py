@@ -94,19 +94,50 @@ def marker_array_to_marker_layer(name: str, msg) -> dict:
     return {'name': name, 'markers': out}
 
 
-def zone_map_list_to_summaries(zone_map_list: Iterable) -> list[dict]:
-    """mower_interface/ZoneMap[] → ZoneSummary[]."""
+def coverage_points_by_zone(marker_array) -> dict[int, int]:
+    """Points of each zone's planned path in a /coverage_path_markers snapshot.
+
+    mower_coverage draws zone N's path as LINE_STRIP markers in namespace
+    ``zone_N_path`` (arrows and connectors use other namespaces). A snapshot
+    without them (no plan yet, or a DELETEALL) yields no zones.
+    """
+    line_strip, add = 4, 0
+    out: dict[int, int] = {}
+    for m in getattr(marker_array, 'markers', []):
+        if m.type != line_strip or m.action != add:
+            continue
+        ns = m.ns or ''
+        if not (ns.startswith('zone_') and ns.endswith('_path')):
+            continue
+        try:
+            zone = int(ns[len('zone_'):-len('_path')])
+        except ValueError:
+            continue
+        out[zone] = out.get(zone, 0) + len(m.points)
+    return out
+
+
+def zone_map_list_to_summaries(zone_map_list: Iterable,
+                               coverage_points: dict[int, int] | None = None) -> list[dict]:
+    """mower_interface/ZoneMap[] → ZoneSummary[].
+
+    map_manage's ZoneMap.path is never filled (the planner keeps its paths to
+    itself), so a zone's planned path is taken from the coverage markers
+    (``coverage_points_by_zone``); a path in the ZoneMap still counts.
+    """
+    coverage_points = coverage_points or {}
     summaries = []
     for zm in zone_map_list:
         inflated = getattr(zm, 'mask_map_inflated', None)
         path = getattr(zm, 'path', None)
         path_poses = getattr(path, 'poses', []) if path is not None else []
         has_map = bool(inflated and getattr(inflated, 'data', []))
+        point_count = max(len(path_poses), coverage_points.get(zm.zone_id, 0))
         summaries.append({
             'zoneId': zm.zone_id,
-            'pointCount': len(path_poses),
+            'pointCount': point_count,
             'hasMap': has_map,
-            'hasCoveragePath': len(path_poses) > 0,
+            'hasCoveragePath': point_count > 0,
         })
     return summaries
 

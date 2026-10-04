@@ -91,6 +91,19 @@ def _free_cells(grid):
     return int(np.count_nonzero(np.asarray(grid.data, dtype=np.int16) == 0))
 
 
+def _free_extent(grid):
+    """World (x0, x1), (y0, y1) spanned by the free cells' outer sides."""
+    info = grid.info
+    data = np.asarray(grid.data, dtype=np.int16).reshape(info.height, info.width)
+    rows, cols = np.nonzero(data == 0)
+    res = info.resolution
+    ox, oy = info.origin.position.x, info.origin.position.y
+    return (
+        (ox + cols.min() * res, ox + (cols.max() + 1) * res),
+        (oy + rows.min() * res, oy + (rows.max() + 1) * res),
+    )
+
+
 def test_import_keeps_collected_freespace_and_clips_zone(map_manage):
     # Collected freespace: free over world [0,4]×[0,4] (16 m²).
     collected = _free_grid((0.0, 4.0, 0.0, 4.0), 0.05, -0.5, -0.5, 100)
@@ -111,15 +124,41 @@ def test_import_keeps_collected_freespace_and_clips_zone(map_manage):
     # Coverage zone = image ∩ collected ≈ 4 m² (NOT the full ~64 m² image).
     zone_area = _free_cells(map_manage.zone_map_list[0].mask_map) * 0.1 * 0.1
     assert 3.0 <= zone_area <= 5.0
-    expected_inflated = map_manage._create_free_space_inflated(
+    # The planner's area keeps 0.3 m from the drawn outline (x = 2 and y = 2
+    # lie on collected grass) and 0.75 m from the collected edge (4 m).
+    inflated = map_manage.zone_map_list[0].mask_map_inflated
+    for lo, hi in _free_extent(inflated):
+        assert lo == pytest.approx(2.3, abs=0.051)
+        assert hi == pytest.approx(3.25, abs=0.11)
+    # Before, the clipped image kept 0.75 m from every edge.
+    old = map_manage._create_free_space_inflated(
         map_manage.zone_map_list[0].mask_map
     )
-    assert map_manage.zone_map_list[0].mask_map_inflated.data == (
-        expected_inflated.data
-    )
-    assert _free_cells(expected_inflated) < _free_cells(
+    assert _free_cells(old) < _free_cells(inflated) / 2
+    assert _free_cells(inflated) < _free_cells(
         map_manage.zone_map_list[0].mask_map
     )
+
+
+def test_small_image_on_collected_grass_keeps_its_shape(map_manage):
+    # A 1 m image inside 4 m of collected grass: the 0.75 m clearance from its
+    # own outline used to leave nothing (see the rejection test below, which
+    # still holds without collected freespace).
+    collected = _free_grid((0.0, 4.0, 0.0, 4.0), 0.05, -0.5, -0.5, 100)
+    map_manage.collected_free_space = collected
+    map_manage.base_map = collected
+    map_manage.map_msg = collected
+
+    res = ImportImageMask.Response()
+    map_manage.import_image_mask_srv(
+        _import_request(1.5, 1.5, side_px=10, res=0.1), res
+    )
+
+    assert res.success, res.message
+    inflated = map_manage.zone_map_list[0].mask_map_inflated
+    for lo, hi in _free_extent(inflated):
+        assert lo == pytest.approx(1.8, abs=0.051)
+        assert hi == pytest.approx(2.2, abs=0.051)
 
 
 def test_import_without_collected_is_image_only(map_manage):

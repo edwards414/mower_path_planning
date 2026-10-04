@@ -57,6 +57,13 @@ from mower_mission.navigation_guard import (
 
 
 MIN_SAFE_INFLATE_RADIUS_M = 0.75
+# How far an image mission's path keeps from the drawn outline where that
+# outline lies on collected grass: about the blade's reach (half a 0.6 m
+# strip), so the cut ends at the outline and the shape survives. The collected
+# freespace's own edges keep inflate_radius_m and no-go areas their dilation;
+# without collected freespace the outline is the only edge known and keeps
+# inflate_radius_m too. Same constant as mower_rs mower_map.
+IMAGE_OUTLINE_INSET_M = 0.3
 
 
 class MapManage(Node, NavigationActivityGuard):
@@ -553,9 +560,13 @@ class MapManage(Node, NavigationActivityGuard):
     def import_image_mask_srv(self, req, res):
         """Import an app-generated black/white mask as the active zone map."""
         try:
-            free_map, risk_map, zone_map, area_m2 = self._create_image_mask_maps(
-                req
-            )
+            (
+                free_map,
+                risk_map,
+                image_map,
+                zone_map,
+                area_m2,
+            ) = self._create_image_mask_maps(req)
         except ValueError as exc:
             res.success = False
             res.message = str(exc)
@@ -570,7 +581,7 @@ class MapManage(Node, NavigationActivityGuard):
             res.area_m2 = 0.0
             return res
 
-        free_space_inflated = self._create_free_space_inflated(free_map)
+        free_space_inflated = self._image_zone_safe_map(free_map, image_map)
         risk_map_inflated = self._create_risk_map_inflated(risk_map)
         if free_space_inflated is None or risk_map_inflated is None:
             res.success = False
@@ -590,10 +601,9 @@ class MapManage(Node, NavigationActivityGuard):
             res.zone_id = zone_map.zone_id
             res.area_m2 = 0.0
             return res
-        # The coverage planner consumes mask_map_inflated. Keep the same
-        # production clearance as /free_space_inflated; the uploaded outline
-        # is a range limit, not permission for the robot footprint to touch
-        # its edge.
+        # The coverage planner consumes mask_map_inflated: the drawn outline
+        # keeps IMAGE_OUTLINE_INSET_M where it lies on collected grass, the
+        # real edges inflate_radius_m (see _image_zone_safe_map).
         zone_map.mask_map_inflated = copy.deepcopy(free_space_inflated)
 
         # The image is only a RANGE LIMITER. zone_map.mask_map already holds
@@ -752,6 +762,7 @@ class MapManage(Node, NavigationActivityGuard):
         # the coverage planner, mower_rs mower_coverage). No-op when no
         # freespace was ever collected.
         had_collected = self.collected_free_space is not None
+        image_free_grid = free_grid
         free_grid = self._clip_free_grid_to_collected(
             free_grid, origin_x, origin_y, resolution
         )
@@ -779,14 +790,61 @@ class MapManage(Node, NavigationActivityGuard):
             origin_y=origin_y,
         )
 
+        image_map = self._occupancy_grid_from_array(
+            image_free_grid,
+            header=copy.deepcopy(header),
+            resolution=resolution,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+
         zone_map = ZoneMap()
         zone_map.header = copy.deepcopy(header)
         zone_map.zone_id = int(req.zone_id) if int(req.zone_id) > 0 else 9001
         zone_map.mask_map = copy.deepcopy(free_map)
         area_m2 = float(np.count_nonzero(free_grid == 0)) * resolution * resolution
-        return free_map, risk_map, zone_map, area_m2
+        return free_map, risk_map, image_map, zone_map, area_m2
 
-    def _clip_free_grid_to_collected(self, free_grid, origin_x, origin_y, resolution):
+    def _image_zone_safe_map(self, free_map, image_map):
+        """Return the image zone's mask_map_inflated.
+
+        With collected freespace the image raster is eroded by
+        IMAGE_OUTLINE_INSET_M from its own outline and kept only where the
+        collected freespace is free after its own inflate_radius_m erosion.
+        Without it, the clipped image keeps the full inflate_radius_m.
+        """
+        if self.collected_free_space is None:
+            return self._create_free_space_inflated(free_map)
+        collected_safe = self._create_free_space_inflated(
+            self.collected_free_space
+        )
+        if collected_safe is None:
+            return None
+        info = image_map.info
+        image = np.asarray(image_map.data, dtype=np.int16).reshape(
+            info.height, info.width
+        )
+        inset = erode_free_space_grid(
+            image,
+            resolution_m=float(info.resolution),
+            inflate_radius_m=IMAGE_OUTLINE_INSET_M,
+        )
+        safe = self._clip_free_grid_to_collected(
+            inset,
+            info.origin.position.x,
+            info.origin.position.y,
+            float(info.resolution),
+            collected=collected_safe,
+        )
+        safe_map = OccupancyGrid()
+        safe_map.header = free_map.header
+        safe_map.info = free_map.info
+        safe_map.data = safe.flatten().tolist()
+        return safe_map
+
+    def _clip_free_grid_to_collected(
+        self, free_grid, origin_x, origin_y, resolution, collected=None
+    ):
         """Intersect an image free_grid with the robot-collected freespace.
 
         Both use the OccupancyGrid convention 0=free, 100=occupied. A cell stays
@@ -798,9 +856,11 @@ class MapManage(Node, NavigationActivityGuard):
         world metres -> floor into the collected grid. Out-of-bounds or unknown
         (value != 0) collected cells are treated as occupied / not-free.
 
-        Returns ``free_grid`` unchanged when no freespace has been collected.
+        ``collected`` defaults to the robot-collected freespace; returns
+        ``free_grid`` unchanged when there is none.
         """
-        collected = self.collected_free_space
+        if collected is None:
+            collected = self.collected_free_space
         if collected is None:
             return free_grid
 
