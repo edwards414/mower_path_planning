@@ -1,0 +1,20 @@
+# 資料收集「當天」的中繼資料（規格 1.6），寫進每個 run 的 run_metadata.yaml。
+# 複製到機器人 ~/.mower/data_collection_session.yaml（容器內
+# /home/mower/.mower/data_collection_session.yaml），每次出車前修改。
+# 單次 run 可用 launch 參數覆寫：run_info:="{weather: cloudy, notes: 'yard2 east'}"
+#
+# 注意（P-099）：YAML 1.1 會把沒加引號的 off／on／yes／no 讀成布林值，
+# 字串一律加引號。
+#
+# 相機高度、俯角、外參來源與標定檔會自動從 calib/extrinsics.yaml 帶入，
+# 解析度與幀率從 launch 參數帶入，不用在這裡重填。
+camera:
+  model: "<型號>"                 # 待填：相機型號
+  serial: "<序號>"                # 待填：序號（lsusb -v 或機身標籤）
+  exposure: "auto"                # auto | manual
+grass_height_cm: 8                # 當天草高（cm）
+weather: "sunny"                  # sunny | cloudy | overcast | rain
+blade: "off"                      # 前幾次錄製保持 "off"
+heading_calibration: "pending"    # 錄完直線來回後改 "straight_line_done"
+calibration_date: ""              # 內參標定日期 YYYY-MM-DD（空白則用外參的 date）
+notes: ""

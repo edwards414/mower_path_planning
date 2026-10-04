@@ -20,10 +20,14 @@ Reads R2 creds from env vars or a .env file (searched: --env-file, ./.env,
   mower-bag ls
   mower-bag get [<run_id>] [<dest_dir>]     # no run_id -> interactive pick
   mower-bag rm <run_id> [-y]
+  mower-bag upload <run_dir>... | --all [--root DIR]   # manifest last, resumable
+  mower-bag verify <run_id>                  # R2 manifest vs objects (sizes)
 """
 import argparse
 import os
 import sys
+
+from mower_recorder import run_manifest
 
 _KEYS = ('R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID',
          'R2_SECRET_ACCESS_KEY', 'R2_PREFIX')
@@ -91,9 +95,12 @@ def _runs(client, cfg):
             continue
         key = f'{parts[0]}/{parts[1]}'
         r = runs.setdefault(
-            key, {'robot': parts[0], 'run_id': parts[1], 'files': 0, 'bytes': 0})
+            key, {'robot': parts[0], 'run_id': parts[1], 'files': 0, 'bytes': 0,
+                  'manifest': False})
         r['files'] += 1
         r['bytes'] += obj['Size']
+        if '/'.join(parts[2:]) == run_manifest.MANIFEST_NAME:
+            r['manifest'] = True   # upload finished (spec 2.1)
     return runs
 
 
@@ -120,11 +127,12 @@ def cmd_ls(client, cfg, _args):
     if not runs:
         print('(no bags in R2)')
         return
-    print(f'{"ROBOT":12} {"RUN_ID":22} {"FILES":>6} {"SIZE":>9}')
+    print(f'{"ROBOT":12} {"RUN_ID":22} {"FILES":>6} {"SIZE":>9}  MANIFEST')
     for k in sorted(runs):
         r = runs[k]
         print(f'{r["robot"]:12} {r["run_id"]:22} {r["files"]:6} '
-              f'{_human(r["bytes"]):>9}')
+              f'{_human(r["bytes"]):>9}  '
+              f'{"done" if r["manifest"] else "incomplete"}')
 
 
 def cmd_get(client, cfg, args):
@@ -159,12 +167,68 @@ def cmd_rm(client, cfg, args):
             != 'y':
         print('aborted')
         return
-    for k in keys:
-        client.delete_object(Bucket=cfg['R2_BUCKET'], Key=k)
-    print(f'deleted {len(keys)} objects')
+    n = run_manifest.delete_run_objects(   # _manifest.json first
+        client, cfg['R2_BUCKET'], base.rstrip('/'))
+    print(f'deleted {n} objects')
 
 
-def main():
+def _pending_runs(root):
+    runs = []
+    for name in sorted(os.listdir(root)):
+        run_dir = os.path.join(root, name)
+        if os.path.isdir(run_dir) and not name.startswith('.') and \
+                not os.path.isfile(os.path.join(run_dir, run_manifest.UPLOADED_MARKER)):
+            runs.append(run_dir)
+    return runs
+
+
+def cmd_upload(client, cfg, args):
+    """Same upload as bag_store_node (manifest last, resumable), one-shot."""
+    root = os.path.expanduser(args.root)
+    run_dirs = [os.path.abspath(os.path.expanduser(d)) for d in args.run_dirs]
+    if args.all:
+        run_dirs += _pending_runs(root)
+    if not run_dirs:
+        print('(nothing to upload)')
+        return 0
+    failed = 0
+    for run_dir in run_dirs:
+        run_id = os.path.basename(run_dir.rstrip('/'))
+        meta = run_manifest.read_run_metadata(run_dir)
+        robot = meta.get('robot_id') or args.robot_id
+        base = run_manifest.run_key(cfg['R2_PREFIX'], robot, run_id)
+        try:
+            res = run_manifest.upload_run(
+                client, cfg['R2_BUCKET'], base, run_dir, run_id, robot,
+                log=print if args.verbose else None)
+        except run_manifest.RunNotReady as e:
+            print(f'SKIP {run_id}: {e}')
+            failed += 1
+            continue
+        except Exception as e:  # noqa: BLE001 — resume by running it again
+            print(f'FAIL {run_id}: {type(e).__name__}: {e}（再執行一次會接續上傳）')
+            failed += 1
+            continue
+        print(f'OK   {run_id} -> {base}/ ({res["files"]} files, '
+              f'{res["uploaded"]} uploaded, {res["skipped"]} already there)')
+    return 1 if failed else 0
+
+
+def cmd_verify(client, cfg, args):
+    run_key = _resolve(client, cfg, args.run_id)
+    base = f'{cfg["R2_PREFIX"].rstrip("/")}/{run_key}'
+    ok, problems, manifest = run_manifest.verify_remote(
+        client, cfg['R2_BUCKET'], base)
+    if ok:
+        print(f'OK   {base}: _manifest.json 列出 {len(manifest["files"])} 個檔案，'
+              '大小都相符')
+        return 0
+    for p in problems:
+        print(f'FAIL {base}: {p}')
+    return 1
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(prog='mower-bag')
     ap.add_argument('--env-file', default='')
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -175,12 +239,25 @@ def main():
     r = sub.add_parser('rm', help='delete a run from R2')
     r.add_argument('run_id')
     r.add_argument('-y', '--yes', action='store_true')
-    args = ap.parse_args()
+    u = sub.add_parser('upload', help='upload local runs (manifest last)')
+    u.add_argument('run_dirs', nargs='*')
+    u.add_argument('--all', action='store_true',
+                   help='every run under --root without .uploaded')
+    u.add_argument('--root', default=os.environ.get('MOWER_BAG_ROOT',
+                                                    '~/.mower/bags'))
+    u.add_argument('--robot-id', default=os.environ.get('MOWER_ROBOT_ID') or 'mower',
+                   help='used when run_metadata.yaml has no robot_id')
+    u.add_argument('-v', '--verbose', action='store_true')
+    v = sub.add_parser('verify', help='check an uploaded run against its manifest')
+    v.add_argument('run_id')
+    args = ap.parse_args(argv)
 
     cfg = _load_env(args.env_file)
     client = _client(cfg)
-    {'ls': cmd_ls, 'get': cmd_get, 'rm': cmd_rm}[args.cmd](client, cfg, args)
+    rc = {'ls': cmd_ls, 'get': cmd_get, 'rm': cmd_rm, 'upload': cmd_upload,
+          'verify': cmd_verify}[args.cmd](client, cfg, args)
+    return rc or 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

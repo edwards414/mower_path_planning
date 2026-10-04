@@ -1,0 +1,29 @@
+# 前鏡頭外參 —— 佔位值（source: placeholder）。資料收集前必須實測後覆寫：
+#   複製到機器人 ~/.mower/calib/extrinsics.yaml，依 docs/資料收集錄製程序.md 第 3 節量測，
+#   把 source 改成 measured。check_run 看到 placeholder 會判 FAIL。
+#
+# 量測基準：驅動輪（後輪）輪軸中點正下方的地面。
+#   base_footprint 在這台車上不是實體點：URDF 把它放在輪軸中點前方約 0.166 m、
+#   離地約 0.093 m（P-086／P-098），所以這裡記錄「實體量測值」，
+#   由 mower_recorder/camera_extrinsics.py 依 URDF 換算成 TF：
+#     base_footprint → base_link → camera_front_link → camera_front_optical_frame
+# 座標：x 向前、y 向左、z 向上；角度單位：度；pitch 向下俯為正。
+schema: mower.camera_extrinsics/v1
+source: placeholder          # placeholder | measured | cad
+date: ""                     # 量測日期 YYYY-MM-DD
+measured_by: ""
+method: ""                   # 例：捲尺量距離；手機水平儀貼鏡頭上緣量俯角；硬地面重投影驗證
+
+reference:
+  axle_height_m: 0.090       # 待量測：驅動輪輪軸中心離地高度（約等於輪半徑）
+  # 輪軸中點在 base_footprint 的座標 [x, y, z]；null = 由 URDF 讀取
+  # （robot.urdf.xacro 目前為 [-0.1655, 0.0145, -0.0030]）
+  axle_center_in_base_footprint_m: null
+
+camera:
+  forward_of_axle_m: 0.35    # 待量測：鏡頭光心在驅動輪軸線前方的水平距離
+  left_of_center_m: 0.0      # 待量測：鏡頭光心偏離車身中線的距離（向左為正）
+  height_m: 0.62             # 待量測：鏡頭光心到地面（土面，不是草冠）
+  roll_deg: 0.0              # 待量測：左右傾斜（右側向下為正）
+  pitch_deg: 20.0            # 待量測：俯角（向下為正）
+  yaw_deg: 0.0               # 待量測：偏航（向左為正）

@@ -1,0 +1,53 @@
+# mower_recorder — data_collection profile（實機資料收集：前鏡頭＋定位 → MCAP → R2）
+# 規格：GrassVision workspace doc/Robot_Recording_R2_Pipeline_Spec.md 第 1、2 節
+# 啟動：launch/data_collection.launch.py（現場程序：docs/資料收集錄製程序.md）
+# 常駐的 record_topics.yaml 不受影響（app 回放依賴它）。
+profile: data_collection
+
+# ── telemetry 組 → <run>/bag/ ────────────────────────────────────────────────
+# MCAP chunk 壓縮（zstd_fast）。不要用 --compression-mode message：逐訊息壓縮後
+# Foxglove／python mcap 讀不到 payload（P-089），所以 compression 關掉。
+topics:
+  # 1.1 必要
+  - /tf
+  - /tf_static
+  - /imu/data
+  - /odom
+  - /fix
+  - /gps/status                     # mower_gps JSON（約 1 Hz）：carrier_solution RTK fixed／float、num_sv、h_acc_m
+  - /odometry/local
+  - /odometry/global
+  - /odometry/gps
+  # 1.2 建議
+  - /cmd_vel
+  - /mower_base/telemetry
+  - /battery_state
+  - /diagnostics
+  - /rosout
+  - /graph_snapshot
+  - /graph_events
+  # 1.3 選用（有硬體才錄）：/scan
+compression: false
+storage_preset_profile: zstd_fast
+max_bag_size_mb: 512
+max_bag_duration_s: 3600
+
+# ── camera 組 → <run>/camera/ ────────────────────────────────────────────────
+# 另一個 recorder，不壓縮（JPEG 再壓沒有效益，還吃 RK3568 CPU），256 MB 分檔。
+# /tf_static 也錄一份：camera/ 單獨拿去 Foxglove 就能投影，check_run 在沒有
+# zstandard 的環境也能檢查相機鏈。
+camera_recorder:
+  enabled: true
+  topics:
+    - /camera/front/image_raw/compressed
+    - /camera/front/camera_info
+    - /tf_static
+    # 1.3 選用：RGB-D 對齊深度與其 camera_info
+  max_bag_size_mb: 256
+  max_bag_duration_s: 0          # 0 = 只依大小分檔
+  storage_preset_profile: ''     # 不壓縮
+
+# 資料收集不需要 costmap 快照
+enable_snapshot: false
+snapshot_topics: []
+snapshot_max_cache_mb: 256

@@ -32,6 +32,7 @@ setup(
             'recorder_manager_node = mower_recorder.recorder_manager_node:main',
             'bag_store_node = mower_recorder.bag_store_node:main',
             'mower-bag = mower_recorder.cli:main',
+            'mower-check-run = mower_recorder.check_run:main',
         ],
     },
 )

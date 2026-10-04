@@ -229,7 +229,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
     && apt-get update \
     && { \
-        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
+        printf '%s\n' libcurl4 libusb-1.0-0 python3-serial python3-zstandard ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
         cat /tmp/runtime-apt-packages.txt; \
     } \
         | sort -u \
