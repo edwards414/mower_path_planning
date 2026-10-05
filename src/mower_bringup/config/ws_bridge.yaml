@@ -61,3 +61,5 @@ services:
   /system/check_update: std_srvs/srv/Trigger
   /pid_autotune: mower_interface/srv/PidAutotune
   /boustrophedon_coverage/set_parameters: rcl_interfaces/srv/SetParameters
+  /mower_recorder/start: std_srvs/srv/Trigger
+  /mower_recorder/stop: std_srvs/srv/Trigger
