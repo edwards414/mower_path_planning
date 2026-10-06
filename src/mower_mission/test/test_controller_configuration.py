@@ -461,7 +461,8 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     for text in (robot_launch, deploy_compose, MISSION_LAUNCH.read_text(encoding='utf-8'),
                  ENV_EXAMPLE.read_text(encoding='utf-8')):
         assert 'rust_coverage' not in text.lower()
-    assert "parameters=[{'require_command_session': True}]" in mux_launch
+    assert ("parameters=[{'require_command_session': True,\n"
+            "                     'max_input_age_s': MANUAL_MAX_INPUT_AGE_S}]") in mux_launch
     assert 'command_timeout_s", 0.20' in main
     assert 'max_input_age_s", 0.25' in main
     assert 'max_future_skew_s", 0.05' in main
@@ -910,6 +911,29 @@ def test_robot_stack_runs_an_idle_recorder_for_the_app():
     install = DEPLOY_INSTALL.read_text(encoding='utf-8')
     assert 'host/mower-data-collection.sh" /opt/mower/host/' in install
     assert 'docker-compose.data-collection.yaml" /opt/mower/' in install
+
+
+def test_manual_guard_allows_the_relay_round_trip_and_nothing_else_does():
+    """App commands carry the robot's own clock, so the manual guard's age
+    limit bounds phone <-> relay <-> robot. 0.25 s dropped every command over
+    the Cloudflare relay (video unaffected, so the robot looked fine): the
+    manual guard -- Python, Rust binary and mower_rsd -- allows 0.8 s, the
+    app's _manualCommandClockTimeout; the final guard keeps 0.25 s."""
+    mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
+    assert 'MANUAL_MAX_INPUT_AGE_S = 0.8\n' in mux_launch
+    manual = mux_launch.split('manual_velocity_guard = Node(', 1)[1].split('\n    )\n', 1)[0]
+    manual_rs = mux_launch.split('manual_velocity_guard_rs = Node(', 1)[1].split('\n    )\n', 1)[0]
+    for block in (manual, manual_rs):
+        assert "'max_input_age_s': MANUAL_MAX_INPUT_AGE_S" in block
+    for name in ('velocity_guard = Node(', 'velocity_guard_rs = Node('):
+        final = mux_launch.split('\n    ' + name, 1)[1].split('\n    )\n', 1)[0]
+        assert 'max_input_age_s' not in final, name
+
+    rsd = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    manual_rsd = rsd.split('\nmanual_velocity_guard:\n', 1)[1].split('\nvelocity_command_guard:\n', 1)[0]
+    assert 'max_input_age_s: 0.8' in manual_rsd
+    final_rsd = re.split(r'\n\S', rsd.split('\nvelocity_command_guard:\n', 1)[1], maxsplit=1)[0]
+    assert 'max_input_age_s' not in final_rsd
 
 
 def test_production_rosbridge_binds_only_wireguard_address():

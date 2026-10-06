@@ -79,6 +79,13 @@ robot_status:
 manual_velocity_guard:
   ros__parameters:
     require_command_session: true
+    # The app stamps each command with the robot's own clock, so this bounds
+    # the whole phone <-> relay <-> robot round trip. 0.25 s (the default) is
+    # never met over 4G + the Cloudflare relay (robot -> SJC edge ~160 ms RTT,
+    # measured 2026-10-05); every command was rejected as stale. Manual only:
+    # the navigation guard below keeps the default. Keep in step with the
+    # app's _manualCommandClockTimeout (mission_mock_provider.dart).
+    max_input_age_s: 0.8
 velocity_command_guard:
   ros__parameters:
     require_command_session: false
