@@ -131,12 +131,18 @@ services:
       - MTX_WEBRTCIPSFROMINTERFACESLIST=${WEBRTC_INTERFACES:-eth1}
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
+      # The `recorder` service has MediaMTX record the front stream into
+      # <run>/video/ (mower_recorder video_record.py): same path as in that
+      # container, so the recordPath it sends is valid here as well.
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}/bags:/home/mower/.mower/bags
 
   # Idle topic recorder behind the app's 錄話題 button: mower_recorder's
   # always-on profile (record_topics.yaml) with /mower_recorder/start|stop,
   # /status and /bags (the app's 錄製 / Bag page). autostart:=false, so
   # nothing is written until someone presses the button; while it records the
-  # rear light breathes red. lawan_node keeps record:=false, so this is the
+  # rear light breathes red and MediaMTX records the front camera into
+  # <run>/video/ (fMP4, the H.264 stream as is, ~1 GB/h at CAMERA_BPS
+  # 2000000). A run stops by itself under 2 GB free disk. lawan_node keeps record:=false, so this is the
   # only owner of /mower_recorder/* -- except during a data-collection run:
   # host/mower-data-collection.sh stops this service first and starts it
   # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
@@ -157,6 +163,7 @@ services:
       - output_root:=/home/mower/.mower/bags
       - autostart:=false
       - r2_env_file:=/home/mower/.mower/r2.env
+      - video_api_url:=http://127.0.0.1:9997
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
       - MOWER_STATE_DIR=/home/mower/.mower

@@ -23,6 +23,10 @@ Lifecycle: autostart on launch, plus /mower_recorder/{start,stop,snapshot}
 services. Recorders are stopped with SIGINT so the mcap is finalized/indexed.
 A fault (Bool on fault_topic) flushes the snapshot buffer of heavy topics.
 
+Front-camera video (video_record.py): with ``video_api_url`` set, MediaMTX
+records its ``front`` stream into ``<run>/video/`` for the length of the run.
+A run stops by itself when the disk gets under ``min_free_mb``.
+
 Profiles (record_profile.py): the always-on ``record_topics.yaml`` keeps its
 original single recorder. ``data_collection.yaml`` (launch/data_collection.
 launch.py) adds a second, uncompressed camera recorder, MCAP chunk compression
@@ -33,6 +37,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 
 import yaml
 
@@ -46,7 +51,7 @@ from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from mower_recorder import record_profile
+from mower_recorder import record_profile, video_record
 
 FULL_RECORDER_NODE = record_profile.FULL_RECORDER_NODE
 SNAPSHOT_RECORDER_NODE = record_profile.SNAPSHOT_RECORDER_NODE
@@ -84,6 +89,11 @@ class RecorderManager(Node):
         self.declare_parameter('intrinsics_placeholder', False)
         self.declare_parameter('extrinsics_file', '')
         self.declare_parameter('extrinsics_derived', '')  # JSON from the launch
+        # Front-camera video through MediaMTX's API (video_record.py); '' = off.
+        self.declare_parameter('video_api_url', '')
+        self.declare_parameter('video_path', 'front')
+        # Stop a run when the disk gets this low (MB); 0 = never.
+        self.declare_parameter('min_free_mb', 2048)
 
         self._robot_id = self.get_parameter('robot_id').value
         self._output_root = os.path.expanduser(
@@ -98,6 +108,18 @@ class RecorderManager(Node):
         self._run_id = None
         self._run_dir = None
         self._last_fix = None
+        self._video_api = self.get_parameter('video_api_url').value
+        self._video_path = self.get_parameter('video_path').value
+        self._min_free_mb = int(self.get_parameter('min_free_mb').value)
+        self._video_on = False
+        self._video_error = None
+        self._stop_reason = None
+        # start/stop come from services and from the status tick (disk guard)
+        self._lock = threading.RLock()
+        if self._video_api:
+            # a recorder that died mid-run must not leave MediaMTX recording
+            self._video_on = True
+            self._set_video(False)
 
         self.create_subscription(
             NavSatFix, self.get_parameter('gps_topic').value,
@@ -151,17 +173,36 @@ class RecorderManager(Node):
             f'autostart: {msg}')
 
     def _start_recording(self):
+        with self._lock:
+            return self._start_recording_locked()
+
+    def _start_recording_locked(self):
         if self._recording():
             return False, '已在錄製中'
         if not self._cfg['topics']:
             return False, 'record_topics.yaml 沒有指定 topics'
+        if record_profile.disk_low(self._output_root, self._min_free_mb):
+            return False, f'磁碟剩不到 {self._min_free_mb} MB，不能開始錄製'
 
         ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
         self._run_id = f'{self._robot_id}_{ts}'
         self._run_dir = os.path.join(self._output_root, self._run_id)
         os.makedirs(self._run_dir, exist_ok=True)
         self._start_time = datetime.datetime.now()
+        self._stop_reason = None
         self._write_metadata()
+
+        video_note = ''
+        if self._video_api:
+            os.makedirs(os.path.join(self._run_dir, video_record.VIDEO_DIR),
+                        exist_ok=True)
+            ok, msg = self._set_video(True)
+            if not ok:
+                video_note = f'（前鏡頭影像沒有錄：{msg}）'
+            elif video_record.path_ready(self._video_api, self._video_path) is False:
+                video_note = '（前鏡頭目前沒有畫面，有畫面時才會錄進去）'
+            else:
+                video_note = '，含前鏡頭影像'
 
         # full (bag/), [camera (camera/)], [snapshot (snapshots/)]; the command
         # lines of the always-on profile are unchanged (test_record_profile.py).
@@ -173,9 +214,35 @@ class RecorderManager(Node):
                 f'({len(spec["topics"])} topics)')
 
         self._publish_status()
-        return True, f'開始錄製 run={self._run_id}'
+        return True, f'開始錄製 run={self._run_id}{video_note}'
+
+    def _set_video(self, on):
+        """Turn MediaMTX's recording of the camera path on (into the current
+        run) or off; returns (ok, message). "On" always sends the new run's
+        path, even if an earlier "off" failed."""
+        if not on and not self._video_on:
+            return True, 'unchanged'
+        body = (video_record.record_patch(self._run_dir) if on
+                else video_record.STOP_PATCH)
+        ok, msg = video_record.patch_path(self._video_api, self._video_path, body)
+        if ok:
+            self._video_on = on
+            self._video_error = None
+            self.get_logger().info(
+                f'video {"on" if on else "off"}: {self._video_path}')
+        elif msg != self._video_error:   # retried every tick: say it once
+            self._video_error = msg
+            self.get_logger().warn(
+                f'video {"on" if on else "off"} failed ({self._video_path}): {msg}')
+        return ok, msg
 
     def _stop_recording(self):
+        with self._lock:
+            return self._stop_recording_locked()
+
+    def _stop_recording_locked(self):
+        if self._video_on:
+            self._set_video(False)
         # Signal every recorder first so all bags end at the same moment,
         # then wait for each to finalize + index its mcap.
         running = [(n, p) for n, p in self._procs.items()
@@ -197,12 +264,23 @@ class RecorderManager(Node):
         return False, '目前沒有在錄製'
 
     def _publish_status(self):
-        recording = self._recording()
+        # under the start/stop lock: a tick in the middle of a start must not
+        # take the video it just turned on for a stopped run
+        with self._lock:
+            recording = self._recording()
+            if recording and record_profile.disk_low(self._run_dir, self._min_free_mb):
+                self.get_logger().error(
+                    f'under {self._min_free_mb} MB free: stopping run {self._run_id}')
+                self._stop_reason = 'disk_low'
+                self._stop_recording()   # publishes the status itself
+                return
+            if not recording and self._video_on:
+                self._set_video(False)   # an earlier "off" failed: keep trying
         elapsed, bag_bytes = 0.0, 0
         if recording and self._start_time is not None:
             elapsed = (datetime.datetime.now() - self._start_time).total_seconds()
             bag_bytes = sum(self._dir_size(os.path.join(self._run_dir, d))
-                            for d in ('bag', 'camera'))
+                            for d in ('bag', 'camera', video_record.VIDEO_DIR))
         cam = self._cfg.get('camera_recorder') or {}
         st = {
             'recording': recording,
@@ -214,6 +292,8 @@ class RecorderManager(Node):
             'num_topics': len(self._cfg.get('topics', [])) + (
                 len(cam.get('topics') or []) if cam.get('enabled') else 0),
             'profile': self._cfg.get('profile') or 'default',
+            'video': recording and self._video_on,
+            'stop_reason': self._stop_reason,
         }
         m = String()
         m.data = json.dumps(st, ensure_ascii=False)

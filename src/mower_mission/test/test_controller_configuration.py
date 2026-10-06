@@ -894,6 +894,11 @@ def test_robot_stack_runs_an_idle_recorder_for_the_app():
         assert line in recorder, line
     assert '/dev:/dev' not in recorder
     assert 'record:=false' in source.split('  mediamtx:', 1)[0]
+    # front camera: MediaMTX records into <run>/video/, which it must see at
+    # the same path as the recorder does
+    assert '- video_api_url:=http://127.0.0.1:9997' in recorder
+    mediamtx = source.split('\n  mediamtx:\n', 1)[1].split('\n  recorder:\n', 1)[0]
+    assert '- ${MOWER_STATE_DIR:-/home/cat/.mower}/bags:/home/mower/.mower/bags' in mediamtx
 
     helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
     start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]

@@ -45,8 +45,10 @@ topics:
   - /rosout                                      # all node + service logs
 
 # ── Snapshot (heavy) topics — buffered in RAM, flushed only on fault ──────────
-# Cameras are NOT here: record video via the WebRTC/MediaMTX pipeline and
-# correlate by timestamp. Bag = telemetry/state; video = its own stream.
+# Cameras are NOT here: with video_api_url set (the robot's `recorder`
+# service) MediaMTX records the front camera's H.264 stream into
+# <run>/video/ for the length of the run (video_record.py); line it up with
+# the bag by the time in the segment names. Bag = telemetry/state.
 snapshot_topics:
   - /global_costmap/costmap
   - /local_costmap/costmap
