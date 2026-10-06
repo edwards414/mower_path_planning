@@ -13,6 +13,15 @@ from launch_ros.actions import Node
 # start. The Python fallbacks keep their own `UnlessCondition(rust_*)`.
 _TRUE = "('true', '1', 'yes', 'on')"
 
+# The app stamps each manual command with this robot's own clock
+# (/manual_command_clock), so the age bounds the whole phone <-> relay <->
+# robot round trip. The guard default (0.25 s) is never met over the
+# Cloudflare relay (~0.15-0.2 s service round trip even from a wired LAN,
+# more over 4G): every command was dropped as stale while the video kept
+# working. Manual guard only; the final guard keeps its default. Keep in step
+# with the app's _manualCommandClockTimeout (800 ms) and mower_rsd.yaml.
+MANUAL_MAX_INPUT_AGE_S = 0.8
+
 
 def _rust_binary(flag, rust_daemon):
     """Run the separate mower_rs binary: switch on and daemon not running."""
@@ -67,6 +76,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'require_command_session': True,
+            'max_input_age_s': MANUAL_MAX_INPUT_AGE_S,
         }],
         remappings=manual_guard_remappings,
     )
@@ -87,7 +97,8 @@ def generate_launch_description():
         name='manual_velocity_guard',
         output='screen',
         condition=_rust_binary(rust_guards, rust_daemon),
-        parameters=[{'require_command_session': True}],
+        parameters=[{'require_command_session': True,
+                     'max_input_age_s': MANUAL_MAX_INPUT_AGE_S}],
         remappings=manual_guard_remappings,
     )
 
