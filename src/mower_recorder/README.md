@@ -49,6 +49,13 @@ IncludeLaunchDescription(PythonLaunchDescriptionSource(
                  'launch', 'record.launch.py')))
 ```
 
+On the robot this runs as the `recorder` service of
+`deploy/docker-compose.yaml` with `autostart:=false`: idle until the app's
+錄話題 button (manual-control panel) calls `/mower_recorder/start` / `stop`.
+`lawan_node` keeps `record:=false`, so that service is the only owner of
+`/mower_recorder/*`; `mower-data-collection.sh` stops it for a
+data-collection run and starts it again afterwards.
+
 While a recording is running the robot's **rear light breathes red** (front
 light unchanged): `recorder_manager_node` publishes
 `{"effect":"recording"|"off","source":"bag"}` on `/mower_base/rear_light` with

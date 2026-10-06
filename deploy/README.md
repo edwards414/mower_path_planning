@@ -35,6 +35,14 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 
 進度在 `~/.mower/update_status.json`，App 透過 `/robot/info` 看得到（`pulling` → `restarting` → `idle` / `failed`）。更新進行中（`pulling` / `restarting`）機身燈條會跑**琥珀色環繞光**（`robot_info_node` → `/mower_base/led_command` → STM32 mode `0x06`），結束後淡回常亮白。
 
+## 話題錄製（App「錄話題」）
+
+compose 的 `recorder` 服務跑 `mower_recorder` 的常駐設定（`record.launch.py`，`autostart:=false`）：平常待命不寫任何東西，App 遙控面板按「錄話題」才呼叫 `/mower_recorder/start`，再按一次 `/mower_recorder/stop` 封存 mcap；錄製中車尾燈呼吸紅燈。bag 在 `~/.mower/bags`，App「錄製 / Bag」頁可改名、刪除、上傳 R2（有 `~/.mower/r2.env` 時）。`lawan_node` 仍是 `record:=false`，所以 `/mower_recorder/*` 只有這個服務在答。
+
+- 第一次啟用（compose 有變動）：`sudo ./install.sh` 後 `cd /opt/mower && sudo docker compose up -d`（只會新增 `recorder`，`lawan_node` 不重啟）。
+- 暫停：`sudo docker compose -f /opt/mower/docker-compose.yaml stop recorder`（下次 `up -d` / 更新會再起來）。
+- 資料收集：`mower-data-collection.sh start` 會先停掉 `recorder`（兩邊都會答 `/mower_recorder/*`），`stop` 再把它開回來。
+
 ## 韌體
 
 - image 內附 `/opt/mower/firmware/mower_robot_firmware.bin` + `.json`（版本、commit、build 時間）。

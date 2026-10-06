@@ -5,7 +5,9 @@
 # (`docker compose up -d --remove-orphans` on docker-compose.yaml) never touch
 # it. Runs next to the normal stack (lawan_node, record:=false, GPS=true for
 # /fix and /gps/status); same image, same DDS domain. Normally driven by
-# host/mower-data-collection.sh; procedure in docs/資料收集錄製程序.md.
+# host/mower-data-collection.sh, which also stops the stack's `recorder`
+# service (the app's 錄話題 button) for the run, since both would own
+# /mower_recorder/*; procedure in docs/資料收集錄製程序.md.
 #
 #   sudo systemctl stop mower-camera.service     # it holds /dev/video0
 #   docker compose -f /opt/mower/docker-compose.data-collection.yaml up -d

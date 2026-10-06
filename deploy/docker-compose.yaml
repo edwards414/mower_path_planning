@@ -131,3 +131,40 @@ services:
       - MTX_WEBRTCIPSFROMINTERFACESLIST=${WEBRTC_INTERFACES:-eth1}
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
+
+  # Idle topic recorder behind the app's 錄話題 button: mower_recorder's
+  # always-on profile (record_topics.yaml) with /mower_recorder/start|stop,
+  # /status and /bags (the app's 錄製 / Bag page). autostart:=false, so
+  # nothing is written until someone presses the button; while it records the
+  # rear light breathes red. lawan_node keeps record:=false, so this is the
+  # only owner of /mower_recorder/* -- except during a data-collection run:
+  # host/mower-data-collection.sh stops this service first and starts it
+  # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
+  recorder:
+    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    pull_policy: missing
+    restart: unless-stopped
+    # `ros2 launch` shuts its nodes down only on SIGINT; on docker's default
+    # SIGTERM a running recording would lose its unfinalized mcap.
+    stop_signal: SIGINT
+    stop_grace_period: 60s
+    command:
+      - ros2
+      - launch
+      - mower_recorder
+      - record.launch.py
+      - robot_id:=${MOWER_ROBOT_ID:-mower}
+      - output_root:=/home/mower/.mower/bags
+      - autostart:=false
+      - r2_env_file:=/home/mower/.mower/r2.env
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
+      - MOWER_STATE_DIR=/home/mower/.mower
+      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
+      # Never flash the STM32 from this container (no /dev/stmcom here).
+      - MOWER_FIRMWARE_SYNC=0
+    network_mode: host
+    ipc: host
+    pid: host
+    volumes:
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
