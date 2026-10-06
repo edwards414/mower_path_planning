@@ -33,6 +33,10 @@ rm -rf /opt/mower/gps
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" \
   "$here/host/mower-lte.sh" "$here/host/mower-lte-dhcp.sh" /opt/mower/host/
 install -m 755 "$here/host/mower-pair" /opt/mower/host/
+# Data collection (docs/資料收集錄製程序.md): a separate compose project; its
+# helper also stops / restarts the stack's recorder service around a run.
+install -m 644 "$here/docker-compose.data-collection.yaml" /opt/mower/
+install -m 755 "$here/host/mower-data-collection.sh" /opt/mower/host/
 ln -sf /opt/mower/host/mower-pair /usr/local/bin/mower-pair
 if [ ! -f /opt/mower/.env ]; then
   sed "s#/home/cat/.mower#$state_dir#" "$here/.env.example" > /opt/mower/.env
@@ -111,3 +115,4 @@ fi
 echo
 echo "next:  sudo /opt/mower/host/mower-update.sh     # pull \$IMAGE_TAG and start"
 echo "       sudo systemctl status mower"
+echo "       (stack already running: cd /opt/mower && sudo docker compose up -d   # adds new services)"

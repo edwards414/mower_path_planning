@@ -2,21 +2,23 @@
 # Data collection helper for the mower_recorder data_collection profile
 # (docker-compose.data-collection.yaml; procedure: docs/資料收集錄製程序.md).
 #
-#   sudo mower-data-collection.sh start        stop the app camera (mower-camera.service)
-#                                              and the update timer, start the container
+#   sudo mower-data-collection.sh start        stop the app camera (mower-camera.service),
+#                                              the update timer and the app's recorder
+#                                              (docker-compose.yaml `recorder`), start the container
 #   mower-data-collection.sh status            camera rate + recorder status
 #   mower-data-collection.sh record-start      /mower_recorder/start
 #   mower-data-collection.sh record-stop       /mower_recorder/stop (finalizes both mcaps)
 #   mower-data-collection.sh smoke [SECONDS]   30 s smoke bag, then check it
 #   mower-data-collection.sh check [RUN_ID] [mower-check-run options]
 #   sudo mower-data-collection.sh stop         record-stop, stop the container,
-#                                              give the camera back to the app
+#                                              give the camera and the recorder back to the app
 #   mower-data-collection.sh upload            upload every pending run (manifest last)
 #   mower-data-collection.sh verify RUN_ID     R2 manifest vs objects
 #
 # Settings (optional, environment): DC_COMPOSE_FILE (default
 # /opt/mower/docker-compose.data-collection.yaml, else next to this script's
-# parent), ENV_FILE (default /opt/mower/.env).
+# parent), ENV_FILE (default /opt/mower/.env), MAIN_COMPOSE_FILE (the robot
+# stack, default /opt/mower/docker-compose.yaml).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -34,11 +36,18 @@ fi
 env_file=${ENV_FILE:-/opt/mower/.env}
 env_args=()
 if [ -f "$env_file" ]; then env_args=(--env-file "$env_file"); fi
-state=/run/mower-data-collection.state   # timer state to restore on stop
+state=/run/mower-data-collection.state   # timer / recorder state to restore on stop
 svc=data_collection
 bags=/home/mower/.mower/bags            # path inside the container
 
 compose() { docker compose "${env_args[@]}" -f "$compose_file" "$@"; }
+# The robot stack's idle recorder (the app's 錄話題 button) owns
+# /mower_recorder/* too; it steps aside for the run and comes back after it.
+main_compose=${MAIN_COMPOSE_FILE:-/opt/mower/docker-compose.yaml}
+stack() { docker compose "${env_args[@]}" -f "$main_compose" "$@"; }
+app_recorder_running() {
+  [ -f "$main_compose" ] && [ -n "$(stack ps -q --status running recorder 2>/dev/null)" ]
+}
 running() { [ -n "$(compose ps -q --status running "$svc" 2>/dev/null)" ]; }
 # docker-entrypoint.sh sources ROS + the workspace (firmware sync is off here)
 ros() { compose exec -T "$svc" /usr/local/bin/docker-entrypoint.sh "$@"; }
@@ -56,6 +65,10 @@ case "${1:-}" in
       echo "timer=inactive" > "$state"
     fi
     systemctl stop mower-camera.service     # it holds /dev/video0 (app has no video now)
+    if app_recorder_running; then
+      stack stop recorder                   # SIGINT: a bag it was recording is finalized
+      echo "recorder=running" >> "$state"
+    fi
     compose up -d
     echo "waiting for /camera/front/image_raw/compressed ..."
     for _ in $(seq 1 30); do
@@ -104,6 +117,9 @@ case "${1:-}" in
       compose down                          # stop_signal SIGINT: clean shutdown
     fi
     systemctl start mower-camera.service
+    if grep -q '^recorder=running' "$state" 2>/dev/null; then
+      stack up -d recorder
+    fi
     if grep -q '^timer=active' "$state" 2>/dev/null; then
       systemctl start mower-update.timer
     fi

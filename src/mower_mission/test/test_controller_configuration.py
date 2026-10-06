@@ -22,6 +22,8 @@ REAL_CONTROLLER_LAUNCH = (
 )
 LOCAL_COMPOSE = SRC_DIR.parent / 'docker-compose.yaml'
 DEPLOY_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.yaml'
+DATA_COLLECTION_HELPER = SRC_DIR.parent / 'deploy/host/mower-data-collection.sh'
+DEPLOY_INSTALL = SRC_DIR.parent / 'deploy/install.sh'
 ROBOT_LAUNCH = SRC_DIR / 'mower_bringup/launch/robot.launch.py'
 DOCKERFILE = SRC_DIR.parent / 'Dockerfile'
 BUILD_WORKFLOW = SRC_DIR.parent / '.github/workflows/build.yml'
@@ -874,6 +876,35 @@ def test_compose_persists_field_data_and_passes_absolute_paths():
         assert 'restart: unless-stopped' in source
         assert 'stop_grace_period: 60s' in source
         assert 'record:=false' in source
+
+
+def test_robot_stack_runs_an_idle_recorder_for_the_app():
+    """The app's 錄話題 button calls /mower_recorder/start|stop: a recorder
+    service waits for it (autostart off), finalizes its mcap on `docker
+    stop`, never flashes the STM32, and is the only owner of
+    /mower_recorder/* -- lawan_node keeps record:=false and the
+    data-collection helper takes the recorder down for its own run."""
+    source = DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    recorder = source.split('\n  recorder:\n', 1)[1]
+    for line in ('- mower_recorder', '- record.launch.py', '- autostart:=false',
+                 '- output_root:=/home/mower/.mower/bags',
+                 'stop_signal: SIGINT', 'restart: unless-stopped',
+                 '- MOWER_FIRMWARE_SYNC=0', 'network_mode: host', 'ipc: host',
+                 '- ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower'):
+        assert line in recorder, line
+    assert '/dev:/dev' not in recorder
+    assert 'record:=false' in source.split('  mediamtx:', 1)[0]
+
+    helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
+    start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
+    stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
+    assert start.index('stack stop recorder') < start.index('compose up -d')
+    assert 'stack up -d recorder' in stop
+    assert stop.index('compose down') < stop.index('stack up -d recorder')
+
+    install = DEPLOY_INSTALL.read_text(encoding='utf-8')
+    assert 'host/mower-data-collection.sh" /opt/mower/host/' in install
+    assert 'docker-compose.data-collection.yaml" /opt/mower/' in install
 
 
 def test_production_rosbridge_binds_only_wireguard_address():
