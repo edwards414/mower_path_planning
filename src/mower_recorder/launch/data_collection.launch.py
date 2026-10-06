@@ -38,8 +38,8 @@ from launch_ros.actions import Node
 from mower_recorder import camera_launch
 
 # Parameters of these nodes land in <run>/params/ (EKF modes, navsat yaw
-# offset / declination: needed offline, P-086). Each dump takes a few seconds
-# before the recorders start.
+# offset / declination: needed offline, P-086). Each dump takes a few
+# seconds; recorder_manager runs them after the recorders have started.
 PARAMS_DUMP_NODES = ['/ekf_filter_node_odom', '/ekf_filter_node_map',
                      '/navsat_transform']
 
