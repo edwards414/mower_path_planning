@@ -214,6 +214,10 @@ class RecorderManager(Node):
                 f'({len(spec["topics"])} topics)')
 
         self._publish_status()
+        # `ros2 param dump` takes ~5 s per node on the robot: done after the
+        # recorders, so a run starts when the button is pressed, not ~10 s on
+        threading.Thread(target=self._dump_params, args=(self._run_dir,),
+                         daemon=True).start()
         return True, f'開始錄製 run={self._run_id}{video_note}'
 
     def _set_video(self, on):
@@ -336,7 +340,6 @@ class RecorderManager(Node):
             self.get_logger().info(f'metadata -> {path}')
         except Exception as e:
             self.get_logger().error(f'write metadata failed: {e}')
-        self._dump_params()
 
     def _profile_metadata(self, meta, profile):
         """Spec 1.6 fields; problems are logged, never block the recording."""
@@ -388,10 +391,10 @@ class RecorderManager(Node):
         except Exception:
             return {'sha': 'unknown'}
 
-    def _dump_params(self):
+    def _dump_params(self, run_dir):
         if not self._params_nodes:
             return
-        pdir = os.path.join(self._run_dir, 'params')
+        pdir = os.path.join(run_dir, 'params')
         os.makedirs(pdir, exist_ok=True)
         for node in self._params_nodes:
             try:
