@@ -95,9 +95,15 @@ ros2 topic pub -1 /mower_recorder/fault std_msgs/msg/Bool "{data: true}"
 - The recorders are renamed via `--ros-args -r __node:=…`; if your rosbag2 build
   ignores that, the snapshot service path (`/mower_snapshot_recorder/snapshot`)
   changes — adjust `SNAPSHOT_RECORDER_NODE` in `recorder_manager_node.py`.
-- Do not add camera/point-cloud topics to the always-on list — record video via
-  the WebRTC/MediaMTX pipeline and correlate by timestamp. For camera data use
-  the `data_collection` profile below instead.
+- Do not add camera/point-cloud topics to the always-on list. Video: with
+  `video_api_url:=http://127.0.0.1:9997` (the robot's `recorder` service)
+  `recorder_manager_node` has MediaMTX record the front camera into
+  `<run>/video/` (fMP4 of the hardware H.264 stream, ~1 GB/h at 2 Mbit/s;
+  segment names carry the start time) and turns it off with the run
+  (`video_record.py`). The app's live view keeps running. For camera frames
+  inside a bag (GrassVision) use the `data_collection` profile below.
+- A run stops by itself when the disk has under `min_free_mb` (default 2048)
+  free; the status then says `"stop_reason": "disk_low"`.
 - Write to eMMC/SSD, not microSD.
 
 ## data_collection profile (camera + localization for GrassVision)

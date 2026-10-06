@@ -77,6 +77,15 @@ jobs:
             test/test_robot_info.py \
             test/test_site_store.py
 
+      # The rest of mower_recorder's tests need mcap / moto / boto3 (bags, R2).
+      - name: Run ROS-free mower_recorder tests
+        working-directory: src/mower_recorder
+        run: |
+          python -m pytest -q \
+            test/test_camera_extrinsics.py \
+            test/test_record_profile.py \
+            test/test_video_record.py
+
   coverage-core-tests:
     # The coverage planner library (safe-map filter, path validator, A*
     # connector, boustrophedon / zigzag / spiral generators, cell

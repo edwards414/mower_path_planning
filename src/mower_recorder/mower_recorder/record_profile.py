@@ -155,6 +155,18 @@ def recorder_specs(cfg, run_dir, qos_path=''):
 
 
 # ── data_collection run metadata ─────────────────────────────────────────────
+def disk_low(path, min_free_mb, usage=shutil.disk_usage):
+    """True when the file system holding ``path`` has under ``min_free_mb``
+    MB free (0 = never). A path that does not exist yet is measured at its
+    nearest existing parent."""
+    if not min_free_mb or min_free_mb <= 0:
+        return False
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)
+    return usage(probe).free < min_free_mb * 1024 * 1024
+
+
 def parse_mapping(text, what='value'):
     """YAML/JSON mapping string (launch parameter) -> dict ('' -> {})."""
     if text is None:

@@ -34,6 +34,8 @@ def generate_launch_description():
     r2_env_file = LaunchConfiguration('r2_env_file')
     upload_policy = LaunchConfiguration('upload_policy')
     gps_topic = LaunchConfiguration('gps_topic')
+    video_api_url = LaunchConfiguration('video_api_url')
+    min_free_mb = LaunchConfiguration('min_free_mb')
 
     # Nodes whose disappearance raises a fault (flushes the snapshot buffer).
     # Edit here to watch your own critical nodes.
@@ -51,6 +53,11 @@ def generate_launch_description():
         DeclareLaunchArgument('r2_env_file', default_value=''),
         DeclareLaunchArgument('upload_policy', default_value='wifi_or_dock'),
         DeclareLaunchArgument('gps_topic', default_value='/fix'),
+        # MediaMTX API (e.g. http://127.0.0.1:9997): record the front camera
+        # into <run>/video/ while a run goes (video_record.py); '' = no video.
+        DeclareLaunchArgument('video_api_url', default_value=''),
+        # Stop a run when the disk gets under this many MB free; 0 = never.
+        DeclareLaunchArgument('min_free_mb', default_value='2048'),
 
         Node(
             package='mower_recorder',
@@ -79,6 +86,8 @@ def generate_launch_description():
                     '/boustrophedon_coverage', '/map_manage'],
                 'gps_topic': gps_topic,
                 'fault_topic': '/mower_recorder/fault',
+                'video_api_url': video_api_url,
+                'min_free_mb': min_free_mb,
             }],
         ),
         Node(

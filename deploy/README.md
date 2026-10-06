@@ -37,7 +37,9 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 
 ## 話題錄製（App「錄話題」）
 
-compose 的 `recorder` 服務跑 `mower_recorder` 的常駐設定（`record.launch.py`，`autostart:=false`）：平常待命不寫任何東西，App 遙控面板按「錄話題」才呼叫 `/mower_recorder/start`，再按一次 `/mower_recorder/stop` 封存 mcap；錄製中車尾燈呼吸紅燈。bag 在 `~/.mower/bags`，App「錄製 / Bag」頁可改名、刪除、上傳 R2（有 `~/.mower/r2.env` 時）。`lawan_node` 仍是 `record:=false`，所以 `/mower_recorder/*` 只有這個服務在答。
+compose 的 `recorder` 服務跑 `mower_recorder` 的常駐設定（`record.launch.py`，`autostart:=false`）：平常待命不寫任何東西，App 遙控面板按「錄話題」才呼叫 `/mower_recorder/start`，再按一次 `/mower_recorder/stop` 封存 mcap；錄製中車尾燈呼吸紅燈。
+
+前鏡頭影像也一起錄：錄製期間 `recorder` 透過 MediaMTX API 讓 `mediamtx` 把 `front` 串流（`mower-camera.service` 硬體編碼的 H.264）存成 fMP4 到 `<run>/video/`，不重新編碼、App 即時影像不中斷，2 Mbit/s 約 1 GB/小時；檔名是開始時間，用來對 bag 的時間。磁碟剩不到 2 GB 時錄製會自己停。bag 在 `~/.mower/bags`，App「錄製 / Bag」頁可改名、刪除、上傳 R2（有 `~/.mower/r2.env` 時）。`lawan_node` 仍是 `record:=false`，所以 `/mower_recorder/*` 只有這個服務在答。
 
 - 第一次啟用（compose 有變動）：`sudo ./install.sh` 後 `cd /opt/mower && sudo docker compose up -d`（只會新增 `recorder`，`lawan_node` 不重啟）。
 - 暫停：`sudo docker compose -f /opt/mower/docker-compose.yaml stop recorder`（下次 `up -d` / 更新會再起來）。
