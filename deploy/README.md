@@ -3,7 +3,7 @@
 一個 image tag = 一個完整的機器人版本：ROS 軟體 + 同一個 commit 編出來的 STM32 韌體（容器啟動時 `firmware-sync` 自動燒）。機器人只做 **pull**，不需要 GitHub 憑證以外的任何東西。
 
 ```
-GitHub main / tag v* ──build.yml──► docker.io/edwards414/mower_path_planning:{main,v0.6.0,stable}
+GitHub main / tag v* ──build.yml──► docker.io/fxrbindi/mower_path_planning:{main,v0.6.0,stable}
                                     (同一份也推到 ghcr.io/edwards414/mower_path_planning，備援)
                                                      │
 LubanCat  sudo /opt/mower/host/mower-update.sh ◄─────┘   (或 App「更新機器人」→ /system/update)

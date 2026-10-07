@@ -61,7 +61,7 @@ STATE_DIR=${MOWER_STATE_DIR:-/home/cat/.mower}
 # from the home ISP ghcr.io's CDN delivers ~70 kB/s against ~9 MB/s
 # (deploy/README.md). Root must be logged in to that registry when the
 # repository is private: sudo docker login <registry>.
-IMAGE_REPO=${IMAGE_REPO:-docker.io/edwards414/mower_path_planning}
+IMAGE_REPO=${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}
 REGISTRY=${IMAGE_REPO%%/*}
 IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 mkdir -p "$STATE_DIR"

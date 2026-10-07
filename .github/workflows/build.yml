@@ -301,7 +301,7 @@ jobs:
           df -h
 
       # Every tag goes to GHCR and, when the repository variable DOCKERHUB_REPO
-      # is set (e.g. "edwards414/mower_path_planning"), to the same-named
+      # is set (e.g. "fxrbindi/mower_path_planning"), to the same-named
       # Docker Hub repository. Robots pull from Docker Hub: from the home ISP
       # ghcr.io's CDN (Fastly) delivers ~70 kB/s while Docker Hub delivers
       # ~9 MB/s (measured 2026-10-07, deploy/README.md). Without the variable
