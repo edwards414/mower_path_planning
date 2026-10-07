@@ -1,5 +1,6 @@
 #!/bin/bash
-# Keeps the Quectel EC25 LTE data session up (qmi_wwan, /dev/cdc-wdm0 + wwan0).
+# Keeps the LTE data session up (qmi_wwan, /dev/cdc-wdm0 + wwan0): Quectel
+# EC25 or SIMCom SIM7600G-H, any modem the qmi_wwan driver binds.
 #
 # Dials the APN over QMI, then runs udhcpc with mower-lte-dhcp.sh so wwan0 gets
 # its address, a default route at MOWER_LTE_METRIC (default 200: Ethernet /
@@ -18,7 +19,10 @@ METRIC=${MOWER_LTE_METRIC:-200}
 QMI=${MOWER_LTE_QMI:-/dev/cdc-wdm0}
 IFACE=${MOWER_LTE_IFACE:-wwan0}
 DHCP_SCRIPT=${MOWER_LTE_DHCP_SCRIPT:-/opt/mower/host/mower-lte-dhcp.sh}
-POLL_S=20
+# A 4G session that drops is not noticed until the next poll, and the redial
+# itself takes ~30 s (measured 2026-10-07: 17:29:52 down -> 17:30:25 new
+# lease); 5 s keeps the dead time close to that floor.
+POLL_S=5
 RETRY_S=15
 
 export MOWER_LTE_METRIC=$METRIC

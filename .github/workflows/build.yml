@@ -70,6 +70,7 @@ jobs:
             test/test_coverage_progress_tracker.py \
             test/test_flutter_adapter_dto.py \
             test/test_image_mask_import.py \
+            test/test_lte_uplink.py \
             test/test_map_safety.py \
             test/test_nav_map_fusion.py \
             test/test_pairing.py \

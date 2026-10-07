@@ -1,8 +1,8 @@
-# Dials the Quectel EC25 (QMI) and keeps wwan0 up as a fallback uplink at
+# Dials the LTE modem (QMI: Quectel EC25 / SIMCom SIM7600) and keeps wwan0 up as a fallback uplink at
 # route metric 200; the app relay (mower_agent) and Tailscale then work over
 # 4G when Ethernet / Wi-Fi are gone. APN and metric come from /opt/mower/.env.
 [Unit]
-Description=Mower LTE uplink (Quectel EC25 via QMI)
+Description=Mower LTE uplink (QMI modem: EC25 / SIM7600)
 After=network.target
 Wants=network.target
 

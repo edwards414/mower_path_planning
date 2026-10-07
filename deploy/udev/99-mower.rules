@@ -17,13 +17,16 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="g
 # PlayStation joystick
 SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", GROUP="joystick", MODE="0660"
 
-# Quectel EC25 LTE modem: interface 2 is the AT command port (0 DM, 1 NMEA,
-# 3 PPP). Polled by host/mower-link-status.py for signal strength.
+# LTE modem AT command port, polled by host/mower-link-status.py for signal
+# strength. Quectel EC25 and SIMCom SIM7600G-H (lubancat, 2026-10-07) both
+# expose five serial interfaces with the AT port at interface 2 (0 DM/diag,
+# 1 NMEA, 3 PPP/modem, 4 audio).
 # ATTRS{} keys in one rule must all match the same parent; idVendor lives on
 # the USB device and bInterfaceNumber on the interface, so the pair never
 # matched and /dev/lte_at was never created. ID_USB_INTERFACE_NUM is set on
 # the tty itself by 60-serial.rules.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2c7c", ATTRS{idProduct}=="0125", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="lte_at", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="lte_at", MODE="0660", GROUP="dialout"
 
 # Genesys Logic 4-port hub the IMU / camera hang off. The kernel default
 # power/control=auto lets it runtime-suspend the moment its ports are idle
