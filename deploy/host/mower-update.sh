@@ -59,6 +59,17 @@ STATE_DIR=${MOWER_STATE_DIR:-/home/cat/.mower}
 IMAGE="ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG}"
 mkdir -p "$STATE_DIR"
 
+# "An update is in progress" is this lock, not the state file: a pull cut
+# short by a reboot or a power cut left update_status.json at "pulling"
+# forever, and every later run (timer, app) refused to start (lubancat,
+# 2026-10-07: stuck from 17:57 across two reboots). The file only tells the
+# app what is going on; the lock dies with the process.
+exec 9>"$STATE_DIR/.update.lock"
+if ! flock -n 9; then
+  echo "[mower-update] an update is already in progress (another mower-update.sh holds the lock)"
+  exit 0
+fi
+
 status() {  # state message
   local tmp="$STATE_DIR/update_status.json.tmp"
   printf '{"state":"%s","message":"%s","tag":"%s","time":%s}\n' "$1" "${2//\"/\\\"}" "$IMAGE_TAG" "$(date +%s)" > "$tmp" \
@@ -97,12 +108,6 @@ if [ "$auto" -eq 1 ]; then
     echo "[mower-update] auto update disabled (MOWER_AUTO_UPDATE=0)"
     exit 0
   fi
-  cur_state=$(json_field "$STATE_DIR/update_status.json" state)
-  case "$cur_state" in
-    pulling|restarting|rebooting)
-      echo "[mower-update] an update is already in progress ($cur_state)"
-      exit 0 ;;
-  esac
   rs="$STATE_DIR/robot_status.json"
   if [ -f "$rs" ]; then
     age=$(( $(date +%s) - $(json_field "$rs" time || echo 0) ))
@@ -131,12 +136,6 @@ if [ "$check" -eq 1 ]; then
   # Registry lookup only (one HTTPS request, no download, no state change):
   # robot_status turns remote_digest != software.digest into
   # /robot/info update.available for the apps.
-  cur_state=$(json_field "$STATE_DIR/update_status.json" state)
-  case "$cur_state" in
-    pulling|restarting|rebooting)
-      echo "[mower-update] check skipped, an update is in progress ($cur_state)"
-      exit 0 ;;
-  esac
   remote=$(remote_digest)
   if [ -z "$remote" ]; then
     write_check_json "" "registry lookup failed (network or ghcr.io login)"
@@ -152,6 +151,13 @@ if [ "$check" -eq 1 ]; then
   fi
   exit 0
 fi
+
+cur_state=$(json_field "$STATE_DIR/update_status.json" state)
+case "$cur_state" in
+  pulling|restarting|rebooting)
+    # nobody holds the lock, so that update died: say so, then carry on
+    status failed "earlier update interrupted while $cur_state (reboot or power loss)" ;;
+esac
 
 before=$(image_digest)
 remote=$(remote_digest)
