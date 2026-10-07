@@ -21,11 +21,32 @@ import re
 import select
 import subprocess
 import sys
+import termios
 import time
 
 AT_PORT = os.environ.get('MOWER_LTE_AT', '/dev/lte_at')
 PERIOD_S = float(os.environ.get('MOWER_LINK_PERIOD_S', '5'))
 SKIP_IFACES = ('lo', 'docker', 'veth', 'br-', 'dummy')
+
+
+def configure_port(fd, baud=termios.B115200):
+    """Raw 8N1, no echo, no flow control. A freshly enumerated modem tty
+    comes up cooked at 9600 baud with CRTSCTS set, on which a non-blocking
+    write fails with EAGAIN before the modem sees a byte (SIM7600G-H,
+    2026-10-07)."""
+    attrs = termios.tcgetattr(fd)
+    iflag, oflag, cflag, lflag, _ispeed, _ospeed, cc = attrs
+    iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP
+               | termios.INLCR | termios.IGNCR | termios.ICRNL | termios.IXON
+               | termios.IXOFF | termios.IXANY)
+    oflag &= ~termios.OPOST
+    lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG
+               | termios.IEXTEN)
+    cflag &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB | termios.CRTSCTS)
+    cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
+    cc = list(cc)
+    cc[termios.VMIN], cc[termios.VTIME] = 0, 0
+    termios.tcsetattr(fd, termios.TCSANOW, [iflag, oflag, cflag, lflag, baud, baud, cc])
 
 
 def at(fd, cmd, timeout=1.5):
@@ -72,6 +93,8 @@ def lte():
         info['error'] = str(e)
         return info
     try:
+        configure_port(fd)
+        termios.tcflush(fd, termios.TCIOFLUSH)
         m = re.search(r'\+CSQ:\s*(\d+),(\d+)', at(fd, 'AT+CSQ'))
         if m:
             csq, ber = int(m.group(1)), int(m.group(2))
