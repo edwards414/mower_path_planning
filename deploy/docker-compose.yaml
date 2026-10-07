@@ -25,7 +25,7 @@
 # commit and flashes it at start-up (utils/firmware-sync).
 services:
   lawan_node:
-    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    image: ${IMAGE_REPO:-docker.io/edwards414/mower_path_planning}:${IMAGE_TAG:-stable}
     # Updates are explicit (host/mower-update.sh): never block a boot on a
     # registry the robot may not reach.
     pull_policy: missing
@@ -147,7 +147,7 @@ services:
   # host/mower-data-collection.sh stops this service first and starts it
   # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
   recorder:
-    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    image: ${IMAGE_REPO:-docker.io/edwards414/mower_path_planning}:${IMAGE_TAG:-stable}
     pull_policy: missing
     restart: unless-stopped
     # `ros2 launch` shuts its nodes down only on SIGINT; on docker's default

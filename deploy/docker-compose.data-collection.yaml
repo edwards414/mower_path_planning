@@ -28,7 +28,7 @@ name: mower-data-collection
 
 services:
   data_collection:
-    image: ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG:-stable}
+    image: ${IMAGE_REPO:-docker.io/edwards414/mower_path_planning}:${IMAGE_TAG:-stable}
     pull_policy: missing
     restart: "no"
     # `ros2 launch` shuts its nodes down only on SIGINT; on docker's default
