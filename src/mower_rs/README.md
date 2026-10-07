@@ -33,7 +33,14 @@ see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 `robot.launch.py` takes all the switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` / `RUST_BASE` in
 `/opt/mower/.env`) so the safety-critical ones — the guards and the base
-driver — can be enabled last, after a supervised drive.
+driver — can be enabled last, after a supervised drive. Since 2026-10-08
+`rust_base`, `rust_localize` and `rust_daemon` default to true in
+`robot.launch.py` and in the deploy compose file; `RUST_BASE=false` /
+`RUST_LOCALIZE=false` / `RUST_DAEMON=false` in `.env` is the roll-back to
+the C++ chain. The sub-launch files (`mower.launch.py`,
+`mission.launch.py`, `dual_ekf_navsat.launch.py`, ...) keep false as
+their own default: the simulation and bench launches include them without
+these arguments and have no base to drive.
 
 ## `mower_rsd`: the same modules in one process
 

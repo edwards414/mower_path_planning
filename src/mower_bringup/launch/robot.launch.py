@@ -459,7 +459,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'rust_localize',
-            default_value='false',
+            default_value='true',
             description='mower_rs mower_localize instead of the two '
                         'robot_localization ekf_node processes and '
                         'navsat_transform_node (same node names, topics, '
@@ -475,7 +475,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'rust_base',
-            default_value='false',
+            default_value='true',
             description='mower_rs mower_base instead of the whole '
                         'ros2_control chain: ros2_control_node '
                         '(controller_manager), mower_hardware::MowerSystem, '
@@ -485,12 +485,12 @@ def generate_launch_description():
                         '/odom_slow, /joint_states and /mower_base/* '
                         'contract; '
                         'robot_state_publisher stays and keeps its '
-                        '/joint_states input. Flip only after a supervised '
-                        'drive.',
+                        '/joint_states input. Default on since 2026-10-08; '
+                        'false falls back to the ros2_control chain.',
         ),
         DeclareLaunchArgument(
             'rust_daemon',
-            default_value='false',
+            default_value='true',
             description='Run every enabled mower_rs module inside one '
                         'mower_rsd process (one r2r Context / DDS '
                         'participant) instead of one binary each. The module '
