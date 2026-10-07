@@ -42,6 +42,24 @@ def at(fd, cmd, timeout=1.5):
     return out.decode(errors='replace')
 
 
+def parse_cpsi(text):
+    """SIMCom (SIM7600) serving-cell report ->
+    {'band', 'plmn', 'rsrp_dbm', 'rsrq_db', 'sinr_db'} or None.
+
+    +CPSI: LTE,Online,466-92,0x639D,134534710,430,EUTRAN-BAND7,3050,5,5,-103,-998,-722,13
+    After the band: EARFCN, DL/UL bandwidth, then RSRQ, RSRP and RSSI in
+    0.1 dB(m) units and RSSNR in dB.
+    """
+    m = re.search(r'\+CPSI:\s*LTE,[^,]*,(\d+-\d+),[^,]*,[^,]*,[^,]*,([^,]*),'
+                  r'-?\d+,-?\d+,-?\d+,(-?\d+),(-?\d+),(-?\d+),(-?\d+)', text)
+    if not m:
+        return None
+    return {'band': m.group(2), 'plmn': m.group(1).replace('-', ''),
+            'rsrq_db': round(int(m.group(3)) / 10.0, 1),
+            'rsrp_dbm': round(int(m.group(4)) / 10.0, 1),
+            'sinr_db': float(m.group(6))}
+
+
 def lte():
     if not os.path.exists(AT_PORT):
         return {'present': False}
@@ -79,6 +97,10 @@ def lte():
             info['rsrp_dbm'] = int(m.group(2))
             info['sinr_db'] = round(int(m.group(3)) / 5.0 - 20.0, 1)
             info['rsrq_db'] = int(m.group(4))
+        if info['rsrp_dbm'] is None:  # SIMCom: the same numbers from +CPSI?
+            cell = parse_cpsi(at(fd, 'AT+CPSI?'))
+            if cell:
+                info.update(cell)
     except OSError as e:
         info['error'] = str(e)
     finally:
