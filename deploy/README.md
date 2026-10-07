@@ -3,7 +3,8 @@
 一個 image tag = 一個完整的機器人版本：ROS 軟體 + 同一個 commit 編出來的 STM32 韌體（容器啟動時 `firmware-sync` 自動燒）。機器人只做 **pull**，不需要 GitHub 憑證以外的任何東西。
 
 ```
-GitHub main / tag v* ──build.yml──► ghcr.io/edwards414/mower_path_planning:{main,v0.6.0,stable}
+GitHub main / tag v* ──build.yml──► docker.io/fxrbindi/mower_path_planning:{main,v0.6.0,stable}
+                                    (同一份也推到 ghcr.io/edwards414/mower_path_planning，備援)
                                                      │
 LubanCat  sudo /opt/mower/host/mower-update.sh ◄─────┘   (或 App「更新機器人」→ /system/update)
           └─ docker compose up -d ─► 容器 entrypoint: firmware-sync ─► ros2 launch robot.launch.py
@@ -14,7 +15,7 @@ LubanCat  sudo /opt/mower/host/mower-update.sh ◄─────┘   (或 App�
 ```bash
 # 在板子上（deploy/ 這個資料夾即可，不需要整個 repo）
 sudo ./install.sh                      # /opt/mower + udev + systemd + ~/.mower
-sudo docker login ghcr.io              # image 是 private 時；用只有 read:packages 的 PAT
+sudo docker login docker.io            # image 是 private 時；用 Read-only 的 Docker Hub access token
 sudo vi /opt/mower/.env                # IMAGE_TAG、ROSBRIDGE_ADDRESS
 sudo /opt/mower/host/mower-update.sh   # pull + 啟動
 sudo systemctl status mower
@@ -22,6 +23,12 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 ```
 
 `install.sh` 可重複執行（更新 compose / 腳本 / udev / 單元）。
+
+## 為什麼拉 Docker Hub 而不是 GHCR
+
+2026-10-07 實測（機器人與開發機同一條 Seednet 線路）：ghcr.io 的 blob 走 Fastly（東京節點），這條線路到它只有 **40–90 kB/s**，cwnd 卡在 10（丟包）；同一時間 Docker Hub / CloudFront 有 **7–9 MB/s**。平常 27–53 MB 的更新要 95–184 s，apt 層（249 MB）一變就要一小時以上。板子本身不是瓶頸（RK3568 解 gzip 60 MB/s）。
+
+所以 `build.yml` 把每個 tag 同時推到 Docker Hub（GitHub repo variable `DOCKERHUB_REPO`、secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`）與 GHCR；機器人 `.env` 的 `IMAGE_REPO` 決定拉哪邊（預設 Docker Hub）。GHCR 出問題時改成 `IMAGE_REPO=ghcr.io/edwards414/mower_path_planning` 再跑 `mower-update.sh` 即可，兩邊 tag 與 digest 相同。CI 的 build cache 仍只放 GHCR（runner 到 GitHub 很快）。
 
 ## 更新 / 回滾
 

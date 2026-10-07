@@ -8,7 +8,7 @@
 # systemd units in /etc/systemd/system, creates ~/.mower for the container
 # and enables everything on boot. Re-run after changing anything in deploy/.
 # It does not pull the image: run  sudo /opt/mower/host/mower-update.sh  next
-# (after `docker login ghcr.io` if the package is private).
+# (after `docker login <registry of IMAGE_REPO>` if the repository is private).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -109,8 +109,13 @@ if ! docker info >/dev/null 2>&1; then
   echo "   docker is not running or not installed" >&2
   exit 1
 fi
-if ! grep -q ghcr.io /root/.docker/config.json 2>/dev/null; then
-  echo "   no ghcr.io login for root: run  sudo docker login ghcr.io  if the image is private"
+# registry of IMAGE_REPO in .env (default Docker Hub); Docker Hub's key in
+# config.json is https://index.docker.io/v1/
+registry=$(sed -n 's/^IMAGE_REPO=\([^/]*\)\/.*/\1/p' /opt/mower/.env 2>/dev/null | tail -1)
+registry=${registry:-docker.io}
+key=$registry; [ "$registry" = docker.io ] && key=index.docker.io
+if ! grep -q "$key" /root/.docker/config.json 2>/dev/null; then
+  echo "   no $registry login for root: run  sudo docker login $registry  if the image is private"
 fi
 echo
 echo "next:  sudo /opt/mower/host/mower-update.sh     # pull \$IMAGE_TAG and start"

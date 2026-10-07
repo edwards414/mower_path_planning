@@ -56,7 +56,14 @@ fi
 set -a; . "$ENV_FILE"; set +a
 IMAGE_TAG=${IMAGE_TAG:-stable}
 STATE_DIR=${MOWER_STATE_DIR:-/home/cat/.mower}
-IMAGE="ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG}"
+# Registry + repository the robot pulls from (.env IMAGE_REPO). CI pushes
+# every tag to both ghcr.io and Docker Hub; Docker Hub is the default because
+# from the home ISP ghcr.io's CDN delivers ~70 kB/s against ~9 MB/s
+# (deploy/README.md). Root must be logged in to that registry when the
+# repository is private: sudo docker login <registry>.
+IMAGE_REPO=${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}
+REGISTRY=${IMAGE_REPO%%/*}
+IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 mkdir -p "$STATE_DIR"
 
 # "An update is in progress" is this lock, not the state file: a pull cut
@@ -138,7 +145,7 @@ if [ "$check" -eq 1 ]; then
   # /robot/info update.available for the apps.
   remote=$(remote_digest)
   if [ -z "$remote" ]; then
-    write_check_json "" "registry lookup failed (network or ghcr.io login)"
+    write_check_json "" "registry lookup failed (network or $REGISTRY login)"
     echo "[mower-update] check: registry lookup failed"
     exit 1
   fi
@@ -176,8 +183,8 @@ status pulling "pulling $IMAGE"
 # exists and the registry says denied
 if ! pull_out=$(docker pull "$IMAGE" 2>&1); then
   case "$pull_out" in
-    *denied*|*unauthorized*) hint="ghcr.io login for root is missing or expired: sudo docker login ghcr.io" ;;
-    *"no such host"*|*"timeout"*|*"connection refused"*) hint="no network to ghcr.io" ;;
+    *denied*|*unauthorized*) hint="$REGISTRY login for root is missing or expired: sudo docker login $REGISTRY" ;;
+    *"no such host"*|*"timeout"*|*"connection refused"*) hint="no network to $REGISTRY" ;;
     *) hint="${pull_out##*$'\n'}" ;;
   esac
   status failed "pull of $IMAGE failed: $hint"
