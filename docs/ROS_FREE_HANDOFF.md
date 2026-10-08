@@ -203,6 +203,15 @@ navsat 鎖的 datum 就歪 10–15 度 —— **C++ 和 Rust 一樣**（容器�
 「oracle 沒涵蓋」警告。映像含 `fix/rf-localize-preflight` 之後不用重建就能試：複製 `dual_ekf_navsat_params.yaml` 到 `~/.mower`，
 compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個 stack 都吃這個參數）。
 
+**2026-10-08 補記：預設值已經翻成 true。** `deploy/docker-compose.yaml`（`${RUST_BASE:-true}` 等三個）、
+`deploy/.env.example` 和 `robot.launch.py` 的 `rust_base` / `rust_localize` / `rust_daemon` 預設都是 true；
+`mower.launch.py`、`mission.launch.py`、`dual_ekf_navsat.launch.py` 等子 launch 自己的預設仍是 false，
+因為模擬與 bench 的 launch 直接 include 它們、沒有底盤可開。機器的 `/opt/mower/.env` 當時**沒有**寫這三個 key，
+所以合併後第一次 `mower-update.sh` 拉到新 main 就會換成 `mower_base` / `mower_localize` / `mower_rsd`；
+要留在 C++ 鏈就在 `.env` 明寫 `RUST_BASE=false`、`RUST_LOCALIZE=false`、`RUST_DAEMON=false`。
+上面的試車清單（拔線三種、`kill -9`、`datum_check.py`）不因預設值改變而免除：latch 0.5 s 那版（`d354537`、`63bc73f`）
+上機後還沒有試車紀錄。
+
 ### 2. Phase D–E 的 Go/No-Go（計畫第 7 節）
 
 **光為了 CPU 不值得做。** A–C 之後整機約 15 %，D–E 再多省約 10 個百分點，

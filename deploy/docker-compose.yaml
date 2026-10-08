@@ -68,14 +68,18 @@ services:
       # RUST_BASE replaces the whole ros2_control chain
       # (controller_manager + mower_hardware + diff_controller +
       # joint_state_broadcaster, ~28 % of a core) with one mower_rs
-      # node. It drives the wheels: supervised drive first.
-      - rust_base:=${RUST_BASE:-false}
-      - rust_localize:=${RUST_LOCALIZE:-false}
+      # node; RUST_LOCALIZE the two robot_localization EKFs and
+      # navsat_transform. Both default on since 2026-10-08. They drive
+      # the wheels and steer nav2, so a robot still on the C++ chain is
+      # switched with someone present (docs/ROS_FREE_HANDOFF.md, 上機);
+      # RUST_BASE=false / RUST_LOCALIZE=false in .env is the roll-back,
+      # no new image needed.
+      - rust_base:=${RUST_BASE:-true}
+      - rust_localize:=${RUST_LOCALIZE:-true}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
-      # behaviour, so flip it only once the modules themselves
-      # have been through their own supervised checks.
-      - rust_daemon:=${RUST_DAEMON:-false}
+      # behaviour. Default on; RUST_DAEMON=false runs one binary each.
+      - rust_daemon:=${RUST_DAEMON:-true}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the
       # domain id only separates it from anything else on the box.

@@ -363,7 +363,7 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     mower = MOWER_LAUNCH.read_text(encoding='utf-8')
     assert "('localize', 'rust_localize')," in robot
     assert "'rust_localize': rust_localize," in robot
-    assert "'rust_localize',\n            default_value='false'," in robot
+    assert "'rust_localize',\n            default_value='true'," in robot
     assert "'rust_localize': LaunchConfiguration('rust_localize')," in mower
 
     # one module, three nodes; under mower_rsd they read the C++ nodes' own
@@ -426,13 +426,13 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     assert '"crates/mower_localize"' in cargo
     assert '"crates/mower_localize_core"' in cargo
 
-    # compose switch and its documented default
+    # compose switch and its documented default (on since 2026-10-08)
     deploy = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    assert 'rust_localize:=${RUST_LOCALIZE:-false}' in deploy
+    assert 'rust_localize:=${RUST_LOCALIZE:-true}' in deploy
     env_example = (SRC_DIR.parent / 'deploy/.env.example').read_text(
         encoding='utf-8'
     )
-    assert 'RUST_LOCALIZE=false' in env_example
+    assert 'RUST_LOCALIZE=true' in env_example
 
     # the filter settings are resolved from the node's parameters, not
     # compiled in (mower_localize_core/tests/yaml_config.rs checks the yaml)
@@ -1292,14 +1292,15 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
     rsp = mower_launch.split('robot_state_publisher = Node(', 1)[1].split(')', 1)[0]
     assert 'condition' not in rsp
 
-    # the switch itself: declared false, threaded down, and a daemon module
+    # the switch itself: declared on (since 2026-10-08), threaded down, and
+    # a daemon module
     argument = re.search(
         r"DeclareLaunchArgument\(\s*'rust_base'(.*?)\n\s*\),",
         robot_launch,
         flags=re.DOTALL,
     )
     assert argument is not None
-    assert re.search(r"default_value='false'", argument.group(1))
+    assert re.search(r"default_value='true'", argument.group(1))
     assert "'rust_base': rust_base," in robot_launch
     assert "('base', 'rust_base')," in robot_launch
 
@@ -1314,10 +1315,10 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
         'set(MOWER_RS_BINARIES', 1)[1].split(')', 1)[0]
     assert '"crates/mower_base"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
 
-    # compose switch, default off
-    assert 'rust_base:=${RUST_BASE:-false}' in DEPLOY_COMPOSE.read_text(
+    # compose switch, default on; RUST_BASE=false in .env is the roll-back
+    assert 'rust_base:=${RUST_BASE:-true}' in DEPLOY_COMPOSE.read_text(
         encoding='utf-8')
-    assert 'RUST_BASE=false' in ENV_EXAMPLE.read_text(encoding='utf-8')
+    assert 'RUST_BASE=true' in ENV_EXAMPLE.read_text(encoding='utf-8')
 
 
 def _load_launch_module(path):
