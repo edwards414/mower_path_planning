@@ -11,6 +11,11 @@
 Phase B（Rust 底盤驅動）已在真機監督試車兩次（2026-09-28、09-29，見下文），
 Phase C（Rust EKF/navsat）程式寫完、容器裡測過，還沒上機。真正拿掉 ROS 是 Phase D–E，還沒開始。
 
+**2026-10-08 補：** B、C 已上機。有人在場、一次開一個：`RUST_BASE`（搖桿、放開即停、兩種拔線的 latch 序列都如下文所述）→ `RUST_LOCALIZE`（nav2 在 Rust 的 `map→odom` 上 `Managed nodes are active`）→ `RUST_DAEMON`，每步 `probe_app.py` 對 baseline `APP_CONTRACT_OK`。
+PR #38 把三個預設翻成 true（子 launch 檔保持 false，模擬 / bench 用），機器 `.env` 明寫。機器上剩 `mower_rsd`（約 51 % 單核）、nav2 容器（13 %）、`robot_state_publisher`、`twist_mux`，loopback 221 封包/s（main 原本 1329）。
+室內 `datum_check.py` 回 `NO_DATUM`，datum 根治仍未決定。D/E 的執行計畫與 Yocto（Phase F）見 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md) 第 8、9 節。
+同日發現 pull 映像會讓板子硬重開（22 次開機無一正常關機），`mower-update.timer` 已停、PR #39 讓更新時壓 CPU 頻率並修了 up_to_date 的誤判，細節在 PR 與 `deploy/README.md`。
+
 ## 分支與 PR
 
 | | |
