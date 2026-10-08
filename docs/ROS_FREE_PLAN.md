@@ -1,6 +1,7 @@
 # 拿掉 ROS 2：單一 Rust 程序（`mowerd`）計畫
 
 日期：2026-09-19　接續 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md)（那份把 Python 節點換成 Rust，這份把 ROS 2 中介層本身換掉）。
+2026-10-08 補第 8 節（D/E 對照程式碼後的執行計畫）與第 9 節（Phase F：Yocto 自建 OS）。
 
 量測對象：LubanCat-2（RK3568，4×A55 @ 1.99 GHz）、映像 `6b7397`（main `2eea6bf`，RUST_* 全開、RUST_RECORD=false）、待機、nav2 已啟動、2 個 app 連線、62 °C、無降頻。PR #13（EKF 20 Hz、ros2_control 25 Hz）已合併但量測時尚未部署到機器上。
 
@@ -297,6 +298,109 @@ A–C 約兩週，D–E 再三到四週。
 4. 要在更便宜的 SoC 上跑同一套（RK3566、雙核 A53 之類）。
 
 只是為了 CPU 數字，不值得做 D–E：A–C 之後整機約 15%，剩下的收益是 10 個百分點的整機 CPU，換三到四週和一份自己維護的導航堆疊。
+
+## 8. D/E 執行計畫（2026-10-08，對照程式碼後）
+
+2026-10-08 起機器已經跑在 `RUST_BASE` / `RUST_LOCALIZE` / `RUST_DAEMON` 上（PR #38 把三個預設翻成 true，機器 `.env` 明寫），
+剩下的 ROS 程序只有 `mower_rsd`、nav2 的 component container、`robot_state_publisher`、`twist_mux`。
+第 7 節的 Go/No-Go 由「要做 Yocto 自建 OS、需要 ROS-free 映像」（條件 2）決定做 D–E；條件 1（感測器路線圖）仍要自己確認：拿掉 nav2 之後避障要自己寫。
+
+### Phase D 的實際範圍
+
+對過 `crates/mower_nav` 之後，D 比第 3 節寫的小：`mower_nav` 只碰 nav2 的三樣東西，
+`navigate_to_pose`（去割草起點，走預設 BT）、`follow_path`（每一段直接丟 controller_server，**不經 BT**）、`bt_navigator/get_state`（就緒檢查）。
+NavigateThroughPoses、waypoint_follower、smoother_server、assisted_teleop、docking 沒有任何呼叫者。
+兩張 costmap 都只有 `static_layer`，沒有 inflation 層（inflation 在 `mower_map` 就做完了）；
+local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/global` 的 map 座標查同一張圖就等價。
+
+| # | 要寫的 | 來源 / 估行數 | 備註 |
+|---|---|---|---|
+| D1 | `mower_nav_core` 的 costmap 查詢 | ~150 | `/map_grid_global` 的 OccupancyGrid 在 map frame 查格子；lethal / unknown 規則照 StaticLayer（`track_unknown_space: true`） |
+| D2 | NavFn | ~400 | `use_astar: false`、`allow_unknown: true`、`tolerance: 0`。格子成本二值，`mower_coverage_core/connector_planner.rs` 的 A* 也能用，但要和 nav2 逐週期比就照移植 |
+| D3 | RotationShim + RegulatedPurePursuit + SimpleProgressChecker + SimpleGoalChecker | ~800 | 參數表機械式對照 `nav2_no_map_params.yaml` 的 40 個 key；`use_collision_detection: true` 的弧線碰撞檢查查 D1 |
+| D4 | velocity_smoother | ~100 | 0.26 m/s、1.0 rad/s、accel 2.5 / 3.2 的限速器，位於 controller 與 `/nav_cmd_vel` 之間 |
+| D5 | NavigateToPose 流程 | ~300 | 預設 BT 是「每秒重規劃，失敗才 recovery」。建議只做重規劃 N 次後停車回報，不移植 Spin / BackUp / Wait：靠靜態圖走的車 recovery 意義不大，`mower_nav` 的失敗路徑本來就通知 app。要移植的話另加 ~400 |
+| D6 | `mower_nav` 改接內部呼叫 | 改既有 3.2k 行的 IO 層 | 兩個 action client 換成直接呼叫；對 app 與 coverage node 的 action、service、`/coverage_progress`、20 Hz 心跳不變 |
+| D7 | shadow 工具 | ~300（Python） | Rust controller 訂同樣輸入，cmd_vel 發到 shadow topic；錄一整趟割草 bag 逐週期比 `/nav_cmd_vel`。照 `tools/localize_compare.py` 的做法 |
+
+驗收三層照第 3 節：核心用 nav2 的測試向量；shadow 跑完整任務；最後 `rust_nav_core:=true` 監督試車，guards 與 `mower_base` 的 arm latch 是安全網。
+
+**D 之前的兩個前置**：map EKF 的 `initial_estimate_covariance` 根治（handoff「還沒做的 1」）要先決定，否則 shadow 是在比兩個都歪 10–15° 的軌跡；戶外要有 RTK fix，D7 的 bag 必須在真實場地錄。
+
+### Phase E 的實際範圍
+
+| # | 要做的 | 重點 |
+|---|---|---|
+| E1 | `mower_bus` crate | typed broadcast，channel 名沿用 topic 名；map / marker / `/robot/info` 這類 latched topic 要有 transient-local 語意；`Clock` trait 給 replay |
+| E2 | 15 個 crate 的 IO 層從 r2r 換 bus | base、localize、guards 已是「純核心 + 薄 IO」，機械式替換。參數改成 mowerd 讀一份 YAML、按模組名分段，key 不變 |
+| E3 | `ws_bridge` 的 schema registry | 現在靠 r2r untyped + ROS introspection 把任意訊息轉 JSON。改成每個 bus 型別用 serde 產出和 ROS 訊息同樣的 JSON 欄位佈局；範圍是 `.cargo/config.toml` 那 17 個套件裡實際用到的 21 個型別。`/rosapi/topics` 與 app 呼叫的兩個參數服務（`/boustrophedon_coverage/set_parameters`、`/map_manage/get_parameters`）在這裡模擬 |
+| E4 | 併入 twist_mux、robot_state_publisher | mux 是優先權加 lock 約 100 行；rsp 只剩 imu_link / gps_link 兩個靜態 transform，從 xacro 抄進設定 |
+| E5 | recorder 重寫 | app 用六個 `/mower_recorder/*` 端點，加 Bag 頁的改名、刪除、上傳 R2，加 MediaMTX 錄影 API 與尾燈。用 Rust 的 `mcap` crate 寫 MCAP，Foxglove 與 `mower-check-run` 不用重寫。資料收集 profile（gscam 進 MCAP 給 GrassVision）要決定留不留 |
+| E6 | host 整合 | `firmware/tools/mower_flash.py`（480 行）移植進 `firmware-sync`，協定核心 `mower_base_core` 已有；link-status、pairing、host.request 收進 mowerd。第一版保留 `~/.mower` 的 JSON 檔契約，一次只換一層 |
+| E7 | 打包 | 先不脫離 Docker：`debian:bookworm-slim` + `mowerd` 約 40 MB，`mower-update.sh` 與 OTA 流程不動，每次更新只剩幾 MB，pull 的負載（2026-10-08 讓板子硬重開的那種）也跟著消失。原生 systemd 留給 Phase F |
+| E8 | 觀測與模擬 | `mowerctl topic echo/hz` 走 bridge 的 loopback 9091；`--ros-tap` cargo feature 讓 D/E 開發期還能開 rviz；`mower_base --sim` 後端給 app 開發；replay 是把 MCAP 餵回 bus 加假時鐘 |
+| E9 | CI 與清理 | cargo 交叉編 aarch64 幾分鐘取代 40 分鐘 QEMU colcon；留一個有 ROS 的 dev container 當離線 oracle；最後拆 launch、`RUST_*` 開關、cyclonedds、sysctl、package.xml |
+
+**時程**：D 10–15 天同第 6 節；E 第 6 節的 5 天太樂觀，recorder 與 bridge registry 各要三四天、host 整合兩三天，抓 2–3 週。
+**順序**：D1–D4 核心 → D7 shadow 工具 → 戶外錄 bag 比對 → D5/D6 切換試車 → E1–E3 → E4–E6 → E7 → E9。E7 之後機器上是一個 40 MB 容器跑一個 binary，Phase F 只要把它搬到 systemd 下。
+
+## 9. Phase F：Yocto 自建 OS
+
+目標：映像裡只有 `mowerd` 加五六個第三方 daemon，永遠不碰 meta-ros。所以 F 排在 E7 之後，
+E 沒做完之前不要開始 BSP：先在現在的 Debian 12（kernel 6.1.99-rk356x）上證明單一 binary 能跑，Yocto 只搬運。
+
+### 現在 host 上有什麼（要一比一帶過去）
+
+| 現況（`deploy/`） | Yocto 對應 |
+|---|---|
+| Docker + compose、`pid/ipc/network_mode: host`、`/dev` bind mount、device cgroup、`99-mower-dds.conf` | 全部不要。`mowerd.service` 直接跑，`After=dev-stmcom.device` 不需要：supervisor 本來就會等裝置 |
+| `mower.service`、`mower-host-request.path/.service`、`mower-update.*`、`mower-link-status`、`mower-camera`、`mower-lte`、`ntpsec` drop-in | `mowerd.service`、`mower-camera.service`（照抄 `mower-camera.sh` 的 gst 管線）；其餘併進 mowerd 或由下面的元件取代 |
+| `udev/99-mower.rules`（stmcom / imu_usb / gps_rtk / lte_at、Genesys hub `power/control=on`） | 原樣安裝到 `/etc/udev/rules.d`；另加 kernel cmdline `usbcore.autosuspend=-1` 一起試 hub reset |
+| `mower-pair`（Python，`/etc/machine-id` 推 robot id）、`identity.json`、`r2.env`、`device_key` | `mowerctl pair`；**machine-id 必須跨 A/B 更新不變**：放資料分割（`systemd.machine_id` 指過去），不然每次換 slot 機器人 ID 就變 |
+| `mower_flash.py` + firmware-sync | Rust `firmware-sync`（E6），`.bin` 與 manifest 隨 appfs |
+
+### BSP 與 kernel
+
+- 兩個都叫 `meta-rockchip` 的 layer：Rockchip 自家的（BSP kernel 6.1、`rockchip-mpp`、`gstreamer1.0-rockchip`、u-boot 與 Rockchip 分割配置）和 Yocto Project 託管的（偏 mainline，有 Rock 3A = RK3568 可以抄）。**相機決定用哪個**：`mower-camera.sh` 靠 `mppjpegdec` + `mpph264enc` 只吃 2 % 一核，mainline 的硬體 H.264 編碼不成熟，720p25 軟編會吃掉一整核。所以用 Rockchip BSP kernel + MPP。
+- LubanCat-2 的 device tree 帶進 kernel recipe，UART3（40-pin pin 8 / 10，`rk356x-lubancat-uart3-m1`）直接寫進 DT，不再走 u-boot 讀 `uEnv.txt` 的 overlay。
+- kernel config fragment：`ch341`（IMU）、`cp210x`（bench stmcom）、`cdc-acm`（u-blox）、`qmi_wwan` + `option`（EC25 / SIM7600）、`uvcvideo`（相機）、`tun`（Tailscale）、`dw_wdt`（硬體 watchdog）。
+- cpufreq：明確設 governor 與上限。計畫第 1、2 節的量測被 1.4–2.0 GHz 跳動干擾過；OPP 是 408 / 600 / 816 / 1104 / 1416 / 1608 / 1800 / 1992 MHz。
+
+### 系統元件
+
+| 項目 | 選擇 | 理由 |
+|---|---|---|
+| init | systemd | 現在全是 unit / path / timer。`RuntimeWatchdogSec` 接 `dw_wdt`，mowerd 的 supervisor 做 `sd_notify`，模組 catch_unwind 之上再多一層 |
+| 網路 | NetworkManager + ModemManager | 150 行 `mower-lte.sh`、udhcpc、resolvconf 由 MM 取代，4G route metric 用 `ipv4.route-metric` 設 200；訊號改走 mmcli / D-Bus，`/dev/lte_at` 不再自己開 |
+| 時間 | systemd-timesyncd | RTC 沒電池；timesyncd 啟動就 step，還存上次時鐘，ntpsec 的 start-limit 問題消失。app 的 HMAC ±60 s 靠它 |
+| 遠端 | openssh、Tailscale（抓官方 static tarball 或用 go 建，沒有官方 recipe） | Studio 的 SSH 隧道要 openssh 的 BatchMode 語意 |
+| 影像 | mediamtx（抓官方 arm64 release，不要 ffmpeg 變體） | recorder 的 fMP4 錄影走它的 API 9997，照舊 |
+| Rust | oe-core 的 `cargo` class，`cargo-update-recipe-crates` 產 crates.inc | 已經 `serialport default-features=false`（無 libudev）、全 rustls（無 OpenSSL），交叉編沒有坑 |
+| Python | 零 | 現在散在五個地方（`mower_flash.py`、`mower-pair`、`mower-link-status.py`、兩個 shell 裡的 JSON 解析），E6 全收進 mowerd / mowerctl |
+| journald | `Storage=persistent` + `SyncIntervalSec` 縮短 | 2026-10-08 硬重開讓前一個 boot 的 journal 整個截斷（`.journal~`），事後查不到死因 |
+
+### 更新（取代 docker pull）
+
+- RAUC，A/B rootfs 加一個獨立的 `appfs` slot（`/opt/mower`：mowerd、韌體 `.bin` + manifest、設定）。u-boot 用 boot count 自動回退。
+- 兩層節奏：rootfs 很少動、手動建；**appfs 由 CI 每次 push 產出**，約 20 MB、幾分鐘。這是 CI 能在 GitHub-hosted runner 上做的那一層。
+- `update_status.json` 的狀態機（pulling → restarting → idle / failed）對到 RAUC 的 install 進度，app 與燈效不用改；`robot_status.json` 的 busy gate 只擋**重開**，安裝寫非作用 slot，割草中也能裝。
+- 2026-10-08 證實的「pull 負載會讓板子硬重開」在這裡沒有消失：RAUC 寫 eMMC 一樣是負載。`mower-update.sh` 的 CPU cap（PR #39）要帶過來，而且電源軌沒量清楚之前自動更新一律關。
+- 唯讀 rootfs、`/etc` overlay、`/var/lib/mower` 資料分割（= 現在的 `~/.mower`：zones、sites、bags、identity、r2.env、calib）。bag 加影片每小時 1 GB 以上，不能和 rootfs 共用。
+
+### CI
+
+GitHub-hosted runner 14 GB 磁碟建不起整個 Yocto；rootfs 在本機或自備 sstate 的 builder 建、只在 tag 時做。CI 交叉編 `mowerd` 與 appfs bundle，跑 `cargo test`、`probe_app.py`、shadow 工具。repo 是公開的，self-hosted runner 不能跑 PR（`build.yml` 已有這條理由）。
+
+### 驗收清單（上機）
+
+開機到 `/robot/online` 幾秒內；`/dev/stmcom` 是 UART3、韌體 sync 成功；IMU / GPS / 相機 / 4G 四個 USB 裝置重插後 udev 名字回來、驅動自己重啟；相機管線走 MPP 且 < 5 % 一核；LTE 掉線由 MM 重撥；RAUC 切 slot 與 boot count 回退各一次；拔 watchdog 餵狗後硬體 watchdog 重開；`probe_app.py` 對 baseline `APP_CONTRACT_OK`；cpufreq 固定；journal 在硬重開後仍可讀。
+
+### 時程與風險
+
+一個人從 BSP 到相機、LTE、GPS、RAUC 全通約 2–3 週，排在 E7 之後。最大的風險不是 Yocto 本身：
+(1) 5 V / USB 電源軌，2026-10-07/08 共 22 次硬重開沒有一次正常關機，Yocto 不會修它，`mower_pcb` 的 SOC 板（獨立 5 V buck + 3V3_4G buck）才是解；
+(2) MPP 相機綁死 BSP kernel，之後 kernel 升級要跟 Rockchip 走；
+(3) 4G 模組與 USB hub 的掉線，換 OS 不會變好，只是 ModemManager 的重撥比自己寫的 shell 穩。
 
 ## 附錄：量測方法
 
