@@ -40,6 +40,8 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 | 從 App | 設定頁「更新機器人」→ `/system/update`（移動中或導航中會拒絕） |
 | **自動** | `mower-update.timer` 開機 10 分鐘後、之後每小時檢查一次頻道；機器人移動 / 導航中會跳過。`.env` 設 `MOWER_AUTO_UPDATE=0` 或 `systemctl disable --now mower-update.timer` 關閉 |
 
+「已是最新」的定義是**正在跑的 `lawan_node` 容器用的就是 tag 指向的映像**，不只是本機 tag 和 registry 一致：更新若在 `docker pull` 完成後、`compose up` 之前被打斷（2026-10-07/08 板子在 pull 中硬重開過四次），tag 已在新映像而容器還在舊的，之後每次 `mower-update.sh` 都會補做那一次 `compose up`，不會卡在 up_to_date。下載與解壓期間 CPU 會被壓到 `MOWER_UPDATE_MAX_FREQ_KHZ`（預設 1.0 GHz，`0` 關閉）降低電流尖峰，stack 重啟前恢復。
+
 進度在 `~/.mower/update_status.json`，App 透過 `/robot/info` 看得到（`pulling` → `restarting` → `idle` / `failed`）。更新進行中（`pulling` / `restarting`）機身燈條會跑**琥珀色環繞光**（`robot_info_node` → `/mower_base/led_command` → STM32 mode `0x06`），結束後淡回常亮白。
 
 ## 話題錄製（App「錄話題」）

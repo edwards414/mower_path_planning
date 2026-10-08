@@ -15,6 +15,17 @@
 #                                and /system/check_update): writes
 #                                update_check.json, never pulls or restarts
 #
+# "Up to date" means the running lawan_node container uses the image the
+# channel's tag points at, not merely that the tag matches the registry: an
+# update cut short between `docker pull` and `compose up` (the LubanCat
+# hard-reset during pulls on 2026-10-07/08) left the tag on the new image
+# and the container on the old one, and every later run said up_to_date.
+# Such a run now goes on to the restart. While it downloads and unpacks,
+# the CPU is capped (MOWER_UPDATE_MAX_FREQ_KHZ, default 1.0 GHz, 0 = off):
+# those resets came with no kernel error and the journal cut mid-line,
+# a 5 V / USB rail brownout under the pull's load being the working
+# hypothesis. The cap is lifted before the stack restarts.
+#
 # Progress goes to <MOWER_STATE_DIR>/update_status.json (relayed to the app
 # by /robot/info; the base shows the amber orbit while it is pulling or
 # restarting), the running image identity to image.json and the last
@@ -65,6 +76,34 @@ IMAGE_REPO=${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}
 REGISTRY=${IMAGE_REPO%%/*}
 IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 mkdir -p "$STATE_DIR"
+# CPU cap while pulling (kHz; RK3568 OPPs: 408 600 816 1008 1200 1416 1608
+# 1800 1992 MHz). MOWER_CPUFREQ_DIR is for the tests.
+MAX_FREQ=${MOWER_UPDATE_MAX_FREQ_KHZ:-1008000}
+CPUFREQ_DIR=${MOWER_CPUFREQ_DIR:-/sys/devices/system/cpu/cpufreq}
+
+cpu_cap_saved=""
+cap_cpu() {
+  local p old
+  [ -n "$MAX_FREQ" ] && [ "$MAX_FREQ" != 0 ] || return 0
+  for p in "$CPUFREQ_DIR"/policy*/scaling_max_freq; do
+    [ -w "$p" ] || continue
+    old=$(cat "$p" 2>/dev/null) || continue
+    echo "$MAX_FREQ" > "$p" 2>/dev/null || continue
+    cpu_cap_saved="$cpu_cap_saved$p $old"$'\n'
+  done
+  [ -n "$cpu_cap_saved" ] && echo "[mower-update] cpu capped at $((MAX_FREQ / 1000)) MHz while pulling"
+  return 0
+}
+uncap_cpu() {  # also runs from the EXIT trap, so a failed pull restores it too
+  local p old
+  [ -n "$cpu_cap_saved" ] || return 0
+  while read -r p old; do
+    [ -n "$p" ] && echo "$old" > "$p" 2>/dev/null
+  done <<< "$cpu_cap_saved"
+  cpu_cap_saved=""
+  return 0
+}
+trap uncap_cpu EXIT
 
 # "An update is in progress" is this lock, not the state file: a pull cut
 # short by a reboot or a power cut left update_status.json at "pulling"
@@ -87,6 +126,18 @@ status() {  # state message
 
 image_digest() {
   docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$IMAGE" 2>/dev/null || true
+}
+
+service_runs_tagged_image() {
+  # A running lawan_node container whose image is the one $IMAGE (the tag)
+  # points at. The tag alone is not enough: after a pull the tag is on the
+  # new image while the container, until `compose up`, is on the old one.
+  local cid want have
+  cid=$(docker compose ps -q --status running "$SERVICE" 2>/dev/null | head -1)
+  [ -n "$cid" ] || return 1
+  want=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null) || return 1
+  have=$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null) || return 1
+  [ -n "$want" ] && [ "$want" = "$have" ]
 }
 
 write_image_json() {
@@ -170,15 +221,16 @@ before=$(image_digest)
 remote=$(remote_digest)
 [ -n "$remote" ] && write_check_json "$remote" ""
 if [ -n "$remote" ] && [ "${before#*@}" = "$remote" ] && [ "$force" -eq 0 ] \
-   && docker compose ps --status running "$SERVICE" 2>/dev/null | grep -q "$SERVICE"; then
-  # nothing new on the channel: say so without entering the pulling state
-  # (which lights the update effect on the robot)
+   && service_runs_tagged_image; then
+  # nothing new on the channel and the service runs it: say so without
+  # entering the pulling state (which lights the update effect on the robot)
   write_image_json
   status up_to_date "already running $remote"
   exit 0
 fi
 
 status pulling "pulling $IMAGE"
+cap_cpu
 # plain docker pull: compose pull happily "skips" when a stale local image
 # exists and the registry says denied
 if ! pull_out=$(docker pull "$IMAGE" 2>&1); then
@@ -191,8 +243,9 @@ if ! pull_out=$(docker pull "$IMAGE" 2>&1); then
   exit 1
 fi
 after=$(image_digest)
+uncap_cpu
 
-if [ "$before" = "$after" ] && [ "$force" -eq 0 ] && docker compose ps --status running "$SERVICE" 2>/dev/null | grep -q "$SERVICE"; then
+if [ "$before" = "$after" ] && [ "$force" -eq 0 ] && service_runs_tagged_image; then
   write_image_json
   status up_to_date "already running ${after#*@}"
   exit 0
