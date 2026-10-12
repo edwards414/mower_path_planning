@@ -259,6 +259,21 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
 所以 RTK 有兩個獨立的阻礙，都要到現場處理：天線那一路（接頭、線材、LNA 供電、換一支天線試）和基站電台（有沒有開、接在 UART1 還是 UART2、鮑率）。
 就算修正資料來了，17–28 dBHz 也進不了 fixed。這兩件沒解決之前，上表的戶外導航、`datum_check.py`、計畫第 8 節 D7 的戶外 bag 都做不了。
 
+**同日 22:20–23:00 的追查**（使用者在車旁，基站說一直開著）：
+
+- 衛星回來了：22:22 8 顆 → 22:25 11 → 22:28 15 顆參與定位，之後一直是 3D fix、hAcc 約 4 m。天線那一路應已改善（當時有人在車上動過）。但一小時內 `diffSoln` 與 `carrSoln` 始終是 0。
+- **機器上這顆是移動站，不是基站裝錯邊**：RAM 與 flash 兩層都是 `CFG-TMODE-MODE = 0`、RTCM 1005/1077/1087/1097/1127/1230 在 UART1/UART2/USB 全部不輸出；晶片序號 `SEC-UNIQID 0d4c22201a`（基站那顆用 u-center 讀來比對）。
+  移動站設定也都對：UART1 38400 8N1、RTCM3 in 開、`NAVHPG-DGNSSMODE 3`（允許 fixed）、修正逾時 60 s、GPS/GLO/GAL/BDS 的 L1 與 L2 全開、`DYNMODEL 0`、`MINELEV 10°`、`MINCNO 6`。
+- **UART1 往外滿載**：flash 裡 `UART1OUTPROT` UBX/NMEA/RTCM3 都開、NMEA GGA 與 GSV 開著，驅動把定位設成 4 Hz 之後 UART1 TX 3828 B/s、`txUsage` 99 %（38400 baud 的上限）。接在 TX1 上的半雙工電台會一直在發送、收不到基站。
+- 22:56 把 UART1 三個輸出協定在 **RAM 層**關掉（CFG-VALSET layer 0x01，ACK，讀回 0/0/0）。TX 掉到 0，之後 90 s UART1 RX **仍是 0 byte**、RTCM3 0 筆、`carrSoln 0`。
+  所以灌爆電台不是唯一原因：**修正資料根本沒到 F9P 的 RX1 腳**，問題在電台或更上游。這個設定會留到 F9P 斷電（hub 重置不會讓它斷電，`mower_gps` 只動 USB 埠），要還原就把三個 key 寫回 1，或讓 F9P 斷電。
+- 下一步（都要在車旁或基站旁）：(1) 機器電台的電源燈與 RX 燈——基站 1 Hz 發，RX 燈應 1 Hz 閃；F9P 現在不輸出了，TX 燈應該安靜。
+  (2) 把機器電台的 TX 改接 USB-TTL、38400 讀：有 `0xD3` 開頭、每秒一包 → 電台與基站都好，問題在電台→F9P 接線（TX→RX1 要交叉、共地、3.3 V TTL，不能是 RS-232 電位）；沒有 → 查基站。
+  (3) 基站 u-center：TMODE 是 fixed 或 survey-in `valid`、接電台那個 UART 的 RTCM 1005/1077/1087/1097/1127/1230 有開且 MON-COMMS txBytes 在增加、該 UART 鮑率與電台一致、兩顆電台的頻道／Net ID／空中速率相同，先把兩顆放近再測。
+- 通了之後的判準：UART1 rxBytes 與 RTCM3 筆數開始增加 → `diffSoln 1` → `carrSoln 1`（float）→ `2`（fixed）。驅動只在 fixed 時給 `/fix` status 2，float 在 app 看起來和 3D 一樣。
+- 讀法：stdlib Python 直接開 `/dev/gps_rtk`，和驅動共用同一個 stream（CFG-VALGET `06 8B` 指定 layer、CFG-VALSET `06 8A`、MON-COMMS `0A 36`、MON-RF `0A 38`、NAV-SAT `01 35`、NAV-PVT `01 07` 的 flags、SEC-UNIQID `27 03`），每個 poll 重送到有回應或 NAK 為止、只收 checksum 正確的 frame；
+  一次送太多 poll 會一個都收不到，長回應（NAV-SAT）常被驅動的流拆掉，要多試幾次。
+
 ### 2. Phase D–E 的 Go/No-Go（計畫第 7 節）
 
 **2026-10-08 已決定做**（條件 2：要做 Yocto 自建 OS、需要 ROS-free 映像），執行計畫在計畫第 8、9 節，程式還沒開始。
@@ -306,3 +321,6 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
    看起來像「今天沒有日誌」。用 `grep -a`，或先 `tr -d '\000'`。
 9. **從 app 那一側看不到 RTK 狀態**：bridge 只放行 `/fix`（status −1 / 0 / 2），`/gps/status`（衛星數、carrier float/fixed）不在白名單，
    Rust 版 `/robot/telemetry` 的 `gps.pvt` 永遠是 null。要看就 ssh 讀 `[gps]: fix: type … carrier … sats …` 日誌行，或直接對接收器 UBX poll。
+10. **4G 上開前鏡頭影像會把 Studio 與 app 踢掉**（10-12 兩次樣本）：app 按 WHEP 開影像後約 20 s，Studio 的 ssh tunnel 和 app 的 bridge 連線各斷一次
+   （22:39:44 開 → 22:40:00 斷；22:42:45 開 → 22:43:06 斷），當時 hub 與 LTE 都沒有重置，Tailscale 走 DERP 中繼。
+   懷疑 25 fps / 2 Mbps 的影像塞滿 4G 上傳；要驗證就關影像看連線會不會穩。
