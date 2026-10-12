@@ -1,6 +1,6 @@
 # ROS-free 工作交接
 
-寫於 2026-09-28。給接手的人（或換模型後的下一個 session）看的現況快照。
+寫於 2026-09-28，2026-10-08、10-12 補過。給接手的人（或換模型後的下一個 session）看的現況快照。
 計畫本身在 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md)，這份只講「做到哪、接下來做什麼、怎麼做」。
 
 ---
@@ -16,6 +16,14 @@ PR #38 把三個預設翻成 true（子 launch 檔保持 false，模擬 / bench 
 室內 `datum_check.py` 回 `NO_DATUM`，datum 根治仍未決定。D/E 的執行計畫與 Yocto（Phase F）見 [ROS_FREE_PLAN.md](ROS_FREE_PLAN.md) 第 8、9 節。
 同日發現 pull 映像會讓板子硬重開（22 次開機無一正常關機），`mower-update.timer` 已停、PR #39 讓更新時壓 CPU 頻率並修了 up_to_date 的誤判，細節在 PR 與 `deploy/README.md`。
 
+**2026-10-12 補：** D–E 已決定做（計畫第 8 節），程式還沒開始。機器搬到戶外（4G）看 RTK：**RTK 沒有起來，問題在天線訊號與修正資料，不在軟體**
+（F9P 的讀數見「還沒做的 1」最後的 GPS 段）。同時看到三件事：
+USB hub 1-1 從開機 4.5 分鐘後每 30–60 s 整個重新列舉，GPS、IMU、4G、相機一起掉，`mower_rsd` 只重啟對應模組、程序 17 分鐘沒重啟（A5 的監督在現場成立）；
+21:58:31 的 hub 重置和 `mower_base: driver alarm flag set` 同一秒，22:02:11 又一次 driver alarm、2 s 後 hub 重置，
+同一秒板載 UART（ttyS3，不在 hub 上）的 STM32 回授也斷了 0.52 s，
+arm latch 鎖住、持續 0.5 s 的停止後解鎖，和設計一致——這比較像整機供電掉壓，不是 hub 本身；
+`mower-update.timer` 在機器重開後又是 active（enabled），10-08 停掉的狀態沒有保留，要關就得 `disable`。
+
 ## 分支與 PR
 
 | | |
@@ -27,17 +35,17 @@ PR #38 把三個預設翻成 true（子 launch 檔保持 false，模擬 / bench 
 
 ## 已完成
 
-### Phase A — 少一點程序（已在真機驗證，已還原）
+### Phase A — 少一點程序（已在真機驗證；composition 與 `RUST_DAEMON` 現在都開著）
 
 | commit | 內容 | 開關 |
 |---|---|---|
 | `0acff53` | nav2 的 8 個 server 併進一個 `component_container_isolated`，開 intra-process；local costmap 5→2 Hz、2→1 Hz；CI smoke test 檢查 component 函式庫沒被映像瘦身砍掉 | `nav_composition` / `NAV_COMPOSITION`，**預設 true** |
-| `4ec15a8` `b9fc3cc` `6795313` `ef4bcf2` | 每個 mower_rs crate 改成 library + 薄 binary；`mower_rsd` 用一個 r2r Context（＝一個 DDS participant）跑任意模組子集 | `rust_daemon` / `RUST_DAEMON`，預設 false |
+| `4ec15a8` `b9fc3cc` `6795313` `ef4bcf2` | 每個 mower_rs crate 改成 library + 薄 binary；`mower_rsd` 用一個 r2r Context（＝一個 DDS participant）跑任意模組子集 | `rust_daemon` / `RUST_DAEMON`，PR #38 起**預設 true** |
 
 參數走單一 `--params-file`（`mower_bringup/config/mower_rsd.yaml`，按節點名分段）；
 remap 走 rcl 的 node-scoped `-r <node>:<from>:=<to>`；**絕不可傳裸的 `-r __node:=`**，會改名整個程序裡的每個節點。
 
-### Phase B — Rust 底盤驅動（未上機）
+### Phase B — Rust 底盤驅動（2026-10-08 上機，PR #38 起預設開）
 
 `ef3eaf5` 是 ROS-free 核心 `mower_base_core`：STM32 協定、diff_drive_controller 4.42.1 +
 control_toolbox 4.11.1 的移植（正好是映像裡 apt 版本）、`BaseCycle` 狀態機、串口錄放格式。
@@ -64,7 +72,7 @@ override 與割刀同規則；容器 `--scenario guardzero` 重現這個順序�
 **不是** `mower_hardware/config/mower_controllers.yaml`，兩份在 `open_loop`、`enable_odom_tf`、
 幾何、`cmd_vel_timeout` 上不一致；`robot_state_publisher` **不在**取代範圍（原計畫寫錯，已改）。
 
-### Phase C — Rust 定位（未上機）
+### Phase C — Rust 定位（2026-10-08 室內上機，PR #38 起預設開；戶外 GPS 導航還沒跑）
 
 `4118bd8` 是核心 `mower_localize_core`：robot_localization 3.8.3 的 EKF、ros_filter 前處理、
 navsat、Krüger UTM，對 `librl_lib.so` 的 oracle 誤差 1e-16。
@@ -116,10 +124,25 @@ composition 省約 8 %、mower_rsd 省約 9 %，合計約 17 %，機器待機從
 
 ## 還沒做的（依優先序）
 
-### 1. `RUST_BASE` / `RUST_LOCALIZE` 上機 —— 最優先，且必須有人在場
+### 1. `RUST_BASE` / `RUST_LOCALIZE` 剩下的上機測試 —— 最優先，且必須有人在場
 
 兩個都是安全關鍵：`mower_base` 直接驅動輪子，nav2 靠 `mower_localize` 發的 `map→odom` 導航。
 第一次開啟一定要監督試車：搖桿、放開即停、一段導航；底盤另外要測斷線與重啟（見下）。
+
+2026-10-12 的狀態（兩個都已經在機器上開著，PR #38 起是預設；「沒有紀錄」是指 repo 與交接裡找不到，不代表一定沒做）：
+
+| 項目 | 狀態 |
+|---|---|
+| 搖桿、放開即停 | 2026-10-08 有人在場做過 |
+| 拔線：兩條都拔、只拔 pin 8 | 2026-10-08 做過（「兩種拔線的 latch 序列」），已是 0.5 s latch 那版 |
+| 回授遺失觸發 | 2026-10-12 戶外自然發生一次（供電事件，見開頭），鎖住後由持續 0.5 s 的停止解鎖，正確 |
+| STM32 重開（reset 鍵） | 沒有紀錄 |
+| 靜止拔線→拔著推搖桿→推著插回；pin 8 在啟動前就鬆 | 沒有紀錄 |
+| 割刀 dead-man 拔線 | 沒有紀錄 |
+| 重啟路徑 | 沒有紀錄。`RUST_DAEMON=true` 下 `base` 是 `mower_rsd` 裡的模組：模組失敗由 supervisor 2 s 後重啟，`kill -9` 會殺掉整個 `mower_rsd` 由 launch respawn，兩條都要看 latch |
+| 一段導航 | 沒有紀錄；室內只確認到 nav2 在 Rust 的 `map→odom` 上 active |
+| 戶外 GPS 導航 + `datum_check.py` | 做不了：GPS 沒有可用的 fix（本節最後） |
+| 真機串口錄一段做離線 replay（`crates/mower_base_core/README.md` 的格式） | 沒有紀錄 |
 
 底盤的斷線／重啟怎麼測（`fix/rf-base-preflight` + `fix/rf-base-cmdtimeout` + `fix/rf-latch-release-window` 之後的行為）：
 
@@ -215,9 +238,31 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
 所以合併後第一次 `mower-update.sh` 拉到新 main 就會換成 `mower_base` / `mower_localize` / `mower_rsd`；
 要留在 C++ 鏈就在 `.env` 明寫 `RUST_BASE=false`、`RUST_LOCALIZE=false`、`RUST_DAEMON=false`。
 上面的試車清單（拔線三種、`kill -9`、`datum_check.py`）不因預設值改變而免除：latch 0.5 s 那版（`d354537`、`63bc73f`）
-上機後還沒有試車紀錄。
+上機後還沒有試車紀錄。（同日稍晚有人在場上機，做了搖桿、放開即停、兩種拔線，見開頭的 10-08 補；
+其餘項目見本節開頭的表。）
+
+#### 戶外 GPS／RTK（2026-10-12）
+
+機器在戶外、走 4G。`mower_gps` 有在跑（`/fix` 4 Hz），但開機 17 分鐘內最多 3–5 顆衛星、hAcc 在 7 m 到 1 km 以上之間跳、carrier 一直是 none，
+開機後 USB 還穩定的前 4.5 分鐘也只有 3 顆，所以不是 hub 重置造成的（F9P 的 MON-COMMS 計數器撐過 24 次驅動重啟，hub 重置沒有讓它斷電）。
+直接問接收器（唯讀 UBX poll，和 `mower_gps` 共用 `/dev/gps_rtk`，沒寫任何設定）：
+
+| | 讀數 | 讀法 |
+|---|---|---|
+| NAV-SAT | 12 顆有訊號、最多 5 顆參與定位；C/N0 全部 17–28 dBHz，仰角 55°、57° 的也只有 22 | 開闊天空應是 40–50；各仰角一起低約 20 dB，不像遮蔽（遮蔽先傷低仰角） |
+| MON-RF | jamInd 16/255、8/255；AGC 77 %、69 % | 沒有干擾；AGC 高＝輸入弱 |
+| MON-RF 天線狀態 | DONTKNOW | 接收器的天線偵測沒開（`CFG-HW-ANT_CFG_VOLTCTRL/SHORTDET/OPENDET` 都是 0），斷路／短路要現場看 |
+| UART1 | 38400、RTCM3 in 開著；**從上電 0 byte** | `tf_gps_assessment_report.md` 記的基站電台埠，現在什麼都沒收到 |
+| UART2 | 57600、RTCM3 in 開著；累計約 270 kB，98.5 % 被跳過，只有 243 筆完整 RTCM3，18 s 取樣內 0 B/s | 有東西斷斷續續進來但幾乎解不出來 |
+| NAV-PVT / NAV-SAT | `diffSoln` 0、`carrSoln` 0，沒有衛星帶差分修正 | 修正資料沒有被用到 |
+
+所以 RTK 有兩個獨立的阻礙，都要到現場處理：天線那一路（接頭、線材、LNA 供電、換一支天線試）和基站電台（有沒有開、接在 UART1 還是 UART2、鮑率）。
+就算修正資料來了，17–28 dBHz 也進不了 fixed。這兩件沒解決之前，上表的戶外導航、`datum_check.py`、計畫第 8 節 D7 的戶外 bag 都做不了。
 
 ### 2. Phase D–E 的 Go/No-Go（計畫第 7 節）
+
+**2026-10-08 已決定做**（條件 2：要做 Yocto 自建 OS、需要 ROS-free 映像），執行計畫在計畫第 8、9 節，程式還沒開始。
+第 8 節列的兩個前置（datum 根治、戶外 RTK fix）到 10-12 都還沒成立。下面是當初的評估。
 
 **光為了 CPU 不值得做。** A–C 之後整機約 15 %，D–E 再多省約 10 個百分點，
 代價是三到四週和一套自己維護的導航堆疊。要四個條件中至少成立兩個：
@@ -225,25 +270,25 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
 
 ### 3. 其他還能省的
 
-- `mower_rsd` 剩下的約 25 % 還沒逐執行緒 profile（懷疑是 bridge 的 JSON、20 Hz 心跳、guard timer）
+- `mower_rsd` 還沒逐執行緒 profile（懷疑是 bridge 的 JSON、20 Hz 心跳、guard timer）。09-23 不含 base／localize 時約 25 %，
+  10-08 含了之後約 51 %（10-12 `ps` 看到的程序平均也是 51 %）；計畫附錄那種固定狀態（待機、2 個 app、60 s）下的對照還沒量
 - 純水管約 11 %（兩個 throttle、robot_state_publisher、twist_mux），Phase C 的模組可以直接發慢速 topic 取代 throttle
 - app 離線重連沒有明顯退避：機器離線 3 天半累積約 5 萬行重連日誌，平均每 12 秒一次
 
-## 現在的環境狀態（2026-09-28 23:00）
+## 現在的環境狀態（2026-10-12 22:10）
 
-- **機器**：`cat@192.168.0.114`，開機 2 分鐘，跑 `main` 映像，`ROSBRIDGE_ADDRESS=192.168.0.114`（正確），
-  `mower-update.timer` active，沒有殘留的 rosfree 測試映像。9/23 的還原是乾淨的。
-- **Mac**：192.168.0.111。
-- **本機映像**：`mower_path_planning:ros-free-test`（2.04 GB，從 `32ba2aa` 建的，含
-  `mower_base` / `mower_localize` / `mower_rsd`）還在 docker 裡，但匯出的 tarball 已隨 session 暫存目錄消失，
-  要用 `docker save ... | gzip -1` 重新匯出。
-- **worktree**：`~/work/rf-{a3-nav2-compose,a5-mower-rsd,b-base-core,b-base-node,c-localize-core,c-localize-node}`
-  都已合併進 `feat/ros-free`，確認後可以 `git worktree remove`。
+- **機器**（XR-02 / lubancat，MW-0CFP37）：在戶外，只有 4G（`wwan0`），沒有區網位址；ssh 走 Tailscale `cat@100.67.138.19`。
+  21:51 開機（journal 顯示上一次不是正常關機），跑 `main` 映像 `016e4a7`（PR #39），`.env` 的 `RUST_*` 全 true。
+  `mower-update.timer` **active、enabled**（10-08 停過，重開機後回來了）。
+- **ros-free 測試映像**：不再需要，`rust_base` / `rust_localize` / `rust_daemon` 都在 main 的映像裡。
+- **worktree**：`~/work/rf-*`（a3、a5、b、c 各段與 `rf-fix-*`）還在，都已合併進 main，確認後可以 `git worktree remove`。
 
 ## 陷阱清單
 
 1. **機器 IP 會跳**（.113 → .109 → .114），而且 **Mac 可能搶走機器的舊 IP**。ssh 連不上先看 `ipconfig getifaddr en0`。
    `known_hosts` 有別台裝置的舊 key 時用 `ssh -o HostKeyAlias=<舊IP>`，不用改檔案。
+   現在先用 Tailscale `100.67.138.19`；Mac 的 Tailscale 登出時 ssh 只會 timeout，不會說原因。
+   戶外走 4G 時 hub 重置會帶走 4G 模組，ssh 和 relay 大約每 30–60 s 斷一次，指令要寫成可以重試。
 2. **`ROSBRIDGE_ADDRESS` 沒跟著 IP 改，bridge 只綁 loopback**，app 走區網完全連不上，而且不會有錯誤訊息指向這裡。
 3. **auto mode 分類器**擋掉所有對機器的寫入（scp、`docker load`、`compose up`、改 `.env`），理由 `Production Deploy`；
    唯讀 ssh 可以。改設定檔一律擋（`Self-Modification`），使用者口頭同意也不算，要他自己 `/permissions`。
@@ -256,3 +301,7 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
    要探測走 `/robot/telemetry` 或 bridge。
 7. **子代理會撞用量上限**（發生過四次）。用 `SendMessage` 接回去時，訊息裡要明確寫「已經 commit 了什麼、剩下什麼」，
    否則它會重做已完成的工作。
+8. **硬重開後容器日誌會夾 NUL 位元組**：`grep` 遇到就印 `binary file matches`，**後面所有行默默不見**，
+   看起來像「今天沒有日誌」。用 `grep -a`，或先 `tr -d '\000'`。
+9. **從 app 那一側看不到 RTK 狀態**：bridge 只放行 `/fix`（status −1 / 0 / 2），`/gps/status`（衛星數、carrier float/fixed）不在白名單，
+   Rust 版 `/robot/telemetry` 的 `gps.pvt` 永遠是 null。要看就 ssh 讀 `[gps]: fix: type … carrier … sats …` 日誌行，或直接對接收器 UBX poll。
