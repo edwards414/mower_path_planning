@@ -22,7 +22,7 @@ USB hub 1-1 從開機 4.5 分鐘後每 30–60 s 整個重新列舉，GPS、IMU�
 21:58:31 的 hub 重置和 `mower_base: driver alarm flag set` 同一秒，22:02:11 又一次 driver alarm、2 s 後 hub 重置，
 同一秒板載 UART（ttyS3，不在 hub 上）的 STM32 回授也斷了 0.52 s，
 arm latch 鎖住、持續 0.5 s 的停止後解鎖，和設計一致——這比較像整機供電掉壓，不是 hub 本身；
-`mower-update.timer` 在機器重開後又是 active（enabled），10-08 停掉的狀態沒有保留，要關就得 `disable`。
+`mower-update.timer` 在機器重開後又是 active（enabled），10-08 只 `stop`、沒有 `disable`，所以沒保留；22:17 已 `disable --now`。
 
 ## 分支與 PR
 
@@ -279,7 +279,8 @@ compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個
 
 - **機器**（XR-02 / lubancat，MW-0CFP37）：在戶外，只有 4G（`wwan0`），沒有區網位址；ssh 走 Tailscale `cat@100.67.138.19`。
   21:51 開機（journal 顯示上一次不是正常關機），跑 `main` 映像 `016e4a7`（PR #39），`.env` 的 `RUST_*` 全 true。
-  `mower-update.timer` **active、enabled**（10-08 停過，重開機後回來了）。
+  `mower-update.timer` 22:17 `disable --now`，現在 inactive / disabled（10-08 只 stop 過，重開機後回來了）；
+  `mower-update-check.timer` 照跑，只查 manifest、不拉映像。電源軌量清楚之前不要再打開。
 - **ros-free 測試映像**：不再需要，`rust_base` / `rust_localize` / `rust_daemon` 都在 main 的映像裡。
 - **worktree**：`~/work/rf-*`（a3、a5、b、c 各段與 `rf-fix-*`）還在，都已合併進 main，確認後可以 `git worktree remove`。
 
