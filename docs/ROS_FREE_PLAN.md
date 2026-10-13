@@ -2,6 +2,7 @@
 
 日期：2026-09-19　接續 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md)（那份把 Python 節點換成 Rust，這份把 ROS 2 中介層本身換掉）。
 2026-10-08 補第 8 節（D/E 對照程式碼後的執行計畫）與第 9 節（Phase F：Yocto 自建 OS）。
+2026-10-12 更新 A5 / B / C 的上機狀態（各段「待辦」後面）與第 8 節兩個前置的現況；細節在 [ROS_FREE_HANDOFF.md](ROS_FREE_HANDOFF.md)。
 
 量測對象：LubanCat-2（RK3568，4×A55 @ 1.99 GHz）、映像 `6b7397`（main `2eea6bf`，RUST_* 全開、RUST_RECORD=false）、待機、nav2 已啟動、2 個 app 連線、62 °C、無降頻。PR #13（EKF 20 Hz、ros2_control 25 Hz）已合併但量測時尚未部署到機器上。
 
@@ -113,6 +114,10 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
 
 待辦：真機開 `rust_daemon:=true` 跑一輪（含監督試車，因為 guards 在裡面），並在同一份量測腳本下記錄 LubanCat 的數字。
 
+**2026-10-12 狀態：已上機。** 2026-10-08 有人在場開啟，PR #38 起預設 true；當時 `mower_rsd`（已含 base、localize）約 51 % 單核、nav2 容器 13 %、loopback 221 封包/s（main 原本 1329）。
+附錄那種固定狀態（待機、2 個 app、60 s）下的對照還沒量。
+10-12 在戶外實地看到模組級監督：USB hub 每 30–60 s 重置，`gps`、`imu` 各重啟 14 次以上，`mower_rsd` 程序 17 分鐘沒重啟、其他模組照跑。
+
 2026-09-30 補記：Python coverage 已移除（見 [RUST_REFACTOR_PLAN.md](RUST_REFACTOR_PLAN.md) 7.12 補記），`coverage` 模組不再有 `rust_coverage` 開關。`rust_daemon:=true` 時 `robot.launch.py` 永遠把它放進模組集合；`rust_daemon:=false` 時由 `mission.launch.py` 起獨立的 `mower_coverage`。其餘模組仍照各自的 `rust_*` 開關。
 
 
@@ -128,7 +133,8 @@ A5 就是 `mowerd` 的骨架：bus、模組 trait、supervisor。之後每個 ph
 
 #### B 執行紀錄（2026-09-23，`feat/rf-b-base-node`）
 
-**狀態：程式與驗證完成，`rust_base` 預設 false，真機尚未切換（缺監督試車）。**
+**狀態（2026-09-23）：程式與驗證完成，`rust_base` 預設 false，真機尚未切換（缺監督試車）。**
+**2026-10-12：已上機**（2026-10-08 有人在場開啟，PR #38 起預設 true），還缺的測試見本段最後的待辦。
 
 新 crate `src/mower_rs/crates/mower_base`（node 名 `mower_base`，也是 `mower_rsd` 的 `base` 模組），
 取代 `ros2_control_node`（controller_manager）+ `mower_hardware::MowerSystem`（含它的
@@ -187,6 +193,10 @@ oracle 向量已經把 limiter、odometry 與 200 週期的控制器對到 1e-12
 待辦：真機 `rust_base:=true` 監督試車（搖桿、放開即停、一段 nav、拔掉串口看 fail-closed
 與重啟），並照 `crates/mower_base_core/README.md` 的格式錄一段真機串口做離線 replay 比對。
 
+**2026-10-12 狀態**：搖桿、放開即停、兩種拔線（兩條都拔、只拔 pin 8）10-08 做過；回授遺失觸發 10-12 在戶外因供電事件自然發生一次，行為正確。
+沒有紀錄的：一段 nav、STM32 重開那種觸發、割刀 dead-man、重啟路徑（`RUST_DAEMON=true` 下是模組重啟或整個 `mower_rsd` respawn）、真機串口錄放比對。
+逐項表在 [ROS_FREE_HANDOFF.md](ROS_FREE_HANDOFF.md)「還沒做的 1」。
+
 ### Phase C：定位（3–4 天，預估 -15~20）
 
 - `mower_localize`：移植 robot_localization 的 EKF（`ekf.cpp` + `filter_base.cpp`，約 1.5k 行；只做這台車用到的 15 態、odom twist + IMU yaw/yaw-rate + GPS pose 三種輸入、兩個實例 odom/map）與 `navsat_transform`（datum、UTM、/odometry/gps）。
@@ -227,6 +237,9 @@ filter state 不可能逐位元相同，正確的讀法是跟「同一套實作�
 | `mower_localize`（release） | 1 | 21 | **4.4 %** |
 
 待辦：真機開 `rust_localize:=true` 跑一輪監督試車（nav2 靠 `map -> odom` 導航），並在同一份量測腳本下記錄 LubanCat 的數字與 23 % 的對照。
+
+**2026-10-12 狀態**：10-08 室內上機，nav2 在 Rust 的 `map -> odom` 上 active、`probe_app.py` 對 baseline OK、`datum_check.py` 室內 `NO_DATUM`；PR #38 起預設 true。
+還沒有：一段導航、戶外 GPS 導航（含 `datum_check.py`）、固定狀態下和 23 % 的對照。10-12 戶外試過，GPS 本身沒有可用的 fix（見第 8 節前置），做不了。
 
 ### Phase D：導航子集（2–3 週，預估 -25，風險最高）
 
@@ -327,6 +340,11 @@ local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/glo
 
 **D 之前的兩個前置**：map EKF 的 `initial_estimate_covariance` 根治（handoff「還沒做的 1」）要先決定，否則 shadow 是在比兩個都歪 10–15° 的軌跡；戶外要有 RTK fix，D7 的 bag 必須在真實場地錄。
 
+2026-10-12 兩個都還沒成立。datum 根治仍未決定；戶外 RTK 沒有 fix，原因在天線訊號與修正資料、不在軟體：F9P 每顆衛星 C/N0 只有 17–28 dBHz（開闊天空應 40–50，各仰角一起低，干擾指標很低），
+基站電台應該接的 UART1 從上電 0 byte，UART2 有斷續資料但 98.5 % 解不出來，沒有衛星帶差分修正。
+同日 22:20 後衛星回到 12–15 顆、3D 約 4 m，天線那一路應已改善；接收器確認是移動站設定（TMODE 0、無 RTCM 輸出），把它滿載的 UART1 輸出關掉後 RX1 仍是 0 byte，
+所以剩下的是修正資料到不了 F9P：電台的燈號、電台 TX 直接用 USB-TTL 讀、基站的 TMODE／RTCM 輸出／鮑率，讀數與步驟見 [ROS_FREE_HANDOFF.md](ROS_FREE_HANDOFF.md)「戶外 GPS／RTK」。
+
 ### Phase E 的實際範圍
 
 | # | 要做的 | 重點 |
@@ -399,6 +417,7 @@ GitHub-hosted runner 14 GB 磁碟建不起整個 Yocto；rootfs 在本機或自�
 
 一個人從 BSP 到相機、LTE、GPS、RAUC 全通約 2–3 週，排在 E7 之後。最大的風險不是 Yocto 本身：
 (1) 5 V / USB 電源軌，2026-10-07/08 共 22 次硬重開沒有一次正常關機，Yocto 不會修它，`mower_pcb` 的 SOC 板（獨立 5 V buck + 3V3_4G buck）才是解；
+2026-10-12 戶外又看到 hub 1-1 每 30–60 s 重置，其中一次和馬達驅動 alarm 同一秒、另一次同一秒板載 UART 的 STM32 回授也斷，像同一個掉壓；
 (2) MPP 相機綁死 BSP kernel，之後 kernel 升級要跟 Rockchip 走；
 (3) 4G 模組與 USB hub 的掉線，換 OS 不會變好，只是 ModemManager 的重撥比自己寫的 shell 穩。
 
