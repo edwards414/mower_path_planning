@@ -678,10 +678,14 @@ encoders, NAV-PVT / NAV-HPPOSLLH / NAV-EOE / ACK decoders and the
 `NavSatFix` mapping of the ROS `ublox_gps` driver (NO_FIX unless gnssFixOK
 with a 2D/3D/GNSS+DR fix, GBAS_FIX for an RTK fixed carrier solution,
 covariance = hAcc², NaN position without a fix). `crates/mower_gps` opens
-`/dev/gps_rtk`, enables PVT + HPPOSLLH + EOE at `rate_hz` on the USB port
-(RAM only, ACK-checked, everything else in the receiver untouched), builds
-one fix per epoch on NAV-EOE with the HPPOSLLH millimetre digits, and
-publishes a 1 Hz JSON `gps/status`. It ends the process on a serial error,
+`/dev/gps_rtk`, turns UART1 output off and enables PVT + HPPOSLLH + EOE at
+`rate_hz` on the USB port (RAM only, ACK-checked, everything else in the
+receiver untouched), builds one fix per epoch with the HPPOSLLH millimetre
+digits, and publishes a 1 Hz JSON `gps/status`. An epoch goes out once its
+PVT and HPPOSLLH are in, on NAV-EOE if the HPPOSLLH was lost, and one epoch
+late (stamped when its PVT arrived) if both were: on 2026-10-24 XR-02's
+rover, its output buffer filled by UART1, sent no NAV-EOE at all and the
+NAV-EOE-only assembly published one fix in minutes (`epoch.rs`). It ends the process on a serial error,
 EOF, or 5 s without NAV-PVT so launch respawns it onto the re-enumerated
 device; the ROS driver spins forever on a dead port instead. Verified on
 the robot 2026-09-19: 4.00 Hz, ~2 % of a core with the receiver streaming

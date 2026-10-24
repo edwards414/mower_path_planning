@@ -11,15 +11,17 @@
 //! navigation health gate fails closed in between.
 //!
 //! Receiver configuration is applied to RAM at every start (nothing is
-//! saved): NAV-PVT, NAV-HPPOSLLH and NAV-EOE on this port at `rate_hz`.
-//! Whatever else the receiver streams (RAWX, MON-*, NMEA) is skipped by the
-//! parser. Correction input (RTCM over UART1 from a base / NTRIP) is not
-//! this driver's business.
+//! saved): UART1 output off (`disable_uart1_output`), then NAV-PVT,
+//! NAV-HPPOSLLH and NAV-EOE on this port at `rate_hz`. Whatever else the
+//! receiver streams (RAWX, MON-*, NMEA) is skipped by the parser. Correction
+//! input (RTCM over UART1 from a base / NTRIP) is not this driver's business.
+//! How the messages become one fix per epoch, also when the receiver drops
+//! some of them, is in `epoch.rs`.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use mower_rs_common::{json_number, params, ModuleCtx, ModuleResult};
 use mower_ubx::{class, id, Ack, CarrierSolution, Fix, Frame, NavHpPosLlh, NavPvt, Parser};
@@ -27,6 +29,9 @@ use r2r::builtin_interfaces::msg::Time;
 use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::String as StringMsg;
 use r2r::QosProfile;
+
+mod epoch;
+use epoch::{Assembler, Epoch};
 
 /// NavSatStatus.service: GPS | GLONASS | BeiDou (COMPASS) | Galileo, the
 /// ZED-F9P default constellation set.
@@ -36,13 +41,26 @@ const COVARIANCE_TYPE_DIAGONAL_KNOWN: u8 = 2;
 const ACK_TIMEOUT: Duration = Duration::from_millis(1000);
 const CONFIG_ATTEMPTS: usize = 3;
 const STATUS_PERIOD: Duration = Duration::from_secs(1);
+const LATE_EPOCH_LOG_PERIOD: Duration = Duration::from_secs(10);
 
-fn stamp_now() -> Time {
-    let ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
+/// UBX-CFG-VALSET (generation 9 configuration interface).
+const CFG_VALSET: u8 = 0x8A;
+/// CFG-UART1OUTPROT-UBX / -NMEA / -RTCM3X.
+const UART1_OUTPUT_KEYS: [u32; 3] = [0x1074_0001, 0x1074_0002, 0x1074_0004];
+
+fn stamp(t: SystemTime) -> Time {
+    let ns = t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
     Time { sec: (ns / 1_000_000_000) as i32, nanosec: (ns % 1_000_000_000) as u32 }
+}
+
+/// CFG-VALSET, RAM layer only: every UART1 output protocol off.
+fn uart1_output_off() -> Vec<u8> {
+    let mut payload = vec![0x00, 0x01, 0x00, 0x00]; // version 0, layers: RAM
+    for key in UART1_OUTPUT_KEYS {
+        payload.extend_from_slice(&key.to_le_bytes());
+        payload.push(0);
+    }
+    mower_ubx::encode(class::CFG, CFG_VALSET, &payload)
 }
 
 struct Settings {
@@ -50,6 +68,7 @@ struct Settings {
     frame_id: String,
     rate_hz: f64,
     configure: bool,
+    uart1_output_off: bool,
     startup_timeout: Duration,
     stale_timeout: Duration,
 }
@@ -60,12 +79,6 @@ struct Outputs {
     pvt: bool,
     hpposllh: bool,
     eoe: bool,
-}
-
-#[derive(Default)]
-struct Epoch {
-    pvt: Option<NavPvt>,
-    hp: Option<NavHpPosLlh>,
 }
 
 struct Driver {
@@ -132,12 +145,14 @@ impl Driver {
 
         let outputs = if s.configure { self.configure(&mut port)? } else { Outputs { pvt: true, hpposllh: true, eoe: true } };
 
-        let mut epoch = Epoch::default();
+        let mut epochs = Assembler::new(outputs.hpposllh, outputs.eoe);
         let mut last_pvt_at: Option<Instant> = None;
         let started = Instant::now();
         let mut last_status_at: Option<Instant> = None;
         let mut last_state: Option<(i8, CarrierSolution, u8)> = None;
         let mut checksum_failures_logged = 0u64;
+        let mut late_epochs_logged = 0u64;
+        let mut late_epochs_logged_at: Option<Instant> = None;
 
         while !self.stop.load(Ordering::Relaxed) {
             for frame in port.read_frames()? {
@@ -148,24 +163,18 @@ impl Driver {
                     id::PVT => {
                         let Some(pvt) = NavPvt::parse(&frame.payload) else { continue };
                         last_pvt_at = Some(Instant::now());
-                        epoch.pvt = Some(pvt);
-                        if !outputs.eoe {
-                            self.publish_epoch(&mut epoch, outputs, &mut last_status_at, &mut last_state);
+                        for epoch in epochs.on_pvt(pvt, SystemTime::now()) {
+                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
                         }
                     }
                     id::HPPOSLLH => {
-                        if let Some(hp) = NavHpPosLlh::parse(&frame.payload) {
-                            epoch.hp = Some(hp);
+                        if let Some(epoch) = NavHpPosLlh::parse(&frame.payload).and_then(|hp| epochs.on_hp(hp)) {
+                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
                         }
                     }
                     id::EOE => {
-                        if let (true, Some(itow)) = (outputs.eoe, mower_ubx::nav_eoe_itow(&frame.payload)) {
-                            if epoch.pvt.map(|p| p.itow_ms) == Some(itow) {
-                                self.publish_epoch(&mut epoch, outputs, &mut last_status_at, &mut last_state);
-                            } else {
-                                // PVT of this epoch was lost; drop the partial epoch
-                                epoch = Epoch::default();
-                            }
+                        if let Some(epoch) = mower_ubx::nav_eoe_itow(&frame.payload).and_then(|itow| epochs.on_eoe(itow)) {
+                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
                         }
                     }
                     _ => {}
@@ -173,6 +182,18 @@ impl Driver {
             }
 
             let now = Instant::now();
+            if epochs.late > late_epochs_logged
+                && late_epochs_logged_at.map(|t| now.duration_since(t) >= LATE_EPOCH_LOG_PERIOD).unwrap_or(true)
+            {
+                late_epochs_logged = epochs.late;
+                late_epochs_logged_at = Some(now);
+                r2r::log_warn!(
+                    &self.logger,
+                    "{} epochs without their NAV-HPPOSLLH and NAV-EOE so far, published one epoch late \
+                     (receiver output buffer full? check MON-COMMS)",
+                    epochs.late
+                );
+            }
             match last_pvt_at {
                 Some(t) if now.duration_since(t) > s.stale_timeout => {
                     return Err(format!("no NAV-PVT from the receiver for {:.1} s", s.stale_timeout.as_secs_f64()));
@@ -192,6 +213,20 @@ impl Driver {
 
     fn configure(&self, port: &mut Port) -> Result<Outputs, String> {
         let s = &self.settings;
+        if s.uart1_output_off {
+            // All ports share the receiver's output buffer. XR-02's rover had
+            // UBX + NMEA + RTCM3 output on UART1 at 38400 stored in flash;
+            // that port sat at 99 % with 10 kB pending, the receiver logged
+            // "txbuf alloc" and dropped USB messages, NAV-EOE first
+            // (2026-10-12, 2026-10-24; its flash was fixed by hand, this
+            // covers a replaced or reset receiver). First, so the ACKs below
+            // get through. Output only: the RTCM input on UART1 stays.
+            match port.configure_one(&uart1_output_off(), class::CFG, CFG_VALSET)? {
+                Some(true) => r2r::log_info!(&self.logger, "UART1 output off (RAM)"),
+                Some(false) => r2r::log_warn!(&self.logger, "receiver rejected turning UART1 output off (NAK)"),
+                None => r2r::log_warn!(&self.logger, "no answer to turning UART1 output off"),
+            }
+        }
         let meas_ms = (1000.0 / s.rate_hz).round().clamp(25.0, 65_535.0) as u16;
         let rate_ok = port.configure_one(&mower_ubx::cfg::rate(meas_ms, 1), class::CFG, id::CFG_RATE)?;
         let mut outputs = Outputs::default();
@@ -221,18 +256,15 @@ impl Driver {
 
     fn publish_epoch(
         &self,
-        epoch: &mut Epoch,
-        outputs: Outputs,
+        epoch: Epoch,
         last_status_at: &mut Option<Instant>,
         last_state: &mut Option<(i8, CarrierSolution, u8)>,
     ) {
-        let Some(pvt) = epoch.pvt.take() else { return };
-        let hp = if outputs.hpposllh { epoch.hp.take() } else { None };
-        epoch.hp = None;
+        let Epoch { pvt, hp, received_at } = epoch;
         let fix = Fix::from_epoch(&pvt, hp.as_ref());
 
         let mut msg = NavSatFix::default();
-        msg.header.stamp = stamp_now();
+        msg.header.stamp = stamp(received_at);
         msg.header.frame_id = self.settings.frame_id.clone();
         msg.status.status = fix.status;
         msg.status.service = SERVICE_ALL;
@@ -306,6 +338,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         frame_id: params::string(&node, "frame_id", "gps_link"),
         rate_hz,
         configure: params::bool(&node, "configure_receiver", true),
+        uart1_output_off: params::bool(&node, "disable_uart1_output", true),
         startup_timeout: positive_secs(&node, "startup_timeout_s", 20.0)?,
         stale_timeout: positive_secs(&node, "stale_timeout_s", 5.0)?,
     };
@@ -352,5 +385,22 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     match failure {
         Some(message) => Err(message.into()),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uart1_output_off_is_the_frame_the_rover_acknowledged() {
+        // sent to XR-02's F9P by hand on 2026-10-24, answered with ACK-ACK
+        assert_eq!(
+            uart1_output_off(),
+            [
+                0xB5, 0x62, 0x06, 0x8A, 0x13, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x74, 0x10, 0x00, 0x02, 0x00,
+                0x74, 0x10, 0x00, 0x04, 0x00, 0x74, 0x10, 0x00, 0x37, 0x6E,
+            ]
+        );
     }
 }
