@@ -225,11 +225,13 @@ navsat 鎖的 datum 就歪 10–15 度 —— **C++ 和 Rust 一樣**（容器�
 （`/datum` 設在同一個原點、只拿掉旋轉；容器裡兩個 stack 都修到 0.00°），然後重啟 adapter
 （兩個 adapter 都只鎖一次 `/adapter/map_datum`，app 衛星底圖的方位不會自己更新），再載場地 / 開任務。
 
-根治還沒做，要決定：map EKF 加 `initial_estimate_covariance`、yaw（第 6 個）給 1.0、其餘 1e-9，
-第一筆 IMU yaw 就會把航向拉到位。容器同一個啟動情境 datum 誤差從 14.9–15.5° 降到 C++ 0.37°、Rust 0.34°，
-兩邊讀同一份 yaml 所以仍然一致；但它會改到現在 C++ 路徑的行為，而且 Rust 對這個 key 印
-「oracle 沒涵蓋」警告。映像含 `fix/rf-localize-preflight` 之後不用重建就能試：複製 `dual_ekf_navsat_params.yaml` 到 `~/.mower`，
-compose command 加 `localize_params_file:=/home/mower/.mower/<檔名>`（兩個 stack 都吃這個參數）。
+**2026-10-25 根治（`fix/map-ekf-initial-yaw-covariance`）**：`dual_ekf_navsat_params.yaml` 的 map EKF 加了
+`initial_estimate_covariance`，yaw（第 6 個）1.0、其餘是上游預設的 1e-9，第一筆 IMU yaw 就把航向拉到位。
+容器同一個啟動情境 datum 誤差原本量到從 14.9–15.5° 降到 C++ 0.37°、Rust 0.34°；兩個 stack 讀同一份 yaml。
+`RosFilter::reset()` 在 `FilterBase::reset()` 之後套用這個矩陣，Rust 在 `EkfSettings::build_filter` 套用，
+oracle 新增 `ros_filter_map_initial_cov.json`（同一組輸入、只差這個矩陣）逐步比對通過，`config.rs` 不再印「oracle 沒涵蓋」。
+同一組輸入下第一筆 IMU 之後 yaw：預設 0.013 rad（之後慢慢爬），新設定 1.77 rad（量測值）。
+還沒做的是上機：合併後隨映像上去，戶外第一次開機跑 `datum_check.py`，應該直接是 `DATUM_OK`、不用 `--fix`。
 
 **2026-10-08 補記：預設值已經翻成 true。** `deploy/docker-compose.yaml`（`${RUST_BASE:-true}` 等三個）、
 `deploy/.env.example` 和 `robot.launch.py` 的 `rust_base` / `rust_localize` / `rust_daemon` 預設都是 true；
