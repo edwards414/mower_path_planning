@@ -796,6 +796,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_nav_core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "mower_pid_autotune"
 version = "0.1.0"
 dependencies = [

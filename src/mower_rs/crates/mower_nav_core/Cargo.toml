@@ -1,0 +1,15 @@
+[package]
+name = "mower_nav_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS-free port of the nav2 (Jazzy 1.3.13) plugins this mower runs: the static-layer costmaps, NavFn, RotationShim + RegulatedPurePursuit, the goal/progress checkers and the velocity smoother (see README.md)"
+
+# Pure core: no r2r, no ROS, no external crates. Builds and tests with a plain
+# `cargo test` on any host; the ROS-side wiring lives in mower_nav.
+[dependencies]
+
+[dev-dependencies]
+serde_json.workspace = true
+# tests read mower_nav2/config/nav2_no_map_params.yaml.
+serde_yaml = "0.9"
