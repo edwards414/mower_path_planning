@@ -8,6 +8,9 @@
 
 use std::time::Instant;
 
+/// The rejection of a command stamped behind the ordering barrier.
+const MOVED_BACKWARD: &str = "velocity source timestamp moved backward";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Limits {
     pub command_timeout_s: f64,
@@ -118,7 +121,7 @@ impl Guard {
         let previous = self.last_source_stamp_ns;
         if let Some(previous) = previous {
             if stamp_ns < previous {
-                return (Some("velocity source timestamp moved backward"), Some(stamp_ns), false);
+                return (Some(MOVED_BACKWARD), Some(stamp_ns), false);
             }
         }
         let is_new = previous.map(|p| stamp_ns > p).unwrap_or(true);
@@ -190,7 +193,16 @@ impl Guard {
             // untrusted (for example, far in the future). Advance only to the
             // robot's own clock so any command already queued before this
             // rejection cannot become a fresh resume command afterward.
-            if self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
+            //
+            // Not for a command that is already behind the barrier: the
+            // barrier excludes it and everything older as it stands, and
+            // moving it to `ros_ns` again would also exclude the next commands
+            // the sender stamps with the robot clock it has seen. When the
+            // round trip is longer than the send interval (the app sends every
+            // 100 ms, 4G takes 150-300 ms) each of those lands behind the
+            // moved barrier in turn, and manual driving stayed locked until
+            // the stick was let go (robot, 2026-10-24: 40 s of rejections).
+            if reason != MOVED_BACKWARD && self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
                 self.last_source_stamp_ns = Some(ros_ns);
             }
             self.nonzero_active = false;
@@ -352,11 +364,11 @@ mod tests {
             g.on_command(&cmd(now + 205_000_000, 0.2, 0.0), now + 215_000_000, t0 + Duration::from_millis(215)),
             Action::Reject("velocity source timestamp moved backward")
         );
-        // every rejection moves the barrier to the robot clock at that
-        // moment (now + 215 ms), so the previously accepted stamp is old too
+        // that rejection was behind the barrier and left it at now + 210 ms:
+        // the barrier's own stamp is a replay, only a newer one moves again
         assert_eq!(
             g.on_command(&cmd(now + 210_000_000, 0.2, 0.0), now + 216_000_000, t0 + Duration::from_millis(216)),
-            Action::Reject("velocity source timestamp moved backward")
+            Action::Reject("replayed velocity cannot resume stopped motion")
         );
         assert_eq!(g.on_command(&cmd(now + 220_000_000, 0.2, 0.0), now + 220_000_000, t0 + Duration::from_millis(220)), forward(0.2, 0.0));
     }
@@ -386,5 +398,29 @@ mod tests {
         // an older valid command that was still queued must not resume motion
         assert_eq!(g.on_command(&cmd(now - 20_000_000, 0.2, 0.0), now, t0), Action::Reject("velocity source timestamp moved backward"));
         assert!(!g.watchdog(t0 + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn rejection_costs_one_round_trip_when_it_exceeds_the_send_interval() {
+        // manual_velocity_guard as deployed (max_input_age_s 0.8), fed like
+        // the app over 4G: a command every 100 ms, stamped with the newest
+        // robot clock the phone has seen, which is 250 ms old on arrival
+        let mut g = Guard::new(Limits::new(0.20, 0.8, 0.05, 0.50, 1.00, true, 0.05).unwrap());
+        let t0 = Instant::now();
+        let base = 1_000 * NS;
+        let mut refused = Vec::new();
+        for ms in (0..=2000u64).step_by(100) {
+            let now = base + ms as i64 * 1_000_000;
+            // one overspeed command at 1.0 s: rejected, barrier -> 1.0 s
+            let linear = if ms == 1000 { 0.9 } else { 0.2 };
+            let action = g.on_command(&cmd(now - 250_000_000, linear, 0.0), now, t0 + Duration::from_millis(ms));
+            if action != forward(0.2, 0.0) {
+                refused.push(ms);
+            }
+        }
+        // the commands stamped 0.85 s and 0.95 s were issued before the stop
+        // and stay refused; the one stamped 1.05 s (arriving at 1.3 s) is
+        // the first after it and drives again, as does the rest
+        assert_eq!(refused, vec![1000, 1100, 1200]);
     }
 }

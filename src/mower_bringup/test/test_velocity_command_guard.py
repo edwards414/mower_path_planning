@@ -252,3 +252,37 @@ def test_manual_guard_restart_stop_blocks_old_writer_motion_at_final_guard(
         assert not final._nonzero_active
     finally:
         final.destroy_node()
+
+
+def test_rejection_behind_the_barrier_leaves_it_in_place(guard):
+    """A command already behind the barrier must not move it again: over 4G
+    the app's next commands carry a robot clock older than any new barrier,
+    and manual driving stayed locked until the stick was let go."""
+    node, published = guard
+    now_ns = node.get_clock().now().nanoseconds
+
+    future_stop = TwistStamped()
+    future_stamp = now_ns + 10_000_000_000
+    future_stop.header.stamp.sec = future_stamp // 1_000_000_000
+    future_stop.header.stamp.nanosec = future_stamp % 1_000_000_000
+    node._command_callback(future_stop)
+    barrier_ns = node._last_source_stamp_ns
+    assert barrier_ns is not None and barrier_ns < future_stamp
+
+    behind = TwistStamped()
+    behind.twist.linear.x = 0.2
+    behind_stamp = barrier_ns - 1_000_000
+    behind.header.stamp.sec = behind_stamp // 1_000_000_000
+    behind.header.stamp.nanosec = behind_stamp % 1_000_000_000
+    node._command_callback(behind)
+    assert published[-1].twist.linear.x == 0.0
+    assert node._last_source_stamp_ns == barrier_ns
+
+    after = TwistStamped()
+    after.twist.linear.x = 0.2
+    after_stamp = barrier_ns + 1
+    after.header.stamp.sec = after_stamp // 1_000_000_000
+    after.header.stamp.nanosec = after_stamp % 1_000_000_000
+    node._command_callback(after)
+    assert published[-1].twist.linear.x == pytest.approx(0.2)
+    assert node._nonzero_active

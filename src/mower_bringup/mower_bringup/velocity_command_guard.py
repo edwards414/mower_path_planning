@@ -13,6 +13,9 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from std_msgs.msg import Header
 
+# The rejection of a command stamped behind the ordering barrier.
+_MOVED_BACKWARD = 'velocity source timestamp moved backward'
+
 
 class VelocityCommandGuard(Node):
     """Validate mux output and stop it on a steady-clock receipt timeout."""
@@ -149,7 +152,7 @@ class VelocityCommandGuard(Node):
             )
         previous_stamp = self._last_source_stamp_ns
         if previous_stamp is not None and stamp_ns < previous_stamp:
-            return 'velocity source timestamp moved backward', stamp_ns, False
+            return _MOVED_BACKWARD, stamp_ns, False
         is_new = previous_stamp is None or stamp_ns > previous_stamp
         if is_new:
             # A newer malformed/overspeed command still represents a newer
@@ -242,9 +245,18 @@ class VelocityCommandGuard(Node):
             # untrusted (for example, far in the future). Advance only to the
             # robot's own clock so any command already queued before this
             # rejection cannot become a fresh resume command afterward.
+            #
+            # Not for a command that is already behind the barrier: the
+            # barrier excludes it and everything older as it stands, and
+            # moving it to the clock again would also exclude the next
+            # commands the sender stamps with the robot clock it has seen.
+            # When the round trip is longer than the send interval (the app
+            # sends every 100 ms, 4G takes 150-300 ms) each of those lands
+            # behind the moved barrier in turn, and manual driving stayed
+            # locked until the stick was let go (robot, 2026-10-24).
             rejection_barrier_ns = self.get_clock().now().nanoseconds
             previous_stamp = self._last_source_stamp_ns
-            if (
+            if reason != _MOVED_BACKWARD and (
                 previous_stamp is None
                 or rejection_barrier_ns > previous_stamp
             ):
