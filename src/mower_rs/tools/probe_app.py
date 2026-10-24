@@ -34,7 +34,7 @@ REQUIRED = ["/robot/online", "/robot/info", "/robot/telemetry", "/battery_state"
 # the inflated layers, empty on main indoors, are compared like-for-like).
 SAVE = sys.argv[sys.argv.index("--save") + 1] if "--save" in sys.argv else None
 BASE = sys.argv[sys.argv.index("--baseline") + 1] if "--baseline" in sys.argv else None
-OPTIONAL = ["/fix", "/gps/fix", "/manual_command_clock", "/mower_recorder/status",
+OPTIONAL = ["/fix", "/gps/fix", "/gps/status", "/manual_command_clock", "/mower_recorder/status",
             "/mower_recorder/bags", "/mower_recorder/command_result"]
 SERVICES = [("/rosapi/topics", {}), ("/check_nav_status", {}), ("/rosapi/get_time", {})]
 # Arriving is not enough: robot_status keeps publishing /robot/online (false),

@@ -674,14 +674,18 @@ checksum handling to the Python driver.
 
 `crates/mower_ubx` is the UBX layer with no dependencies (host-testable):
 resynchronising frame parser, Fletcher checksum, CFG-RATE / CFG-MSG
-encoders, NAV-PVT / NAV-HPPOSLLH / NAV-EOE / ACK decoders and the
-`NavSatFix` mapping of the ROS `ublox_gps` driver (NO_FIX unless gnssFixOK
-with a 2D/3D/GNSS+DR fix, GBAS_FIX for an RTK fixed carrier solution,
-covariance = hAcc², NaN position without a fix). `crates/mower_gps` opens
-`/dev/gps_rtk`, turns UART1 output off and enables PVT + HPPOSLLH + EOE at
-`rate_hz` on the USB port (RAM only, ACK-checked, everything else in the
-receiver untouched), builds one fix per epoch with the HPPOSLLH millimetre
-digits, and publishes a 1 Hz JSON `gps/status`. An epoch goes out once its
+encoders, NAV-PVT / NAV-HPPOSLLH / NAV-SAT / NAV-RELPOSNED / NAV-EOE / ACK
+decoders and the `NavSatFix` mapping of the ROS `ublox_gps` driver (NO_FIX
+unless gnssFixOK with a 2D/3D/GNSS+DR fix, GBAS_FIX for an RTK fixed
+carrier solution, covariance = hAcc², NaN position without a fix).
+`crates/mower_gps` opens `/dev/gps_rtk`, turns UART1 output off and enables
+PVT + HPPOSLLH + RELPOSNED + EOE at `rate_hz` and SAT about once a second
+on the USB port (RAM only, ACK-checked, everything else in the receiver
+untouched), builds one fix per epoch with the HPPOSLLH millimetre digits,
+and publishes a 1 Hz JSON `gps/status` that also carries the satellite
+list (`sky`: C/N0, elevation, azimuth, used) and the base -> rover vector
+(`relpos`) for Mower Studio and the app's base station marker (layout in
+`mower_gps/src/status.rs` and `docs/ROBOT_API.md`). An epoch goes out once its
 PVT and HPPOSLLH are in, on NAV-EOE if the HPPOSLLH was lost, and one epoch
 late (stamped when its PVT arrived) if both were: on 2026-10-24 XR-02's
 rover, its output buffer filled by UART1, sent no NAV-EOE at all and the

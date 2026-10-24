@@ -5,9 +5,10 @@
 # launch sets fix_topic to the canonical gps_fix_topic (/fix).
 #
 # The driver turns UART1 output off and enables NAV-PVT + NAV-HPPOSLLH +
-# NAV-EOE on the USB port at rate_hz, in the receiver's RAM at every start
-# (nothing saved); the rest of the receiver configuration, including the RTCM
-# correction input on UART1 from a base station or NTRIP, is left alone.
+# NAV-RELPOSNED + NAV-EOE at rate_hz and NAV-SAT about once a second on the
+# USB port, in the receiver's RAM at every start (nothing saved); the rest of
+# the receiver configuration, including the RTCM correction input on UART1
+# from a base station or NTRIP, is left alone.
 # Verified on the robot 2026-09-19 (4.00 Hz, indoor no-fix -> status -1 / NaN
 # position).
 # To try other settings without a new image, put a copy in ~/.mower and pass
@@ -30,4 +31,5 @@ gps:
     stale_timeout_s: 5.0
     startup_timeout_s: 20.0
     # 1 Hz JSON: fix_type, carrier_solution, num_sv, h_acc_m, pdop, utc, ...
+    # plus sky (NAV-SAT satellites) and relpos (base -> rover, NAV-RELPOSNED)
     status_topic: gps/status

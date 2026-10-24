@@ -12,11 +12,19 @@
 //!
 //! Receiver configuration is applied to RAM at every start (nothing is
 //! saved): UART1 output off (`disable_uart1_output`), then NAV-PVT,
-//! NAV-HPPOSLLH and NAV-EOE on this port at `rate_hz`. Whatever else the
-//! receiver streams (RAWX, MON-*, NMEA) is skipped by the parser. Correction
-//! input (RTCM over UART1 from a base / NTRIP) is not this driver's business.
+//! NAV-HPPOSLLH, NAV-RELPOSNED and NAV-EOE on this port at `rate_hz`,
+//! NAV-SAT about once a second. Whatever else the receiver streams (RAWX,
+//! MON-*, NMEA) is skipped by the parser. Correction input (RTCM over UART1
+//! from a base / NTRIP) is not this driver's business; NAV-RELPOSNED only
+//! reports where the antenna is relative to that base.
 //! How the messages become one fix per epoch, also when the receiver drops
 //! some of them, is in `epoch.rs`.
+//!
+//! `gps/status` carries, next to the fix summary, the latest satellite list
+//! (`sky`, NAV-SAT: signal strength and position in the sky of every
+//! satellite) and the base -> rover vector (`relpos`, NAV-RELPOSNED) for the
+//! desktop dashboard and the app's base station marker; their layout is in
+//! `status.rs`.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,13 +32,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use mower_rs_common::{json_number, params, ModuleCtx, ModuleResult};
-use mower_ubx::{class, id, Ack, CarrierSolution, Fix, Frame, NavHpPosLlh, NavPvt, Parser};
+use mower_ubx::{class, id, Ack, CarrierSolution, Fix, Frame, NavHpPosLlh, NavPvt, NavRelPosNed, NavSat, Parser};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::String as StringMsg;
 use r2r::QosProfile;
 
 mod epoch;
+mod status;
 use epoch::{Assembler, Epoch};
 
 /// NavSatStatus.service: GPS | GLONASS | BeiDou (COMPASS) | Galileo, the
@@ -79,6 +88,16 @@ struct Outputs {
     pvt: bool,
     hpposllh: bool,
     eoe: bool,
+    sat: bool,
+    relposned: bool,
+}
+
+/// The newest NAV-SAT and NAV-RELPOSNED with when they arrived; they go out
+/// with the next status message, not epoch by epoch.
+#[derive(Default)]
+struct Latest {
+    sat: Option<(NavSat, Instant)>,
+    relpos: Option<(NavRelPosNed, Instant)>,
 }
 
 struct Driver {
@@ -143,9 +162,14 @@ impl Driver {
         let _ = port.inner.clear(serialport::ClearBuffer::All);
         r2r::log_info!(&self.logger, "u-blox receiver on {} opened", s.device);
 
-        let outputs = if s.configure { self.configure(&mut port)? } else { Outputs { pvt: true, hpposllh: true, eoe: true } };
+        let outputs = if s.configure {
+            self.configure(&mut port)?
+        } else {
+            Outputs { pvt: true, hpposllh: true, eoe: true, sat: true, relposned: true }
+        };
 
         let mut epochs = Assembler::new(outputs.hpposllh, outputs.eoe);
+        let mut latest = Latest::default();
         let mut last_pvt_at: Option<Instant> = None;
         let started = Instant::now();
         let mut last_status_at: Option<Instant> = None;
@@ -164,17 +188,27 @@ impl Driver {
                         let Some(pvt) = NavPvt::parse(&frame.payload) else { continue };
                         last_pvt_at = Some(Instant::now());
                         for epoch in epochs.on_pvt(pvt, SystemTime::now()) {
-                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
+                            self.publish_epoch(epoch, &latest, &mut last_status_at, &mut last_state);
                         }
                     }
                     id::HPPOSLLH => {
                         if let Some(epoch) = NavHpPosLlh::parse(&frame.payload).and_then(|hp| epochs.on_hp(hp)) {
-                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
+                            self.publish_epoch(epoch, &latest, &mut last_status_at, &mut last_state);
+                        }
+                    }
+                    id::SAT => {
+                        if let Some(sat) = NavSat::parse(&frame.payload) {
+                            latest.sat = Some((sat, Instant::now()));
+                        }
+                    }
+                    id::RELPOSNED => {
+                        if let Some(relpos) = NavRelPosNed::parse(&frame.payload) {
+                            latest.relpos = Some((relpos, Instant::now()));
                         }
                     }
                     id::EOE => {
                         if let Some(epoch) = mower_ubx::nav_eoe_itow(&frame.payload).and_then(|itow| epochs.on_eoe(itow)) {
-                            self.publish_epoch(epoch, &mut last_status_at, &mut last_state);
+                            self.publish_epoch(epoch, &latest, &mut last_status_at, &mut last_state);
                         }
                     }
                     _ => {}
@@ -230,8 +264,8 @@ impl Driver {
         let meas_ms = (1000.0 / s.rate_hz).round().clamp(25.0, 65_535.0) as u16;
         let rate_ok = port.configure_one(&mower_ubx::cfg::rate(meas_ms, 1), class::CFG, id::CFG_RATE)?;
         let mut outputs = Outputs::default();
-        let mut enable = |msg_id: u8, name: &str, slot: &mut bool| -> Result<(), String> {
-            let ack = port.configure_one(&mower_ubx::cfg::msg_rate(class::NAV, msg_id, 1), class::CFG, id::CFG_MSG)?;
+        let mut enable = |msg_id: u8, every_n: u8, name: &str, slot: &mut bool| -> Result<(), String> {
+            let ack = port.configure_one(&mower_ubx::cfg::msg_rate(class::NAV, msg_id, every_n), class::CFG, id::CFG_MSG)?;
             *slot = ack == Some(true);
             match ack {
                 Some(true) => {}
@@ -240,12 +274,20 @@ impl Driver {
             }
             Ok(())
         };
-        enable(id::PVT, "PVT", &mut outputs.pvt)?;
-        enable(id::HPPOSLLH, "HPPOSLLH", &mut outputs.hpposllh)?;
-        enable(id::EOE, "EOE", &mut outputs.eoe)?;
+        // The satellite list is for the dashboard: about once a second is
+        // plenty, and at ~12 bytes per satellite the largest NAV message.
+        let sat_every = s.rate_hz.round().clamp(1.0, 255.0) as u8;
+        enable(id::PVT, 1, "PVT", &mut outputs.pvt)?;
+        enable(id::HPPOSLLH, 1, "HPPOSLLH", &mut outputs.hpposllh)?;
+        enable(id::RELPOSNED, 1, "RELPOSNED", &mut outputs.relposned)?;
+        enable(id::SAT, sat_every, "SAT", &mut outputs.sat)?;
+        enable(id::EOE, 1, "EOE", &mut outputs.eoe)?;
         match rate_ok {
-            Some(true) => r2r::log_info!(&self.logger, "receiver configured: {} ms epochs, NAV-PVT{}{}", meas_ms,
-                if outputs.hpposllh { " + HPPOSLLH" } else { "" }, if outputs.eoe { " + EOE" } else { " (no EOE: fix published on PVT)" }),
+            Some(true) => r2r::log_info!(&self.logger, "receiver configured: {} ms epochs, NAV-PVT{}{}{}{}", meas_ms,
+                if outputs.hpposllh { " + HPPOSLLH" } else { "" },
+                if outputs.relposned { " + RELPOSNED" } else { "" },
+                if outputs.sat { format!(" + SAT every {sat_every}") } else { String::new() },
+                if outputs.eoe { " + EOE" } else { " (no EOE: fix published on PVT)" }),
             Some(false) => r2r::log_warn!(&self.logger, "receiver rejected the {} ms measurement rate (NAK); keeping its own", meas_ms),
             None => r2r::log_warn!(&self.logger, "no answer to the measurement rate; the receiver keeps its own"),
         }
@@ -257,6 +299,7 @@ impl Driver {
     fn publish_epoch(
         &self,
         epoch: Epoch,
+        latest: &Latest,
         last_status_at: &mut Option<Instant>,
         last_state: &mut Option<(i8, CarrierSolution, u8)>,
     ) {
@@ -305,6 +348,8 @@ impl Driver {
                 "high_precision": fix.high_precision,
                 "utc": pvt.utc(),
                 "rate_hz": json_number(self.settings.rate_hz),
+                "sky": status::latest(&latest.sat, now, status::sky_json),
+                "relpos": status::latest(&latest.relpos, now, status::relpos_json),
             });
             if let Err(e) = self.status_pub.publish(&StringMsg { data: status.to_string() }) {
                 r2r::log_error!(&self.logger, "publish gps status failed: {:?}", e);
