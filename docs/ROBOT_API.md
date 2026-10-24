@@ -92,7 +92,35 @@ App 掃碼後把這台存進「我的機器人」，之後**每次 WebSocket 連
 
 > `base` 來源 `/mower_base/telemetry` 本身是 20 Hz（與 STM32 `0x85` 同步，PID 自動校正需要這個取樣率），並多了 `t`（ROS time）與 `pid.last_rx_seq`。
 
-給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態、充電模組 `charger`、抬刀 servo `servo`（脈寬、上下限微動、被限位擋下）、割草馬達 `blade`，來自 STM32 的 `0x81/0x82/0x83/0x84/0x85/0x86/0x88/0x89`）、`battery`（`/battery_state` 攤平：`present / pct / voltage_v / current_a / status`，`aon` 下是小電池同格式）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（像 `top` / `free` / `df`：每 2 s 更新的 CPU 總使用率與 us/sy/wa、每核 %、時脈與降頻上限、各溫度區、load 1/5/15、記憶體、磁碟容量與讀寫速率、eMMC 壽命、CPU 前 10 名程序；程序的 % 是單核百分比，4 核滿載 400 %；速率欄位在第一筆是 null；Rust 版在 `robot_status/src/host.rs`，Python 版在 `mower_mission/host_stats.py`）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
+給桌面參數儀表板（`mower_sudio_app`）的唯讀資料流，一個 topic 包含儀表板要顯示的全部：`gps`（`/fix` 狀態 / 位置 / 精度，有 u-blox `navpvt` 時附 `pvt` 衛星數與 RTK carrier solution；真機的 `mower_gps` 沒有 `navpvt`，`pvt` 是 null，衛星數、訊號強度與相對基站位置改看 `/gps/status`）、`imu`（roll / pitch / yaw、角速度、加速度、更新率）、`odom`、`base`（`/mower_base/telemetry`：左右輪目標 / 實測 RPM、PID 輸出與增益、燈光模式、電源狀態、充電模組 `charger`、抬刀 servo `servo`（脈寬、上下限微動、被限位擋下）、割草馬達 `blade`，來自 STM32 的 `0x81/0x82/0x83/0x84/0x85/0x86/0x88/0x89`）、`battery`（`/battery_state` 攤平：`present / pct / voltage_v / current_a / status`，`aon` 下是小電池同格式）、`link`（LTE `AT+CSQ` RSSI、Wi-Fi RSSI、介面狀態，由 `deploy/host/mower-link-status.py` 寫入 `link_status.json`）、`host`（像 `top` / `free` / `df`：每 2 s 更新的 CPU 總使用率與 us/sy/wa、每核 %、時脈與降頻上限、各溫度區、load 1/5/15、記憶體、磁碟容量與讀寫速率、eMMC 壽命、CPU 前 10 名程序；程序的 % 是單核百分比，4 核滿載 400 %；速率欄位在第一筆是 null；Rust 版在 `robot_status/src/host.rs`，Python 版在 `mower_mission/host_stats.py`）、`info`（最新的 `/robot/info`）。每一塊都有 `valid` 與 `age_s`，欄位說明見 `src/mower_mission/mower_mission/telemetry_node.py`。
+
+## `/gps/status`（std_msgs/String，JSON，約 1 Hz，App 唯讀）
+
+`mower_gps`（u-blox ZED-F9P，`src/mower_rs/crates/mower_gps`）每秒一筆，fix 狀態變化時立即補發。Mower Studio 的 GPS 畫面直接訂閱它（PyGPSClient 那種衛星強度 / 天空圖 / 相對基站位置）；iOS App 用 `relpos` 和 `/fix` 算出基站位置，在地圖上標「基站」（目前設計基站就是充電座）：
+
+```json
+{"fix_type": 3, "fix_ok": true, "status": 2, "carrier_solution": "fixed", "diff_soln": true,
+ "num_sv": 24, "h_acc_m": 0.014, "v_acc_m": 0.021, "pdop": 1.2, "ground_speed_m_s": 0.0,
+ "high_precision": true, "utc": "2026-10-23T06:12:30Z", "rate_hz": 4.0,
+ "sky": {"age_s": 0.42, "itow_ms": 345600000, "num_svs": 38, "num_used": 24,
+         "sats": [[0, 12, 44, 56, 123, 31], [6, 3, 0, null, null, 1], ...]},
+ "relpos": {"age_s": 0.1, "itow_ms": 345600000, "ref_station_id": 0, "valid": true,
+            "carrier_solution": "fixed", "n_m": 12.3456, "e_m": -4.5678, "d_m": 0.1195,
+            "length_m": 13.1609, "heading_deg": null,
+            "acc_n_m": 0.012, "acc_e_m": 0.011, "acc_d_m": 0.02, "acc_length_m": 0.015,
+            "acc_heading_deg": null, "is_moving": false, "ref_pos_miss": false,
+            "ref_obs_miss": false, "flags": 23}}
+```
+
+- 前面的欄位來自 NAV-PVT：`num_sv` 是解算用到的衛星數，`carrier_solution` 是 `none / float / fixed`（RTK），`h_acc_m / v_acc_m` 是 1σ。
+- `sky`（NAV-SAT，約 1 Hz）：`num_svs` 是接收機回報的衛星數（追蹤中加上有星曆、還沒追到的），`num_used` 是其中參與解算的。`sats` 每顆一個陣列 `[gnss_id, sv_id, cno_dbhz, elev_deg, azim_deg, flags]`，用陣列是為了讓經過 cloud relay 的訊息小一點。
+  - `gnss_id`：0 GPS、1 SBAS、2 Galileo、3 BeiDou、5 QZSS、6 GLONASS、7 NavIC。
+  - `cno_dbhz` 是訊號強度（C/N0），0 = 沒追到。`elev_deg / azim_deg` 不知道位置時是 null。
+  - `flags` 是 NAV-SAT 原始值：bit 0-2 訊號品質（0 無訊號、1 搜尋中、2 已擷取、3 偵測到但不可用、4 code locked、5-7 code + carrier locked），bit 3 用於解算，bit 4-5 health（0 未知、1 正常、2 不正常），bit 6 有差分修正。
+- `relpos`（NAV-RELPOSNED，每個 epoch 一筆，送出時帶最新收到的那筆）：**基站 → 車**的 NED 向量（公尺，北 / 東 / 下）與 1σ 精度，`length_m` 是基線長度。它不一定和前面 NAV-PVT 欄位同一個 epoch（epoch 收齊 PVT + HPPOSLLH 就送出，RELPOSNED 可能還沒到），要對齊看 `itow_ms`。`valid` 是 relPosValid：沒有收到基站 / NTRIP 的 RTCM 修正時是 false，數值無意義。`heading_deg` 只在接收機標示有效時給（一般固定基站不會有），`ref_pos_miss / ref_obs_miss` 是基站位置 / 觀測量缺了、接收機用外插補的。`ref_station_id` 是 RTCM 1005 的站號。
+- `sky` / `relpos` 從沒收到、或超過 5 s 沒更新就是 null（接收機不支援、NAK，或 `configure_receiver: false` 時接收機本身沒開這兩個訊息）。
+
+新增 topic，`api_version` 不 bump。
 
 ## `/battery_state`（sensor_msgs/BatteryState，1 Hz）
 

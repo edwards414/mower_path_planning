@@ -77,6 +77,15 @@ def test_rosbridge_exposes_info_topic_and_system_services():
     assert "'/robot/info'" in rosapi_topics
 
 
+
+def test_rosbridge_exposes_gps_status_for_the_dashboard():
+    # Mower Studio's GPS view and the app's base station marker read the
+    # satellite list and the base -> rover vector from mower_gps' /gps/status
+    text = ROSBRIDGE_CONFIG.read_text(encoding='utf-8')
+    assert "'/gps/status'" in text.split('topics_sub_glob')[1].split('\n')[0]
+    rosapi_topics = text.split('rosapi:')[1].split('topics_glob')[1].split('\n')[0]
+    assert "'/gps/status'" in rosapi_topics
+
 def test_api_version_is_documented():
     """docs/ROBOT_API.md must list the current ROBOT_API_VERSION."""
     text = API_DOC.read_text(encoding='utf-8')

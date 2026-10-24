@@ -16,6 +16,7 @@ topics_sub:
   - '/battery_state'
   - '/fix'
   - '/gps/fix'
+  - '/gps/status'
   - '/manual_command_clock'
   - '/*/online'
   - '/*/robot_pose'

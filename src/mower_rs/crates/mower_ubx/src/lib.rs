@@ -1,8 +1,8 @@
 //! u-blox UBX protocol, the part `mower_gps` needs: a resynchronising frame
 //! parser, the 8-bit Fletcher checksum, encoders for the legacy CFG
 //! messages that set the output rate on the current port, and decoders for
-//! NAV-PVT, NAV-HPPOSLLH, NAV-EOE and ACK-ACK/NAK. No ROS or I/O in here so
-//! it is unit-tested on any host with plain cargo.
+//! NAV-PVT, NAV-HPPOSLLH, NAV-SAT, NAV-RELPOSNED, NAV-EOE and ACK-ACK/NAK.
+//! No ROS or I/O in here so it is unit-tested on any host with plain cargo.
 //!
 //! References: u-blox ZED-F9P interface description (UBX-18010854), which
 //! still accepts UBX-CFG-MSG / UBX-CFG-RATE next to the newer CFG-VALSET.
@@ -24,6 +24,8 @@ pub mod id {
     // NAV
     pub const PVT: u8 = 0x07;
     pub const HPPOSLLH: u8 = 0x14;
+    pub const SAT: u8 = 0x35;
+    pub const RELPOSNED: u8 = 0x3C;
     pub const EOE: u8 = 0x61;
     // ACK
     pub const ACK_NAK: u8 = 0x00;
@@ -179,6 +181,9 @@ impl Parser {
 
 fn u16_at(p: &[u8], i: usize) -> u16 {
     u16::from_le_bytes([p[i], p[i + 1]])
+}
+fn i16_at(p: &[u8], i: usize) -> i16 {
+    u16_at(p, i) as i16
 }
 fn u32_at(p: &[u8], i: usize) -> u32 {
     u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]])
@@ -459,6 +464,273 @@ impl NavHpPosLlh {
     }
 }
 
+/// One satellite of UBX-NAV-SAT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SatInfo {
+    /// 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 5 QZSS, 6 GLONASS, 7 NavIC
+    pub gnss_id: u8,
+    pub sv_id: u8,
+    /// Carrier-to-noise ratio, dBHz (0 = not tracked)
+    pub cno: u8,
+    /// Degrees; None when the receiver does not know where the satellite is
+    pub elev_deg: Option<i8>,
+    pub azim_deg: Option<i16>,
+    /// Pseudorange residual, 0.1 m
+    pub pr_res_dm: i16,
+    pub flags: u32,
+}
+
+impl SatInfo {
+    pub const FLAG_SV_USED: u32 = 0x08;
+    pub const FLAG_DIFF_CORR: u32 = 0x40;
+
+    /// Signal quality, 0 no signal .. 4 code locked .. 5-7 code and carrier locked.
+    pub fn quality(&self) -> u8 {
+        (self.flags & 0x07) as u8
+    }
+
+    /// Used in the navigation solution.
+    pub fn sv_used(&self) -> bool {
+        self.flags & Self::FLAG_SV_USED != 0
+    }
+
+    /// 0 unknown, 1 healthy, 2 unhealthy.
+    pub fn health(&self) -> u8 {
+        ((self.flags >> 4) & 0x03) as u8
+    }
+
+    /// Differential correction data is available for this satellite.
+    pub fn diff_corr(&self) -> bool {
+        self.flags & Self::FLAG_DIFF_CORR != 0
+    }
+}
+
+/// UBX-NAV-SAT: every satellite the receiver tracks or has orbit data for,
+/// with signal strength and position in the sky.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NavSat {
+    pub itow_ms: u32,
+    pub version: u8,
+    pub sats: Vec<SatInfo>,
+}
+
+impl NavSat {
+    pub const HEADER_LEN: usize = 8;
+    pub const SAT_LEN: usize = 12;
+
+    pub fn parse(payload: &[u8]) -> Option<NavSat> {
+        if payload.len() < Self::HEADER_LEN {
+            return None;
+        }
+        let p = payload;
+        let num_svs = p[5] as usize;
+        if p.len() != Self::HEADER_LEN + Self::SAT_LEN * num_svs {
+            return None;
+        }
+        let sats = p[Self::HEADER_LEN..]
+            .chunks_exact(Self::SAT_LEN)
+            .map(|s| {
+                let elev = s[3] as i8;
+                let azim = i16_at(s, 4);
+                // elevation out of range means the position is unknown, and
+                // the azimuth with it
+                let known = (-90..=90).contains(&elev);
+                SatInfo {
+                    gnss_id: s[0],
+                    sv_id: s[1],
+                    cno: s[2],
+                    elev_deg: known.then_some(elev),
+                    azim_deg: (known && (0..=360).contains(&azim)).then_some(azim),
+                    pr_res_dm: i16_at(s, 6),
+                    flags: u32_at(s, 8),
+                }
+            })
+            .collect();
+        Some(NavSat { itow_ms: u32_at(p, 0), version: p[4], sats })
+    }
+
+    pub fn num_used(&self) -> usize {
+        self.sats.iter().filter(|s| s.sv_used()).count()
+    }
+}
+
+/// UBX-NAV-RELPOSNED: where the antenna is relative to the RTK reference
+/// station (base -> rover, north / east / down). Version 1 is the ZED-F9P
+/// layout; version 0 (NEO-M8P) has no length / heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavRelPosNed {
+    pub version: u8,
+    pub ref_station_id: u16,
+    pub itow_ms: u32,
+    /// cm, plus the 0.1 mm part (-99..=99)
+    pub rel_pos_n_cm: i32,
+    pub rel_pos_e_cm: i32,
+    pub rel_pos_d_cm: i32,
+    pub rel_pos_hp_n: i8,
+    pub rel_pos_hp_e: i8,
+    pub rel_pos_hp_d: i8,
+    /// Version 1 only: cm + 0.1 mm, and 1e-5 degrees
+    pub rel_pos_length_cm: Option<i32>,
+    pub rel_pos_hp_length: Option<i8>,
+    pub rel_pos_heading_1e5: Option<i32>,
+    /// 0.1 mm
+    pub acc_n_0_1mm: u32,
+    pub acc_e_0_1mm: u32,
+    pub acc_d_0_1mm: u32,
+    /// Version 1 only: 0.1 mm, and 1e-5 degrees
+    pub acc_length_0_1mm: Option<u32>,
+    pub acc_heading_1e5: Option<u32>,
+    pub flags: u32,
+}
+
+impl NavRelPosNed {
+    pub const LEN_V0: usize = 40;
+    pub const LEN_V1: usize = 64;
+    pub const FLAG_GNSS_FIX_OK: u32 = 0x001;
+    pub const FLAG_DIFF_SOLN: u32 = 0x002;
+    pub const FLAG_REL_POS_VALID: u32 = 0x004;
+    pub const FLAG_IS_MOVING: u32 = 0x020;
+    pub const FLAG_REF_POS_MISS: u32 = 0x040;
+    pub const FLAG_REF_OBS_MISS: u32 = 0x080;
+    pub const FLAG_HEADING_VALID: u32 = 0x100;
+    pub const FLAG_NORMALIZED: u32 = 0x200;
+
+    pub fn parse(payload: &[u8]) -> Option<NavRelPosNed> {
+        let p = payload;
+        match p.first()? {
+            0 if p.len() >= Self::LEN_V0 => Some(NavRelPosNed {
+                version: 0,
+                ref_station_id: u16_at(p, 2),
+                itow_ms: u32_at(p, 4),
+                rel_pos_n_cm: i32_at(p, 8),
+                rel_pos_e_cm: i32_at(p, 12),
+                rel_pos_d_cm: i32_at(p, 16),
+                rel_pos_hp_n: p[20] as i8,
+                rel_pos_hp_e: p[21] as i8,
+                rel_pos_hp_d: p[22] as i8,
+                rel_pos_length_cm: None,
+                rel_pos_hp_length: None,
+                rel_pos_heading_1e5: None,
+                acc_n_0_1mm: u32_at(p, 24),
+                acc_e_0_1mm: u32_at(p, 28),
+                acc_d_0_1mm: u32_at(p, 32),
+                acc_length_0_1mm: None,
+                acc_heading_1e5: None,
+                flags: u32_at(p, 36),
+            }),
+            1 if p.len() >= Self::LEN_V1 => Some(NavRelPosNed {
+                version: 1,
+                ref_station_id: u16_at(p, 2),
+                itow_ms: u32_at(p, 4),
+                rel_pos_n_cm: i32_at(p, 8),
+                rel_pos_e_cm: i32_at(p, 12),
+                rel_pos_d_cm: i32_at(p, 16),
+                rel_pos_hp_n: p[32] as i8,
+                rel_pos_hp_e: p[33] as i8,
+                rel_pos_hp_d: p[34] as i8,
+                rel_pos_length_cm: Some(i32_at(p, 20)),
+                rel_pos_hp_length: Some(p[35] as i8),
+                rel_pos_heading_1e5: Some(i32_at(p, 24)),
+                acc_n_0_1mm: u32_at(p, 36),
+                acc_e_0_1mm: u32_at(p, 40),
+                acc_d_0_1mm: u32_at(p, 44),
+                acc_length_0_1mm: Some(u32_at(p, 48)),
+                acc_heading_1e5: Some(u32_at(p, 52)),
+                flags: u32_at(p, 60),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Metres from cm + 0.1 mm, computed in 0.1 mm integers so the value
+    /// prints with at most four decimals.
+    fn metres(cm: i32, hp: i8) -> f64 {
+        (cm as i64 * 100 + hp as i64) as f64 / 1e4
+    }
+
+    pub fn n_m(&self) -> f64 {
+        Self::metres(self.rel_pos_n_cm, self.rel_pos_hp_n)
+    }
+
+    pub fn e_m(&self) -> f64 {
+        Self::metres(self.rel_pos_e_cm, self.rel_pos_hp_e)
+    }
+
+    pub fn d_m(&self) -> f64 {
+        Self::metres(self.rel_pos_d_cm, self.rel_pos_hp_d)
+    }
+
+    pub fn length_m(&self) -> Option<f64> {
+        Some(Self::metres(self.rel_pos_length_cm?, self.rel_pos_hp_length?))
+    }
+
+    /// Heading of the base -> rover vector, only when the receiver flags it valid.
+    pub fn heading_deg(&self) -> Option<f64> {
+        let h = self.rel_pos_heading_1e5.filter(|_| self.heading_valid())?;
+        Some(h as f64 / 1e5)
+    }
+
+    pub fn acc_n_m(&self) -> f64 {
+        self.acc_n_0_1mm as f64 / 1e4
+    }
+
+    pub fn acc_e_m(&self) -> f64 {
+        self.acc_e_0_1mm as f64 / 1e4
+    }
+
+    pub fn acc_d_m(&self) -> f64 {
+        self.acc_d_0_1mm as f64 / 1e4
+    }
+
+    pub fn acc_length_m(&self) -> Option<f64> {
+        Some(self.acc_length_0_1mm? as f64 / 1e4)
+    }
+
+    pub fn acc_heading_deg(&self) -> Option<f64> {
+        let a = self.acc_heading_1e5.filter(|_| self.heading_valid())?;
+        Some(a as f64 / 1e5)
+    }
+
+    pub fn gnss_fix_ok(&self) -> bool {
+        self.flags & Self::FLAG_GNSS_FIX_OK != 0
+    }
+
+    pub fn diff_soln(&self) -> bool {
+        self.flags & Self::FLAG_DIFF_SOLN != 0
+    }
+
+    /// False without corrections from a reference station.
+    pub fn rel_pos_valid(&self) -> bool {
+        self.flags & Self::FLAG_REL_POS_VALID != 0
+    }
+
+    pub fn carrier_solution(&self) -> CarrierSolution {
+        match (self.flags >> 3) & 0x03 {
+            2 => CarrierSolution::Fixed,
+            1 => CarrierSolution::Float,
+            _ => CarrierSolution::None,
+        }
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.flags & Self::FLAG_IS_MOVING != 0
+    }
+
+    /// Extrapolated reference position used (the base position message is missing).
+    pub fn ref_pos_miss(&self) -> bool {
+        self.flags & Self::FLAG_REF_POS_MISS != 0
+    }
+
+    /// Extrapolated reference observations used (base observations are missing).
+    pub fn ref_obs_miss(&self) -> bool {
+        self.flags & Self::FLAG_REF_OBS_MISS != 0
+    }
+
+    pub fn heading_valid(&self) -> bool {
+        self.version >= 1 && self.flags & Self::FLAG_HEADING_VALID != 0
+    }
+}
+
 /// UBX-NAV-EOE: end of the navigation epoch `itow`; sent after every other
 /// enabled NAV message of that epoch.
 pub fn nav_eoe_itow(payload: &[u8]) -> Option<u32> {
@@ -676,6 +948,129 @@ mod tests {
         assert_eq!(fix.status, -1);
         assert!(fix.latitude_deg.is_nan() && fix.longitude_deg.is_nan() && fix.altitude_m.is_nan());
         assert!(fix.h_var_m2 > 1e6);
+    }
+
+    fn sat(gnss_id: u8, sv_id: u8, cno: u8, elev: i8, azim: i16, flags: u32) -> Vec<u8> {
+        let mut s = vec![gnss_id, sv_id, cno, elev as u8];
+        s.extend_from_slice(&azim.to_le_bytes());
+        s.extend_from_slice(&(-12i16).to_le_bytes()); // prRes -1.2 m
+        s.extend_from_slice(&flags.to_le_bytes());
+        s
+    }
+
+    #[test]
+    fn nav_sat_decodes_every_satellite_and_unknown_positions() {
+        let mut p = vec![0u8; NavSat::HEADER_LEN];
+        p[0..4].copy_from_slice(&345_600_000u32.to_le_bytes());
+        p[4] = 1;
+        p[5] = 3;
+        p.extend(sat(0, 12, 44, 56, 123, 0x0000_001F)); // GPS, used, healthy, quality 7
+        p.extend(sat(6, 3, 0, -91, 400, 0x0000_0001)); // GLONASS, searching, position unknown
+        p.extend(sat(3, 25, 38, 10, 360, 0x0000_0044)); // BeiDou, quality 4, diff corr, not used
+        let nav = NavSat::parse(&p).unwrap();
+        assert_eq!(nav.itow_ms, 345_600_000);
+        assert_eq!(nav.version, 1);
+        assert_eq!(nav.sats.len(), 3);
+        assert_eq!(nav.num_used(), 1);
+        let g = nav.sats[0];
+        assert_eq!((g.gnss_id, g.sv_id, g.cno, g.elev_deg, g.azim_deg, g.pr_res_dm), (0, 12, 44, Some(56), Some(123), -12));
+        assert!(g.sv_used() && !g.diff_corr());
+        assert_eq!((g.quality(), g.health()), (7, 1));
+        let r = nav.sats[1];
+        assert_eq!((r.elev_deg, r.azim_deg, r.quality()), (None, None, 1));
+        let c = nav.sats[2];
+        assert_eq!((c.elev_deg, c.azim_deg), (Some(10), Some(360)));
+        assert!(!c.sv_used() && c.diff_corr());
+        assert_eq!((c.quality(), c.health()), (4, 0));
+        // numSvs and the length must agree
+        assert!(NavSat::parse(&p[..p.len() - 1]).is_none());
+        let mut extra = p.clone();
+        extra.extend(vec![0u8; NavSat::SAT_LEN]);
+        assert!(NavSat::parse(&extra).is_none());
+        assert!(NavSat::parse(&p[..7]).is_none());
+        let empty = NavSat::parse(&[0, 0, 0, 0, 1, 0, 0, 0]).unwrap();
+        assert!(empty.sats.is_empty());
+    }
+
+    #[test]
+    fn nav_relposned_v1_combines_the_high_precision_parts() {
+        let mut p = vec![0u8; NavRelPosNed::LEN_V1];
+        p[0] = 1;
+        p[2..4].copy_from_slice(&7u16.to_le_bytes());
+        p[4..8].copy_from_slice(&1000u32.to_le_bytes());
+        p[8..12].copy_from_slice(&1234i32.to_le_bytes()); // N 12.34 m
+        p[12..16].copy_from_slice(&(-456i32).to_le_bytes()); // E -4.56 m
+        p[16..20].copy_from_slice(&12i32.to_le_bytes()); // D 0.12 m
+        p[20..24].copy_from_slice(&1316i32.to_le_bytes()); // length 13.16 m
+        p[24..28].copy_from_slice(&33_973_000i32.to_le_bytes()); // 339.73 deg
+        p[32] = 56; // +5.6 mm
+        p[33] = (-78i8) as u8; // -7.8 mm
+        p[34] = (-5i8) as u8;
+        p[35] = 9;
+        p[36..40].copy_from_slice(&120u32.to_le_bytes()); // 12.0 mm
+        p[40..44].copy_from_slice(&110u32.to_le_bytes());
+        p[44..48].copy_from_slice(&200u32.to_le_bytes());
+        p[48..52].copy_from_slice(&150u32.to_le_bytes());
+        p[52..56].copy_from_slice(&52_000u32.to_le_bytes()); // 0.52 deg
+        // gnssFixOK | diffSoln | relPosValid | carrSoln fixed | headingValid
+        p[60..64].copy_from_slice(&(0x001 | 0x002 | 0x004 | (2 << 3) | 0x100u32).to_le_bytes());
+        let r = NavRelPosNed::parse(&p).unwrap();
+        assert_eq!((r.version, r.ref_station_id, r.itow_ms), (1, 7, 1000));
+        assert_eq!(r.n_m(), 12.3456);
+        assert_eq!(r.e_m(), -4.5678);
+        assert_eq!(r.d_m(), 0.1195);
+        assert_eq!(r.length_m(), Some(13.1609));
+        assert_eq!(r.heading_deg(), Some(339.73));
+        assert_eq!((r.acc_n_m(), r.acc_e_m(), r.acc_d_m()), (0.012, 0.011, 0.02));
+        assert_eq!(r.acc_length_m(), Some(0.015));
+        assert_eq!(r.acc_heading_deg(), Some(0.52));
+        assert!(r.gnss_fix_ok() && r.diff_soln() && r.rel_pos_valid() && r.heading_valid());
+        assert_eq!(r.carrier_solution(), CarrierSolution::Fixed);
+        assert!(!r.is_moving() && !r.ref_pos_miss() && !r.ref_obs_miss());
+
+        // no corrections: not valid, no carrier solution, heading withheld
+        p[60..64].copy_from_slice(&(0x001 | 0x040 | 0x080u32).to_le_bytes());
+        let r = NavRelPosNed::parse(&p).unwrap();
+        assert!(!r.rel_pos_valid());
+        assert_eq!(r.carrier_solution(), CarrierSolution::None);
+        assert!(r.ref_pos_miss() && r.ref_obs_miss());
+        assert_eq!((r.heading_deg(), r.acc_heading_deg()), (None, None));
+        assert_eq!(r.length_m(), Some(13.1609), "length does not depend on the heading flag");
+        p[60..64].copy_from_slice(&(0x004 | (1 << 3) | 0x020u32).to_le_bytes());
+        let r = NavRelPosNed::parse(&p).unwrap();
+        assert_eq!(r.carrier_solution(), CarrierSolution::Float);
+        assert!(r.is_moving());
+
+        assert!(NavRelPosNed::parse(&p[..63]).is_none());
+        p[0] = 2;
+        assert!(NavRelPosNed::parse(&p).is_none(), "unknown version");
+        assert!(NavRelPosNed::parse(&[]).is_none());
+    }
+
+    #[test]
+    fn nav_relposned_v0_has_no_length_or_heading() {
+        let mut p = vec![0u8; NavRelPosNed::LEN_V0];
+        p[2..4].copy_from_slice(&3u16.to_le_bytes());
+        p[4..8].copy_from_slice(&2000u32.to_le_bytes());
+        p[8..12].copy_from_slice(&(-100i32).to_le_bytes()); // N -1.00 m
+        p[12..16].copy_from_slice(&250i32.to_le_bytes());
+        p[16..20].copy_from_slice(&(-3i32).to_le_bytes());
+        p[20] = (-25i8) as u8; // -> -1.0025 m
+        p[21] = 1;
+        p[22] = (-9i8) as u8;
+        p[24..28].copy_from_slice(&80u32.to_le_bytes());
+        p[28..32].copy_from_slice(&90u32.to_le_bytes());
+        p[32..36].copy_from_slice(&300u32.to_le_bytes());
+        // relPosValid | carrSoln float, plus bit 8 which v0 does not define
+        p[36..40].copy_from_slice(&(0x004 | (1 << 3) | 0x100u32).to_le_bytes());
+        let r = NavRelPosNed::parse(&p).unwrap();
+        assert_eq!((r.version, r.ref_station_id, r.itow_ms), (0, 3, 2000));
+        assert_eq!((r.n_m(), r.e_m(), r.d_m()), (-1.0025, 2.5001, -0.0309));
+        assert_eq!((r.acc_n_m(), r.acc_e_m(), r.acc_d_m()), (0.008, 0.009, 0.03));
+        assert_eq!((r.length_m(), r.heading_deg(), r.acc_length_m(), r.acc_heading_deg()), (None, None, None, None));
+        assert!(r.rel_pos_valid() && !r.heading_valid());
+        assert_eq!(r.carrier_solution(), CarrierSolution::Float);
+        assert!(NavRelPosNed::parse(&p[..39]).is_none());
     }
 
     #[test]
