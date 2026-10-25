@@ -1,0 +1,89 @@
+{
+  "comment": "FollowPath scenarios run twice: by scenarios.py against the real nav2 controller_server (wall clock) and by tests/controller_server_oracle.rs against mower_nav_core (simulated clock). Times in seconds from the scenario start; paths start at `from` (map frame) and run along +x with 0.1 m spacing; robot 'kinematic' follows the last cmd_vel, 'static' never moves; goals are numbered in send order.",
+  "map_from_odom": [0.3, -0.2, 0.1],
+  "scenarios": [
+    {
+      "name": "empty_path",
+      "map": "empty", "robot": "static", "start": [0.0, 0.05, 0.05], "duration": 1.5,
+      "events": [{"t": 0.2, "op": "send", "length": null}]
+    },
+    {
+      "name": "reach_straight",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 12.0,
+      "events": [{"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 1.5}]
+    },
+    {
+      "name": "already_at_goal",
+      "map": "empty", "robot": "static", "start": [1.0, 0.02, 0.3], "duration": 1.5,
+      "events": [{"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 1.0}]
+    },
+    {
+      "name": "cancel_running",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 3.0,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 2.0, "op": "cancel", "goal": 0}
+      ]
+    },
+    {
+      "name": "preempt_same_path",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 4.0,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.5, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 3.0, "op": "cancel", "goal": 1}
+      ]
+    },
+    {
+      "name": "preempt_with_empty_path",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 2.5,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "send", "length": null}
+      ]
+    },
+    {
+      "name": "pending_replaced",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 3.0,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "send", "from": [0.0, 0.0], "length": 2.0},
+        {"t": 2.0, "op": "cancel", "goal": 2}
+      ]
+    },
+    {
+      "name": "cancel_running_while_pending",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 3.0,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "cancel", "goal": 0},
+        {"t": 2.0, "op": "cancel", "goal": 1}
+      ]
+    },
+    {
+      "name": "cancel_pending",
+      "map": "empty", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 2.5,
+      "events": [
+        {"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "send", "from": [0.0, 0.0], "length": 3.0},
+        {"t": 1.0, "op": "cancel", "goal": 1}
+      ]
+    },
+    {
+      "name": "wall_patience",
+      "map": "wall", "robot": "kinematic", "start": [0.0, 0.05, 0.05], "duration": 8.0,
+      "events": [{"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 2.5}]
+    },
+    {
+      "name": "no_progress",
+      "map": "empty", "robot": "static", "start": [0.0, 0.05, 0.05], "duration": 22.0,
+      "events": [{"t": 0.2, "op": "send", "from": [0.0, 0.0], "length": 3.0}]
+    }
+  ],
+  "maps": {
+    "empty": {"width": 120, "height": 80, "resolution": 0.05, "origin": [-2.0, -2.0], "lethal_x": null},
+    "wall": {"width": 120, "height": 80, "resolution": 0.05, "origin": [-2.0, -2.0], "lethal_x": [1.2, 1.4]}
+  }
+}

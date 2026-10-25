@@ -8,6 +8,7 @@
 //! deliberately not.
 
 pub mod checkers;
+pub mod controller_server;
 pub mod costmap;
 pub mod footprint;
 pub mod geometry;

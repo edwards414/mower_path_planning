@@ -205,6 +205,6 @@ impl SimpleProgressChecker {
 }
 
 /// `rclcpp::Duration::from_seconds`: `static_cast<int64_t>(s * 1e9)`.
-fn duration_from_seconds(seconds: f64) -> i64 {
+pub(crate) fn duration_from_seconds(seconds: f64) -> i64 {
     (seconds * 1e9) as i64
 }
