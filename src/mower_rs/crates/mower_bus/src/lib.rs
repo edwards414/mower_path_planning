@@ -180,7 +180,8 @@ impl Scope {
         erased::subscribe(self, name, qos)
     }
 
-    /// A writer on topic `name` that takes JSON. Creating it always works;
+    /// A writer on topic `name` that takes JSON. Creating it works before the
+    /// type is known (it still fails on an invalid name or a closed scope);
     /// each publish decodes with the channel's codec and fails with
     /// [`BusError::UnknownName`] while no typed endpoint has fixed the type.
     pub fn publisher_json(&self, name: &str, qos: Qos) -> Result<JsonPublisher, BusError> {

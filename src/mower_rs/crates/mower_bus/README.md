@@ -38,10 +38,17 @@ Later steps build on it:
   - The supervisor closes an instance's scope when the instance ends, however it ends, before
     restarting it. A task the old instance spawned and nobody aborted therefore cannot keep
     publishing next to the new instance. r2r gives the same guarantee today by dropping the node.
+  - **Hooks of dropped endpoints:** an endpoint dropped before its scope closes leaves a small
+    close hook (about 200 B) until the close. That is fine for modules, which create their
+    endpoints at start. A component that opens endpoints per session, like ws_bridge in E3, uses
+    one scope per session and closes it on disconnect.
 - **Names:** absolute ROS names (`/odometry/global`, `/robot/info`, `/map_manage/get_parameters`).
   - A relative name is refused.
-  - Resolving launch remappings and namespaces into absolute names is the caller's job (E2 adds a
-    resolver to `ModuleCtx`; the guards and the IMU rely on remapping today).
+  - Resolving launch remappings, name parameters and namespaces into absolute names is the
+    caller's job. E2 adds a resolver to `ModuleCtx`.
+  - The guards, the IMU, gps, all three localize nodes, nav and coverage use relative names today.
+    [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 5.4 has every name that must come
+    out.
 - **Messages:** any `T: Clone + Send + Sync + Serialize + DeserializeOwned + 'static`, via the
   blanket trait `Message`.
   - r2r's generated message types qualify: they derive `Clone, Serialize, Deserialize`. E2 can
@@ -114,7 +121,11 @@ QoS mapping (constructors mirror r2r's builder names, so E2 diffs stay one-to-on
 | `default()` | `Qos::default()` | 10 | reliable | volatile |
 | `sensor_data()` | `Qos::sensor_data()` | 5 | best effort | volatile |
 | `default().keep_last(1).reliable().transient_local()` | `Qos::latched()` or the same chain | 1 | reliable | transient local |
+| `system_default()` | `Qos::system_default()` | 1 | reliable | volatile |
 | `services_default()` | not needed (services have no QoS here) | | | |
+
+`Qos::system_default()` is what rmw_cyclonedds resolves the system default to on this robot.
+`mower_base` uses it for `/odom`, `/joint_states`, `/tf` and its cmd_vel subscription.
 
 ## Services
 

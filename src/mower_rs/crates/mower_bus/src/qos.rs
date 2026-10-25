@@ -46,6 +46,13 @@ impl Qos {
         Qos { depth: 5, reliability: Reliability::BestEffort, durability: Durability::Volatile }
     }
 
+    /// `rmw_qos_profile_system_default` as rmw_cyclonedds resolves it on this
+    /// robot: keep last 1, reliable, volatile. The bus has no "whatever the
+    /// middleware picks", so it is spelled out.
+    pub const fn system_default() -> Self {
+        Qos { depth: 1, reliability: Reliability::Reliable, durability: Durability::Volatile }
+    }
+
     /// The latched topics' profile: keep last 1, reliable, transient local.
     pub const fn latched() -> Self {
         Qos { depth: 1, reliability: Reliability::Reliable, durability: Durability::TransientLocal }
@@ -92,6 +99,7 @@ mod tests {
         let q = Qos::default().keep_last(1).best_effort().volatile();
         assert_eq!((q.depth, q.reliability, q.durability), (1, Reliability::BestEffort, Durability::Volatile));
         assert_eq!(Qos::sensor_data().depth, 5);
+        assert_eq!(Qos::system_default(), Qos::default().keep_last(1).reliable().volatile());
         assert_eq!(Qos::default().keep_last(0).effective_depth(), 1);
         assert!(Qos::latched().is_transient_local() && !Qos::default().is_transient_local());
     }
