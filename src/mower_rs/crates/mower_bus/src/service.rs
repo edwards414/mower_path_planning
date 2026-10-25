@@ -35,9 +35,10 @@
 //!   message or a waker (a waker can hold the last reference to a task,
 //!   whose drop runs anything). Several of those in a row are each a call
 //!   of their own (`crate::wake::UserCode`): one that panics skips none of
-//!   the others. Locks nest in two places only: an entry's
-//!   state over its clients' close signals (introspection), and the caller
-//!   table over the scope's hook list (`Registry::caller`).
+//!   the others.
+//! - Locks nest in two places only: an entry's state over its clients'
+//!   close signals (introspection), and the caller table over the scope's
+//!   hook list (`Registry::caller`).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;

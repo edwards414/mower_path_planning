@@ -323,7 +323,7 @@ impl Scope {
         }
         // Let go of the children whose close has finished. One still closing
         // on another thread stays: this scope's close must wait for it.
-        let finished: Vec<Scope> = life.children.extract_if(.., |child| child.inner.state() == State::Closed).collect();
+        let finished: Vec<Scope> = life.children.extract_if(.., |older| older.inner.state() == State::Closed).collect();
         life.children.push(child.clone());
         drop(life);
         // Possibly the last handles: freed with no lock held.
