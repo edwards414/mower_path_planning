@@ -30,8 +30,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 
-use futures::{Stream, StreamExt};
-use mower_bus::{Qos, Scope, Subscriber};
+use futures::StreamExt;
+use mower_bus::{BusError, PublisherChanges, Qos, Scope, Subscriber};
 use r2r::QosProfile;
 
 use crate::log::{Failure, Log};
@@ -60,9 +60,9 @@ pub(crate) fn to_ros<T: BridgeMessage>(
     let reader_qos = bus_qos.keep_last(bus_qos.effective_depth().max(READER_DEPTH));
     let (reader, changes) = if bus_qos.is_transient_local() {
         // The watch comes from a reader of the bridge's own scope, so that it
-        // ends when that scope closes. That reader goes at once (volatile and
-        // of depth 1, it holds at most one message meanwhile); the readers
-        // that carry messages each live in a scope of their own (`Reader`).
+        // ends when that scope closes. That reader goes at once (dropping it
+        // empties its queue, which the watch keeps); the readers that carry
+        // messages each live in a child scope (`Reader`).
         let sentinel = scope.subscribe::<T>(name, Qos::default().keep_last(1))?;
         let changes = sentinel.publisher_changes();
         drop(sentinel);
@@ -79,7 +79,7 @@ pub(crate) fn to_ros<T: BridgeMessage>(
         latched: bus_qos.is_transient_local(),
         reader_qos,
         scope: scope.clone(),
-        changes: Box::new(changes),
+        changes,
         reader,
         dds: None,
         held: VecDeque::new(),
@@ -91,16 +91,17 @@ pub(crate) fn to_ros<T: BridgeMessage>(
 /// The bus reader a `to_ros` forwarder takes messages from.
 struct Reader<T: BridgeMessage> {
     sub: Subscriber<T>,
-    /// Transient local: the scope this reader alone lives in, closed when the
-    /// reader is replaced. A reader of the bridge's long-lived scope would
-    /// leave its close hook there at every resync (mower_bus README, "Hooks
-    /// of dropped endpoints").
+    /// Transient local: the child scope this reader alone lives in, closed
+    /// when the reader is replaced. A child takes no close hook in the
+    /// bridge's scope, where a reader of that scope would leave one at every
+    /// resync (mower_bus README, "Hooks of dropped endpoints"); and it closes
+    /// with that scope, or comes out closed once that scope is closing.
     own_scope: Option<Scope>,
 }
 
 impl<T: BridgeMessage> Reader<T> {
-    fn latched(scope: &Scope, name: &str, qos: Qos) -> Result<Self, BridgeError> {
-        let own = scope.bus().scope(scope.name());
+    fn latched(scope: &Scope, name: &str, qos: Qos) -> Result<Self, BusError> {
+        let own = scope.child(scope.name());
         let sub = own.subscribe::<T>(name, qos)?;
         Ok(Reader { sub, own_scope: Some(own) })
     }
@@ -124,7 +125,7 @@ struct ToRos<T: BridgeMessage> {
     /// The bridge's scope: its close ends `changes`, and with it the
     /// forwarder.
     scope: Scope,
-    changes: Box<dyn Stream<Item = usize> + Send + Unpin>,
+    changes: PublisherChanges,
     reader: Reader<T>,
     dds: Option<r2r::Publisher<T>>,
     /// Transient local: what the DDS writer holds, oldest first, at most
@@ -189,7 +190,8 @@ impl<T: BridgeMessage> ToRos<T> {
     async fn resync_latched(&mut self) {
         let fresh = match Reader::latched(&self.scope, &self.name, self.reader_qos) {
             Ok(fresh) => fresh,
-            // Only `Closed`: the bridge's scope closed, and `changes` ends next.
+            // The bridge's scope is closing: `changes` ends next.
+            Err(BusError::Closed { .. }) => return,
             Err(e) => {
                 self.env.log.error(Failure::BusOther, || format!("a fresh bus reader: {e}"));
                 return;

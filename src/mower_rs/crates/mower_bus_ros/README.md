@@ -72,7 +72,8 @@ The forwarder watches the bus topic's live writers (`publisher_changes`).
     history. Which values match is decided by the message's `Arc` identity, not by its value.
   - A module restart that the stream reports as one item with the count unchanged still replaces the DDS writer when
     its value came from the old instance.
-  - Each fresh reader lives in a throwaway scope, so resyncs leave no close hooks in the bridge's scope.
+  - Each fresh reader lives in a child scope of the bridge's, closed when the reader is replaced. A child takes no close
+    hook in the bridge's scope, so resyncs leave nothing behind there, and it closes with the bridge's scope.
 - **Volatile:** a resync forwards what is queued first (it was published before the change), then creates or destroys
   the DDS writer.
 - **Several latched writers on one name** (5.5 e: `/mower_base/led_command`, `/tf_static`, ...):

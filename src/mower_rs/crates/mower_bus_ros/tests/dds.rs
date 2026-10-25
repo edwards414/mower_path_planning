@@ -813,6 +813,9 @@ fn run_returns_when_its_scope_closes() {
         let running = start(bridge);
         everything.assert_up(&running).await;
         everything.bridge_scope.close();
+        // The latched reader is a child of the bridge's scope: ended by the
+        // close itself, before the forwarder has even looked.
+        assert_eq!(everything.publisher.subscription_count(), 0);
         running.ended().await.unwrap();
         everything.assert_gone("scope_closed").await;
     });
