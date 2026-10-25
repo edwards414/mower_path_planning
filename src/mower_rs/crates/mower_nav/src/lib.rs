@@ -137,6 +137,20 @@ enum Backend {
 /// transitions publish immediately.
 const PROGRESS_FEEDBACK_PERIOD: Duration = Duration::from_millis(500);
 
+/// nav_core: a task whose runtime thread has not completed a tick for this
+/// long is stalled (the thread ticks at least every 10 ms while a goal runs).
+/// The drive is safe either way, since `/nav_cmd_vel` comes from that thread
+/// and twist_mux (0.5 s) and the final guard (0.2 s) zero a silent input;
+/// this keeps the task from waiting forever on a result that cannot come.
+const CORE_STALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How long the runtime has not ticked, once both that and the task's own
+/// age exceed `limit`. The thread sleeps while idle, so right after a goal is
+/// sent its last tick can be old without anything being wrong.
+fn core_stall_age(task_age: Duration, tick_age: Duration, limit: Duration) -> Option<Duration> {
+    (task_age > limit && tick_age > limit).then_some(tick_age)
+}
+
 #[derive(Default)]
 struct ProgressState {
     progress: Progress<PoseStamped>,
@@ -841,6 +855,12 @@ enum Outcome {
 }
 
 impl Execution {
+    /// nav_core only: the runtime thread's stall, see [`CORE_STALL_TIMEOUT`].
+    fn core_stall(&self, task_started_at: Instant) -> Option<Duration> {
+        let Backend::Core(runtime) = &self.ctx.backend else { return None };
+        core_stall_age(task_started_at.elapsed(), runtime.last_tick_age(), CORE_STALL_TIMEOUT)
+    }
+
     fn action_cancel_requested(&self) -> bool {
         self.action_cancel_accepted.load(Ordering::SeqCst)
     }
@@ -1028,7 +1048,19 @@ impl Execution {
                     terminal = t;
                     break;
                 }
-                None => {}
+                None => {
+                    if let Some(age) = self.core_stall(started_at) {
+                        // The goal is still correlated: monitor_uncertain_nav2_task
+                        // keeps retrying its cancel until the runtime proves it
+                        // ended, and the mux stays locked until then.
+                        let message = format!("{task_name}: in-process navigation stopped ticking {:.1}s ago", age.as_secs_f64());
+                        self.ctx.error(&message);
+                        self.terminate(&Outcome::Aborted);
+                        self.clear_active_task();
+                        self.ctx.mark_nav2_task_uncertain(&message, None);
+                        return false;
+                    }
+                }
             }
             let external = self.ctx.state.lock().unwrap().external_cancel_requested;
             if self.action_cancel_requested() || external {
@@ -1970,6 +2002,19 @@ mod tests {
     fn core_readiness_timeout_names_the_missing_inputs() {
         assert_eq!(missing_inputs(&Readiness::default()), "global map, local map, robot pose, odometry");
         assert_eq!(missing_inputs(&Readiness { global_map: true, pose: true, ..Default::default() }), "local map, odometry");
+    }
+
+    #[test]
+    fn core_stall_needs_both_an_old_tick_and_an_old_task() {
+        let s = Duration::from_secs_f64;
+        let limit = CORE_STALL_TIMEOUT;
+        // just sent: the thread may still be waking from its idle sleep
+        assert_eq!(core_stall_age(s(0.05), s(30.0), limit), None);
+        // running and ticking
+        assert_eq!(core_stall_age(s(12.0), s(0.01), limit), None);
+        assert_eq!(core_stall_age(s(12.0), s(1.0), limit), None);
+        // running, silent for longer than the limit
+        assert_eq!(core_stall_age(s(12.0), s(1.2), limit), Some(s(1.2)));
     }
 
     #[tokio::test]
