@@ -356,7 +356,11 @@ static void dump_measurement_queue(robot_localization::RosEkf & f, bool & first)
   (void)first;
 }
 
-static void ros_filter_vectors(const char * path, bool map_instance)
+// initial_yaw_variance > 0 sets initial_estimate_covariance the way the map
+// EKF's yaml does: 1e-9 on the diagonal (upstream's default) except yaw.
+// RosFilter::reset() applies it with setEstimateErrorCovariance after
+// FilterBase::reset(), which is what is done here.
+static void ros_filter_vectors(const char * path, bool map_instance, double initial_yaw_variance = 0.0)
 {
   out = fopen(path, "w");
   Frames frames = robot_frames();
@@ -395,6 +399,13 @@ static void ros_filter_vectors(const char * path, bool map_instance)
   for (int i = 0; i < STATE_SIZE; ++i) {q(i, i) = map_instance ? q_map[i] : q_odom[i];}
   f->filter_.setProcessNoiseCovariance(q);
   f->filter_.setSensorTimeout(rclcpp::Duration::from_nanoseconds(50000000));
+  Eigen::MatrixXd p0(STATE_SIZE, STATE_SIZE);
+  p0.setIdentity();
+  p0 *= 1e-9;
+  if (initial_yaw_variance > 0.0) {
+    p0(5, 5) = initial_yaw_variance;
+    f->filter_.setEstimateErrorCovariance(p0);
+  }
 
   add_static(f->tf_buffer_.get(), "base_footprint", "imu_link", frames.base_to_imu);
   add_static(f->tf_buffer_.get(), "base_footprint", "gps_link", frames.base_to_gps);
@@ -447,6 +458,10 @@ static void ros_filter_vectors(const char * path, bool map_instance)
   fprintf(out, "{\n\"instance\":\"%s\",\n\"process_noise_covariance\":",
     map_instance ? "map" : "odom");
   jmat(q);
+  if (initial_yaw_variance > 0.0) {
+    fprintf(out, ",\n\"initial_estimate_covariance\":");
+    jmat(p0);
+  }
   fprintf(out, ",\n\"sensor_timeout_ns\":50000000,\n\"transforms\":[");
   jtransform("base_footprint", "imu_link", frames.base_to_imu);
   fprintf(out, ",");
@@ -743,6 +758,7 @@ int main(int argc, char ** argv)
   ekf_core_vectors((dir + "/ekf_core.json").c_str());
   ros_filter_vectors((dir + "/ros_filter_odom.json").c_str(), false);
   ros_filter_vectors((dir + "/ros_filter_map.json").c_str(), true);
+  ros_filter_vectors((dir + "/ros_filter_map_initial_cov.json").c_str(), true, 1.0);
   navsat_vectors((dir + "/navsat.json").c_str());
   rclcpp::shutdown();
   return 0;

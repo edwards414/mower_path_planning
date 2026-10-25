@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# vendor/r2r is a patched dependency (see [patch.crates-io]), not a member.
+exclude = ["vendor"]
 members = ["crates/mower_rs_common", "crates/robot_status", "crates/velocity_command_guard", "crates/mower_adapter", "crates/mower_imu", "crates/mower_ws_bridge", "crates/mower_record", "crates/mower_nav", "crates/mower_battery", "crates/mower_pid_autotune", "crates/mower_map", "crates/mower_coverage", "crates/mower_agent", "crates/mower_ubx", "crates/mower_gps", "crates/mower_base_core", "crates/mower_base", "crates/mower_localize_core", "crates/mower_nav_core", "crates/mower_rsd", "crates/mower_localize"]
 
 [workspace.package]
@@ -19,3 +21,8 @@ indexmap = "2"
 opt-level = 2
 debug = false
 strip = true
+
+# r2r 0.9.7 with one patch: spin_once keeps its rcl wait set between calls
+# instead of creating and destroying it every time (vendor/r2r/VENDORED.md).
+[patch.crates-io]
+r2r = { path = "vendor/r2r" }
