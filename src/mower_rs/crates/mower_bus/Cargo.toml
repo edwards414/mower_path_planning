@@ -9,6 +9,9 @@ description = "In-process typed publish/subscribe, services, type-erased JSON ac
 # DDS side of the process lives in mower_bus_ros.
 [dependencies]
 futures.workspace = true
+# Structural pinning for Clock::timeout without `unsafe`; already in the lock
+# through tokio and futures.
+pin-project-lite = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 # sync primitives for wake-ups, time for Clock::system's async sleeps

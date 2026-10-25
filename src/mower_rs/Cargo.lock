@@ -713,6 +713,7 @@ name = "mower_bus"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "pin-project-lite",
  "serde",
  "serde_json",
  "tokio",

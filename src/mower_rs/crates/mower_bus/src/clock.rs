@@ -591,36 +591,34 @@ impl fmt::Debug for Sleep {
     }
 }
 
-/// A future with a deadline on a [`Clock`] ([`Clock::timeout`]): its output,
-/// or [`Elapsed`] if the deadline comes first.
-///
-/// The future is polled first, as in tokio, so when both are ready its
-/// output wins. The deadline is pending (`ManualClock::next_deadline`) from
-/// creation until the timeout completes or drops. `Unpin` and `Send` when
-/// the future is.
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Timeout<F> {
-    fut: F,
-    sleep: Sleep,
+// pin-project-lite (tokio's own way to pin `fut` structurally) keeps the
+// crate free of `unsafe`.
+pin_project_lite::pin_project! {
+    /// A future with a deadline on a [`Clock`] ([`Clock::timeout`]): its
+    /// output, or [`Elapsed`] if the deadline comes first.
+    ///
+    /// The future is polled first, as in tokio, so when both are ready its
+    /// output wins. The deadline is pending (`ManualClock::next_deadline`)
+    /// from creation until the timeout completes or drops. `Unpin` and `Send`
+    /// when the future is.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub struct Timeout<F> {
+        #[pin]
+        fut: F,
+        sleep: Sleep,
+    }
 }
 
 impl<F: Future> Future for Timeout<F> {
     type Output = Result<F::Output, Elapsed>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: `fut` is pinned structurally, `sleep` is not. That holds
-        // because `Timeout` is `Unpin` only when `F` is (the auto impl; there
-        // is no manual one), has no `Drop` impl, and nothing moves `fut` out
-        // of it; `sleep` is `Unpin` and only ever used through `&mut`.
-        let (fut, sleep) = unsafe {
-            let this = self.get_unchecked_mut();
-            (Pin::new_unchecked(&mut this.fut), &mut this.sleep)
-        };
-        if let Poll::Ready(out) = fut.poll(cx) {
-            sleep.disarm();
+        let this = self.project();
+        if let Poll::Ready(out) = this.fut.poll(cx) {
+            this.sleep.disarm();
             return Poll::Ready(Ok(out));
         }
-        Pin::new(sleep).poll(cx).map(|()| Err(Elapsed))
+        Pin::new(this.sleep).poll(cx).map(|()| Err(Elapsed))
     }
 }
 
