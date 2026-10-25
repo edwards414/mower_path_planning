@@ -105,6 +105,16 @@ match sub.recv_timeout(Duration::from_millis(50)) { Ok(msg) => .., Err(RecvError
 erased ones, including the ROS bridge's. Like `get_subscription_count()` in ROS, it lets a
 producer skip expensive work nobody wants.
 
+**`Subscriber::publisher_count()`** counts the channel's live writers, typed and JSON. Each
+writer counts once, clones included, and only while its scope is open. It is rclcpp's
+`get_publisher_count()`; mower_base's arm latch asks exactly this question.
+
+**`publisher_changes()`** is a stream that yields that count each time writers come or go.
+- Changes in between coalesce, so a module restart can yield an unchanged count.
+- It is not ordered with the message queue, so treat every item as "resync".
+- It ends when the reader's scope closes.
+- The ROS bridge uses it to drop a latched value on the DDS side once the last bus writer is gone.
+
 **Differences from DDS, all deliberate**
 - **No QoS incompatibility.**
   - DDS refuses a reliable reader on a best-effort writer, and a transient-local reader on a
