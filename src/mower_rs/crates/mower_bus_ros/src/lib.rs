@@ -20,7 +20,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use mower_bus::{BusError, Scope};
 use r2r::QosProfile;
@@ -150,10 +149,6 @@ impl From<r2r::Error> for BridgeError {
 /// scope closes.
 pub(crate) type Forwarder = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// How often `run` looks whether the bridge's scope has closed (the bus has
-/// no future for that, and a bridge may have no endpoint that would end).
-const SCOPE_POLL: Duration = Duration::from_millis(50);
-
 /// Forwards declared names between the bus and DDS (README.md).
 ///
 /// Declarations create both endpoints at once, so a bad name, a type that
@@ -272,14 +267,14 @@ impl RosBridge {
             tasks.spawn(forwarder);
         }
         let mut shutdown = std::pin::pin!(shutdown);
-        let mut poll = tokio::time::interval(SCOPE_POLL);
+        // The scope can close with no forwarder of its own to notice (a
+        // bridge may declare nothing), so wait for that directly.
+        let mut closed = std::pin::pin!(scope.closed());
         let mut failure = None;
         loop {
             tokio::select! {
                 () = &mut shutdown => break,
-                _ = poll.tick() => if scope.is_closed() {
-                    break;
-                },
+                () = &mut closed => break,
                 // A forwarder ends on its own only when the scope closes.
                 Some(ended) = tasks.join_next() => if let Err(e) = ended {
                     failure = Some(BridgeError::Panicked(format!("a forwarder: {e}")));

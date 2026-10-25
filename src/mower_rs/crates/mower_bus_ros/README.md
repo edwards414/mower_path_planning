@@ -185,8 +185,7 @@ the spin thread, which owns the node:
 
 ## Lifecycle
 
-- **`run(shutdown)` returns when `shutdown` completes or the bridge's scope closes.** The bus has no future for the
-  close, so `run` polls `Scope::is_closed` every 50 ms.
+- **`run(shutdown)` returns when `shutdown` completes or the bridge's scope closes** (`Scope::closed()`).
 - **Before returning, in this order:**
   1. it aborts and awaits the forwarder tasks, and their bus endpoints go with them;
   2. it stops the spin thread, which drops the node after its last `spin_once`, so no thread is left in `rcl_wait`
