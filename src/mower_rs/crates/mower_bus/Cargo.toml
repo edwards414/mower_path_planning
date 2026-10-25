@@ -14,7 +14,7 @@ futures.workspace = true
 pin-project-lite = "0.2"
 serde.workspace = true
 serde_json.workspace = true
-# sync primitives for wake-ups, time for Clock::system's async sleeps
+# time, for Clock::system's async sleeps (wake-ups are the crate's own)
 tokio.workspace = true
 
 [dev-dependencies]
