@@ -774,7 +774,8 @@ mod tests {
     }
 
     // Not a no-op waker in effect: the probe is its drop glue, not `wake`.
-    #[allow(clippy::manual_noop_waker)]
+    // (`unknown_lints`: clippy before 1.99 does not know this lint.)
+    #[allow(unknown_lints, clippy::manual_noop_waker)]
     impl std::task::Wake for DropProbe {
         fn wake(self: Arc<Self>) {}
     }
