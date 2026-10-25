@@ -24,7 +24,10 @@
 //!   history;
 //! - closing the scope does both for every endpoint of the scope (via
 //!   `Scope::on_close` with `Weak` references), and ends its readers' streams
-//!   at once, discarding what they still had queued.
+//!   at once, discarding what they still had queued. A reader's close does
+//!   the bus's part (closed, unregistered, its watches taken out) before any
+//!   user code, so that a waker or drop glue that panics leaves no closed
+//!   reader registered and no watch asleep.
 //!
 //! How:
 //! - a message travels as the `AnyMsg` its publisher made, so typed readers
@@ -36,7 +39,9 @@
 //!   what gives every reader the same order across publishing threads, and
 //!   what lets a late joiner take history and register without missing or
 //!   repeating a message. Wake-ups, and freeing the messages that full
-//!   inboxes pushed out, wait until the publish holds no lock;
+//!   inboxes pushed out, wait until the publish holds no lock, and each is a
+//!   call of its own (`crate::wake::UserCode`): one that panics skips none
+//!   of the others;
 //! - a reader can count the channel's live writers and watch them come and
 //!   go (`publisher_count`, `publisher_changes`); a writer coming or going
 //!   wakes the watches, which costs publishing nothing;
@@ -55,6 +60,7 @@ use std::time::{Duration, Instant};
 use futures::Stream;
 
 use crate::codec::{AnyMsg, Codec};
+use crate::wake::UserCode;
 use crate::{ros_type_name, BusError, Message, Qos, RecvError, Scope, TopicInfo};
 
 /// The topic half of the bus registry: one channel per name.
@@ -408,26 +414,25 @@ impl Channel {
         }
     }
 
-    /// Unregister a reader whose scope closed, and end its watches. The
-    /// inbox is closed first: a watch that looks after that sees it closed,
-    /// and one that looked before is registered by now and woken here.
-    fn close_reader(&self, inbox: &Arc<Inbox>) {
-        let mut after = AfterUnlock::new();
-        {
-            let mut state = lock(&self.state);
-            if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
-                state.readers.remove(i);
-            }
-            let mut i = 0;
-            while i < state.watchers.len() {
-                if Weak::as_ptr(&state.watchers[i].inbox) == Arc::as_ptr(inbox) {
-                    after.wake.push(Wake::Task(state.watchers.swap_remove(i).waker));
-                } else {
-                    i += 1;
-                }
+    /// Unregister a reader whose scope closed, and take out the wakers of
+    /// its waiting watches, for the caller to wake. The inbox is closed
+    /// first: a watch that looks after that sees it closed, and one that
+    /// looked before is registered by now and woken by the caller.
+    fn close_reader(&self, inbox: &Arc<Inbox>) -> Vec<Waker> {
+        let mut state = lock(&self.state);
+        if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
+            state.readers.remove(i);
+        }
+        let mut watches = Vec::new();
+        let mut i = 0;
+        while i < state.watchers.len() {
+            if Weak::as_ptr(&state.watchers[i].inbox) == Arc::as_ptr(inbox) {
+                watches.push(state.watchers.swap_remove(i).waker);
+            } else {
+                i += 1;
             }
         }
-        after.run();
+        watches
     }
 
     fn add_writer(&self, entry: WriterEntry) {
@@ -442,18 +447,18 @@ impl Channel {
 
     fn remove_writer(&self, id: u64) {
         let mut after = AfterUnlock::new();
-        let removed = {
+        {
             let mut state = lock(&self.state);
-            let i = state.writers.iter().position(|writer| writer.id == id);
-            let removed = i.map(|i| state.writers.remove(i));
-            if removed.is_some() {
+            if let Some(i) = state.writers.iter().position(|writer| writer.id == id) {
+                let removed = state.writers.remove(i);
+                // Its history is freed with the rest, with no lock held.
+                for (_, msg) in removed.history.into_iter().flat_map(|history| history.msgs) {
+                    after.release.push(msg);
+                }
                 state.writers_changed(&mut after);
             }
-            removed
-        };
+        }
         after.run();
-        // Its history is freed here, with no lock held.
-        drop(removed);
     }
 
     /// Deliver `msg` from writer `writer`: number it, retain it if the
@@ -554,25 +559,30 @@ impl Inbox {
         }
     }
 
-    /// End the reader (its scope closed): what it still had queued is
-    /// discarded, and a waiting task or thread wakes up to find it closed.
-    fn close(&self) {
-        let (discarded, waker, sleeping) = {
+    /// End the reader (its scope closed) and signal a thread waiting in
+    /// `recv_timeout`. What it still had queued and the waker of the task
+    /// waiting on it are handed back: freeing and waking them runs user
+    /// code, which the caller runs last. `None` if it was closed already.
+    fn close(&self) -> Option<Discarded> {
+        let (queued, waker, sleeping) = {
             let mut queue = lock(&self.queue);
             if queue.closed {
-                return;
+                return None;
             }
             queue.closed = true;
             (std::mem::take(&mut queue.msgs), queue.waker.take(), std::mem::take(&mut queue.sleeping))
         };
-        drop(discarded);
-        if let Some(waker) = waker {
-            waker.wake();
-        }
         if sleeping {
             self.ready.notify_one();
         }
+        Some(Discarded { queued, waker })
     }
+}
+
+/// What a closed reader leaves: its queued messages and its task's waker.
+struct Discarded {
+    queued: VecDeque<AnyMsg>,
+    waker: Option<Waker>,
 }
 
 /// The receiving half shared by [`Subscriber`] and `ErasedSubscriber`:
@@ -594,10 +604,27 @@ impl Reader {
             let channel = Arc::clone(&channel);
             let inbox = Arc::downgrade(&inbox);
             move || {
-                if let Some(inbox) = inbox.upgrade() {
-                    inbox.close();
-                    channel.close_reader(&inbox);
+                let Some(inbox) = inbox.upgrade() else { return };
+                // The bus's part first: closed, unregistered, its watches
+                // taken out. Then the user code, one call at a time, so that
+                // a waker or a message's drop that panics skips nothing:
+                // the watches are woken, then the reader's task, then what
+                // it had queued is freed.
+                let discarded = inbox.close();
+                let watches = channel.close_reader(&inbox);
+                let mut user = UserCode::default();
+                for waker in watches {
+                    user.wake(waker);
                 }
+                if let Some(Discarded { queued, waker }) = discarded {
+                    if let Some(waker) = waker {
+                        user.wake(waker);
+                    }
+                    for msg in queued {
+                        user.run(|| drop(msg));
+                    }
+                }
+                user.finish();
             }
         };
         let reader = Reader { channel, inbox, qos };
@@ -854,15 +881,22 @@ impl AfterUnlock {
         AfterUnlock { wake: Batch::new(), release: Batch::new() }
     }
 
+    /// Each waker and each drop on its own (`UserCode`): one that panics
+    /// keeps no other reader asleep. The first panic goes on afterwards, to
+    /// whoever published or closed.
     fn run(self) {
-        let AfterUnlock { mut wake, release } = self;
+        let AfterUnlock { mut wake, mut release } = self;
+        let mut user = UserCode::default();
         for wake in wake.drain() {
             match wake {
-                Wake::Task(waker) => waker.wake(),
+                Wake::Task(waker) => user.wake(waker),
                 Wake::Thread(inbox) => inbox.ready.notify_one(),
             }
         }
-        drop(release);
+        for msg in release.drain() {
+            user.run(|| drop(msg));
+        }
+        user.finish();
     }
 }
 

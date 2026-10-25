@@ -27,6 +27,7 @@ mod qos;
 mod service;
 mod timer;
 mod topic;
+mod wake;
 
 pub use clock::{Clock, Elapsed, Interval, ManualClock, MissedTick, Mono, Sleep, Time, Timeout};
 pub use erased::{ErasedMsg, ErasedSubscriber, JsonPublisher};

@@ -5,8 +5,11 @@
 
 use std::any::type_name;
 use std::collections::BTreeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -694,6 +697,154 @@ fn publisher_changes_has_a_name_and_still_works_as_an_impl_stream() {
     assert_eq!(futures::executor::block_on(topic.writers.next()), Some(1));
     assert_eq!(topic.reader.publisher_count(), 1);
     assert!(format!("{:?}", topic.writers).contains("/map"));
+}
+
+// ---- user code that panics while a reader closes or a publish wakes ----
+
+/// A waker that panics when woken.
+struct Exploding;
+
+impl Wake for Exploding {
+    fn wake(self: Arc<Self>) {
+        panic!("waker exploded");
+    }
+}
+
+/// A waker that counts its wake-ups.
+#[derive(Default)]
+struct Count(AtomicUsize);
+
+impl Wake for Count {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn counter() -> (Arc<Count>, Waker) {
+    let count = Arc::new(Count::default());
+    (count.clone(), Waker::from(count))
+}
+
+fn exploding() -> Waker {
+    Waker::from(Arc::new(Exploding))
+}
+
+/// Poll `stream` once with `waker`: it must be waiting.
+fn park<S: futures::Stream + Unpin>(stream: &mut S, waker: &Waker) {
+    assert!(Pin::new(stream).poll_next(&mut Context::from_waker(waker)).is_pending());
+}
+
+/// Review 2026-10-26, second pass: a reader's close hook was
+/// `inbox.close(); channel.close_reader(&inbox)`, and a panic in the first
+/// half (its task's waker, or drop glue of what it discarded) skipped the
+/// second: the closed reader stayed registered on its channel, and a task
+/// parked on its `publisher_changes()` was never woken.
+#[test]
+fn a_panic_inside_a_readers_close_still_unregisters_it_and_wakes_its_watch() {
+    let bus = Bus::new();
+    let m = bus.scope("ros_bridge");
+    let p = bus.scope("map_manage").publisher::<u32>("/map_grid", Qos::default()).unwrap();
+    let mut sub = m.subscribe::<u32>("/map_grid", Qos::default()).unwrap();
+    park(&mut sub, &exploding());
+    let mut changes = sub.publisher_changes();
+    let (counted, watcher) = counter();
+    park(&mut changes, &watcher);
+
+    let panicked = catch_unwind(AssertUnwindSafe(|| m.close())).is_err();
+    assert!(panicked);
+    let (registered, woken) = (p.subscription_count(), counted.0.load(Ordering::SeqCst));
+    assert_eq!(
+        (registered, woken),
+        (0, 1),
+        "after the panic: closed reader still registered on its channel ({registered}), parked publisher_changes() woken {woken} times"
+    );
+    assert_eq!(Pin::new(&mut changes).poll_next(&mut Context::from_waker(&watcher)), Poll::Ready(None));
+}
+
+/// A message whose drop glue panics.
+#[derive(Clone, Serialize, Deserialize)]
+struct Bomb;
+
+impl Drop for Bomb {
+    fn drop(&mut self) {
+        if !thread::panicking() {
+            panic!("bomb");
+        }
+    }
+}
+
+#[test]
+fn drop_glue_that_panics_in_a_closing_readers_queue_skips_nothing_else() {
+    let bus = Bus::new();
+    let m = bus.scope("recorder");
+    let bombs = bus.scope("map_manage").publisher::<Bomb>("/bombs", Qos::default()).unwrap();
+    let sub = m.subscribe::<Bomb>("/bombs", Qos::default()).unwrap();
+    let mut changes = sub.publisher_changes();
+    let (watched, watcher) = counter();
+    park(&mut changes, &watcher);
+    bombs.publish_owned(Bomb).unwrap(); // queued, unread: the close frees it
+
+    assert!(catch_unwind(AssertUnwindSafe(|| m.close())).is_err(), "the bomb's panic goes on");
+    assert_eq!(bombs.subscription_count(), 0, "the reader is unregistered all the same");
+    assert_eq!(watched.0.load(Ordering::SeqCst), 1, "and its watch woken");
+    assert!(sub.is_closed());
+}
+
+#[test]
+fn a_watch_whose_waker_panics_keeps_no_other_waiter_of_a_closing_reader_asleep() {
+    let bus = Bus::new();
+    let m = bus.scope("ros_bridge");
+    let _writer = bus.scope("map_manage").publisher::<u32>("/map", Qos::latched()).unwrap();
+    let mut sub = m.subscribe::<u32>("/map", Qos::latched()).unwrap();
+    let mut first = sub.publisher_changes();
+    let mut second = sub.publisher_changes();
+    park(&mut first, &exploding());
+    let (watched, watcher) = counter();
+    park(&mut second, &watcher);
+    let (woken, waker) = counter();
+    park(&mut sub, &waker);
+
+    assert!(catch_unwind(AssertUnwindSafe(|| m.close())).is_err());
+    assert_eq!(watched.0.load(Ordering::SeqCst), 1, "the other watch woken");
+    assert_eq!(woken.0.load(Ordering::SeqCst), 1, "the reader's own task woken");
+    assert_eq!(Pin::new(&mut second).poll_next(&mut Context::from_waker(&watcher)), Poll::Ready(None));
+}
+
+#[test]
+fn a_watch_whose_waker_panics_keeps_no_other_watch_asleep_when_a_writer_closes() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ros_bridge");
+    let map = bus.scope("map_manage");
+    let p = map.publisher::<Pose>("/map", Qos::latched()).unwrap();
+    let retained = Arc::new(pose(1.0));
+    p.publish_arc(retained.clone()).unwrap();
+    let (a, b) = (bridge.subscribe::<Pose>("/map", Qos::default()).unwrap(), bridge.subscribe::<Pose>("/map", Qos::default()).unwrap());
+    let (mut first, mut second) = (a.publisher_changes(), b.publisher_changes());
+    park(&mut first, &exploding());
+    let (watched, watcher) = counter();
+    park(&mut second, &watcher);
+
+    assert!(catch_unwind(AssertUnwindSafe(|| map.close())).is_err());
+    assert_eq!(watched.0.load(Ordering::SeqCst), 1, "the other watch woken");
+    assert_eq!(Arc::strong_count(&retained), 1, "the writer's history freed");
+    assert_eq!(Pin::new(&mut second).poll_next(&mut Context::from_waker(&watcher)), Poll::Ready(Some(0)));
+}
+
+#[test]
+fn a_reader_whose_waker_panics_keeps_no_other_reader_asleep_on_a_publish() {
+    let bus = Bus::new();
+    let m = bus.scope("nav");
+    let p = bus.scope("localize").publisher::<Pose>("/odom", Qos::default()).unwrap();
+    let mut broken = m.subscribe::<Pose>("/odom", Qos::default()).unwrap();
+    let mut fine = m.subscribe::<Pose>("/odom", Qos::default()).unwrap();
+    park(&mut broken, &exploding());
+    let (woken, waker) = counter();
+    park(&mut fine, &waker);
+
+    assert!(catch_unwind(AssertUnwindSafe(|| p.publish(&pose(1.0)))).is_err(), "the panic goes on to the publisher");
+    assert_eq!(woken.0.load(Ordering::SeqCst), 1, "the other reader woken");
+    assert_eq!((xs(&mut broken), xs(&mut fine)), (vec![1.0], vec![1.0]), "delivered to both");
+    p.publish(&pose(2.0)).unwrap(); // nobody parked now: an ordinary publish
 }
 
 #[test]

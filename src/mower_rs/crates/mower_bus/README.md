@@ -51,8 +51,10 @@ Later steps build on it:
     - `scope.closed().await` resolves once the close has finished. It needs no runtime, and a
       `select!` loop can poll a fresh one in every turn.
   - **Panics in a close:** a close frees messages and wakes tasks, which runs user code (drop glue,
-    wakers). If that panics, the close still ends everything else and wakes its waiters, then
-    re-raises the first panic. The supervisor logs it and goes on.
+    wakers). Each endpoint's close does the bus's part first (closed, unregistered), and every
+    wake and every drop is a call of its own, so one that panics skips nothing. The close ends
+    everything else and wakes its waiters, then re-raises the first panic. The supervisor logs it
+    and goes on.
   - The supervisor closes an instance's scope when the instance ends, however it ends, before
     restarting it. A task the old instance spawned and nobody aborted therefore cannot keep
     publishing next to the new instance, and its `while timer.tick().await.is_ok()` loops end. r2r
@@ -141,7 +143,9 @@ loop {
 - It never waits for a reader. It takes the channel's lock briefly, to queue the message for every
   reader. After unlocking, it wakes the readers and drops the messages it pushed out of full
   queues. Both happen on the publisher's thread: waking runs the readers' wakers, and the last
-  reference to a big message (a 160 kB grid) takes a while to free.
+  reference to a big message (a 160 kB grid) takes a while to free. Each wake and each drop is
+  a call of its own: one that panics keeps no other reader asleep, and the panic goes on to the
+  publisher afterwards.
 - It returns `Err(BusError::Closed)` only when the writer's scope is closed. The `Result` exists
   so that r2r-style call sites (`publisher.publish(&msg)?`) keep compiling.
 
