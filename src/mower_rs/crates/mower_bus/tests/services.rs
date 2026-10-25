@@ -6,9 +6,10 @@
 use std::any::type_name;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::thread;
 use std::time::Duration;
 
 use futures::task::ArcWake;
@@ -605,4 +606,139 @@ fn handles_are_send_and_unpin_and_the_response_future_can_be_spawned() {
     send(&scope.call_json("/add", json!({})));
     let client = scope.client::<AddRequest, AddResponse>("/add").unwrap();
     send(&client.wait_for_service());
+}
+
+/// Review 2026-10-26 (a stress test that passed: evidence for "nothing
+/// found"). Calls race server restarts, dropped requests and closes of the
+/// calling scopes, typed and JSON: every call resolves, with an outcome the
+/// README allows.
+///
+/// Ignored by default because it soaks for 3 s by design. Run it with
+/// `cargo test -p mower_bus --test services -- --ignored`.
+#[test]
+#[ignore = "soaks for 3 s; run with --ignored"]
+fn calls_racing_server_restarts_and_caller_closes_always_resolve_with_an_allowed_outcome() {
+    const HANG: Duration = Duration::from_secs(10);
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_time().build().unwrap();
+    let bus = Bus::new();
+    let stop = Arc::new(AtomicBool::new(false));
+    let answered = Arc::new(AtomicU64::new(0));
+
+    // A server that restarts: serve, answer for a while (some answers from
+    // spawned tasks, some requests dropped), close the scope, again.
+    let server = {
+        let (bus, stop) = (bus.clone(), stop.clone());
+        rt.spawn(async move {
+            let mut round = 0u64;
+            while !stop.load(Ordering::SeqCst) {
+                round += 1;
+                let scope = bus.scope("server");
+                let mut srv = match scope.service::<u64, u64>("/x") {
+                    Ok(srv) => srv,
+                    Err(e) => panic!("round {round}: {e}"),
+                };
+                let serving = tokio::spawn(async move {
+                    let mut n = 0u64;
+                    while let Some(req) = srv.next().await {
+                        n += 1;
+                        match n % 5 {
+                            0 => drop(req),
+                            1 => {
+                                tokio::spawn(async move {
+                                    tokio::task::yield_now().await;
+                                    let v = req.message + 1;
+                                    let _ = req.respond(v);
+                                });
+                            }
+                            _ => {
+                                let v = req.message + 1;
+                                let _ = req.respond(v);
+                            }
+                        }
+                    }
+                });
+                tokio::time::sleep(Duration::from_micros(300 + round % 700)).await;
+                scope.close();
+                tokio::time::timeout(HANG, serving).await.expect("server stream ended after close").unwrap();
+            }
+        })
+    };
+
+    // Callers whose scopes close now and then, mid-call.
+    let callers: Vec<_> = (0..6)
+        .map(|c| {
+            let (bus, stop, answered) = (bus.clone(), stop.clone(), answered.clone());
+            rt.spawn(async move {
+                let mut k = 0u64;
+                while !stop.load(Ordering::SeqCst) {
+                    let scope = bus.scope(&format!("caller{c}"));
+                    let client = scope.client::<u64, u64>("/x").unwrap();
+                    for _ in 0..50 {
+                        k += 1;
+                        if k.is_multiple_of(37) {
+                            let s = scope.clone();
+                            tokio::spawn(async move { s.close() });
+                        }
+                        let fut = match client.request(&k) {
+                            Ok(fut) => fut,
+                            Err(BusError::ServiceUnavailable { .. }) | Err(BusError::Closed { .. }) => {
+                                // refused at once: let the server run (bus futures do not yield on their own)
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
+                            Err(e) => panic!("outer error {e}"),
+                        };
+                        match tokio::time::timeout(HANG, fut).await.expect("a call hung") {
+                            Ok(v) => {
+                                assert_eq!(v, k + 1);
+                                answered.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(BusError::ServiceUnavailable { .. })
+                            | Err(BusError::NoResponse { .. })
+                            | Err(BusError::Closed { .. }) => {}
+                            Err(e) => panic!("inner error {e}"),
+                        }
+                        if k.is_multiple_of(3) && !stop.load(Ordering::SeqCst) {
+                            // wait_for_service races the restarts too; once the
+                            // server loop has stopped it may wait for good
+                            if tokio::time::timeout(HANG, client.wait_for_service()).await.is_err() {
+                                assert!(stop.load(Ordering::SeqCst), "wait_for_service hung while servers kept coming");
+                            }
+                        }
+                        if stop.load(Ordering::SeqCst) {
+                            break;
+                        }
+                    }
+                    scope.close();
+                }
+            })
+        })
+        .collect();
+
+    // JSON calls from a bridge scope as well.
+    let bridge = {
+        let (bus, stop) = (bus.clone(), stop.clone());
+        rt.spawn(async move {
+            let scope = bus.scope("ws_bridge");
+            while !stop.load(Ordering::SeqCst) {
+                match tokio::time::timeout(HANG, scope.call_json("/x", json!(41))).await.expect("json call hung") {
+                    Ok(v) => assert_eq!(v, json!(42)),
+                    Err(BusError::ServiceUnavailable { .. }) | Err(BusError::NoResponse { .. }) | Err(BusError::UnknownName { .. }) => {}
+                    Err(e) => panic!("json error {e}"),
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+    };
+
+    thread::sleep(Duration::from_secs(3));
+    stop.store(true, Ordering::SeqCst);
+    rt.block_on(async {
+        tokio::time::timeout(HANG, server).await.expect("server loop hung").unwrap();
+        for c in callers {
+            tokio::time::timeout(HANG, c).await.expect("caller hung").unwrap();
+        }
+        tokio::time::timeout(HANG, bridge).await.expect("bridge hung").unwrap();
+    });
+    assert!(answered.load(Ordering::Relaxed) > 100, "{}", answered.load(Ordering::Relaxed));
 }

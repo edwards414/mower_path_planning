@@ -32,11 +32,12 @@
 //!   scope: `call_json` has no endpoint to hang a hook on, and one hook per
 //!   call would pile up for the scope's lifetime.
 //! - No lock is held while waking a task, sending an answer or dropping a
-//!   message. Locks nest in two places only: an entry's state over its
-//!   clients' close signals (introspection), and the caller table over the
-//!   scope's hook list (`Registry::caller`).
+//!   message or a waker (a waker can hold the last reference to a task,
+//!   whose drop runs anything). Locks nest in two places only: an entry's
+//!   state over its clients' close signals (introspection), and the caller
+//!   table over the scope's hook list (`Registry::caller`).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{hash_map, BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -323,9 +324,12 @@ impl Server {
             return Poll::Ready(None);
         }
         let Some(Pending { id, request, reply }) = state.queue.pop_front() else {
-            if !state.waker.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-                state.waker = Some(cx.waker().clone());
-            }
+            let replaced = match &state.waker {
+                Some(waker) if waker.will_wake(cx.waker()) => None,
+                _ => state.waker.replace(cx.waker().clone()),
+            };
+            drop(state);
+            drop(replaced);
             return Poll::Pending;
         };
         state.in_flight.insert(id, reply);
@@ -338,12 +342,15 @@ impl Server {
     /// `Service` dropped before its scope closes still refuses late answers
     /// with `Closed` after the close.
     fn end(&self, entry: &Entry, scope_closed: bool) {
-        {
+        let unregistered = {
             let mut state = lock(&entry.state);
             if state.server.as_ref().is_some_and(|live| std::ptr::eq(Arc::as_ptr(live), self)) {
-                state.server = None;
+                state.server.take()
+            } else {
+                None
             }
-        }
+        };
+        drop(unregistered);
         let (queue, in_flight, waker) = {
             let mut state = lock(&self.state);
             state.scope_closed |= scope_closed;
@@ -495,7 +502,8 @@ struct ClientInner {
 
 impl Drop for ClientInner {
     fn drop(&mut self) {
-        lock(&self.entry.state).clients.remove(&self.id);
+        let removed = lock(&self.entry.state).clients.remove(&self.id);
+        drop(removed);
     }
 }
 
@@ -560,7 +568,9 @@ impl Future for WaitForService<'_> {
         if state.server.is_some() {
             return Poll::Ready(Ok(()));
         }
-        state.waiting.register(&mut this.waiting, cx.waker());
+        let replaced = state.waiting.register(&mut this.waiting, cx.waker());
+        drop(state);
+        drop(replaced);
         Poll::Pending
     }
 }
@@ -569,7 +579,8 @@ impl Drop for WaitForService<'_> {
     fn drop(&mut self) {
         self.client.caller.unwatch(&mut self.closing);
         if let Some(key) = self.waiting.take() {
-            lock(&self.client.entry.state).waiting.remove(key);
+            let removed = lock(&self.client.entry.state).waiting.remove(key);
+            drop(removed);
         }
     }
 }
@@ -661,15 +672,19 @@ impl CloseSignal {
     /// Have `waker` woken when the scope closes; `false` if it has.
     fn watch(&self, key: &mut Option<u64>, waker: &Waker) -> bool {
         let mut state = lock(&self.state);
-        if !state.fired {
-            state.watchers.register(key, waker);
+        if state.fired {
+            return false;
         }
-        !state.fired
+        let replaced = state.watchers.register(key, waker);
+        drop(state);
+        drop(replaced);
+        true
     }
 
     fn unwatch(&self, key: &mut Option<u64>) {
         if let Some(key) = key.take() {
-            lock(&self.state).watchers.remove(key);
+            let removed = lock(&self.state).watchers.remove(key);
+            drop(removed);
         }
     }
 
@@ -687,6 +702,9 @@ impl CloseSignal {
 
 /// Tasks waiting for one event, each under its own key, so that a waiter
 /// that gives up takes its waker back out instead of leaving it to pile up.
+///
+/// It lives under a lock, so a waker it lets go of is handed back to be
+/// dropped once the lock is released.
 #[derive(Default)]
 struct WakerSet {
     last_key: u64,
@@ -695,19 +713,27 @@ struct WakerSet {
 
 impl WakerSet {
     /// Add or refresh the waker under `key`, picking a key on first use.
-    fn register(&mut self, key: &mut Option<u64>, waker: &Waker) {
+    /// Returns the waker it replaces.
+    #[must_use = "drop the replaced waker once the lock is released"]
+    fn register(&mut self, key: &mut Option<u64>, waker: &Waker) -> Option<Waker> {
         let key = *key.get_or_insert_with(|| {
             self.last_key += 1;
             self.last_key
         });
-        let slot = self.wakers.entry(key).or_insert_with(|| waker.clone());
-        if !slot.will_wake(waker) {
-            *slot = waker.clone();
+        match self.wakers.entry(key) {
+            hash_map::Entry::Occupied(slot) if slot.get().will_wake(waker) => None,
+            hash_map::Entry::Occupied(mut slot) => Some(slot.insert(waker.clone())),
+            hash_map::Entry::Vacant(slot) => {
+                slot.insert(waker.clone());
+                None
+            }
         }
     }
 
-    fn remove(&mut self, key: u64) {
-        self.wakers.remove(&key);
+    /// Take the waker under `key` out.
+    #[must_use = "drop the removed waker once the lock is released"]
+    fn remove(&mut self, key: u64) -> Option<Waker> {
+        self.wakers.remove(&key)
     }
 
     /// Empty the set, to wake everyone once the lock is released.
@@ -756,6 +782,83 @@ mod tests {
             assert!(Pin::new(&mut call).poll(&mut cx).is_pending());
         }
         assert!(lock(&client.inner.caller.state).watchers.wakers.is_empty());
+    }
+
+    /// A waker that records, when its last clone drops, whether every lock
+    /// a service endpoint takes was free at that moment.
+    struct DropProbe {
+        entry: Arc<Entry>,
+        caller: Arc<CloseSignal>,
+        server: Option<Arc<Server>>,
+        freed: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl std::task::Wake for DropProbe {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let free = self.entry.state.try_lock().is_ok()
+                && self.caller.state.try_lock().is_ok()
+                && self.server.as_ref().is_none_or(|server| server.state.try_lock().is_ok());
+            self.freed.lock().unwrap().push(free);
+        }
+    }
+
+    #[test]
+    fn wakers_replaced_or_given_back_are_dropped_with_no_lock_held() {
+        let bus = Bus::new();
+        let (serving, calling) = (bus.scope("server"), bus.scope("caller"));
+        let mut srv = serving.service::<u32, u32>("/x").unwrap();
+        let client = calling.client::<u32, u32>("/x").unwrap();
+        let lonely = calling.client::<u32, u32>("/nobody_serves").unwrap();
+        let freed = Arc::new(Mutex::new(Vec::new()));
+        // Each probe's last clone ends up in the bus: the test drops its own
+        // right after the first poll.
+        let probe = |client: &Client<u32, u32>, server: Option<&Arc<Server>>| {
+            let (entry, caller) = (client.inner.entry.clone(), client.inner.caller.clone());
+            Waker::from(Arc::new(DropProbe { entry, caller, server: server.cloned(), freed: freed.clone() }))
+        };
+        let freed_now = || std::mem::take(&mut *freed.lock().unwrap());
+        let mut noop = noop_cx();
+
+        // the waiting server's waker, replaced by the next poll
+        let waker = probe(&client, Some(&srv.server));
+        assert!(Pin::new(&mut srv).poll_next(&mut Context::from_waker(&waker)).is_pending());
+        drop(waker);
+        assert!(Pin::new(&mut srv).poll_next(&mut noop).is_pending());
+        assert_eq!(freed_now(), [true], "Server::poll_request");
+
+        // a wait for a missing server: its waker in the entry's set, replaced
+        // and then given back by the drop
+        for drop_it in [false, true] {
+            let mut wait = WaitForService { client: &lonely.inner, closing: None, waiting: None };
+            let waker = probe(&lonely, None);
+            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_pending());
+            drop(waker);
+            if drop_it {
+                drop(wait);
+            } else {
+                assert!(Pin::new(&mut wait).poll(&mut noop).is_pending());
+            }
+            assert_eq!(freed_now(), [true], "the entry's waiting set (dropped: {drop_it})");
+        }
+
+        // a wait that found the server: its waker only in the scope's close
+        // signal, replaced and then given back by the drop
+        for drop_it in [false, true] {
+            let mut wait = WaitForService { client: &client.inner, closing: None, waiting: None };
+            let waker = probe(&client, None);
+            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_ready());
+            drop(waker);
+            if drop_it {
+                drop(wait);
+            } else {
+                assert!(Pin::new(&mut wait).poll(&mut noop).is_ready());
+            }
+            assert_eq!(freed_now(), [true], "the close signal's watchers (dropped: {drop_it})");
+        }
     }
 
     #[test]
