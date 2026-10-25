@@ -226,10 +226,10 @@ mower_nav sends one `navigate_to_pose` goal per mission, to the coverage start
   * Upstream's outer recovery cycles through clear, Spin, Wait and BackUp;
     here every recovery is the clear. Until the second recovery the two
     trees are the same.
-  * The tree as XML: `tests/oracle/navigator/navigate_to_pose_w_replanning_and_clearing.xml`
-    (the default with three lines deleted). Setting it as
-    `default_nav_to_pose_bt_xml` makes nav2 on the robot behave like the port
-    before D6 switches over.
+  * The tree as XML: `src/mower_nav2/config/navigate_to_pose_w_replanning_and_clearing.xml`
+    (the default with three lines deleted). The robot's nav2 runs it too
+    (`default_nav_to_pose_bt_xml` in `nav2_no_map_params.yaml`), so the
+    behaviour changes before D6 swaps the implementation.
 
   Quirks kept:
   * The result code is the smallest nonzero of the two error codes. A

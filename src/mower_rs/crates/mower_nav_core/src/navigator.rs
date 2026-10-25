@@ -23,7 +23,8 @@
 //! Spin 1.57 rad, Wait 5 s, BackUp 0.30 m]; here it is the clearing every
 //! time (`docs/ROS_FREE_PLAN.md` §8 D5). Up to the second outer recovery the
 //! two trees behave the same. The tree as XML, for running it on the real
-//! bt_navigator, is `tests/oracle/navigator/navigate_to_pose_w_replanning_and_clearing.xml`.
+//! bt_navigator, is `src/mower_nav2/config/navigate_to_pose_w_replanning_and_clearing.xml`,
+//! which the robot's nav2 also runs (`default_nav_to_pose_bt_xml`).
 //!
 //! Kept as upstream does it, quirks included:
 //!

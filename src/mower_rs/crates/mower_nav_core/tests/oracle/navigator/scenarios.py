@@ -13,9 +13,9 @@ NavigateToPose goals at the scenario's times, and records every goal's result
 follow_path goals the tree sent (first seen, how and when they ended), the
 plans on /plan, when the two
 costmaps updated (their publications' stamps) and the robot's final pose.
-A goal names the tree to run in `behavior_tree`: the port's
-navigate_to_pose_w_replanning_and_clearing.xml next to this file, or nav2's
-default (empty). Between scenarios the robot is moved back and nothing runs.
+A goal names the tree to run in `behavior_tree`: the robot's (and the port's)
+mower_nav2/config/navigate_to_pose_w_replanning_and_clearing.xml, or nav2's
+stock default (empty; set as bt_navigator's default here). Between scenarios the robot is moved back and nothing runs.
 
   python3 scenarios.py <nav2_no_map_params.yaml> <scenarios.json> <out.json>
 
@@ -50,7 +50,12 @@ SERVERS = [
     ('behavior_server', 'nav2_behaviors'),
     ('bt_navigator', 'nav2_bt_navigator'),
 ]
-CLEARING_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'navigate_to_pose_w_replanning_and_clearing.xml')
+HERE = os.path.dirname(os.path.abspath(__file__))
+# the robot's tree (mower_nav2), and nav2's own default for the 'default' runs:
+# the yaml's default_nav_to_pose_bt_xml is a launch substitution that a node
+# started straight from the file cannot resolve
+CLEARING_XML = os.path.normpath(os.path.join(HERE, '../../../../../../mower_nav2/config/navigate_to_pose_w_replanning_and_clearing.xml'))
+NAV2_DEFAULT_XML = '/opt/ros/jazzy/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml'
 
 
 def quat(yaw):
@@ -302,7 +307,8 @@ def main():
     # the binaries themselves: terminating `ros2 run` leaves its child running
     servers = [
         subprocess.Popen(
-            [f'/opt/ros/jazzy/lib/{pkg}/{name}', '--ros-args', '--params-file', params],
+            [f'/opt/ros/jazzy/lib/{pkg}/{name}', '--ros-args', '--params-file', params]
+            + (['-p', f'default_nav_to_pose_bt_xml:={NAV2_DEFAULT_XML}'] if name == 'bt_navigator' else []),
             stdout=subprocess.DEVNULL, stderr=open(f'/tmp/navigator_oracle_{name}.log', 'w'))
         for name, pkg in SERVERS
     ]
