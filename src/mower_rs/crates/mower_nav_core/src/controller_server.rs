@@ -142,16 +142,7 @@ impl ControllerServerParams {
     }
 }
 
-/// An accepted `follow_path` goal, in acceptance order.
-pub type GoalId = u64;
-
-/// How a goal ended (`rclcpp_action` terminal states).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalStatus {
-    Succeeded,
-    Aborted,
-    Canceled,
-}
+pub use crate::action::{GoalId, GoalStatus};
 
 /// A goal's result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +238,8 @@ pub struct ControllerServer<C: Controller> {
     run: Option<Run>,
     /// Results produced outside a pass, reported by the next one.
     backlog: VecDeque<FollowPathResult>,
+    /// `computeControl` entries so far.
+    loops_started: u64,
 }
 
 impl ControllerServer<RotationShim<RegulatedPurePursuit>> {
@@ -279,6 +272,7 @@ impl<C: Controller> ControllerServer<C> {
             preempt_requested: false,
             run: None,
             backlog: VecDeque::new(),
+            loops_started: 0,
         }
     }
 
@@ -315,6 +309,18 @@ impl<C: Controller> ControllerServer<C> {
     /// A goal is executing: tick at `controller_frequency`.
     pub fn is_executing(&self) -> bool {
         self.current.is_some()
+    }
+
+    /// Goals accepted so far (every goal is accepted).
+    pub fn goals_received(&self) -> u64 {
+        self.next_goal - 1
+    }
+
+    /// How many times `computeControl` has been entered. Upstream's loop
+    /// rate (a `WallRate` built on entry) starts over when this goes up; a
+    /// preemption stays in the same loop.
+    pub fn loops_started(&self) -> u64 {
+        self.loops_started
     }
 
     /// `handle_goal` + `handle_accepted`: every goal is accepted. While one
@@ -395,6 +401,7 @@ impl<C: Controller> ControllerServer<C> {
 
     /// Everything before the `while` loop.
     fn start(&mut self, input: &CycleInput) -> Result<(), ControllerError> {
+        self.loops_started += 1;
         let path = self.current.as_ref().map(|g| g.path.clone()).unwrap_or_default();
         self.run = Some(Run { current_path: Vec::new(), end_pose: Pose2D::default(), last_valid_cmd_ns: input.now_ns, waiting_since_ns: None });
         if let Err(e) = self.set_planner_path(&path) {

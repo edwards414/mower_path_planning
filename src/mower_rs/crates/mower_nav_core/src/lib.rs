@@ -7,14 +7,18 @@
 //! in replay and under test. See `README.md` for what is ported and what is
 //! deliberately not.
 
+pub mod action;
 pub mod checkers;
 pub mod controller_server;
 pub mod costmap;
 pub mod footprint;
 pub mod geometry;
+pub mod nav_stack;
 pub mod navfn;
+pub mod navigator;
 pub mod path_handler;
 pub mod planner;
+pub mod planner_server;
 pub mod rpp;
 pub mod shim;
 pub mod smoother;

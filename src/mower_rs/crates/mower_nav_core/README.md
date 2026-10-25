@@ -1,7 +1,7 @@
 # mower_nav_core
 
 The ROS-free core of Phase D of [`docs/ROS_FREE_PLAN.md`](../../../../docs/ROS_FREE_PLAN.md)
-(section 8, D1–D4): a Rust port of the parts of **nav2 (Jazzy, 1.3.13)** this
+(section 8, D1–D5): a Rust port of the parts of **nav2 (Jazzy, 1.3.13)** this
 mower actually runs, as configured by
 [`mower_nav2/config/nav2_no_map_params.yaml`](../../../mower_nav2/config/nav2_no_map_params.yaml).
 
@@ -24,6 +24,9 @@ image.
 | `src/shim.rs` | `nav2_rotation_shim_controller` | D3 |
 | `src/checkers.rs` | `nav2_controller` plugins: `SimpleGoalChecker`, `SimpleProgressChecker` | D3 |
 | `src/controller_server.rs` | `nav2_controller::ControllerServer` (`follow_path`), `nav2_util::SimpleActionServer` | D3 |
+| `src/planner_server.rs` | `nav2_planner::PlannerServer` (`compute_path_to_pose`) | D2 |
+| `src/navigator.rs` | `nav2_bt_navigator` (`navigate_to_pose`), `nav2_behavior_tree`, BehaviorTree.CPP 4.10 control nodes | D5 |
+| `src/nav_stack.rs` | the three servers' threads and loop rates, on one clock | D5 |
 | `src/smoother.rs` | `nav2_velocity_smoother` | D4 |
 
 ## Costmaps (D1)
@@ -201,6 +204,95 @@ Checked two ways:
   * The closed loop also shows the RPP findings above: the wall run stops
     0.77 m short and aborts 2.05 s after the last command; the 1.5 m segment
     ends 4.8 cm short of its end, inside the 5 cm goal tolerance.
+
+## Planner server, navigator and the stack (D2, D5: `navigate_to_pose`)
+
+mower_nav sends one `navigate_to_pose` goal per mission, to the coverage start
+(module docs for the details):
+
+* `planner_server.rs`: `compute_path_to_pose` around NavFn. The order of
+  `computePlan` (cancel, the costmap wait with `costmap_update_timeout` 1 s,
+  preemption, start pose, plugin id, `createPlan`, the empty-path check), its
+  error codes 200–208, and the SimpleActionServer around it. One quirk kept:
+  a goal that preempts during the costmap wait receives the plan of the goal
+  it preempted (upstream assigns the pending goal to a copy of the pointer).
+* `navigator.rs` (D5): `bt_navigator` with nav2's default
+  `navigate_to_pose_w_replanning_and_recovery.xml`, ported node by node,
+  **without Spin, Wait and BackUp** (`docs/ROS_FREE_PLAN.md` §8):
+  * The tree plans at 1 Hz, and every new plan preempts the FollowPath goal.
+  * A failed plan is retried once after clearing the global costmap, and a
+    failed FollowPath once after clearing the local one.
+  * Then the whole pipeline is retried after clearing both, up to 6 times.
+  * Upstream's outer recovery cycles through clear, Spin, Wait and BackUp;
+    here every recovery is the clear. Until the second recovery the two
+    trees are the same.
+  * The tree as XML: `tests/oracle/navigator/navigate_to_pose_w_replanning_and_clearing.xml`
+    (the default with three lines deleted). Setting it as
+    `default_nav_to_pose_bt_xml` makes nav2 on the robot behave like the port
+    before D6 switches over.
+
+  Quirks kept:
+  * The result code is the smallest nonzero of the two error codes. A
+    FollowPath code beats a planner code, even a stale one: an old 104 keeps
+    the recovery going after a later planner error that no recovery helps.
+  * Every clear counts as a recovery.
+  * `GoalUpdated` never fires (BehaviorTree.CPP 4.10 resets it every tick),
+    so a preempting goal is planned to at the next replan.
+* `nav_stack.rs`: the three servers on one clock, each scheduled the way its
+  thread runs upstream.
+  * Rates: the tree every 10 ms; the controller at 20 Hz from its loop's
+    start; the planner as soon as it has a goal. Both servers poll at 100 Hz
+    while they wait for a costmap.
+  * The loop rates are `WallRate`s, overrun reset included.
+  * Results go back to whoever sent the goal. mower_nav's own `follow_path`
+    goals (`send_follow_path`) share the one controller server, as they do
+    upstream.
+  * The costmaps belong to the caller. A cleared costmap must stay not
+    current until its next update (the global one updates at 1 Hz, which is
+    why every retry after a clear waits up to a second).
+* For the wiring (D6): tick at least every 10 ms (`next_tick_ns`). Pass
+  `map <- base` and `odom <- base` as the latest transforms, and apply
+  `StackOutput::clears` to the costmaps.
+* Not ported: per-goal `behavior_tree`, the feedback's
+  `estimated_time_remaining` (no consumer), the result-callback wake-up
+  (a result is seen at the next tick, ≤ 10 ms later), service and goal
+  response timeouts.
+
+Checked:
+
+* `tests/planner_server.rs`: the wait, the timeout, every error code, cancel
+  (including the quirk that a plan with the robot at the goal succeeds while
+  cancelled), and the preemption quirk.
+* `tests/navigator.rs`: the tree against scripted servers. It pins down:
+  * the exact tick counts (each plan is seen one tick after it was asked
+    for, and the 1 Hz timer restarts then);
+  * 7 × 2 plans and 19 clears for NO_VALID_PATH;
+  * 7 × 2 FollowPath attempts for PATIENCE_EXCEEDED;
+  * the stale-code quirk, cancel during planning, preemption, the feedback
+    distance.
+* `tests/navigator_oracle.rs`, black box against the real `bt_navigator`,
+  `planner_server` and `controller_server`, with `behavior_server` for the
+  default tree:
+  * `tests/oracle/navigator/scenarios.py` plays 9 scenarios on the robot's
+    yaml. It records each goal's result, the last feedback, every
+    compute_path_to_pose and follow_path goal, `/plan`, and when the two
+    costmaps updated.
+  * The test replays them on `NavStack`, with the costmaps updating at the
+    phases nav2's had.
+  * Every status and error code matches, and so does every recovery count
+    (19 in the two retry scenarios), plan count and number of
+    compute_path_to_pose goals. Result times agree within 0.18 s (35.07 s vs
+    35.05 s for the 7-round wall scenario), and the robot ends within 6 mm.
+  * The scenarios that never reach a second recovery also match nav2's
+    **default** tree: reach, cancel, preempt, goal occupied (206).
+  * For comparison, the default tree with its motion recoveries: unreachable
+    takes 17.3 s instead of 12.7 s and the robot turns about 180° and backs
+    up; the wall takes 47.5 s instead of 35.1 s. Both end with the same code.
+  * One count may differ in the wall scenario. A replan reaches nav2's tree
+    10–30 ms after it is asked for, and here one tick later, so whether the
+    last replan of a round lands before that round's FollowPath failure can
+    flip. The port then sends one more preempting FollowPath goal per round
+    (43 vs 38 over 7 rounds); the outcome does not change.
 
 ## Checkers (D3) and velocity smoother (D4)
 
