@@ -365,10 +365,8 @@ impl EkfSettings {
             None => None,
         };
         let initial_estimate_covariance = match r.opt_double_array("initial_estimate_covariance")? {
-            Some(flat) => {
-                r.untested("initial_estimate_covariance");
-                Some(covariance(node, "initial_estimate_covariance", &flat)?)
-            }
+            // covered by tests/data/ros_filter_map_initial_cov.json
+            Some(flat) => Some(covariance(node, "initial_estimate_covariance", &flat)?),
             None => None,
         };
         // rclcpp declares it on every node; the port runs on the wall clock.

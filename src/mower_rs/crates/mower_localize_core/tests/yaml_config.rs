@@ -135,7 +135,16 @@ fn the_yaml_is_still_the_configuration_the_oracle_verified() {
         assert_eq!(s.base_link_frame, oracle.base_link_frame, "{node}");
         assert_eq!(s.world_frame, oracle.world_frame, "{node}");
         assert_eq!(s.process_noise_covariance, Some(oracle.process_noise_covariance), "{node}");
-        assert!(s.initial_estimate_covariance.is_none() && !s.predict_to_current_time);
+        // The map EKF starts yaw at variance 1.0 (the datum fix); the oracle's
+        // ros_filter_map_initial_cov.json runs the filter with this same matrix.
+        if node == "ekf_filter_node_map" {
+            let p0 = common::mat15(&common::load("ros_filter_map_initial_cov.json")["initial_estimate_covariance"]);
+            assert_eq!(s.initial_estimate_covariance, Some(p0), "{node}");
+            assert_eq!(s.build_filter().filter.estimate_error_covariance, p0, "{node}");
+        } else {
+            assert!(s.initial_estimate_covariance.is_none(), "{node}");
+        }
+        assert!(!s.predict_to_current_time);
         assert!(!s.dynamic_process_noise_covariance && !s.permit_corrected_publication);
         assert_eq!(s.gravitational_acceleration, 9.80665);
         assert_eq!(s.odoms.len(), odoms.len(), "{node}");

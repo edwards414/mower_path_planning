@@ -111,6 +111,10 @@ fn run(file: &str, map_instance: bool) {
     core.filter
         .set_process_noise_covariance(mat15(&data["process_noise_covariance"]));
     core.filter.sensor_timeout_ns = data["sensor_timeout_ns"].as_i64().unwrap();
+    if !data["initial_estimate_covariance"].is_null() {
+        // what EkfSettings::build_filter does with initial_estimate_covariance
+        core.filter.estimate_error_covariance = mat15(&data["initial_estimate_covariance"]);
+    }
     core.last_diff_time = 1.7e9;
     transforms_into(&mut core, &data);
 
@@ -235,4 +239,11 @@ fn odom_instance_matches_robot_localization() {
 #[test]
 fn map_instance_matches_robot_localization() {
     run("ros_filter_map.json", true);
+}
+
+/// The map EKF with the yaml's initial_estimate_covariance (yaw variance 1.0),
+/// on the same inputs: odometry arrives before the first IMU yaw.
+#[test]
+fn map_instance_with_initial_yaw_covariance_matches_robot_localization() {
+    run("ros_filter_map_initial_cov.json", true);
 }

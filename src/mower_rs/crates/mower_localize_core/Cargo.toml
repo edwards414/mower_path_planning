@@ -10,6 +10,7 @@ description = "ROS-free port of the robot_localization paths this mower uses: th
 [dependencies]
 
 [dev-dependencies]
-serde_json.workspace = true
+# float_roundtrip: without it serde_json reads ~1 oracle float in 10 one ulp off.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 # tests/yaml_config.rs reads mower_nav2/config/dual_ekf_navsat_params.yaml.
 serde_yaml = "0.9"
