@@ -12,7 +12,7 @@
 //!   through an order that a stale value would break.
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -789,6 +789,77 @@ fn a_dds_call_made_while_the_bus_server_restarts_is_answered_once_it_is_back() {
             running.service(name).unanswered
         );
         assert_eq!(running.service(name).unanswered, 0);
+        running.stop().await.unwrap();
+    });
+}
+
+/// A bus server that takes a call and ends before answering (its scope
+/// closes while it holds the call, as when its module fails), while its
+/// replacement is already up. The call must not be made again: the
+/// handler may have run, and dispatch, start-coverage or the lock services
+/// are not idempotent. A direct r2r server never runs a request twice; the
+/// DDS request is lost, as a crash of that server would lose it.
+#[test]
+fn a_dds_call_a_bus_server_took_is_never_made_again() {
+    on_one_thread(async {
+        let name = "/bridge_test/dispatch_once";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("dispatch_once_bridge", &bus.scope("bridge"));
+        bridge.service_to_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        // The first instance runs its handler for the call and holds it.
+        let first = bus.scope("mission_manager");
+        let mut service = first.service::<SetBool::Request, SetBool::Response>(name).unwrap();
+        let (taken, held) = tokio::sync::oneshot::channel();
+        let _holder = {
+            let runs = runs.clone();
+            tokio::spawn(async move {
+                if let Some(request) = service.next().await {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = taken.send(());
+                    let _request = request;
+                    while service.next().await.is_some() {}
+                }
+            })
+        };
+        let app = Peer::new("dispatch_once_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        wait_for_service(&client).await;
+        let mut call = Box::pin(client.request(&set_bool(true)).unwrap());
+        tokio::time::timeout(WAIT, held).await.expect("the first instance took the call").unwrap();
+
+        // It ends holding the call, and its replacement is up before the
+        // bridge can look: no await in between, on one thread.
+        first.close();
+        let second = bus.scope("mission_manager");
+        let mut replacement = second.service::<SetBool::Request, SetBool::Response>(name).unwrap();
+        let _answering = {
+            let runs = runs.clone();
+            tokio::spawn(async move {
+                while let Some(request) = replacement.next().await {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = request.respond(SetBool::Response { success: true, message: "replacement".into() });
+                }
+            })
+        };
+
+        eventually("the bridge to give the call up, or to make it again", || {
+            running.service(name).unanswered == 1 || runs.load(Ordering::SeqCst) > 1
+        })
+        .await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "the handler ran again for a call a server had taken");
+        assert_eq!(running.service(name).unanswered, 1);
+        // The bridge has let go of it, so nothing can answer it any more.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!((&mut call).now_or_never().is_none(), "the DDS request ends unanswered");
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        // The replacement serves the calls that come after.
+        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(false)).unwrap()).await.unwrap().unwrap();
+        assert_eq!(answer.message, "replacement");
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
         running.stop().await.unwrap();
     });
 }

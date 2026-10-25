@@ -187,13 +187,15 @@ the spin thread, which owns the node:
 `ServiceTimeouts` bounds the calls. Set it with `RosBridge::with_service_timeouts` before declaring the services.
 
 - **`service_to_ros`:** each DDS request becomes a bus call, and the answer goes back.
-  - **No bus server (`ServiceUnavailable`):** the call waits up to `bus_server` (4 s) for one, then is tried once more.
-    mower_rsd starts a failed module again after 2 s, so a call made during that restart is answered by the restarted
-    module.
-  - A server that went away holding the call gives the same `ServiceUnavailable`, so that call is tried again too. If
-    its handler had already run, it runs twice.
-  - **`NoResponse` or `Closed`, or no server by the end of the wait:** the DDS request is dropped unanswered, since ROS
-    has no error channel. The ROS client times out, as with a crashed server.
+  - **No bus server when the call is made:** the bus refuses the call at once with `ServiceUnavailable`, so nothing has
+    run for it yet. It waits up to `bus_server` (4 s) for a server, then is made once more. mower_rsd starts a failed
+    module again after 2 s, so a call made during that restart is answered by the restarted module.
+  - **A call a server has taken is never made again,** however it ends. This covers a server whose scope closes while
+    holding the call (`ServiceUnavailable` from the response) and one that drops it (`NoResponse`).
+    - Its handler may have run, and dispatch, start-coverage and the lock services are not idempotent.
+    - The DDS request is lost, as a direct r2r server's crash loses it; a direct r2r server never runs a request twice.
+  - **Dropped unanswered:** a call a server lost, `Closed`, or no server by the end of the wait. ROS has no error
+    channel, so the ROS client times out, as with a crashed server.
   - Each error kind is logged once, until a call succeeds again.
   - **Proposal: withdraw the DDS service while no bus server exists,** so that a DDS client's `is_available` fails as it
     does for a dead server. ws_bridge would then tell the app "unavailable" within 5 s instead of after its 30 s.

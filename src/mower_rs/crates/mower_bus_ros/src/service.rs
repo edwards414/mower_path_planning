@@ -62,30 +62,39 @@ pub(crate) fn service_to_ros<S: BridgeService>(
 
 /// One DDS request: call the bus server and answer with what it says.
 ///
-/// With no bus server, the call waits up to `wait` for one and is then tried
-/// once more. The DDS service stays advertised meanwhile (r2r cannot take it
-/// back), so a DDS client cannot learn that the server is gone; but mower_rsd
-/// starts a failed module again after 2 s, and a call made during that
-/// restart is answered by the restarted module. A server that went away with
-/// the call is the same `ServiceUnavailable` to the bus, so that call is
-/// tried once more too.
+/// A call the bus refuses at once, because no server is live when it is
+/// made, waits up to `wait` for one and is made once more. Nothing has run
+/// for it yet, so that is safe. The DDS service stays advertised meanwhile
+/// (r2r cannot take it back), so a DDS client cannot learn that the server
+/// is gone; but mower_rsd starts a failed module again after 2 s, and a call
+/// made during that restart is answered by the restarted module.
 ///
-/// ROS has no error reply, so on any other bus error, or when the wait runs
-/// out, the request is dropped unanswered: the ROS client sees what it sees
-/// of a crashed server, and times out.
+/// A call a server has taken is never made again, however it ends: its
+/// handler may have run, and dispatch, start-coverage and the lock services
+/// are not idempotent. A direct r2r server never runs a request twice. So a
+/// server that closes holding it (`ServiceUnavailable` from the response) or
+/// drops it (`NoResponse`) loses it, as a crashed r2r server would.
+///
+/// ROS has no error reply, so the request is then dropped unanswered, as it
+/// is on any other bus error or when the wait runs out: the ROS client sees
+/// what it sees of a crashed server, and times out.
 async fn answer<S: BridgeService>(
     client: Client<S::Request, S::Response>, request: ServiceRequest<S>, env: Arc<Env>, wait: Duration,
 ) {
-    let mut response = bus_call(&client, &request.message).await;
     let mut waited = "";
-    if matches!(response, Err(BusError::ServiceUnavailable { .. })) {
-        match tokio::time::timeout(wait, client.wait_for_service()).await {
-            Ok(Ok(())) => response = bus_call(&client, &request.message).await,
-            // The bridge's scope closed: the response stays the error.
-            Ok(Err(_)) => {}
-            Err(_) => waited = ", and none came in time",
-        }
-    }
+    let response = match client.request(&request.message) {
+        Ok(response) => response.await,
+        Err(BusError::ServiceUnavailable { .. }) => match tokio::time::timeout(wait, client.wait_for_service()).await {
+            Ok(Ok(())) => bus_call(&client, &request.message).await,
+            // The bridge's scope closed.
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                waited = ", and none came in time";
+                Err(BusError::ServiceUnavailable { name: client.name().to_string() })
+            }
+        },
+        Err(e) => Err(e),
+    };
     match response {
         Ok(response) => match request.respond(response) {
             Ok(()) => {

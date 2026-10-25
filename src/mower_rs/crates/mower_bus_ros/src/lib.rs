@@ -161,10 +161,11 @@ pub struct ServiceTimeouts {
     /// It is what ends a call whose server is replaced while holding it: a
     /// server is matched at every check then, just not the one that has it.
     pub dds_call: Duration,
-    /// `service_to_ros`: how long a DDS call that finds no bus server waits
-    /// for one, to be tried once more when it comes. 4 s by default, above
-    /// mower_rsd's 2 s restart delay, so that a call made while a module
-    /// restarts reaches the restarted module.
+    /// `service_to_ros`: how long a DDS call that the bus refuses because no
+    /// server is live waits for one, to be made once more when it comes. 4 s
+    /// by default, above mower_rsd's 2 s restart delay, so that a call made
+    /// while a module restarts reaches the restarted module. A call a server
+    /// had taken is never made again.
     pub bus_server: Duration,
 }
 
