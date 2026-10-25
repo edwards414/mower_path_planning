@@ -9,14 +9,19 @@
 //! `AnyMsg`) the typed readers do.
 //!
 //! Requirements beyond the README:
-//! - publish never blocks on a reader and never runs user code; no lock is
-//!   held while waking readers;
+//! - publish never waits for a reader: it holds the channel's lock, and each
+//!   reader's queue lock in turn, only to queue the message. What it does
+//!   with no lock held, on the publisher's thread, is the only user code it
+//!   runs: waking the readers' tasks and threads, and dropping the messages
+//!   it pushed out of full queues;
 //! - works without any async runtime (publish from a std thread, blocking
 //!   readers on std threads, async readers on any executor);
 //! - `Publisher` and `Subscriber` are `Send + Sync + Unpin`; `Publisher` is
 //!   `Clone` (clones are one writer, one history);
-//! - dropping a `Subscriber` unregisters it; dropping the last clone of a
-//!   `Publisher` unregisters the writer and drops its history;
+//! - dropping a `Subscriber` unregisters it and frees what it had queued at
+//!   once, even while a `publisher_changes` stream of it lives on; dropping
+//!   the last clone of a `Publisher` unregisters the writer and drops its
+//!   history;
 //! - closing the scope does both for every endpoint of the scope (via
 //!   `Scope::on_close` with `Weak` references), and ends its readers' streams
 //!   at once, discarding what they still had queued.
@@ -114,8 +119,8 @@ impl<T: Message> Publisher<T> {
         self.writer.qos
     }
 
-    /// Clone `msg` once into an `Arc` and deliver it. Never blocks; fails
-    /// only with [`BusError::Closed`].
+    /// Clone `msg` once into an `Arc` and deliver it. Never waits for a
+    /// reader (README.md, "`publish`"); fails only with [`BusError::Closed`].
     pub fn publish(&self, msg: &T) -> Result<(), BusError> {
         self.publish_arc(Arc::new(msg.clone()))
     }
@@ -207,7 +212,7 @@ impl<T: Message> Subscriber<T> {
     /// `select!`) and can outlive the subscriber. Make it before reading
     /// [`Subscriber::publisher_count`] for the starting state, so that no
     /// change falls in between. Costs nothing on the publish path.
-    pub fn publisher_changes(&self) -> impl Stream<Item = usize> + Send + Sync + Unpin + 'static {
+    pub fn publisher_changes(&self) -> PublisherChanges {
         self.reader.watch_publishers()
     }
 }
@@ -272,7 +277,7 @@ struct ChannelState {
     /// merged.
     published: u64,
     last_published: Option<Instant>,
-    /// Writers registered or unregistered so far: what a `PublisherWatch`
+    /// Writers registered or unregistered so far: what a `PublisherChanges`
     /// compares with the count it saw last.
     writer_changes: u64,
     /// Watches waiting for the next writer change (which wakes and removes
@@ -281,7 +286,7 @@ struct ChannelState {
     next_watch: u64,
 }
 
-/// A `PublisherWatch` that waits.
+/// A `PublisherChanges` that waits.
 struct Watcher {
     id: u64,
     /// The reader the watch belongs to: closing it ends the watch.
@@ -678,10 +683,10 @@ impl Reader {
     }
 
     /// The stream behind `publisher_changes`, starting from now.
-    pub(crate) fn watch_publishers(&self) -> PublisherWatch {
+    pub(crate) fn watch_publishers(&self) -> PublisherChanges {
         let mut state = lock(&self.channel.state);
         state.next_watch += 1;
-        PublisherWatch {
+        PublisherChanges {
             channel: Arc::clone(&self.channel),
             inbox: Arc::clone(&self.inbox),
             id: state.next_watch,
@@ -692,16 +697,33 @@ impl Reader {
 
 impl Drop for Reader {
     fn drop(&mut self) {
+        // Unregistered first, so that no publish queues anything after the
+        // queue is emptied below.
         self.channel.remove_reader(&self.inbox);
+        // A `PublisherChanges` may keep the inbox for as long as it lives:
+        // what was queued (a 160 kB grid) and the waker go now, with no lock
+        // held. The inbox stays open; only its scope's close ends the watch.
+        let (queued, waker) = {
+            let mut queue = lock(&self.inbox.queue);
+            (std::mem::take(&mut queue.msgs), queue.waker.take())
+        };
+        drop(waker);
+        drop(queued);
     }
 }
 
-/// The stream `publisher_changes` returns (topic.rs keeps it unnamed: an
-/// `impl Stream` needs no export).
-pub(crate) struct PublisherWatch {
+/// The writer count of a reader's topic each time writers have come or gone
+/// ([`Subscriber::publisher_changes`],
+/// [`crate::ErasedSubscriber::publisher_changes`]): a
+/// `Stream<Item = usize>` that ends when the reader's scope closes.
+///
+/// `Send + Sync + Unpin + 'static`, so it can be spawned or kept next to the
+/// reader in a `select!`, and it can outlive the reader.
+pub struct PublisherChanges {
     channel: Arc<Channel>,
     /// The reader's inbox: when its scope closes, the stream ends. Held
-    /// strongly, so the stream can outlive the subscriber.
+    /// strongly, so the stream can outlive the subscriber; the subscriber's
+    /// drop empties it.
     inbox: Arc<Inbox>,
     /// Its slot in `ChannelState::watchers`.
     id: u64,
@@ -709,7 +731,7 @@ pub(crate) struct PublisherWatch {
     seen: u64,
 }
 
-impl Stream for PublisherWatch {
+impl Stream for PublisherChanges {
     type Item = usize;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<usize>> {
@@ -735,10 +757,16 @@ impl Stream for PublisherWatch {
     }
 }
 
-impl Drop for PublisherWatch {
+impl Drop for PublisherChanges {
     fn drop(&mut self) {
         let waker = lock(&self.channel.state).take_watcher(self.id);
         drop(waker);
+    }
+}
+
+impl fmt::Debug for PublisherChanges {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PublisherChanges").field("name", &self.channel.name()).finish_non_exhaustive()
     }
 }
 
@@ -958,7 +986,7 @@ mod tests {
         let waker = Waker::from(Arc::clone(&probe));
         let mut cx = Context::from_waker(&waker);
         let mut watch = sub.reader.watch_publishers();
-        let mut poll = |watch: &mut PublisherWatch| Pin::new(watch).poll_next(&mut cx);
+        let mut poll = |watch: &mut PublisherChanges| Pin::new(watch).poll_next(&mut cx);
 
         assert!(poll(&mut watch).is_pending());
         assert!(poll(&mut watch).is_pending(), "polled again: same slot");
@@ -1017,6 +1045,59 @@ mod tests {
         let unwatched = WATCHED.with(|w| w.borrow_mut().take());
         drop(unwatched);
         FREED.with(|f| f.take())
+    }
+
+    /// A waker that records, when its last clone drops, whether the
+    /// channel's and the inbox's locks were free at that moment.
+    struct DropProbe {
+        channel: Arc<Channel>,
+        inbox: Weak<Inbox>,
+        freed: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl Wake for DropProbe {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let inbox_free = self.inbox.upgrade().is_none_or(|inbox| inbox.queue.try_lock().is_ok());
+            self.freed.lock().unwrap().push(self.channel.state.try_lock().is_ok() && inbox_free);
+        }
+    }
+
+    #[test]
+    fn a_dropped_reader_frees_its_queue_and_waker_with_no_lock_held_while_its_watch_lives() {
+        let bus = Bus::new();
+        let scope = bus.scope("ros_bridge");
+        let p = scope.publisher::<Tracked>("/map_grid", Qos::default()).unwrap();
+
+        // what it had queued
+        let sub = scope.subscribe::<Tracked>("/map_grid", Qos::default()).unwrap();
+        for i in 0..3 {
+            p.publish_owned(Tracked(i)).unwrap();
+        }
+        let watch = sub.publisher_changes();
+        WATCHED.with(|w| *w.borrow_mut() = Some((Arc::clone(&sub.reader.channel), Some(Arc::clone(&sub.reader.inbox)))));
+        drop(sub);
+        let unwatched = WATCHED.with(|w| w.borrow_mut().take());
+        drop(unwatched);
+        assert_eq!(FREED.with(|f| f.take()), [true, true, true], "freed at the drop, with no lock held");
+        assert!(lock(&watch.inbox.queue).msgs.capacity() == 0, "the queue's buffer too");
+        drop(watch);
+
+        // the waker of a task parked on it
+        let mut sub = scope.subscribe::<Tracked>("/map_grid", Qos::default()).unwrap();
+        let freed = Arc::new(Mutex::new(Vec::new()));
+        let probe =
+            DropProbe { channel: Arc::clone(&sub.reader.channel), inbox: Arc::downgrade(&sub.reader.inbox), freed: freed.clone() };
+        let waker = Waker::from(Arc::new(probe));
+        assert!(Pin::new(&mut sub).poll_next(&mut Context::from_waker(&waker)).is_pending());
+        drop(waker); // the inbox holds the last clone now
+        let watch = sub.publisher_changes();
+        drop(sub);
+        assert_eq!(*freed.lock().unwrap(), [true], "dropped at the drop, with no lock held");
+        assert!(!lock(&watch.inbox.queue).closed, "the watch lives on until the scope closes");
     }
 
     #[test]

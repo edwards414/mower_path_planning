@@ -34,7 +34,7 @@ pub use introspect::{ros_type_name, ServiceInfo, TopicInfo};
 pub use qos::{Durability, Qos, Reliability};
 pub use service::{Client, Request, ResponseFuture, Service};
 pub use timer::Timer;
-pub use topic::{Publisher, Subscriber};
+pub use topic::{Publisher, PublisherChanges, Subscriber};
 
 /// What can travel on the bus. Blanket-implemented, so r2r's generated
 /// message types (which derive `Clone, Serialize, Deserialize`) qualify as

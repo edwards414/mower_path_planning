@@ -13,7 +13,7 @@ use futures::Stream;
 
 use crate::codec::{AnyMsg, Codec};
 use crate::topic::{Reader, Writer};
-use crate::{BusError, Message, Qos, RecvError, Scope};
+use crate::{BusError, Message, PublisherChanges, Qos, RecvError, Scope};
 
 pub(crate) fn subscribe(scope: &Scope, name: &str, qos: Qos) -> Result<ErasedSubscriber, BusError> {
     Ok(ErasedSubscriber { reader: Reader::open(scope, name, qos, None)? })
@@ -100,7 +100,7 @@ impl ErasedSubscriber {
     /// when this reader's scope closes: see
     /// [`crate::Subscriber::publisher_changes`]. The ROS bridge drops a
     /// latched value on the DDS side from it when a topic's last writer goes.
-    pub fn publisher_changes(&self) -> impl Stream<Item = usize> + Send + Sync + Unpin + 'static {
+    pub fn publisher_changes(&self) -> PublisherChanges {
         self.reader.watch_publishers()
     }
 

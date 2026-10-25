@@ -5,12 +5,13 @@
 
 use std::any::type_name;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::{FutureExt, StreamExt};
-use mower_bus::{Bus, BusError, ErasedSubscriber, JsonPublisher, Publisher, Qos, RecvError, Subscriber};
+use futures::{FutureExt, Stream, StreamExt};
+use mower_bus::{Bus, BusError, ErasedSubscriber, JsonPublisher, Publisher, PublisherChanges, Qos, RecvError, Subscriber};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -608,6 +609,93 @@ async fn a_bridge_loop_selects_over_messages_and_writer_changes() {
     assert_eq!(events.recv().await, None, "both streams ended with the scope");
 }
 
+static GRIDS_LIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// A message that counts its live copies (an OccupancyGrid, as far as
+/// memory goes).
+#[derive(Serialize, Deserialize)]
+struct Grid(u32);
+
+impl Grid {
+    fn new(n: u32) -> Self {
+        GRIDS_LIVE.fetch_add(1, Ordering::SeqCst);
+        Grid(n)
+    }
+}
+
+impl Clone for Grid {
+    fn clone(&self) -> Self {
+        Grid::new(self.0)
+    }
+}
+
+impl Drop for Grid {
+    fn drop(&mut self) {
+        GRIDS_LIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Review 2026-10-26: a `publisher_changes()` stream "can outlive the
+/// subscriber" and held its inbox, queue included, so dropping the
+/// subscriber freed nothing it had queued while the stream lived (the ROS
+/// bridge keeps such streams for latched topics: 160 kB grids).
+#[test]
+fn dropping_a_subscriber_frees_its_queue_while_its_publisher_watch_lives() {
+    let bus = Bus::new();
+    let s = bus.scope("bridge");
+    let map = bus.scope("map");
+    let p = map.publisher::<Grid>("/map_grid", Qos::default()).unwrap();
+    let sub = s.subscribe::<Grid>("/map_grid", Qos::default()).unwrap();
+    for n in 0..3 {
+        p.publish_owned(Grid::new(n)).unwrap();
+    }
+    assert_eq!(GRIDS_LIVE.load(Ordering::SeqCst), 3);
+    let mut changes = sub.publisher_changes();
+    drop(sub);
+    assert_eq!(GRIDS_LIVE.load(Ordering::SeqCst), 0, "the dropped subscriber's queued messages are still alive");
+
+    // the same for an erased reader
+    let erased = s.subscribe_erased("/map_grid", Qos::default()).unwrap();
+    p.publish_owned(Grid::new(3)).unwrap();
+    let erased_changes = erased.publisher_changes();
+    drop(erased);
+    assert_eq!(GRIDS_LIVE.load(Ordering::SeqCst), 0);
+    drop(erased_changes);
+
+    // and the stream itself works on until the reader's scope closes
+    map.close();
+    assert_eq!(changes.next().now_or_never(), Some(Some(0)));
+    s.close();
+    assert_eq!(changes.next().now_or_never(), Some(None));
+}
+
+/// The ROS bridge keeps the stream in a struct next to the reader, so the
+/// type has a name; code that took it as an `impl Stream` keeps compiling.
+#[test]
+fn publisher_changes_has_a_name_and_still_works_as_an_impl_stream() {
+    struct LatchedTopic {
+        reader: ErasedSubscriber,
+        writers: PublisherChanges,
+    }
+    fn first_change(stream: impl Stream<Item = usize> + Send + Sync + Unpin + 'static) -> Option<usize> {
+        futures::executor::block_on(stream.take(1).collect::<Vec<_>>()).pop()
+    }
+
+    let bus = Bus::new();
+    let bridge = bus.scope("ros_bridge");
+    let sub = bridge.subscribe::<Pose>("/map", Qos::latched()).unwrap();
+    let typed: PublisherChanges = sub.publisher_changes();
+    let reader = bridge.subscribe_erased("/map", Qos::latched()).unwrap();
+    let writers = reader.publisher_changes();
+    let mut topic = LatchedTopic { reader, writers };
+
+    let _p = bus.scope("map_manage").publisher::<Pose>("/map", Qos::latched()).unwrap();
+    assert_eq!(first_change(typed), Some(1));
+    assert_eq!(futures::executor::block_on(topic.writers.next()), Some(1));
+    assert_eq!(topic.reader.publisher_count(), 1);
+    assert!(format!("{:?}", topic.writers).contains("/map"));
+}
+
 #[test]
 fn publisher_changes_need_no_runtime() {
     let bus = Bus::new();
@@ -835,4 +923,81 @@ fn endpoints_are_send_sync_and_unpin() {
     check::<ErasedSubscriber>();
     check::<JsonPublisher>();
     check::<mower_bus::ErasedMsg>();
+    check::<PublisherChanges>();
+}
+
+/// Review 2026-10-26 (a stress test that passed: evidence for "nothing
+/// found"). Readers of every kind race publishes from two writers, drops and
+/// scope closes: every reader's stream ends, the watches end after it, and
+/// no reader sees a message twice in a row.
+#[test]
+fn readers_racing_publishes_drops_and_scope_closes_always_end_and_keep_order() {
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_time().build().unwrap();
+    let bus = Bus::new();
+    for round in 0..300u64 {
+        let readers_scope = bus.scope("readers");
+        let writer_scope = bus.scope("writer");
+        let p = writer_scope.publisher::<u64>("/t", Qos::default().keep_last(4)).unwrap();
+        let latched = writer_scope.publisher::<u64>("/t", Qos::latched().keep_last(3)).unwrap();
+        let mut tasks = Vec::new();
+        for r in 0..4 {
+            let qos = if r % 2 == 0 { Qos::default().keep_last(1 + r) } else { Qos::latched().keep_last(1 + r) };
+            let mut sub = readers_scope.subscribe::<u64>("/t", qos).unwrap();
+            let mut changes = sub.publisher_changes();
+            tasks.push(rt.spawn(async move {
+                let mut last = None;
+                loop {
+                    tokio::select! {
+                        m = sub.next() => match m {
+                            Some(v) => {
+                                // per writer, values only go up; across the two writers they interleave
+                                let v = *v;
+                                if let Some(prev) = last { assert!(v != prev, "repeated {v}"); }
+                                last = Some(v);
+                            }
+                            None => break,
+                        },
+                        Some(_) = changes.next() => {}
+                    }
+                }
+                // after the stream ends, the watch ends too
+                assert_eq!(tokio::time::timeout(WAIT, changes.next()).await.expect("watch hung"), None);
+            }));
+        }
+        let blocking = {
+            let mut sub = readers_scope.subscribe::<u64>("/t", Qos::default()).unwrap();
+            thread::spawn(move || loop {
+                match sub.recv_timeout(WAIT) {
+                    Ok(_) => {}
+                    Err(RecvError::Closed) => break,
+                    Err(e) => panic!("blocking reader: {e}"),
+                }
+            })
+        };
+        let publisher = {
+            let (p, latched) = (p.clone(), latched.clone());
+            thread::spawn(move || {
+                for n in 0..200u64 {
+                    let v = round * 1_000_000 + n * 2;
+                    let _ = p.publish(&v);
+                    let _ = latched.publish(&(v + 1));
+                }
+            })
+        };
+        if round % 2 == 0 {
+            readers_scope.close();
+            publisher.join().unwrap();
+        } else {
+            publisher.join().unwrap();
+            drop((p, latched));
+            readers_scope.close();
+        }
+        writer_scope.close();
+        rt.block_on(async {
+            for t in tasks {
+                tokio::time::timeout(WAIT, t).await.expect("an async reader never ended").unwrap();
+            }
+        });
+        blocking.join().unwrap();
+    }
 }
