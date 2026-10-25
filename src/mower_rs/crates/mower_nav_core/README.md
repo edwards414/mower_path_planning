@@ -23,6 +23,7 @@ image.
 | `src/rpp.rs`, `src/path_handler.rs` | `nav2_regulated_pure_pursuit_controller` | D3 |
 | `src/shim.rs` | `nav2_rotation_shim_controller` | D3 |
 | `src/checkers.rs` | `nav2_controller` plugins: `SimpleGoalChecker`, `SimpleProgressChecker` | D3 |
+| `src/controller_server.rs` | `nav2_controller::ControllerServer` (`follow_path`), `nav2_util::SimpleActionServer` | D3 |
 | `src/smoother.rs` | `nav2_velocity_smoother` | D4 |
 
 ## Costmaps (D1)
@@ -127,6 +128,79 @@ interface (`set_plan`, `compute_velocity_commands`, `set_speed_limit`,
     and never skips;
   * `min_distance_to_obstacle` does nothing in 1.3.13; the shim and RPP share
     `rotate_to_heading_angular_vel` and `max_angular_accel`.
+
+## Controller server (D3, `follow_path`)
+
+`ControllerServer::mower()` is `controller_server` with that FollowPath, the
+`general_goal_checker` and the `progress_checker`: what mower_nav sends every
+coverage segment to. It is a state machine: `send_goal` / `cancel_goal` are
+the action client's requests, and one `tick(&CycleInput)` is one pass of
+`computeControl`'s loop. A pass gets the time, whether the costmap is
+current, the robot pose in odom, the odometry twist, `odom <- map`, and the
+local costmap. It returns the `cmd_vel` commands, the feedback and the
+results of goals that ended.
+
+* Ported line by line:
+  * The order of a pass: cancel, then the costmap wait
+    (`costmap_update_timeout` 1 s, `ControllerTimedOut`), then preemption,
+    then `isGoalReached`, then the progress check, the controller and the
+    feedback.
+  * The thresholded odometry twist (`min_y_velocity_threshold: 0.5` zeroes
+    `y`).
+  * `failure_tolerance` (2 s): `NoValidControl` publishes a zero, and after
+    more than 2 s since the last valid command the goal ends with
+    `PatienceExceeded`.
+  * Every exception's error code, then `publishZeroVelocity` (a zero, then the
+    controller's `reset`).
+* The SimpleActionServer around it is kept, quirks included (module doc):
+  * A preempted goal is aborted with an empty result, error code 0.
+  * Preemption resets the goal checker, but not the progress checker or the
+    patience clock.
+  * A second pending goal replaces the first.
+  * Cancelling the pending goal also ends the running one; cancelling the
+    running goal while one is pending is ignored until the preemption.
+  * A goal that fails while it is being cancelled ends `Canceled`, with the
+    failure's code.
+* Deliberate change: the feedback's `distance_to_goal` measures from the plan
+  pose closest to the robot *in map*. Upstream compares the odom pose with map
+  poses, so its distance shifts with the `map -> odom` offset, and mower_nav
+  turns that distance into coverage progress.
+* For the wiring (D6):
+  * Tick right after `send_goal`, then every 50 ms while `is_executing()`;
+    upstream's worker thread starts a goal at once and keeps its own 20 Hz
+    from there.
+  * `Costmap2DROS::getRobotPose` takes the latest transform without an age
+    check, so a stalled `odom -> base_footprint` freezes the pose instead of
+    failing. Pass the latest pose, and `None` only when there has never been
+    one.
+  * The local costmap updates at 2 Hz in the yaml (A4); a pass may get a
+    fresher one.
+* Not ported: lifecycle, the action server itself, tf, the odometry
+  subscriber, the `speed_limit` subscription (`set_speed_limit`), dynamic
+  parameters, `controller_id` / `goal_checker_id` / `progress_checker_id`
+  (one of each, the ids mower_nav sends), `error_msg` (1.3.13 leaves it
+  empty).
+
+Checked two ways:
+
+* `tests/controller_server.rs`: every branch against a scripted controller,
+  with exact tick counts for the patience (aborted on the pass at 2.05 s) and
+  the progress checker (20.05 s).
+* `tests/controller_server_oracle.rs`, black box against the real
+  `controller_server`:
+  * `tests/oracle/controller_server/scenarios.py` plays
+    `scenarios.json` on the real node with mower_nav2's yaml: map, tf,
+    `/odom` and a kinematic robot following `/cmd_vel`.
+  * The test plays the same scenarios on the port with a simulated clock.
+  * The 11 scenarios: reach the end, already at the goal, empty path, cancel,
+    preemption by the same path and by an empty one, a replaced pending goal,
+    cancels around a pending goal, a wall across the path, no progress.
+  * All 15 goals end with the same status and error code. Result times
+    agree within 0.06 s, and the robot ends within 1.1 cm of where nav2
+    left it.
+  * The closed loop also shows the RPP findings above: the wall run stops
+    0.77 m short and aborts 2.05 s after the last command; the 1.5 m segment
+    ends 4.8 cm short of its end, inside the 5 cm goal tolerance.
 
 ## Checkers (D3) and velocity smoother (D4)
 

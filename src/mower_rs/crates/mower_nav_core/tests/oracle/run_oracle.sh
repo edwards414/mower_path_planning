@@ -15,9 +15,15 @@ if [ ${#components[@]} -eq 0 ]; then
 fi
 mkdir -p "$here/../data"
 for c in "${components[@]}"; do
-  build="/tmp/nav-oracle-build/$c"
-  cmake -S "$here/$c" -B "$build" -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "$build" -j4 >/dev/null
-  "$build/oracle" "$here/../data/$c.json"
+  if [ -f "$here/$c/scenarios.py" ]; then
+    # the real node, black box, on the wall clock (about 1.5 min)
+    python3 "$here/$c/scenarios.py" "$here/../../../../../mower_nav2/config/nav2_no_map_params.yaml" \
+      "$here/$c/scenarios.json" "$here/../data/$c.json"
+  else
+    build="/tmp/nav-oracle-build/$c"
+    cmake -S "$here/$c" -B "$build" -DCMAKE_BUILD_TYPE=Release >/dev/null
+    cmake --build "$build" -j4 >/dev/null
+    "$build/oracle" "$here/../data/$c.json"
+  fi
   ls -l "$here/../data/$c.json"
 done
