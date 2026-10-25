@@ -2,7 +2,7 @@
 resolver = "2"
 # vendor/r2r is a patched dependency (see [patch.crates-io]), not a member.
 exclude = ["vendor"]
-members = ["crates/mower_rs_common", "crates/robot_status", "crates/velocity_command_guard", "crates/mower_adapter", "crates/mower_imu", "crates/mower_ws_bridge", "crates/mower_record", "crates/mower_nav", "crates/mower_battery", "crates/mower_pid_autotune", "crates/mower_map", "crates/mower_coverage", "crates/mower_agent", "crates/mower_ubx", "crates/mower_gps", "crates/mower_base_core", "crates/mower_base", "crates/mower_localize_core", "crates/mower_nav_core", "crates/mower_rsd", "crates/mower_localize"]
+members = ["crates/mower_rs_common", "crates/robot_status", "crates/velocity_command_guard", "crates/mower_adapter", "crates/mower_imu", "crates/mower_ws_bridge", "crates/mower_record", "crates/mower_nav", "crates/mower_battery", "crates/mower_pid_autotune", "crates/mower_map", "crates/mower_coverage", "crates/mower_agent", "crates/mower_ubx", "crates/mower_gps", "crates/mower_base_core", "crates/mower_base", "crates/mower_localize_core", "crates/mower_nav_core", "crates/mower_rsd", "crates/mower_localize", "crates/mower_bus"]
 
 [workspace.package]
 version = "0.1.0"

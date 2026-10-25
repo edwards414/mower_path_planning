@@ -709,6 +709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_bus"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_coverage"
 version = "0.1.0"
 dependencies = [
