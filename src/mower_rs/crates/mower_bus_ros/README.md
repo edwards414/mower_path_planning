@@ -215,6 +215,7 @@ the spin thread, which owns the node:
 - `stale` (no live bus writer);
 - `resyncs`;
 - `unanswered` (service calls left without an answer);
+- `dropped` (`to_ros` bus messages lost to the bridge's full reader queue: a forwarder stalled for more than 64);
 - `dds_writer` (whether the `to_ros` DDS writer exists).
 
 It is for diagnostics (E8's `mowerctl`) and for the tests, which cannot see a skipped publish from DDS.

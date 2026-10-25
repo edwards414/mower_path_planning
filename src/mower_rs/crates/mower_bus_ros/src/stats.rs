@@ -16,6 +16,7 @@ pub(crate) struct Counters {
     stale: AtomicU64,
     resyncs: AtomicU64,
     unanswered: AtomicU64,
+    dropped: AtomicU64,
     dds_writer: AtomicBool,
 }
 
@@ -40,6 +41,10 @@ impl Counters {
         self.unanswered.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_dropped(&self, n: u64) {
+        self.dropped.store(n, Ordering::Relaxed);
+    }
+
     pub(crate) fn set_dds_writer(&self, exists: bool) {
         self.dds_writer.store(exists, Ordering::Relaxed);
     }
@@ -61,6 +66,10 @@ pub struct EntryStats {
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
     pub unanswered: u64,
+    /// `to_ros`: bus messages the bridge's reader lost to its full queue,
+    /// because the forwarder fell more than its depth (at least 64) behind.
+    /// Counted when the forwarder next handles a message or a change.
+    pub dropped: u64,
     /// `to_ros`: whether the bridge's DDS writer exists now.
     pub dds_writer: bool,
 }
@@ -107,6 +116,7 @@ impl BridgeStats {
             stale: load(&c.stale),
             resyncs: load(&c.resyncs),
             unanswered: load(&c.unanswered),
+            dropped: load(&c.dropped),
             dds_writer: c.dds_writer.load(Ordering::Relaxed),
         })
     }

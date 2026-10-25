@@ -85,6 +85,7 @@ pub(crate) fn to_ros<T: BridgeMessage>(
         reader,
         dds: None,
         sent: VecDeque::new(),
+        dropped_before: 0,
         env,
     };
     Ok(Box::pin(forwarder.run()))
@@ -137,6 +138,8 @@ struct ToRos<T: BridgeMessage> {
     /// every reader the publisher's own `Arc`. `Weak`, so that a map the bus
     /// has dropped is not kept alive here.
     sent: VecDeque<Weak<T>>,
+    /// What the readers a latched resync replaced had lost to a full queue.
+    dropped_before: u64,
     env: Env,
 }
 
@@ -158,6 +161,7 @@ impl<T: BridgeMessage> ToRos<T> {
                     None => return,
                 },
             }
+            self.env.counters.set_dropped(self.dropped_before + self.reader.sub.dropped());
         }
     }
 
@@ -201,7 +205,9 @@ impl<T: BridgeMessage> ToRos<T> {
                 return;
             }
         };
-        drop(std::mem::replace(&mut self.reader, fresh));
+        let replaced = std::mem::replace(&mut self.reader, fresh);
+        self.dropped_before += replaced.sub.dropped();
+        drop(replaced);
         let mut replay = Vec::new();
         while let Ok(msg) = self.reader.sub.try_recv() {
             replay.push(msg);

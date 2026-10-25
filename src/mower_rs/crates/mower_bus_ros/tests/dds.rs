@@ -276,6 +276,30 @@ fn a_volatile_topic_reaches_dds_only_while_a_dds_reader_is_matched() {
     });
 }
 
+/// A forwarder that falls more than its reader's depth (64) behind loses
+/// messages on the bus side; the stats say how many. On one thread nothing
+/// runs between the publishes, so all 100 reach the reader's queue before
+/// the forwarder takes any.
+#[test]
+fn a_forwarder_that_falls_behind_counts_what_its_reader_lost() {
+    on_one_thread(async {
+        let topic = "/bridge_test/fell_behind";
+        let bus = Bus::new();
+        let module = bus.scope("mower_base");
+        let publisher = module.publisher::<Text>(topic, Qos::default()).unwrap();
+        let mut bridge = new_bridge("fell_behind_bridge", &bus.scope("bridge"));
+        bridge.to_ros::<Text>(topic, QosProfile::default()).unwrap();
+        let running = start(bridge);
+        eventually("the DDS writer", || running.topic(topic).dds_writer).await;
+        for i in 0..100 {
+            publisher.publish(&text(i)).unwrap();
+        }
+        eventually("the 64 that fitted handled", || running.topic(topic).skipped == 64).await;
+        assert_eq!(running.topic(topic).dropped, 36);
+        running.stop().await.unwrap();
+    });
+}
+
 /// README.md, "QoS", on the DDS side (the bus side is `bus_qos`'s unit
 /// tests): the bridge's DDS writer announces the source's reliability and
 /// durability. The graph carries no history or depth.
