@@ -2,6 +2,7 @@
 //! ends and when it has, concurrent and panicking closes, `closed()`, child
 //! scopes, and the wall timers tied to a scope.
 
+use std::cell::RefCell;
 use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
@@ -350,6 +351,137 @@ fn a_close_that_panics_finishes_and_wakes_its_waiters_then_re_raises_the_first_p
     assert_eq!(poll_once(&mut tick), Poll::Ready(Err(closed("m"))));
     assert_eq!(child_out.publish(&1), Err(closed("child")), "the panics skipped nothing");
     m.close(); // closed now: returns, and does not panic again
+}
+
+// ---- a close re-entered from the user code it runs ----
+
+thread_local! {
+    /// The scope a `CloseOnDrop` message closes when it is freed.
+    static TO_CLOSE: RefCell<Option<Scope>> = const { RefCell::new(None) };
+    /// What that inner close left once it returned: (`is_closed()`,
+    /// `closed()` ready).
+    static SEEN: RefCell<Option<(bool, bool)>> = const { RefCell::new(None) };
+}
+
+/// User drop glue that closes a scope: what an RAII close guard dropped with
+/// the last reference to something a hook frees would do.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct CloseOnDrop {
+    #[serde(skip)]
+    armed: bool,
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Some(scope) = TO_CLOSE.with(|s| s.borrow_mut().take()) {
+                scope.close();
+                let finished = poll_once(&mut Box::pin(scope.closed())).is_ready();
+                SEEN.with(|s| *s.borrow_mut() = Some((scope.is_closed(), finished)));
+            }
+        }
+    }
+}
+
+/// Give `scope` a reader holding the only reference to an armed
+/// `CloseOnDrop`, freed by the scope's close.
+fn arm(scope: &Scope) -> Subscriber<CloseOnDrop> {
+    let reader = scope.subscribe::<CloseOnDrop>("/guarded", Qos::default()).unwrap();
+    let feeder = scope.bus().scope("feeder").publisher::<CloseOnDrop>("/guarded", Qos::default()).unwrap();
+    feeder.publish_owned(CloseOnDrop { armed: true }).unwrap();
+    reader
+}
+
+/// Run `f` on a thread of its own: its result, or `None` if it still runs
+/// after 3 s (it hangs, and is left hanging).
+fn within_3s<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let thread = thread::spawn(f);
+    let start = Instant::now();
+    while !thread.is_finished() && start.elapsed() < Duration::from_secs(3) {
+        thread::sleep(ms(10));
+    }
+    thread.is_finished().then(|| thread.join().unwrap())
+}
+
+/// Review 2026-10-26, second pass: a close that found one under way waited
+/// for it on the condvar, and a hook frees messages and wakes tasks (user
+/// code). If that code closed the same scope, the inner close waited for
+/// the outer one on the same thread, which hung for good.
+#[test]
+fn a_close_re_entered_from_drop_glue_on_the_closing_thread_returns() {
+    let bus = Bus::new();
+    let m = bus.scope("m");
+    let _reader = arm(&m);
+    let closer = {
+        let m = m.clone();
+        thread::spawn(move || {
+            TO_CLOSE.with(|s| *s.borrow_mut() = Some(m.clone()));
+            m.close(); // the reader's hook frees the message, whose drop closes m
+        })
+    };
+    let start = Instant::now();
+    while !closer.is_finished() && start.elapsed() < Duration::from_secs(3) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(closer.is_finished(), "the close waits for itself (the thread is left hanging)");
+}
+
+#[test]
+fn a_close_re_entered_on_the_closing_thread_returns_before_the_close_has_finished() {
+    let bus = Bus::new();
+    let m = bus.scope("m");
+    let _reader = arm(&m);
+    let out = m.publisher::<u32>("/out", Qos::default()).unwrap(); // a hook after the reader's
+    let seen = within_3s({
+        let m = m.clone();
+        move || {
+            TO_CLOSE.with(|s| *s.borrow_mut() = Some(m.clone()));
+            m.close();
+            SEEN.with(|s| s.borrow_mut().take())
+        }
+    })
+    .expect("the close waited for itself");
+    assert_eq!(seen, Some((true, false)), "the inner close returns at once: closing, not closed yet");
+    assert_eq!(out.publish(&1), Err(closed("m")), "the close under way finished the job");
+    assert!(poll_once(&mut Box::pin(m.closed())).is_ready());
+}
+
+#[test]
+fn a_close_re_entered_through_a_child_or_its_parent_returns() {
+    // the parent's close reaches the child, whose drop glue closes the parent
+    let bus = Bus::new();
+    let parent = bus.scope("ws_bridge");
+    let child = parent.child("session");
+    let _reader = arm(&child);
+    let (parent_out, child_out) = (parent.publisher::<u32>("/p", Qos::default()).unwrap(), child.publisher::<u32>("/c", Qos::default()).unwrap());
+    within_3s({
+        let parent = parent.clone();
+        move || {
+            TO_CLOSE.with(|s| *s.borrow_mut() = Some(parent.clone()));
+            parent.close();
+        }
+    })
+    .expect("the parent's close waited for itself");
+    assert_eq!((parent_out.publish(&1), child_out.publish(&1)), (Err(closed("ws_bridge")), Err(closed("session"))));
+
+    // the child's own close frees drop glue that closes the open parent, whose
+    // close comes back to the child
+    let bus = Bus::new();
+    let parent = bus.scope("ws_bridge");
+    let child = parent.child("session");
+    let _reader = arm(&child);
+    let parent_out = parent.publisher::<u32>("/p", Qos::default()).unwrap();
+    within_3s({
+        let (parent, child) = (parent.clone(), child.clone());
+        move || {
+            TO_CLOSE.with(|s| *s.borrow_mut() = Some(parent));
+            child.close();
+        }
+    })
+    .expect("the child's close waited for itself");
+    assert!(parent.is_closed() && child.is_closed());
+    assert_eq!(parent_out.publish(&1), Err(closed("ws_bridge")));
+    assert!(poll_once(&mut Box::pin(parent.closed())).is_ready() && poll_once(&mut Box::pin(child.closed())).is_ready());
 }
 
 // ---- closed() ----

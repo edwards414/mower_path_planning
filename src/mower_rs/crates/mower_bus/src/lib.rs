@@ -11,6 +11,7 @@ use std::fmt;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::thread::ThreadId;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -72,7 +73,7 @@ impl Bus {
                 name: name.to_string(),
                 id,
                 state: AtomicU8::new(State::Open as u8),
-                life: Mutex::new(Life { hooks: Vec::new(), children: Vec::new() }),
+                life: Mutex::new(Life { hooks: Vec::new(), children: Vec::new(), closer: None }),
                 finished: Condvar::new(),
                 closed: Notify::new(),
             }),
@@ -145,6 +146,9 @@ struct Life {
     /// holds nothing of its parent, so there is no cycle. The children whose
     /// close has finished are let go when a child is added.
     children: Vec<Scope>,
+    /// The thread running the close, while it is closing: a close re-entered
+    /// on that thread must not wait for itself.
+    closer: Option<ThreadId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,8 +216,17 @@ impl Scope {
     /// [`BusError::Closed`].
     ///
     /// Returns once all of that is done. A close that finds another one
-    /// under way (on another thread) waits for it to finish, so returning
+    /// under way on another thread waits for it to finish, so returning
     /// always means every endpoint of the scope has ended.
+    ///
+    /// The one exception is a close re-entered on the thread running the
+    /// close: drop glue or a waker that the close runs (see below) and that
+    /// closes this scope again, or its parent. That close returns at once,
+    /// before the scope has finished closing, and the close under way
+    /// finishes the job. Closing scopes from such user code across threads
+    /// is not supported: thread A closing a child whose drop glue closes its
+    /// parent, while thread B closes that parent and so waits for the child,
+    /// deadlocks.
     ///
     /// # Panics
     ///
@@ -223,14 +236,15 @@ impl Scope {
     /// first panic. A close that only waited for another one does not.
     pub fn close(&self) {
         let inner = &*self.inner;
+        let me = std::thread::current().id();
         let (children, hooks) = {
             let mut life = lock(&inner.life);
             match inner.state() {
                 State::Open => {}
+                // Re-entered from user code the close under way runs on this
+                // very thread: waiting would be waiting for itself.
+                State::Closing if life.closer == Some(me) => return,
                 State::Closing => {
-                    // Wait for the close under way. Hooks are crate-internal
-                    // and never call `close`, so it runs on another thread:
-                    // this cannot be a close waiting for itself.
                     let life = inner.finished.wait_while(life, |_| inner.state() != State::Closed);
                     drop(life.unwrap_or_else(PoisonError::into_inner));
                     return;
@@ -238,6 +252,7 @@ impl Scope {
                 State::Closed => return,
             }
             inner.set_state(&mut life, State::Closing);
+            life.closer = Some(me);
             (std::mem::take(&mut life.children), std::mem::take(&mut life.hooks))
         };
         // Finishes the close when dropped, so that it finishes even if
@@ -402,7 +417,10 @@ struct FinishClose<'a>(&'a ScopeInner);
 
 impl Drop for FinishClose<'_> {
     fn drop(&mut self) {
-        self.0.set_state(&mut lock(&self.0.life), State::Closed);
+        let mut life = lock(&self.0.life);
+        self.0.set_state(&mut life, State::Closed);
+        life.closer = None;
+        drop(life);
         self.0.finished.notify_all();
         self.0.closed.notify_waiters();
     }

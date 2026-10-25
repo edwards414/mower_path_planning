@@ -40,6 +40,12 @@ Later steps build on it:
   - **When a close is done:**
     - `close()` returns once all of the above has happened. A `close()` that finds another one under
       way on another thread waits for it, so returning always means every endpoint has ended.
+    - The exception is a close re-entered on the thread running a close: drop glue or a waker run
+      by the close (see "Panics in a close") that closes the same scope, or its parent. It returns
+      at once, before the scope has finished closing, and the close under way finishes the job.
+      Closing scopes from such code across threads is not supported: thread A closing a child whose
+      drop glue closes its parent, while thread B closes that parent and waits for the child,
+      deadlocks.
     - `is_closed()` is true from the moment a close starts. From then on nothing new attaches:
       creating an endpoint or a timer fails with `Closed`, and a child comes out closed.
     - `scope.closed().await` resolves once the close has finished. It needs no runtime, and a
