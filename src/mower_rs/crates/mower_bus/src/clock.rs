@@ -45,6 +45,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::task::{ready, Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::wake::UserCode;
+
 const NANOS_PER_SEC: i64 = 1_000_000_000;
 
 /// Wall / ROS time: nanoseconds since the UNIX epoch (what header stamps
@@ -279,10 +281,14 @@ impl ManualState {
             due.push(entry.remove());
         }
         drop(inner);
+        // Each waker on its own: one that panics keeps no other sleeper
+        // asleep (its entry is gone already), and the panic goes on once all
+        // are woken.
+        let mut user = UserCode::default();
         let mut threads = false;
         for waiter in due {
             match waiter {
-                Waiter::Task(Some(waker)) => waker.wake(),
+                Waiter::Task(Some(waker)) => user.wake(waker),
                 Waiter::Task(None) => {}
                 Waiter::Thread => threads = true,
             }
@@ -290,6 +296,7 @@ impl ManualState {
         if threads {
             self.threads.notify_all();
         }
+        user.finish();
     }
 }
 

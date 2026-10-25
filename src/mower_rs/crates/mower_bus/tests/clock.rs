@@ -412,6 +412,32 @@ fn blocking_sleepers_on_std_threads_wake_when_the_manual_clock_moves() {
     assert_eq!(ticker.join().unwrap(), [at_ms(20), at_ms(25), at_ms(30)]);
 }
 
+/// A waker that panics when woken.
+struct Exploding;
+
+impl Wake for Exploding {
+    fn wake(self: Arc<Self>) {
+        panic!("waker exploded");
+    }
+}
+
+#[test]
+fn a_sleeper_whose_waker_panics_keeps_no_other_sleeper_asleep() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut broken = clock.sleep(ms(10)); // the same deadline, registered first: woken first
+    let mut fine = clock.sleep(ms(10));
+    assert!(poll_with(&mut broken, &Waker::from(Arc::new(Exploding))).is_pending());
+    let log = Arc::new(Mutex::new(Vec::new()));
+    assert!(poll_with(&mut fine, &recorder("fine", &log)).is_pending());
+
+    let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mc.advance(ms(10))));
+    assert!(moved.is_err(), "the waker's panic goes on to whoever moved the clock");
+    assert_eq!(*log.lock().unwrap(), ["fine"], "the other sleeper was woken");
+    assert_eq!(clock.mono(), at_ms(10));
+    assert!(poll_once(&mut fine).is_ready() && poll_once(&mut broken).is_ready());
+    assert_eq!(mc.next_deadline(), None);
+}
+
 #[test]
 fn advance_to_next_jumps_to_the_earliest_pending_deadline() {
     let start = Time::from_ns(SEC);

@@ -33,7 +33,9 @@
 //!   call would pile up for the scope's lifetime.
 //! - No lock is held while waking a task, sending an answer or dropping a
 //!   message or a waker (a waker can hold the last reference to a task,
-//!   whose drop runs anything). Locks nest in two places only: an entry's
+//!   whose drop runs anything). Several of those in a row are each a call
+//!   of their own (`crate::wake::UserCode`): one that panics skips none of
+//!   the others. Locks nest in two places only: an entry's
 //!   state over its clients' close signals (introspection), and the caller
 //!   table over the scope's hook list (`Registry::caller`).
 
@@ -50,7 +52,7 @@ use futures::channel::oneshot;
 use futures::{Stream, StreamExt};
 
 use crate::codec::{AnyMsg, Codec};
-use crate::wake::WakerSet;
+use crate::wake::{UserCode, WakerSet};
 use crate::{check_name, ros_type_name, BusError, Message, Scope, ServiceInfo};
 
 /// How a call ends, before the response is typed again.
@@ -144,11 +146,16 @@ pub(crate) fn serve<Req: Message, Resp: Message>(scope: &Scope, name: &str) -> R
         // close would have.
         server.end(&entry, true);
     }
-    // Taken out of the set above, so woken either way to look again.
+    // Taken out of the set above, so woken either way to look again. A
+    // waker that panics wakes no fewer of the others; its panic goes on once
+    // the `Service` exists, so that unwinding drops it and frees the name.
+    let mut user = UserCode::default();
     for waker in waiting {
-        waker.wake();
+        user.wake(waker);
     }
-    hooked.map(|()| Service { entry, server, _t: PhantomData })
+    let served = hooked.map(|()| Service { entry, server, _t: PhantomData });
+    user.finish();
+    served
 }
 
 pub(crate) fn client<Req: Message, Resp: Message>(scope: &Scope, name: &str) -> Result<Client<Req, Resp>, BusError> {
@@ -361,12 +368,24 @@ impl Server {
             state.ended = true;
             (std::mem::take(&mut state.queue), std::mem::take(&mut state.in_flight), state.waker.take())
         };
-        for reply in queue.into_iter().map(|call| call.reply).chain(in_flight.into_values()) {
-            let _ = reply.send(Err(entry.unavailable()));
+        // User code, each call on its own: an answer's send wakes its
+        // caller's task, a request's drop runs its drop glue.
+        let mut user = UserCode::default();
+        for Pending { request, reply, .. } in queue {
+            user.run(|| {
+                let _ = reply.send(Err(entry.unavailable()));
+            });
+            user.run(|| drop(request));
+        }
+        for reply in in_flight.into_values() {
+            user.run(|| {
+                let _ = reply.send(Err(entry.unavailable()));
+            });
         }
         if let Some(waker) = waker {
-            waker.wake();
+            user.wake(waker);
         }
+        user.finish();
     }
 }
 
@@ -695,9 +714,11 @@ impl CloseSignal {
             state.fired = true;
             state.watchers.take()
         };
+        let mut user = UserCode::default();
         for waker in watchers {
-            waker.wake();
+            user.wake(waker);
         }
+        user.finish();
     }
 }
 

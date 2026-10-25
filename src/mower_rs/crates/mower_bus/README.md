@@ -266,7 +266,8 @@ clock.sleep_blocking(d);              // for dedicated std threads
     `advance_to_next()` (jump to the earliest pending deadline), `set_wall(t)` (a wall step, as
     from NTP, while `mono` keeps running);
   - when it moves, the tasks whose deadline has passed (sleeps, intervals, timeouts) are woken in
-    deadline order, then the threads blocked in a sleep are notified;
+    deadline order, then the threads blocked in a sleep are notified. A waker that panics keeps no
+    other sleeper asleep; its panic goes on to whoever moved the clock;
   - it needs no runtime and works for blocking sleepers too.
   - Tests use it instead of tokio's process-wide paused time. Replay (E8) feeds it recorded
     stamps.

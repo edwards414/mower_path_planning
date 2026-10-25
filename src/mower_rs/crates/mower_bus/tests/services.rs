@@ -5,10 +5,11 @@
 
 use std::any::type_name;
 use std::future::Future;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
@@ -584,6 +585,99 @@ fn a_call_answered_from_a_std_thread_completes_without_any_runtime() {
     }
     server.close();
     serving.join().unwrap();
+}
+
+/// A waker that panics when woken.
+struct Exploding;
+
+impl ArcWake for Exploding {
+    fn wake_by_ref(_: &Arc<Self>) {
+        panic!("waker exploded");
+    }
+}
+
+fn exploding() -> Waker {
+    futures::task::waker(Arc::new(Exploding))
+}
+
+fn poll_by<F: Future + Unpin>(fut: &mut F, waker: &Waker) -> Poll<F::Output> {
+    Pin::new(fut).poll(&mut Context::from_waker(waker))
+}
+
+/// The contract for the callers. It would hold even if the server's close
+/// skipped the later answers: dropping an unsent answer wakes its caller
+/// with `ServiceUnavailable` all the same. The next test is the one a
+/// skipped wake-up shows in.
+#[test]
+fn a_caller_whose_waker_panics_keeps_no_other_caller_asleep_when_the_server_closes() {
+    let bus = Bus::new();
+    let (server, caller) = (bus.scope("server"), bus.scope("caller"));
+    let _srv = server.service::<AddRequest, AddResponse>("/add").unwrap();
+    let client = caller.client::<AddRequest, AddResponse>("/add").unwrap();
+    let mut broken = client.request(&add(1, 1)).unwrap(); // queued first, failed first
+    let mut fine = client.request(&add(2, 2)).unwrap();
+    assert!(poll_by(&mut broken, &exploding()).is_pending());
+    let woken = Woken::new();
+    assert!(poll_with(&mut fine, &woken).is_pending());
+
+    assert!(catch_unwind(AssertUnwindSafe(|| server.close())).is_err(), "the waker's panic goes on");
+    assert!(woken.take(), "the other caller was woken");
+    assert_eq!(poll_with(&mut fine, &woken), Poll::Ready(Err(unavailable("/add"))));
+}
+
+#[test]
+fn a_caller_whose_waker_panics_keeps_the_server_task_from_sleeping_through_its_close() {
+    let bus = Bus::new();
+    let (server, caller) = (bus.scope("server"), bus.scope("caller"));
+    let mut srv = server.service::<AddRequest, AddResponse>("/add").unwrap();
+    let client = caller.client::<AddRequest, AddResponse>("/add").unwrap();
+    let mut broken = client.request(&add(1, 1)).unwrap();
+    assert!(poll_by(&mut broken, &exploding()).is_pending());
+    let server_task = Woken::new();
+    let Poll::Ready(Some(in_hand)) = poll_next_with(&mut srv, &server_task) else { panic!("the call is not handed out") };
+    assert!(poll_next_with(&mut srv, &server_task).is_pending(), "the server task waits for the next one");
+
+    assert!(catch_unwind(AssertUnwindSafe(|| server.close())).is_err(), "the waker's panic goes on");
+    assert!(server_task.take(), "the server task was woken to its stream's end");
+    assert!(matches!(poll_next_with(&mut srv, &server_task), Poll::Ready(None)));
+    assert_eq!(in_hand.respond(sum(2)), Err(closed("server")));
+}
+
+#[test]
+fn a_call_whose_waker_panics_keeps_no_other_call_asleep_when_its_scope_closes() {
+    let bus = Bus::new();
+    let (server, caller) = (bus.scope("server"), bus.scope("caller"));
+    let _srv = server.service::<AddRequest, AddResponse>("/add").unwrap(); // never answers
+    let client = caller.client::<AddRequest, AddResponse>("/add").unwrap();
+    let mut broken = client.request(&add(1, 1)).unwrap(); // the first to watch the scope
+    let mut fine = client.request(&add(2, 2)).unwrap();
+    assert!(poll_by(&mut broken, &exploding()).is_pending());
+    let woken = Woken::new();
+    assert!(poll_with(&mut fine, &woken).is_pending());
+
+    assert!(catch_unwind(AssertUnwindSafe(|| caller.close())).is_err(), "the waker's panic goes on");
+    assert!(woken.take(), "the other call was woken");
+    assert_eq!(poll_with(&mut fine, &woken), Poll::Ready(Err(closed("caller"))));
+}
+
+#[test]
+fn a_waiter_whose_waker_panics_keeps_no_other_waiter_asleep_when_a_server_comes() {
+    let bus = Bus::new();
+    let caller = bus.scope("caller");
+    let client = caller.client::<AddRequest, AddResponse>("/add").unwrap();
+    let mut broken = Box::pin(client.wait_for_service()); // the first to wait
+    let mut fine = Box::pin(client.wait_for_service());
+    assert!(poll_by(&mut broken, &exploding()).is_pending());
+    let woken = Woken::new();
+    assert!(poll_with(&mut fine, &woken).is_pending());
+
+    let server = bus.scope("server");
+    let registered = catch_unwind(AssertUnwindSafe(|| server.service::<AddRequest, AddResponse>("/add")));
+    assert!(registered.is_err(), "the waker's panic goes on to whoever registers");
+    assert!(woken.take(), "the other waiter was woken");
+    // the panic dropped the new server on its way out: the name is free
+    let _srv = server.service::<AddRequest, AddResponse>("/add").unwrap();
+    assert_eq!(poll_with(&mut fine, &woken), Poll::Ready(Ok(())));
 }
 
 #[test]
