@@ -138,6 +138,12 @@ let resp = client.request(&Trigger_Request {})?.await?;   // the same two-level 
   - `ServiceUnavailable`: there is no server, or the server's scope closes before it answers;
   - `NoResponse`: the server drops a `Request` without answering. r2r would leave that caller
     waiting forever.
+- **Ending a server:**
+  - Dropping the `Service` frees the name while its scope stays open. A `Request` answered after
+    that returns `Ok` and its answer is dropped.
+  - After the server's scope closes, `respond` returns `Closed`.
+- **Client clones** are one client: one registration and one introspection entry, like publisher
+  clones.
 - **Timeouts:** none at the bus level. Callers combine `request` with `clock.sleep`, as they
   combine r2r calls with `tokio::time::timeout` today.
 - **Actions are not in E1.** mower_nav's `nav_action*` and coverage's client of it are the only
@@ -195,8 +201,24 @@ clock.sleep_blocking(d);              // for dedicated std threads
   - **`interval_at(start, period)` with `MissedTick::Skip`:** reproduces an r2r / rcl wall timer.
     The first tick comes after one period, and after an overrun it fires once and stays on the
     original phase.
+- **Where `Skip` differs from rcl:** both cases are inherited from tokio's interval.
+  - An overrun that ends exactly on a phase point moves on to the next point, where rcl fires at
+    once. This only shows on a manual clock, where times are exact.
+  - A tick up to 5 ms late still counts as on time, so periods under 5 ms get an extra tick. Every
+    period in mower_rs is at least 20 ms.
+- **`timeout(d, fut)` / `timeout_at(deadline, fut)`** replace `tokio::time::timeout`, which has
+  36 call sites today.
+  - The future is polled first, so it wins when both are ready.
+  - The result is `Err(Elapsed)` once the deadline has passed.
+- **Pending deadlines:** a `Sleep`, an `Interval`'s next tick or a `Timeout` counts as pending from
+  the moment it is created until it completes or is dropped, for `next_deadline` and
+  `advance_to_next`.
+- **Under tokio's paused time** (`start_paused`), the system clock's sleeps follow tokio, but
+  `mono()` and `now()` stay real. Tests drive a `Clock::manual` instead.
 - **`Time` converts to and from `(sec: i32, nanosec: u32)`**, the `builtin_interfaces/Time`
   layout. Negative times use floor and remainder, so `nanosec` is always in `0..1e9`.
+  - Outside the `i32` seconds range the conversion saturates instead of wrapping.
+  - Arithmetic saturates at the `i64` limits.
 
 ## Introspection
 
@@ -222,5 +244,6 @@ clock.sleep_blocking(d);              // for dedicated std threads
 | `node.is_available(&client)?.await` | `client.wait_for_service().await` |
 | `node.create_wall_timer(p)` and `timer.tick().await` | `m.clock.interval_at(m.clock.mono() + p, p)` with `MissedTick::Skip`, then `tick().await` |
 | `tokio::time::sleep(d)` / `Instant::now()` / `SystemTime::now()` | `m.clock.sleep(d)` / `m.clock.mono()` / `m.clock.now()` |
+| `tokio::time::timeout(d, fut)` | `m.clock.timeout(d, fut)` (`Err(Elapsed)` as in tokio) |
 | `node.spin_once(..)` thread | gone: the bus needs no spinning |
 | parameters (`mower_rs_common::params`) | unchanged in E1; E2 moves them to one YAML read by mowerd |

@@ -103,7 +103,7 @@ impl fmt::Debug for Bus {
 /// scope.
 ///
 /// The registries must never hold a `Scope` (that would be a reference
-/// cycle through [`Bus`]); they keep [`Scope::id`] and [`Scope::name`].
+/// cycle through [`Bus`]); they keep `Scope::id` and [`Scope::name`].
 #[derive(Clone)]
 pub struct Scope {
     inner: Arc<ScopeInner>,

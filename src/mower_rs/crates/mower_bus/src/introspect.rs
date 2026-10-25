@@ -34,7 +34,9 @@ pub struct ServiceInfo {
     pub server: Option<String>,
     /// Scope names, one entry per live client.
     pub clients: Vec<String>,
-    /// Calls made since the bus started (answered or not).
+    /// Calls that reached a live server since the bus started, answered or
+    /// not. Calls refused at call time (no server, closed scope, bad JSON)
+    /// are not counted.
     pub calls: u64,
 }
 
