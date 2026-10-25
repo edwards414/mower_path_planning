@@ -252,7 +252,9 @@ mower_nav sends one `navigate_to_pose` goal per mission, to the coverage start
     why every retry after a clear waits up to a second).
 * For the wiring (D6): tick at least every 10 ms (`next_tick_ns`). Pass
   `map <- base` and `odom <- base` as the latest transforms, and apply
-  `StackOutput::clears` to the costmaps.
+  `StackOutput::clears` to the costmaps. `StackOutput::log` has what the
+  servers would have logged at WARN or ERROR (tolerated `NoValidControl`,
+  the exceptions that ended goals, the planner's missed rate).
 * Not ported: per-goal `behavior_tree`, the feedback's
   `estimated_time_remaining` (no consumer), the result-callback wake-up
   (a result is seen at the next tick, ≤ 10 ms later), service and goal

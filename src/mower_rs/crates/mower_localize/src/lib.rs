@@ -35,8 +35,8 @@ mod conv;
 mod ekf;
 mod navsat;
 mod paramsrv;
-mod tfbus;
-mod tfgraph;
+pub mod tfbus;
+pub mod tfgraph;
 
 use mower_rs_common::{ModuleCtx, ModuleResult};
 
