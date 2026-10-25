@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.16)
+project(mower_nav_rpp_oracle CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(nav2_util REQUIRED)
+find_package(nav2_core REQUIRED)
+find_package(nav2_controller REQUIRED)
+find_package(nav2_regulated_pure_pursuit_controller REQUIRED)
+find_package(nav2_rotation_shim_controller REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
+add_executable(oracle oracle.cpp)
+ament_target_dependencies(oracle rclcpp rclcpp_lifecycle nav2_costmap_2d nav2_util nav2_core nav2_controller
+  nav2_regulated_pure_pursuit_controller nav2_rotation_shim_controller tf2_ros nav_msgs)
+target_link_libraries(oracle nlohmann_json::nlohmann_json)
+# The robot's own parameter file, read the way the controller server reads it.
+target_compile_definitions(oracle PRIVATE
+  NAV2_PARAMS_YAML="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../mower_nav2/config/nav2_no_map_params.yaml")
