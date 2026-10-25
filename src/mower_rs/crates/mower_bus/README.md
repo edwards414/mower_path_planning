@@ -57,13 +57,17 @@ Later steps build on it:
   - **Child scopes:** `scope.child(name)` is a scope of its own, with its own node name, that closes
     when its parent closes; a child of a closed or closing scope is created closed. It can also be
     closed on its own. `mower_localize::run_all` gives each of its three roles one, and ws_bridge
-    (E3) gives one to each session. Neither keeps the other alive.
+    (E3) gives one to each session.
+    - The parent holds each child until the child's close has finished. A child whose handles were
+      all dropped, while its endpoints live on in tasks it spawned, is therefore still closed with
+      its parent. A child holds nothing of its parent.
   - **Hooks of dropped endpoints:** an endpoint dropped before its scope closes leaves a small
     close hook (about 200 B) until the close. Modules mostly create their endpoints at start. The
     exception today is pid_autotune, which subscribes to the base telemetry once per tuning
     session: a hook per session, which is negligible. A component that opens endpoints per session,
     like ws_bridge in E3, uses a child scope per session and closes it on disconnect. A child takes
-    no hook in its parent, and a dropped one is pruned when the next child is made.
+    no hook in its parent. A closed child is let go when the next one is made; one dropped without
+    being closed stays, with its hooks, until the parent closes.
 - **Names:** absolute ROS names (`/odometry/global`, `/robot/info`, `/map_manage/get_parameters`).
   - A relative name is refused.
   - Resolving launch remappings, name parameters and namespaces into absolute names is the

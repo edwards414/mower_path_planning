@@ -9,8 +9,8 @@
 use std::any::Any;
 use std::fmt;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -71,8 +71,8 @@ impl Bus {
                 bus: self.clone(),
                 name: name.to_string(),
                 id,
-                closing: AtomicBool::new(false),
-                life: Mutex::new(Life { state: State::Open, hooks: Vec::new(), children: Vec::new() }),
+                state: AtomicU8::new(State::Open as u8),
+                life: Mutex::new(Life { hooks: Vec::new(), children: Vec::new() }),
                 finished: Condvar::new(),
                 closed: Notify::new(),
             }),
@@ -121,9 +121,11 @@ struct ScopeInner {
     bus: Bus,
     name: String,
     id: u64,
-    /// `life.state != Open`, readable without the lock: set when a close
-    /// starts, never cleared.
-    closing: AtomicBool,
+    /// A `State`. It only moves forward and is written only with `life`
+    /// locked (`set_state` takes the guard), so a read under that lock is
+    /// exact and one without it is a state the scope has reached:
+    /// `is_closed` and a parent pruning its children take no lock for it.
+    state: AtomicU8,
     life: Mutex<Life>,
     /// Signalled when a close finishes, for a `close` that waits for the one
     /// under way.
@@ -132,20 +134,21 @@ struct ScopeInner {
     closed: Notify,
 }
 
-/// Where a scope is in its life, and what closing it has to end. No user
-/// code ever runs under this lock: hooks run, and refused hooks drop, after
-/// it is released.
+/// What closing a scope has to end. No user code ever runs under this
+/// lock: hooks run, and refused hooks drop, after it is released.
 struct Life {
-    state: State,
     /// Run once by the close, in registration order, after the children.
     hooks: Vec<Hook>,
-    /// Closed by the close, before the hooks. `Weak`, so a parent does not
-    /// keep its children alive; the dead ones are pruned when a child is
-    /// added.
-    children: Vec<Weak<ScopeInner>>,
+    /// Closed by the close, before the hooks. Held strongly: a child whose
+    /// handles are all gone may still have endpoints in tasks it left
+    /// running, and only its parent can still reach it to end them. A child
+    /// holds nothing of its parent, so there is no cycle. The children whose
+    /// close has finished are let go when a child is added.
+    children: Vec<Scope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum State {
     Open,
     /// A `close` is ending the children and running the hooks. Nothing new
@@ -153,6 +156,21 @@ enum State {
     Closing,
     /// Everything has ended.
     Closed,
+}
+
+impl ScopeInner {
+    fn state(&self) -> State {
+        match self.state.load(Ordering::Acquire) {
+            0 => State::Open,
+            1 => State::Closing,
+            _ => State::Closed,
+        }
+    }
+
+    /// Move to `state`, with `life` locked (the guard is the proof).
+    fn set_state(&self, _locked: &mut Life, state: State) {
+        self.state.store(state as u8, Ordering::Release);
+    }
 }
 
 /// What a scope's close runs for one endpoint (see `Scope::on_close`).
@@ -183,7 +201,7 @@ impl Scope {
     /// returning, or [`Scope::closed`] resolving, says. Takes no lock, so a
     /// dedicated std thread can check it in every turn of its loop.
     pub fn is_closed(&self) -> bool {
-        self.inner.closing.load(Ordering::Acquire)
+        self.inner.state() != State::Open
     }
 
     /// End everything created through this scope (idempotent): subscriber
@@ -207,20 +225,19 @@ impl Scope {
         let inner = &*self.inner;
         let (children, hooks) = {
             let mut life = lock(&inner.life);
-            match life.state {
+            match inner.state() {
                 State::Open => {}
                 State::Closing => {
                     // Wait for the close under way. Hooks are crate-internal
                     // and never call `close`, so it runs on another thread:
                     // this cannot be a close waiting for itself.
-                    let life = inner.finished.wait_while(life, |life| life.state != State::Closed);
+                    let life = inner.finished.wait_while(life, |_| inner.state() != State::Closed);
                     drop(life.unwrap_or_else(PoisonError::into_inner));
                     return;
                 }
                 State::Closed => return,
             }
-            life.state = State::Closing;
-            inner.closing.store(true, Ordering::Release);
+            inner.set_state(&mut life, State::Closing);
             (std::mem::take(&mut life.children), std::mem::take(&mut life.hooks))
         };
         // Finishes the close when dropped, so that it finishes even if
@@ -233,9 +250,7 @@ impl Scope {
             }
         };
         for child in children {
-            if let Some(child) = child.upgrade() {
-                contain(catch_unwind(AssertUnwindSafe(|| Scope { inner: child }.close())));
-            }
+            contain(catch_unwind(AssertUnwindSafe(|| child.close())));
         }
         for hook in hooks {
             contain(catch_unwind(AssertUnwindSafe(hook)));
@@ -258,7 +273,7 @@ impl Scope {
         // On the waiting list before the look, so that a close finishing in
         // between still wakes it.
         notified.as_mut().enable();
-        if lock(&self.inner.life).state == State::Closed {
+        if self.inner.state() == State::Closed {
             return;
         }
         notified.await;
@@ -270,20 +285,25 @@ impl Scope {
     ///
     /// For a module that runs several nodes (`mower_localize::run_all`) or
     /// opens endpoints per session (ws_bridge in E3): whoever closes the
-    /// module's scope ends them all. A child can be closed on its own, before
-    /// its parent; neither keeps the other alive.
+    /// module's scope ends them all, also those whose handles were all
+    /// dropped while their endpoints live on in tasks. A child can be closed
+    /// on its own, before its parent. The parent holds it until its close
+    /// has finished; a child holds nothing of its parent.
     pub fn child(&self, name: &str) -> Scope {
         let child = self.inner.bus.scope(name);
         let mut life = lock(&self.inner.life);
-        if life.state == State::Open {
-            // Only the dead ones go: their scopes are freed already, so no
-            // drop glue runs under the lock.
-            life.children.retain(|child| child.strong_count() > 0);
-            life.children.push(Arc::downgrade(&child.inner));
-        } else {
+        if self.inner.state() != State::Open {
             drop(life);
             child.close(); // it has nothing to end yet
+            return child;
         }
+        // Let go of the children whose close has finished. One still closing
+        // on another thread stays: this scope's close must wait for it.
+        let finished: Vec<Scope> = life.children.extract_if(.., |child| child.inner.state() == State::Closed).collect();
+        life.children.push(child.clone());
+        drop(life);
+        // Possibly the last handles: freed with no lock held.
+        drop(finished);
         child
     }
 
@@ -320,7 +340,7 @@ impl Scope {
     /// exceptions).
     pub(crate) fn on_close(&self, hook: Hook) -> Result<(), BusError> {
         let mut life = lock(&self.inner.life);
-        if life.state != State::Open {
+        if self.inner.state() != State::Open {
             drop(life);
             // With no lock held: it may own the last reference to what it was
             // to end.
@@ -382,7 +402,7 @@ struct FinishClose<'a>(&'a ScopeInner);
 
 impl Drop for FinishClose<'_> {
     fn drop(&mut self) {
-        lock(&self.0.life).state = State::Closed;
+        self.0.set_state(&mut lock(&self.0.life), State::Closed);
         self.0.finished.notify_all();
         self.0.closed.notify_waiters();
     }
@@ -478,35 +498,45 @@ mod tests {
     }
 
     #[test]
-    fn a_child_and_its_parent_hold_no_strong_reference_to_each_other() {
+    fn a_parent_holds_its_children_until_they_have_closed_and_no_child_holds_its_parent() {
         let bus = Bus::new();
         let parent = bus.scope("localize");
         let child = parent.child("ekf_filter_node_odom");
         let grandchild = child.child("tf");
-        assert_eq!(Arc::strong_count(&parent.inner), 1, "the child does not keep its parent");
-        assert_eq!(Arc::strong_count(&child.inner), 1, "the parent does not keep its child");
+        assert_eq!(Arc::strong_count(&parent.inner), 1, "a child holds nothing of its parent");
+        assert_eq!(Arc::strong_count(&child.inner), 2, "the parent holds its child");
         assert_eq!(child.name(), "ekf_filter_node_odom");
         assert!(Arc::ptr_eq(&child.bus().inner, &bus.inner), "on the same bus");
+
+        child.close();
+        assert!(grandchild.is_closed());
+        let next = parent.child("ekf_filter_node_map");
+        assert_eq!(Arc::strong_count(&child.inner), 1, "a closed child is let go when the next one is added");
         drop(parent);
-        assert!(!child.is_closed(), "a parent dropped unclosed closes nothing, like any scope");
-        drop(child);
-        assert!(!grandchild.is_closed());
+        assert!(!next.is_closed(), "a parent dropped unclosed closes nothing, like any scope");
     }
 
     #[test]
-    fn children_dropped_before_their_parent_closes_leave_nothing_behind() {
+    fn closed_children_are_let_go_and_dropped_ones_are_kept_until_their_parent_closes() {
         let bus = Bus::new();
         let bridge = bus.scope("ws_bridge");
+        let mut leftovers = Vec::new();
         for i in 0..100 {
             let session = bridge.child("session");
             if i % 2 == 0 {
-                session.close(); // a session that ended; the others are only dropped
+                session.close(); // a session that ended
+            } else {
+                // one that dropped its handle and left an endpoint in a task
+                leftovers.push(session.publisher::<u32>("/app_joy", Qos::default()).unwrap());
             }
         }
         let live = bridge.child("session");
-        assert_eq!(lock(&bridge.inner.life).children.len(), 1, "the dead ones are pruned when one is added");
+        assert_eq!(lock(&bridge.inner.life).children.len(), 51, "the 50 closed ones went when one was added");
         assert_eq!(bridge.hook_count(), 0, "children take no hook");
         bridge.close();
         assert!(live.is_closed());
+        for leftover in &leftovers {
+            assert_eq!(leftover.publish(&1), Err(BusError::Closed { scope: "session".into() }));
+        }
     }
 }

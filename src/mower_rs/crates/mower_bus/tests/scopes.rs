@@ -464,6 +464,53 @@ fn a_child_closes_with_its_parent_and_not_the_other_way_round() {
     assert!(bridge.child("late").is_closed(), "a child of a closed scope is created closed");
 }
 
+/// Review 2026-10-26, second pass: the parent kept only a `Weak` of its
+/// child and the child's hooks live in the child, so a child whose handles
+/// were all dropped was out of the parent's reach and its endpoints, alive
+/// in a task the session spawned, were never closed: the leftover-task case
+/// closing exists for.
+#[test]
+fn a_child_dropped_before_its_parent_closes_still_has_its_endpoints_closed() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ws_bridge");
+    let session = bridge.child("session");
+    let leftover = session.publisher::<u32>("/app_joy_cmd", Qos::default()).unwrap();
+    let mut reader = session.subscribe::<u32>("/robot/info", Qos::default()).unwrap();
+    drop(session); // the handle goes; the endpoints live on in the "task"
+
+    bridge.close(); // what the supervisor does when ws_bridge ends
+    assert_eq!(leftover.publish(&1), Err(closed("session")), "the dropped child's publisher still publishes");
+    assert!(reader.is_closed(), "the dropped child's reader is still open");
+    assert_eq!(reader.try_recv().map(|_| ()), Err(RecvError::Closed));
+}
+
+/// A child is let go once its close has finished, not when it starts: one
+/// still closing on another thread is waited for by its parent's close.
+#[test]
+fn a_parents_close_waits_for_a_child_still_closing_on_another_thread() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ws_bridge");
+    let session = bridge.child("session");
+    let (gate, _reader) = hold_the_close_of(&session);
+    let session_closer = start_closing(&session, &gate);
+    let _next = bridge.child("session"); // lets go of the finished children only
+
+    let returned = Arc::new(AtomicUsize::new(0));
+    let bridge_closer = {
+        let (bridge, returned) = (bridge.clone(), returned.clone());
+        thread::spawn(move || {
+            bridge.close();
+            returned.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    thread::sleep(ms(30));
+    assert_eq!(returned.load(Ordering::SeqCst), 0, "the parent's close returned while its child was still closing");
+    gate.open();
+    bridge_closer.join().unwrap();
+    session_closer.join().unwrap();
+    assert_eq!(returned.load(Ordering::SeqCst), 1);
+}
+
 // ---- wall timers ----
 
 #[allow(dead_code)]
