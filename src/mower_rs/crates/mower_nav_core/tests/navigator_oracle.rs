@@ -23,6 +23,18 @@ use serde_json::Value;
 
 const MS: i64 = 1_000_000;
 
+/// The scenario where nav2 itself is not repeatable. A replan whose result
+/// reaches the tree while the controller's PATIENCE_EXCEEDED result for the
+/// running goal is still in flight (a few ms of DDS latency) makes FollowPath
+/// send the new plan as an update; the controller, idle by then, starts a
+/// fresh loop with a fresh patience clock, and the tree drops the failure
+/// because it no longer waits on that goal id. That round then lasts one
+/// patience period (2.05 s) longer. Three runs of the real nodes took 35.05 s,
+/// 37.04 s and 39.5 s (0, 1 and 2 such races); the port hands results over
+/// in the same tick and always takes the race-free path.
+const RACE_SCENARIO: &str = "wall_only_in_local_costmap";
+const RACE_S: f64 = 2.1;
+
 fn status_name(s: GoalStatus) -> &'static str {
     match s {
         GoalStatus::Succeeded => "succeeded",
@@ -217,7 +229,10 @@ fn scenarios_match_the_real_navigator() {
                 if t_rec != -1 && recoveries != t_rec {
                     failures.push(format!("{tree} {name} goal {i}: {recoveries} recoveries, nav2 {t_rec}"));
                 }
-                if (at - t_at).abs() > 0.3 {
+                // In the wall scenario nav2 can take a round twice as long
+                // (see RACE_S): its result may come up to three of those later.
+                let late_ok = if name == RACE_SCENARIO { 3.0 * RACE_S } else { 0.0 };
+                if at - t_at > 0.3 || t_at - at > 0.3 + late_ok {
                     failures.push(format!("{tree} {name} goal {i}: ended at {at:.3} s, nav2 at {t_at:.3} s"));
                 }
             }
@@ -235,16 +250,16 @@ fn scenarios_match_the_real_navigator() {
                 println!("{tree} {name} compute ours {:?}\n  nav2 {t_compute:?}", ours.compute_goals);
                 println!("{tree} {name} follow ours {:?}\n  nav2 {t_follow:?}", ours.follow_goals);
             }
-            // A plan takes nav2 10-30 ms from request to result (the action
-            // round trip), and its 1 Hz timer restarts when the result is seen,
-            // so its replans drift later than the port's (one tick, 10 ms).
-            // When a retry round ends, the replan and the second FollowPath
-            // failure come within a few ms of each other: in nav2 the failure
-            // usually wins and the plan is cancelled, here the replan comes
-            // ~40 ms earlier and preempts FollowPath once more. Allow one
-            // follow_path goal per round there (7 rounds).
-            let slack = if name == "wall_only_in_local_costmap" { 7 } else { 1 };
-            if compute != t_compute.len() || ours.plans != t_plans || follow.abs_diff(t_follow.len()) > slack {
+            // In the wall scenario the replans and the FollowPath failures of a
+            // round land within a few ms of each other, and nav2's plan takes
+            // 10-30 ms from request to result (here one tick): which comes
+            // first can flip, so the counts of plans and follow_path goals
+            // differ by a few there (see RACE_S). Everywhere else they match.
+            let (plan_slack, follow_slack) = if name == RACE_SCENARIO { (3, 7) } else { (0, 1) };
+            if compute.abs_diff(t_compute.len()) > plan_slack
+                || ours.plans.abs_diff(t_plans) > plan_slack
+                || follow.abs_diff(t_follow.len()) > follow_slack
+            {
                 failures.push(format!(
                     "{tree} {name}: {} plans, {compute} compute_path_to_pose / {follow} follow_path goals; nav2 {t_plans}, {} / {}",
                     ours.plans,
