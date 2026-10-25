@@ -1,6 +1,7 @@
 //! The clock (README.md, "Clock"): `Time` and `Mono` arithmetic, the system
-//! clock against std and tokio, the manual clock's wake-ups, and `Interval`
-//! against tokio's own interval under paused time as the oracle.
+//! clock against std and tokio, the manual clock's wake-ups, `Interval`
+//! against tokio's own interval under paused time as the oracle, and
+//! `Timeout` on both clocks.
 
 use std::future::Future;
 use std::pin::{pin, Pin};
@@ -9,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mower_bus::{Clock, Interval, ManualClock, MissedTick, Mono, Sleep, Time};
+use mower_bus::{Clock, Elapsed, Interval, ManualClock, MissedTick, Mono, Sleep, Time, Timeout};
 
 const SEC: i64 = 1_000_000_000;
 
@@ -68,14 +69,16 @@ fn wait_until(what: &str, cond: impl Fn() -> bool) {
     }
 }
 
-// Static assertions (they fail to compile, not to run): sleeps, intervals and
-// a pending tick can be held across `.await` in spawned tasks, and a `Sleep`
-// can be polled in place, as tokio's `Pin<Box<Sleep>>` could.
+// Static assertions (they fail to compile, not to run): sleeps, intervals,
+// timeouts and a pending tick can be held across `.await` in spawned tasks,
+// and a `Sleep` (or a timeout of an `Unpin` future) can be polled in place,
+// as tokio's `Pin<Box<Sleep>>` could.
 const _: () = {
     const fn send_unpin<T: Send + Unpin>() {}
     const fn send_sync<T: Send + Sync>() {}
     send_unpin::<Sleep>();
     send_unpin::<Interval>();
+    send_unpin::<Timeout<Sleep>>();
     send_sync::<Clock>();
     send_sync::<ManualClock>();
 };
@@ -83,6 +86,15 @@ const _: () = {
 #[allow(dead_code)]
 fn a_pending_tick_is_send(interval: &mut Interval) -> impl Future<Output = Mono> + Send + '_ {
     interval.tick()
+}
+
+#[allow(dead_code)]
+fn a_timeout_of_a_send_future_that_is_not_unpin_is_send(clock: &Clock) -> impl Future<Output = Result<u8, Elapsed>> + Send {
+    let sleep = clock.sleep(ms(1));
+    clock.timeout(ms(1), async move {
+        sleep.await;
+        1
+    })
 }
 
 // ---- Time and Mono ----
@@ -746,4 +758,110 @@ fn a_zero_period_panics_like_tokio() {
 #[should_panic(expected = "`period` must be non-zero")]
 fn a_zero_period_panics_on_the_system_clock_too() {
     let _ = Clock::system().interval_at(Mono::from_ns(0), Duration::ZERO);
+}
+
+// ---- Timeout ----
+
+#[test]
+fn a_manual_timeout_returns_the_output_of_a_future_that_finishes_first() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut timeout = clock.timeout(ms(10), clock.sleep(ms(5)));
+    assert!(poll_once(&mut timeout).is_pending());
+    assert_eq!(mc.advance_to_next(), Some(at_ms(5)), "the future's own deadline");
+    assert_eq!(poll_once(&mut timeout), Poll::Ready(Ok(())));
+    assert_eq!(mc.next_deadline(), None, "a completed timeout is no longer pending, dropped or not");
+}
+
+#[test]
+fn a_manual_timeout_elapses_when_its_deadline_comes_first() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut timeout = clock.timeout(ms(10), clock.sleep(ms(30)));
+    assert!(poll_once(&mut timeout).is_pending());
+    assert_eq!(mc.advance_to_next(), Some(at_ms(10)), "advance_to_next stops at the timeout's deadline");
+    let Poll::Ready(result) = poll_once(&mut timeout) else { panic!("the deadline has come") };
+    assert_eq!(result, Err(Elapsed));
+    assert_eq!(mc.next_deadline(), Some(at_ms(30)), "the future given up on lives as long as the timeout");
+    drop(timeout);
+    assert_eq!(mc.next_deadline(), None);
+
+    // `?` into a boxed error, as call sites do
+    let boxed = |result: Result<(), Elapsed>| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        result?;
+        Ok(())
+    };
+    assert_eq!(boxed(result).unwrap_err().to_string(), "deadline has elapsed");
+}
+
+#[test]
+fn when_the_future_and_the_deadline_are_both_ready_the_future_wins() {
+    let (clock, mc) = Clock::manual(Time::default());
+    assert_eq!(poll_once(&mut clock.timeout(Duration::ZERO, futures::future::ready(7))), Poll::Ready(Ok(7)));
+    let mut both = clock.timeout(ms(10), clock.sleep(ms(10)));
+    assert!(poll_once(&mut both).is_pending());
+    mc.advance(ms(10));
+    assert_eq!(poll_once(&mut both), Poll::Ready(Ok(())));
+
+    // the system clock decides both without a timer, so without a runtime
+    let system = Clock::system();
+    assert_eq!(poll_once(&mut system.timeout(Duration::ZERO, futures::future::ready(7))), Poll::Ready(Ok(7)));
+    assert_eq!(poll_once(&mut system.timeout_at(Mono::from_ns(0), futures::future::ready(8))), Poll::Ready(Ok(8)));
+    assert_eq!(poll_once(&mut system.timeout(Duration::ZERO, futures::future::pending::<()>())), Poll::Ready(Err(Elapsed)));
+}
+
+#[tokio::test]
+async fn a_system_timeout_returns_whichever_of_future_and_deadline_comes_first() {
+    let clock = Clock::system();
+    // the future first; an async block, so not Unpin
+    let sleep = clock.sleep(ms(10));
+    assert_eq!(
+        clock
+            .timeout(ms(500), async move {
+                sleep.await;
+                5
+            })
+            .await,
+        Ok(5)
+    );
+
+    let start = clock.mono();
+    assert_eq!(clock.timeout(ms(20), futures::future::pending::<()>()).await, Err(Elapsed));
+    assert!(clock.mono().saturating_duration_since(start) >= ms(20));
+
+    // both ready by the first poll: the future wins
+    let both = clock.timeout(ms(10), clock.sleep(ms(10)));
+    clock.sleep(ms(20)).await;
+    assert_eq!(both.await, Ok(()));
+}
+
+#[test]
+fn dropping_a_timeout_deregisters_its_deadline() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let unpolled = clock.timeout(ms(10), futures::future::pending::<()>());
+    assert_eq!(mc.next_deadline(), Some(at_ms(10)), "pending from creation");
+    drop(unpolled);
+    assert_eq!(mc.next_deadline(), None);
+
+    let mut polled = clock.timeout(ms(10), futures::future::pending::<()>());
+    assert!(poll_once(&mut polled).is_pending());
+    drop(polled);
+    assert_eq!(mc.next_deadline(), None);
+    assert_eq!(mc.advance_to_next(), None);
+}
+
+#[test]
+fn a_timeout_of_a_future_that_is_not_unpin_works_once_pinned() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let sleep = clock.sleep(ms(5));
+    let mut on_stack = pin!(clock.timeout(ms(10), async move {
+        sleep.await;
+        42
+    }));
+    assert!(poll_once(&mut on_stack).is_pending());
+    mc.advance(ms(5));
+    assert_eq!(poll_once(&mut on_stack), Poll::Ready(Ok(42)));
+
+    let mut boxed = Box::pin(clock.timeout(ms(10), async { futures::future::pending::<()>().await }));
+    assert!(poll_once(&mut boxed).is_pending());
+    assert_eq!(mc.advance_to_next(), Some(at_ms(15)));
+    assert_eq!(poll_once(&mut boxed), Poll::Ready(Err(Elapsed)));
 }

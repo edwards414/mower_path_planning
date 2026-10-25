@@ -22,7 +22,7 @@ mod qos;
 mod service;
 mod topic;
 
-pub use clock::{Clock, Interval, ManualClock, MissedTick, Mono, Sleep, Time};
+pub use clock::{Clock, Elapsed, Interval, ManualClock, MissedTick, Mono, Sleep, Time, Timeout};
 pub use erased::{ErasedMsg, ErasedSubscriber, JsonPublisher};
 pub use error::{BusError, RecvError};
 pub use introspect::{ros_type_name, ServiceInfo, TopicInfo};

@@ -1,7 +1,7 @@
 //! Time for modules: wall (`Time`) and monotonic (`Mono`) readings, async
-//! and blocking sleeps, and intervals, from either the system clock or a
-//! `ManualClock` that tests and replay move by hand. Contract: README.md,
-//! "Clock".
+//! and blocking sleeps, intervals and timeouts, from either the system clock
+//! or a `ManualClock` that tests and replay move by hand. Contract:
+//! README.md, "Clock".
 //!
 //! Requirements beyond the README:
 //! - `Clock::system()`: wall = `SystemTime::now()`, mono = `Instant` since one
@@ -18,16 +18,20 @@
 //! - `Interval`: `interval(p)` ticks at once then every `p`
 //!   (`MissedTick::Burst` default, tokio's semantics for Burst / Delay /
 //!   Skip); `interval_at(start, p)` first ticks at `start`; `tick()` returns
-//!   the deadline it fired for; a zero period panics, as in tokio.
+//!   the deadline it fired for; a zero period panics, as in tokio;
+//! - `Timeout` (`tokio::time::timeout` on a clock): polls the future first,
+//!   so its output wins when both are ready; `Unpin` / `Send` when the
+//!   future is; its deadline is pending from creation until it completes or
+//!   drops.
 //!
 //! How the manual clock keeps this: one mutex over both readings and the
 //! pending deadlines, in (deadline, registration) order. A `Sleep` (an
-//! `Interval` holds one) registers when it is created or re-armed, not on
-//! its first poll, so `ManualClock::next_deadline` knows a deadline from the
-//! moment it exists; it deregisters when it drops. A move takes the due
-//! entries out under the lock and wakes them once the lock is released:
-//! tasks through the `Waker` of their last poll, std threads through the
-//! condvar they wait on.
+//! `Interval` and a `Timeout` hold one) registers when it is created or
+//! re-armed, not on its first poll, so `ManualClock::next_deadline` knows a
+//! deadline from the moment it exists; it deregisters when it drops. A move
+//! takes the due entries out under the lock and wakes them once the lock is
+//! released: tasks through the `Waker` of their last poll, std threads
+//! through the condvar they wait on.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -394,6 +398,17 @@ impl Clock {
         assert!(period > Duration::ZERO, "`period` must be non-zero.");
         Interval { clock: self.clone(), sleep: self.sleep_until(start), period, behavior: MissedTick::default() }
     }
+
+    /// `fut`'s output, or [`Elapsed`] if `d` passes first:
+    /// `tokio::time::timeout` on this clock.
+    pub fn timeout<F: Future>(&self, d: Duration, fut: F) -> Timeout<F> {
+        self.timeout_at(self.mono() + d, fut)
+    }
+
+    /// `fut`'s output, or [`Elapsed`] if `mono()` reaches `deadline` first.
+    pub fn timeout_at<F: Future>(&self, deadline: Mono, fut: F) -> Timeout<F> {
+        Timeout { fut, sleep: self.sleep_until(deadline) }
+    }
 }
 
 impl std::fmt::Debug for Clock {
@@ -499,6 +514,20 @@ impl Sleep {
             drop(old); // its waker, outside the lock
         }
     }
+
+    /// Stop waiting without completing (a `Timeout` whose future finished
+    /// first): the deadline is no longer pending, and tokio's timer is freed.
+    fn disarm(&mut self) {
+        match &mut self.kind {
+            SleepKind::System { timer } => *timer = None,
+            SleepKind::Manual { state, key } => {
+                if let Some(key) = key.take() {
+                    let removed = state.lock().pending.remove(&key);
+                    drop(removed); // its waker, after the lock
+                }
+            }
+        }
+    }
 }
 
 impl Future for Sleep {
@@ -561,6 +590,57 @@ impl fmt::Debug for Sleep {
         f.debug_struct("Sleep").field("deadline", &self.deadline).finish_non_exhaustive()
     }
 }
+
+/// A future with a deadline on a [`Clock`] ([`Clock::timeout`]): its output,
+/// or [`Elapsed`] if the deadline comes first.
+///
+/// The future is polled first, as in tokio, so when both are ready its
+/// output wins. The deadline is pending (`ManualClock::next_deadline`) from
+/// creation until the timeout completes or drops. `Unpin` and `Send` when
+/// the future is.
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct Timeout<F> {
+    fut: F,
+    sleep: Sleep,
+}
+
+impl<F: Future> Future for Timeout<F> {
+    type Output = Result<F::Output, Elapsed>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: `fut` is pinned structurally, `sleep` is not. That holds
+        // because `Timeout` is `Unpin` only when `F` is (the auto impl; there
+        // is no manual one), has no `Drop` impl, and nothing moves `fut` out
+        // of it; `sleep` is `Unpin` and only ever used through `&mut`.
+        let (fut, sleep) = unsafe {
+            let this = self.get_unchecked_mut();
+            (Pin::new_unchecked(&mut this.fut), &mut this.sleep)
+        };
+        if let Poll::Ready(out) = fut.poll(cx) {
+            sleep.disarm();
+            return Poll::Ready(Ok(out));
+        }
+        Pin::new(sleep).poll(cx).map(|()| Err(Elapsed))
+    }
+}
+
+impl<F> fmt::Debug for Timeout<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Timeout").field("deadline", &self.sleep.deadline).finish_non_exhaustive()
+    }
+}
+
+/// The error of a [`Timeout`] whose deadline came first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Elapsed;
+
+impl fmt::Display for Elapsed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("deadline has elapsed")
+    }
+}
+
+impl std::error::Error for Elapsed {}
 
 /// What an [`Interval`] does after missing ticks (tokio's semantics).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
