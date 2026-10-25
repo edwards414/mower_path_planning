@@ -184,12 +184,8 @@ impl NavState {
     }
 
     pub fn recent_nav2_log_summary(&self, since: Instant) -> String {
-        let recent: Vec<&(Instant, String, String)> = self.recent_nav2_logs.iter().filter(|(t, _, _)| *t >= since).collect();
-        if recent.is_empty() {
-            return "recent_nav2_logs=None".into();
-        }
-        let lines: Vec<String> = recent.iter().rev().take(5).rev().map(|(_, name, msg)| format!("[{name}] {msg}")).collect();
-        format!("recent_nav2_logs={}", lines.join(" | "))
+        let lines: Vec<String> = self.recent_nav2_logs.iter().filter(|(t, _, _)| *t >= since).map(|(_, name, msg)| format!("[{name}] {msg}")).collect();
+        nav2_log_summary(&lines)
     }
 
     pub fn record_nav2_log(&mut self, level: u8, name: &str, msg: &str, now: Instant) {
@@ -206,6 +202,15 @@ impl NavState {
         }
         self.recent_nav2_logs.push_back((now, name.to_string(), msg.to_string()));
     }
+}
+
+/// The "recent Nav2 log" part of a task failure message: the last five of
+/// `lines` (oldest first), from nav2's `/rosout` or the in-process runtime.
+pub fn nav2_log_summary(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return "recent_nav2_logs=None".into();
+    }
+    format!("recent_nav2_logs={}", lines[lines.len().saturating_sub(5)..].join(" | "))
 }
 
 /// `_source_stamp_block_reason`: `age_s` is (now - stamp) in seconds, None when
@@ -428,5 +433,28 @@ mod tests {
         assert_eq!(imu_block_reason(Some(0.05), "imu_link", [0.0, 0.0, 0.0, 0.5], [0.0; 3], [0.0; 3], &ok_cov, &ok_cov, &ok_cov, &p).as_deref(), Some("IMU orientation quaternion is not normalized"));
         assert_eq!(robot_pose_block_reason(Some(0.05), "map", [0.0; 3], [0.0, 0.0, 0.0, 1.0], &p), None);
         assert_eq!(robot_pose_block_reason(Some(0.05), "odom", [0.0; 3], [0.0, 0.0, 0.0, 1.0], &p).as_deref(), Some("robot pose frame must be map"));
+    }
+
+    #[test]
+    fn nav2_log_summary_keeps_the_last_five_warnings_of_the_task() {
+        let mut s = NavState::new();
+        let before = Instant::now();
+        let start = before + Duration::from_secs(1);
+        assert_eq!(s.recent_nav2_log_summary(before), "recent_nav2_logs=None");
+        s.record_nav2_log(30, "controller_server", "before the task", before);
+        s.record_nav2_log(20, "controller_server", "info is not kept", start);
+        s.record_nav2_log(40, "map_manage", "not a nav2 node", start);
+        for i in 0..6 {
+            s.record_nav2_log(30, "controller_server", &format!("warning {i}"), start);
+        }
+        assert_eq!(
+            s.recent_nav2_log_summary(start),
+            "recent_nav2_logs=[controller_server] warning 1 | [controller_server] warning 2 | [controller_server] warning 3 | [controller_server] warning 4 | [controller_server] warning 5"
+        );
+        assert_eq!(s.recent_nav2_log_summary(start + Duration::from_secs(1)), "recent_nav2_logs=None");
+        // the in-process runtime's events, as they come
+        let events = vec!["global costmap cleared".to_string(), "NoValidControl tolerated".to_string()];
+        assert_eq!(nav2_log_summary(&events), "recent_nav2_logs=global costmap cleared | NoValidControl tolerated");
+        assert_eq!(nav2_log_summary(&[]), "recent_nav2_logs=None");
     }
 }
