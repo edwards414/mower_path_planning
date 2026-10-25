@@ -7,7 +7,10 @@
 //! declares what to forward, and runs it until shutdown:
 //!
 //! ```text
-//! let mut bridge = RosBridge::new(r2r::Node::create(ctx, &m.node_name, &m.namespace)?, m.bus.clone());
+//! // A node of its own: two nodes with one name in one process must not
+//! // happen (README.md, "The node").
+//! let node = r2r::Node::create(ctx, &format!("{}_bus_bridge", m.node_name), &m.namespace)?;
+//! let mut bridge = RosBridge::new(node, m.bus.clone());
 //! bridge.to_ros::<Odometry>("/odom", QosProfile::system_default())?;                       // bus -> DDS
 //! bridge.from_ros::<TwistStamped>("/app_joy_cmd", QosProfile::default().keep_last(10))?;   // DDS -> bus
 //! bridge.service_to_ros::<Trigger::Service>("/save_map")?;                                 // DDS clients -> bus server

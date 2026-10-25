@@ -12,7 +12,9 @@ The bridge between the in-process bus ([`mower_bus`](../mower_bus/README.md)) an
 - **Rules:** they come from BUS_TOPICS.md 5.5, "the traps a bridge can create".
 
 ```rust
-let mut bridge = RosBridge::new(r2r::Node::create(ctx, &m.node_name, &m.namespace)?, m.bus.clone());
+// a node of its own ("The node" below)
+let node = r2r::Node::create(ctx, &format!("{}_bus_bridge", m.node_name), &m.namespace)?;
+let mut bridge = RosBridge::new(node, m.bus.clone());
 bridge.to_ros::<Odometry>("/odom", QosProfile::system_default())?;                      // bus writers -> DDS
 bridge.from_ros::<TwistStamped>("/app_joy_cmd", QosProfile::default().keep_last(10))?;  // DDS writers -> bus
 bridge.service_to_ros::<Trigger::Service>("/save_map")?;                                // DDS clients -> bus server
@@ -24,6 +26,11 @@ bridge.run(m.shutdown.wait()).await?;
 - **Types:** the same r2r message type on both sides (`BridgeMessage`: r2r's types are bus messages as they are), so
   nothing is converted and no conversion can fail.
 - **Names:** absolute, as on the bus.
+- **The node** is the bridge's alone, and needs a name of its own. A module that keeps an r2r node calls the bridge's
+  `<node>_bus_bridge`; only a module whose one node is the bridge's may give it the module's name.
+  - Two nodes with one name in one process must not happen: rcl applies remap rules and parameters addressed to a node
+    name (`-r <node>:<from>:=<to>`) to both of them.
+  - The graph (`/rosout`, graph_snapshot's node list) would also show one node twice.
 - **Declarations** create both endpoints at once, so a relative name, a type that differs from the bus's, a service that
   is served already, a QoS without a bus equivalent or a refused direction fails at the call. The one exception is
   `to_ros`'s DDS writer, which exists only while a bus writer does (below).
@@ -53,6 +60,10 @@ bridge.run(m.shutdown.wait()).await?;
   - what DDS readers see is the DDS writer's history, which keeps the source's depth.
 
 ## Topics
+
+- **Order across names:** each name has its own forwarder task. Messages published back to back on two names
+  (`/odom`, then `/tf`) can therefore reach DDS in either order, where a module that published through r2r itself
+  usually kept it. The order within one name is kept.
 
 ### `to_ros`: writer lifetime follows the bus writers (5.5 b)
 
@@ -216,7 +227,10 @@ the spin thread, which owns the node:
   - the node lives on its own thread, as in every module (`spawn_blocking`, `spin_once(20 ms)`);
   - creating and destroying the `to_ros` DDS writers runs there, between two spins, as commands from the forwarders;
   - publishing, requests, responses and probes run in the forwarders. r2r allows that from any thread.
-- **Forwarders** end on their own when the scope closes.
+- **Forwarders:** `run` aborts them all before it returns, which is what ends some of them.
+  - A `to_ros` and a `service_from_ros` forwarder end on their own when the scope closes.
+  - A `from_ros` forwarder would notice only at its next DDS sample.
+  - A `service_to_ros` forwarder never would, since its DDS requests keep coming.
 - **A panic** in the spin thread (r2r's `spin_once` unwraps its own locks) or in a forwarder (a bug: there are no user
   conversions) makes `run` stop everything and return `BridgeError::Panicked` at once, so that the module fails and is
   restarted. Without the spin thread nothing would cross any more. Await `run` to the end: dropped half-way, it still
