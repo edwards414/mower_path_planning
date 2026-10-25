@@ -1,0 +1,16 @@
+[package]
+name = "mower_bus_ros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Forwards topics and services between the in-process mower_bus and DDS (r2r) while ROS nodes remain outside the process (docs/ROS_FREE_PLAN.md Phase E, see README.md)"
+
+[dependencies]
+futures.workspace = true
+mower_bus = { path = "../mower_bus" }
+r2r.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# The JSON parity check compares r2r's untyped JSON with serde's.
+serde_json.workspace = true

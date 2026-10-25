@@ -720,6 +720,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_bus_ros"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_bus",
+ "r2r",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_coverage"
 version = "0.1.0"
 dependencies = [
