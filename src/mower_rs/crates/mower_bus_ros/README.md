@@ -196,8 +196,9 @@ the spin thread, which owns the node:
   - creating and destroying the `to_ros` DDS writers runs there, between two spins, as commands from the forwarders;
   - publishing, requests, responses and probes run in the forwarders. r2r allows that from any thread.
 - **Forwarders** end on their own when the scope closes.
-- **A panic** in the spin thread or a forwarder (a bug: there are no user conversions) makes `run` return
-  `BridgeError::Panicked`, so that the module fails and is restarted. Await `run` to the end: dropped half-way, it still
+- **A panic** in the spin thread (r2r's `spin_once` unwraps its own locks) or in a forwarder (a bug: there are no user
+  conversions) makes `run` stop everything and return `BridgeError::Panicked` at once, so that the module fails and is
+  restarted. Without the spin thread nothing would cross any more. Await `run` to the end: dropped half-way, it still
   stops the spin thread, but does not wait for it.
 
 ## Stats

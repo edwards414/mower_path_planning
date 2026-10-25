@@ -261,7 +261,7 @@ impl RosBridge {
         r2r::log_info!(&logger, "mower_bus_ros: forwarding {} names between the bus and DDS", forwarders.len());
         let running = Arc::new(AtomicBool::new(true));
         let stop = StopSpin(running.clone());
-        let spin = tokio::task::spawn_blocking(move || node::spin(node, commands, running));
+        let mut spin = tokio::task::spawn_blocking(move || node::spin(node, commands, running));
         let mut tasks = tokio::task::JoinSet::new();
         for forwarder in forwarders {
             tasks.spawn(forwarder);
@@ -271,10 +271,22 @@ impl RosBridge {
         // bridge may declare nothing), so wait for that directly.
         let mut closed = std::pin::pin!(scope.closed());
         let mut failure = None;
+        let mut spun = None;
         loop {
             tokio::select! {
                 () = &mut shutdown => break,
                 () = &mut closed => break,
+                // The spin thread stops only when told to, so ending now is a
+                // panic (r2r's spin_once unwraps its own locks). Nothing
+                // would cross to or from DDS any more.
+                ended = &mut spin => {
+                    failure = Some(BridgeError::Panicked(match &ended {
+                        Err(e) => format!("the spin thread: {e}"),
+                        Ok(()) => "the spin thread stopped".to_string(),
+                    }));
+                    spun = Some(ended);
+                    break;
+                }
                 // A forwarder ends on its own only when the scope closes.
                 Some(ended) = tasks.join_next() => if let Err(e) = ended {
                     failure = Some(BridgeError::Panicked(format!("a forwarder: {e}")));
@@ -287,7 +299,10 @@ impl RosBridge {
         tasks.shutdown().await;
         drop(handle);
         drop(stop);
-        let spun = spin.await;
+        let spun = match spun {
+            Some(spun) => spun,
+            None => spin.await,
+        };
         // The names are free again only once their DDS endpoints are gone.
         drop(claims);
         match (failure, spun) {
@@ -304,5 +319,45 @@ struct StopSpin(Arc<AtomicBool>);
 impl Drop for StopSpin {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// The process's r2r context, on the DDS tests' domain and RMW
+    /// (tests/dds.rs has why).
+    fn context() -> r2r::Context {
+        static CONTEXT: std::sync::OnceLock<r2r::Context> = std::sync::OnceLock::new();
+        CONTEXT
+            .get_or_init(|| {
+                std::env::set_var("ROS_DOMAIN_ID", "77");
+                std::env::set_var("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp");
+                r2r::Context::create().expect("an rcl context (source /opt/ros/jazzy/setup.bash)")
+            })
+            .clone()
+    }
+
+    #[test]
+    fn run_fails_once_its_spin_thread_has_died() {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let bus = mower_bus::Bus::new();
+            let node = r2r::Node::create(context(), "spin_dies_bridge", "").unwrap();
+            let mut bridge = RosBridge::new(node, bus.scope("bridge"));
+            bridge.to_ros::<r2r::std_msgs::msg::String>("/bridge_unit/spin_dies", QosProfile::default()).unwrap();
+            let handle = bridge.handle.clone();
+            let (_keep_running, never) = tokio::sync::oneshot::channel::<()>();
+            let run = tokio::spawn(bridge.run(async move {
+                let _ = never.await;
+            }));
+            // What a panic inside r2r's spin_once would do: the thread ends.
+            assert!(handle.call(|_| panic!("a panic on the spin thread, on purpose")).await.is_none());
+            let ended = tokio::time::timeout(Duration::from_secs(20), run).await.expect("run returned").unwrap();
+            assert!(matches!(ended, Err(BridgeError::Panicked(ref what)) if what.starts_with("the spin thread")), "{ended:?}");
+        });
     }
 }
