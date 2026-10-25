@@ -73,7 +73,11 @@ pub async fn run_all(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut tasks = Vec::with_capacity(NODES.len());
     for name in NODES {
         let ctx = ctx.clone();
-        let mc = ModuleCtx::new(name, m.shutdown.clone());
+        // Three nodes, so three scopes, all on this process's one bus (as
+        // under mower_rsd), and one clock.
+        let mc = ModuleCtx::new(name, m.shutdown.clone())
+            .with_bus(m.bus.bus().scope(name))
+            .with_clock(m.clock.clone());
         tasks.push(tokio::spawn(async move { (name, run(ctx, mc).await) }));
     }
     let mut failure: Option<String> = None;
