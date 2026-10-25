@@ -32,6 +32,9 @@
 //!   what lets a late joiner take history and register without missing or
 //!   repeating a message. Wake-ups, and freeing the messages that full
 //!   inboxes pushed out, wait until the publish holds no lock;
+//! - a reader can count the channel's live writers and watch them come and
+//!   go (`publisher_count`, `publisher_changes`); a writer coming or going
+//!   wakes the watches, which costs publishing nothing;
 //! - lock order: registry, then channel, then inbox. Readers only ever take
 //!   their own inbox's lock.
 
@@ -40,7 +43,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -186,6 +189,27 @@ impl<T: Message> Subscriber<T> {
     pub fn is_closed(&self) -> bool {
         self.reader.is_closed()
     }
+
+    /// Live writers on the channel, typed and JSON: one per writer (a
+    /// publisher and its clones count once), none whose scope has closed.
+    /// rclcpp's `get_publisher_count()`.
+    pub fn publisher_count(&self) -> usize {
+        self.reader.channel.publisher_count()
+    }
+
+    /// The channel's live writer count each time writers have come or gone:
+    /// an item means at least one did since the previous item (or since the
+    /// stream was made), and several changes in between give one item. A
+    /// module restart can therefore give an item with the count unchanged.
+    /// The stream ends when this reader's scope closes.
+    ///
+    /// It is a separate object, so it can be polled next to `recv` (in one
+    /// `select!`) and can outlive the subscriber. Make it before reading
+    /// [`Subscriber::publisher_count`] for the starting state, so that no
+    /// change falls in between. Costs nothing on the publish path.
+    pub fn publisher_changes(&self) -> impl Stream<Item = usize> + Send + Sync + Unpin + 'static {
+        self.reader.watch_publishers()
+    }
 }
 
 impl<T: Message> Stream for Subscriber<T> {
@@ -248,6 +272,49 @@ struct ChannelState {
     /// merged.
     published: u64,
     last_published: Option<Instant>,
+    /// Writers registered or unregistered so far: what a `PublisherWatch`
+    /// compares with the count it saw last.
+    writer_changes: u64,
+    /// Watches waiting for the next writer change (which wakes and removes
+    /// them all) or for their reader's close.
+    watchers: Vec<Watcher>,
+    next_watch: u64,
+}
+
+/// A `PublisherWatch` that waits.
+struct Watcher {
+    id: u64,
+    /// The reader the watch belongs to: closing it ends the watch.
+    inbox: Weak<Inbox>,
+    waker: Waker,
+}
+
+impl ChannelState {
+    /// A writer came or went: wake every waiting watch.
+    fn writers_changed(&mut self, after: &mut AfterUnlock) {
+        self.writer_changes += 1;
+        for watcher in self.watchers.drain(..) {
+            after.wake.push(Wake::Task(watcher.waker));
+        }
+    }
+
+    /// Store watch `id`'s waker; the one it replaces is returned, to be
+    /// dropped with no lock held.
+    fn register_watcher(&mut self, id: u64, inbox: &Arc<Inbox>, waker: &Waker) -> Option<Waker> {
+        match self.watchers.iter_mut().find(|watcher| watcher.id == id) {
+            Some(watcher) if watcher.waker.will_wake(waker) => None,
+            Some(watcher) => Some(std::mem::replace(&mut watcher.waker, waker.clone())),
+            None => {
+                self.watchers.push(Watcher { id, inbox: Arc::downgrade(inbox), waker: waker.clone() });
+                None
+            }
+        }
+    }
+
+    fn take_watcher(&mut self, id: u64) -> Option<Waker> {
+        let i = self.watchers.iter().position(|watcher| watcher.id == id)?;
+        Some(self.watchers.swap_remove(i).waker)
+    }
 }
 
 /// A writer as its channel sees it.
@@ -294,6 +361,12 @@ impl Channel {
         lock(&self.state).readers.len()
     }
 
+    /// Writers leave the list when their last clone drops or their scope's
+    /// close reaches them, so its length is the count of live writers.
+    pub(crate) fn publisher_count(&self) -> usize {
+        lock(&self.state).writers.len()
+    }
+
     fn info(&self) -> TopicInfo {
         let type_name = self.codec.get().map(|codec| codec.type_name);
         let ros_type = type_name.and_then(ros_type_name);
@@ -330,16 +403,50 @@ impl Channel {
         }
     }
 
+    /// Unregister a reader whose scope closed, and end its watches. The
+    /// inbox is closed first: a watch that looks after that sees it closed,
+    /// and one that looked before is registered by now and woken here.
+    fn close_reader(&self, inbox: &Arc<Inbox>) {
+        let mut after = AfterUnlock::new();
+        {
+            let mut state = lock(&self.state);
+            if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
+                state.readers.remove(i);
+            }
+            let mut i = 0;
+            while i < state.watchers.len() {
+                if Weak::as_ptr(&state.watchers[i].inbox) == Arc::as_ptr(inbox) {
+                    after.wake.push(Wake::Task(state.watchers.swap_remove(i).waker));
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        after.run();
+    }
+
     fn add_writer(&self, entry: WriterEntry) {
-        lock(&self.state).writers.push(entry);
+        let mut after = AfterUnlock::new();
+        {
+            let mut state = lock(&self.state);
+            state.writers.push(entry);
+            state.writers_changed(&mut after);
+        }
+        after.run();
     }
 
     fn remove_writer(&self, id: u64) {
+        let mut after = AfterUnlock::new();
         let removed = {
             let mut state = lock(&self.state);
             let i = state.writers.iter().position(|writer| writer.id == id);
-            i.map(|i| state.writers.remove(i))
+            let removed = i.map(|i| state.writers.remove(i));
+            if removed.is_some() {
+                state.writers_changed(&mut after);
+            }
+            removed
         };
+        after.run();
         // Its history is freed here, with no lock held.
         drop(removed);
     }
@@ -483,8 +590,8 @@ impl Reader {
             let inbox = Arc::downgrade(&inbox);
             move || {
                 if let Some(inbox) = inbox.upgrade() {
-                    channel.remove_reader(&inbox);
                     inbox.close();
+                    channel.close_reader(&inbox);
                 }
             }
         };
@@ -569,11 +676,69 @@ impl Reader {
     pub(crate) fn is_closed(&self) -> bool {
         lock(&self.inbox.queue).closed
     }
+
+    /// The stream behind `publisher_changes`, starting from now.
+    pub(crate) fn watch_publishers(&self) -> PublisherWatch {
+        let mut state = lock(&self.channel.state);
+        state.next_watch += 1;
+        PublisherWatch {
+            channel: Arc::clone(&self.channel),
+            inbox: Arc::clone(&self.inbox),
+            id: state.next_watch,
+            seen: state.writer_changes,
+        }
+    }
 }
 
 impl Drop for Reader {
     fn drop(&mut self) {
         self.channel.remove_reader(&self.inbox);
+    }
+}
+
+/// The stream `publisher_changes` returns (topic.rs keeps it unnamed: an
+/// `impl Stream` needs no export).
+pub(crate) struct PublisherWatch {
+    channel: Arc<Channel>,
+    /// The reader's inbox: when its scope closes, the stream ends. Held
+    /// strongly, so the stream can outlive the subscriber.
+    inbox: Arc<Inbox>,
+    /// Its slot in `ChannelState::watchers`.
+    id: u64,
+    /// `ChannelState::writer_changes` at the last item, or when it was made.
+    seen: u64,
+}
+
+impl Stream for PublisherWatch {
+    type Item = usize;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<usize>> {
+        let this = self.get_mut();
+        let stale_waker;
+        let poll = {
+            let mut state = lock(&this.channel.state);
+            // Read under the channel's lock: see `Channel::close_reader`.
+            if lock(&this.inbox.queue).closed {
+                stale_waker = state.take_watcher(this.id);
+                Poll::Ready(None)
+            } else if state.writer_changes != this.seen {
+                this.seen = state.writer_changes;
+                stale_waker = state.take_watcher(this.id);
+                Poll::Ready(Some(state.writers.len()))
+            } else {
+                stale_waker = state.register_watcher(this.id, &this.inbox, cx.waker());
+                Poll::Pending
+            }
+        };
+        drop(stale_waker);
+        poll
+    }
+}
+
+impl Drop for PublisherWatch {
+    fn drop(&mut self) {
+        let waker = lock(&self.channel.state).take_watcher(self.id);
+        drop(waker);
     }
 }
 
@@ -781,6 +946,45 @@ mod tests {
 
     /// The channel (and inbox) whose locks `Tracked`'s drop checks.
     type Watched = (Arc<Channel>, Option<Arc<Inbox>>);
+
+    #[test]
+    fn a_waiting_publisher_watch_is_woken_with_no_lock_held_and_leaves_no_slot_behind() {
+        let bus = Bus::new();
+        let scope = bus.scope("m");
+        let sub = scope.subscribe::<u32>("/n", Qos::default()).unwrap();
+        let channel = Arc::clone(&sub.reader.channel);
+        let inbox = Arc::downgrade(&sub.reader.inbox);
+        let probe = Arc::new(Probe { channel: Arc::clone(&channel), inbox, wakes: Mutex::default() });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut cx = Context::from_waker(&waker);
+        let mut watch = sub.reader.watch_publishers();
+        let mut poll = |watch: &mut PublisherWatch| Pin::new(watch).poll_next(&mut cx);
+
+        assert!(poll(&mut watch).is_pending());
+        assert!(poll(&mut watch).is_pending(), "polled again: same slot");
+        assert_eq!(lock(&channel.state).watchers.len(), 1);
+        let p = scope.publisher::<u32>("/n", Qos::default()).unwrap();
+        assert_eq!(*probe.wakes.lock().unwrap(), [true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(Some(1)));
+        assert!(poll(&mut watch).is_pending());
+        drop(p);
+        assert_eq!(*probe.wakes.lock().unwrap(), [true, true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(Some(0)));
+
+        // a watch dropped while it waits takes its slot with it
+        let mut other = sub.reader.watch_publishers();
+        assert!(poll(&mut other).is_pending());
+        assert!(poll(&mut watch).is_pending());
+        assert_eq!(lock(&channel.state).watchers.len(), 2);
+        drop(other);
+        assert_eq!(lock(&channel.state).watchers.len(), 1);
+
+        // the reader's scope closing wakes it the same way
+        scope.close();
+        assert_eq!(*probe.wakes.lock().unwrap(), [true, true, true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(None));
+        assert!(lock(&channel.state).watchers.is_empty());
+    }
 
     thread_local! {
         static WATCHED: RefCell<Option<Watched>> = const { RefCell::new(None) };

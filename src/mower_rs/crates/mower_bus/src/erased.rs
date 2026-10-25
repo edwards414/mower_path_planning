@@ -90,6 +90,20 @@ impl ErasedSubscriber {
         self.reader.dropped()
     }
 
+    /// Live writers on the channel, as [`crate::Subscriber::publisher_count`]
+    /// counts them.
+    pub fn publisher_count(&self) -> usize {
+        self.reader.channel().publisher_count()
+    }
+
+    /// The live writer count each time writers have come or gone, ending
+    /// when this reader's scope closes: see
+    /// [`crate::Subscriber::publisher_changes`]. The ROS bridge drops a
+    /// latched value on the DDS side from it when a topic's last writer goes.
+    pub fn publisher_changes(&self) -> impl Stream<Item = usize> + Send + Sync + Unpin + 'static {
+        self.reader.watch_publishers()
+    }
+
     /// A channel carries messages only once a typed endpoint has fixed its
     /// type (a `JsonPublisher` cannot publish before), so a reader that
     /// attached earlier finds the codec by the time its first message comes.

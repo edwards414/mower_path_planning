@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use mower_bus::{Bus, BusError, ErasedSubscriber, JsonPublisher, Publisher, Qos, RecvError, Subscriber};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -489,6 +489,139 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert!(o.publishers.is_empty() && o.subscribers.is_empty());
     assert_eq!((o.retained, o.published), (0, 3));
+}
+
+#[test]
+fn publisher_count_counts_each_live_writer_once() {
+    let bus = Bus::new();
+    let base = bus.scope("base");
+    let tap = bus.scope("recorder");
+    let cmd = base.subscribe::<Twist>("/cmd_vel", Qos::default()).unwrap();
+    let erased = tap.subscribe_erased("/cmd_vel", Qos::default()).unwrap();
+    let count = || {
+        let n = cmd.publisher_count();
+        assert_eq!(erased.publisher_count(), n, "typed and erased readers agree");
+        n
+    };
+    let teleop = bus.scope("teleop");
+    let _reader = teleop.subscribe::<Twist>("/cmd_vel", Qos::default()).unwrap();
+    let _elsewhere = teleop.publisher::<Twist>("/nav_cmd_vel", Qos::default()).unwrap();
+    assert_eq!(count(), 0, "readers and other topics' writers do not count");
+
+    let p = teleop.publisher::<Twist>("/cmd_vel", Qos::default()).unwrap();
+    let clone = p.clone();
+    assert_eq!(count(), 1, "a publisher and its clones are one writer");
+    let app = bus.scope("ws_bridge");
+    let json = app.publisher_json("/cmd_vel", Qos::default()).unwrap();
+    let _json_clone = json.clone();
+    assert_eq!(count(), 2, "a JsonPublisher is a writer");
+    let nav = bus.scope("nav");
+    let q = nav.publisher::<Twist>("/cmd_vel", Qos::default()).unwrap();
+    assert_eq!(count(), 3);
+
+    drop(p);
+    assert_eq!(count(), 3, "a clone is left");
+    drop(clone);
+    assert_eq!(count(), 2, "the last clone takes the writer with it");
+    app.close();
+    assert_eq!(count(), 1, "a closed scope's writers stop counting, whoever still holds them");
+    drop(q);
+    assert_eq!(count(), 0);
+}
+
+#[tokio::test]
+async fn publisher_changes_report_writers_coming_and_going_until_the_readers_scope_closes() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ros_bridge");
+    let sub = bridge.subscribe::<Pose>("/map", Qos::latched()).unwrap();
+    let mut changes = sub.publisher_changes();
+    assert_eq!(sub.publisher_count(), 0);
+    assert_eq!(changes.next().now_or_never(), None, "nothing has changed yet");
+
+    let map = bus.scope("map_manage");
+    let p = map.publisher::<Pose>("/map", Qos::latched()).unwrap();
+    assert_eq!(changes.next().await, Some(1));
+    assert_eq!(changes.next().now_or_never(), None, "one item per change");
+
+    // several changes between two looks give one item; a clone is no change
+    let app = bus.scope("ws_bridge");
+    let json = app.publisher_json("/map", Qos::default()).unwrap();
+    let _clone = p.clone();
+    drop(json);
+    assert_eq!(changes.next().await, Some(1));
+    assert_eq!(changes.next().now_or_never(), None);
+
+    // a module restart: the writer goes with its scope and a new one comes;
+    // the count ends where it was, the item still comes
+    map.close();
+    let restarted = bus.scope("map_manage");
+    let _p2 = restarted.publisher::<Pose>("/map", Qos::latched()).unwrap();
+    assert_eq!(changes.next().await, Some(1));
+
+    // a task parked on a stream is woken by the change
+    let mut parked = sub.publisher_changes();
+    let task = tokio::spawn(async move { parked.next().await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    restarted.close();
+    assert_eq!(tokio::time::timeout(WAIT, task).await.unwrap().unwrap(), Some(0));
+
+    // the reader's scope closing ends its streams, parked or not, also
+    // after the subscriber itself is gone
+    let mut parked = sub.publisher_changes();
+    let task = tokio::spawn(async move { parked.next().await });
+    drop(sub);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    bridge.close();
+    assert_eq!(tokio::time::timeout(WAIT, task).await.unwrap().unwrap(), None);
+    assert_eq!(changes.next().await, None, "the end wins over a change not yet reported");
+    assert_eq!(changes.next().await, None);
+}
+
+/// The ROS bridge's loop: forward a latched topic's messages and notice its
+/// last writer going, in one `select!` over the reader and its changes.
+#[tokio::test]
+async fn a_bridge_loop_selects_over_messages_and_writer_changes() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ros_bridge");
+    let mut sub = bridge.subscribe_erased("/robot/info", Qos::latched()).unwrap();
+    let mut writers = sub.publisher_changes();
+    let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(msg) = sub.next() => tx.send(format!("message {}", msg.to_json().unwrap()["x"])).unwrap(),
+                Some(count) = writers.next() => tx.send(format!("writers {count}")).unwrap(),
+                else => break,
+            }
+        }
+    });
+
+    let robot = bus.scope("robot_status");
+    let p = robot.publisher::<Pose>("/robot/info", Qos::latched()).unwrap();
+    assert_eq!(events.recv().await.unwrap(), "writers 1");
+    p.publish(&pose(1.5)).unwrap();
+    assert_eq!(events.recv().await.unwrap(), "message 1.5");
+    robot.close();
+    assert_eq!(events.recv().await.unwrap(), "writers 0");
+    bridge.close();
+    tokio::time::timeout(WAIT, task).await.unwrap().unwrap();
+    assert_eq!(events.recv().await, None, "both streams ended with the scope");
+}
+
+#[test]
+fn publisher_changes_need_no_runtime() {
+    let bus = Bus::new();
+    let base = bus.scope("base");
+    let sub = base.subscribe::<Twist>("/wheel_override", Qos::default()).unwrap();
+    let mut changes = sub.publisher_changes();
+    let teleop = bus.scope("teleop");
+    let creator = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        teleop.publisher::<Twist>("/wheel_override", Qos::default()).unwrap()
+    });
+    assert_eq!(futures::executor::block_on(changes.next()), Some(1));
+    drop(creator.join().unwrap());
+    assert_eq!(futures::executor::block_on(changes.next()), Some(0));
 }
 
 #[test]
