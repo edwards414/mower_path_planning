@@ -67,9 +67,10 @@ with it. With `RUST_BASE` it also refuses a `mower_base` / `mower_rsd` binary
 without the latch's log text. It prints the image's `MOWER_VERSION` /
 `MOWER_GIT_SHA` on every switch and `status`.
 
-Compose runs `ghcr.io/edwards414/mower_path_planning:${IMAGE_TAG}` with
-`pull_policy: missing`, so the loaded image must carry exactly that name, or
-compose tries a pull and gets `manifest unknown`. A build can exit 0 and still
+Compose runs `${IMAGE_REPO}:${IMAGE_TAG}` (the robot's `.env`; default
+`docker.io/fxrbindi/mower_path_planning`) with `pull_policy: missing`, so the
+loaded image must carry exactly that name, or compose tries a pull and gets
+`manifest unknown`. A build can exit 0 and still
 leave the previous image under the tag (a `rosdep install` failure far up the
 log), so check the sha and the binaries before saving.
 
@@ -78,24 +79,24 @@ SHA=$(git rev-parse HEAD); test -z "$(git status --porcelain)" || echo DIRTY
 docker buildx build --platform linux/arm64 --target runtime -f Dockerfile \
   --build-arg MOWER_VERSION=${SHA:0:7}-rosfree --build-arg MOWER_GIT_SHA=$SHA \
   --build-arg MOWER_BUILD_UNIX=$(git log -1 --format=%ct) \
-  --build-arg MOWER_IMAGE=ghcr.io/edwards414/mower_path_planning:rosfree-test \
+  --build-arg MOWER_IMAGE=docker.io/fxrbindi/mower_path_planning:rosfree-test \
   --cache-from type=registry,ref=ghcr.io/edwards414/mower_path_planning-buildcache:runtime \
-  --load -t ghcr.io/edwards414/mower_path_planning:rosfree-test .
+  --load -t docker.io/fxrbindi/mower_path_planning:rosfree-test .
 docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' \
-  ghcr.io/edwards414/mower_path_planning:rosfree-test | grep MOWER_GIT_SHA   # must be $SHA
-docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+  docker.io/fxrbindi/mower_path_planning:rosfree-test | grep MOWER_GIT_SHA   # must be $SHA
+docker run --rm --entrypoint grep docker.io/fxrbindi/mower_path_planning:rosfree-test \
   -caF 'arm latch: wheel feedback lost' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1, not 0
-docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+docker run --rm --entrypoint grep docker.io/fxrbindi/mower_path_planning:rosfree-test \
   -caF 'not receiving our commands' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the TX-lead trigger
-docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+docker run --rm --entrypoint grep docker.io/fxrbindi/mower_path_planning:rosfree-test \
   -caF 'dead-man is let go' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the review fixes (blade, board gate)
-docker run --rm --entrypoint grep ghcr.io/edwards414/mower_path_planning:rosfree-test \
+docker run --rm --entrypoint grep docker.io/fxrbindi/mower_path_planning:rosfree-test \
   -caF 'non-zero after' /mower_ws/install/mower_rs/lib/mower_rs/mower_base  # 1: the release window (guard zero)
-docker save ghcr.io/edwards414/mower_path_planning:rosfree-test | gzip -1 > /tmp/rosfree-test.tar.gz
+docker save docker.io/fxrbindi/mower_path_planning:rosfree-test | gzip -1 > /tmp/rosfree-test.tar.gz
 scp /tmp/rosfree-test.tar.gz cat@<robot>:/tmp/
 ssh cat@<robot> 'gunzip -c /tmp/rosfree-test.tar.gz | sudo docker load && rm /tmp/rosfree-test.tar.gz'
 # only if it was saved under another name:
-#   sudo docker tag mower_path_planning:ros-free-test ghcr.io/edwards414/mower_path_planning:rosfree-test
+#   sudo docker tag mower_path_planning:ros-free-test docker.io/fxrbindi/mower_path_planning:rosfree-test
 ```
 
 **The scripts** go somewhere that survives a boot (`/tmp` is wiped), together
@@ -111,7 +112,7 @@ ssh cat@<robot> "SWITCH_EXPECT_SHA=$SHA bash ~/rosfree/switch.sh rosfree-test fa
 ssh cat@<robot> 'sleep 90; bash ~/rosfree/measure.sh'
 ssh cat@<robot> 'bash ~/rosfree/switch.sh status'                   # any time; changes nothing
 ssh cat@<robot> 'bash ~/rosfree/switch.sh restore; sudo systemctl start mower-update.timer'
-ssh cat@<robot> 'sudo docker rmi ghcr.io/edwards414/mower_path_planning:rosfree-test'   # when done testing
+ssh cat@<robot> 'sudo docker rmi docker.io/fxrbindi/mower_path_planning:rosfree-test'   # when done testing
 ```
 
 `switch.sh <tag> <nav_composition> <rust_daemon> <compose> [KEY=VAL ...]`:

@@ -36,7 +36,10 @@
 set -euo pipefail
 
 MOWER_DIR=${MOWER_DIR:-/opt/mower}
-REPO=ghcr.io/edwards414/mower_path_planning
+# The image repository the compose runs: .env IMAGE_REPO, else the compose's
+# own default (the same rule as mower-update.sh).
+REPO=$(sed -n 's/^IMAGE_REPO=//p' "$MOWER_DIR/.env" 2>/dev/null | tail -n 1)
+REPO=${REPO:-docker.io/fxrbindi/mower_path_planning}
 WAIT_S=${SWITCH_WAIT_S:-180}
 # ...then the drivers must keep their PIDs, with no restart logged, this long.
 STABLE_S=${SWITCH_STABLE_S:-30}
@@ -273,7 +276,8 @@ CF=$(readlink -f "$CF")
 for p in "${PASSTHROUGH[@]}"; do
   grep -qF -- "$p" "$CF" || die "$CF does not pass ${p%%:=*} through (not the branch compose?)"
 done
-grep -qF "image: $REPO:\${IMAGE_TAG" "$CF" || die "$CF does not run $REPO:\${IMAGE_TAG}"
+grep -qE 'image: \$\{IMAGE_REPO:-[^}]+\}:\$\{IMAGE_TAG' "$CF" ||
+  die "$CF does not name its image \${IMAGE_REPO:-…}:\${IMAGE_TAG…} (not the branch compose?)"
 
 declare -A SET=([IMAGE_TAG]=$TAG [NAV_COMPOSITION]=$NC [RUST_DAEMON]=$RD
                 [RUST_BASE]=false [RUST_LOCALIZE]=false [RUST_NAV_CORE]=false)
