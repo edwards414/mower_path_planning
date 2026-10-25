@@ -80,6 +80,12 @@ services:
       # mower_rsd process (one DDS participant); it changes no
       # behaviour. Default on; RUST_DAEMON=false runs one binary each.
       - rust_daemon:=${RUST_DAEMON:-true}
+      # RUST_NAV_CORE: mower_nav steers with mower_nav_core, the in-process
+      # Rust port of nav2 (docs/ROS_FREE_PLAN.md Phase D), and nav2 is not
+      # started. Needs RUST_DAEMON, RUST_NAV and RUST_LOCALIZE (launch
+      # refuses it otherwise). It changes the code that drives the wheels:
+      # the first switch of a robot is a supervised outdoor run.
+      - rust_nav_core:=${RUST_NAV_CORE:-false}
     environment:
       # The graph stays on loopback (CycloneDDS config in the image); the
       # domain id only separates it from anything else on the box.

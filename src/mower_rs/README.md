@@ -42,6 +42,23 @@ the C++ chain. The sub-launch files (`mower.launch.py`,
 their own default: the simulation and bench launches include them without
 these arguments and have no base to drive.
 
+`rust_nav_core` (compose `RUST_NAV_CORE`, default false) is not a binary of
+its own but a mode of the `nav` module. With it `robot.launch.py` gives
+`nav_action_server` `nav_backend: nav_core` and `nav_core.pose_source:
+tfbus`, so `mower_nav` steers with `mower_nav_core::NavStack` (the in-process
+port of the nav2 servers, `crates/mower_nav_core`, `docs/ROS_FREE_PLAN.md`
+Phase D) on the pose the `localize` module keeps in the same process, and
+passes `enable_navigation:=false` to `mower.launch.py`, so no nav2 server or
+component container starts; twist_mux, the guards, `robot_state_publisher`
+and localization are unchanged. It needs `rust_daemon`, `rust_nav` and
+`rust_localize`, and `robot.launch.py` refuses to start without them. False
+sets nothing: `mower_nav` keeps its default backend, nav2, which starts as
+before, so `RUST_NAV_CORE=false` in `.env` is the roll-back, no new image
+needed. **It changes the code that drives the motors**: the first time it is
+enabled on a robot is a supervised outdoor run (RTK fixed, someone at the
+robot to stop it; `tools/switch.sh` to switch and restore), with the guards
+and `mower_base`'s arm latch as the safety net, before it stays on in `.env`.
+
 ## `mower_rsd`: the same modules in one process
 
 Each crate above is a library (`run(ctx, ModuleCtx)`) plus a three-line
