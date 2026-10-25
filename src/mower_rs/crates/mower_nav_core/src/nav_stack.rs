@@ -26,6 +26,21 @@
 //!
 //! What the servers would have logged at WARN or ERROR is in
 //! [`StackOutput::log`], for the caller's diagnostics; nothing here reads it.
+//!
+//! The planner is either inline ([`NavStack::mower`]: the stack's own
+//! [`PlannerServer`], ticked by [`NavStack::tick`] on the stack's clock) or
+//! external ([`NavStack::mower_external_planner`]: an [`ExternalPlanner`]).
+//! An external planner_server runs elsewhere, on its own thread as upstream's
+//! does, so a long NavFn search does not hold up the controller. The tree's
+//! `compute_path_to_pose` goals and cancels then come out in
+//! [`StackOutput::plan_requests`], numbered by the stack from 1 as
+//! `PlannerServer` numbers them, and the results go back in through
+//! [`NavStack::on_compute_path_result`]; the tree sees a result at its next
+//! tick, as it sees an inline planner's. The planner owns the global costmap
+//! then: it applies the tick's [`StackOutput::clears`] of it before the
+//! tick's requests (the inline planner's pass, too, comes after the tree's and
+//! sees them), and the stack reads neither `StackInput::global_costmap` nor
+//! `global_costmap_current`.
 
 use crate::action::GoalId;
 use crate::controller_server::{ControllerServer, CycleInput, Feedback, FollowPathResult};
@@ -34,13 +49,13 @@ use crate::geometry::{Pose2D, Transform2D, Twist2D};
 use crate::navigator::{CostmapId, NavInput, NavServers, NavigateFeedback, NavigateResult, Navigator};
 use crate::path_handler::Path;
 use crate::planner::PlannerError;
-use crate::planner_server::{ComputePathToPose, PlanInput, PlannerServer};
+use crate::planner_server::{ComputePathResult, ComputePathToPose, PlanInput, PlanOutput, PlannerServer};
 use crate::rpp::{Controller, ControllerError, RegulatedPurePursuit};
 use crate::shim::RotationShim;
 use crate::smoother::TwistStamped;
 
 /// `rclcpp::Rate r(100)`: how often a server checks a costmap it waits for.
-const COSTMAP_POLL_NS: i64 = 10_000_000;
+pub const COSTMAP_POLL_NS: i64 = 10_000_000;
 
 /// `rclcpp::WallRate`.
 #[derive(Debug, Clone, Copy)]
@@ -87,7 +102,8 @@ pub struct StackInput<'a> {
     pub odom_from_map: Option<Transform2D>,
     pub local_costmap: &'a Costmap2D,
     pub local_costmap_current: bool,
-    /// NavFn writes to it (`clearRobotCell`).
+    /// NavFn writes to it (`clearRobotCell`). Not read with an external
+    /// planner (any costmap will do).
     pub global_costmap: &'a mut Costmap2D,
     pub global_costmap_current: bool,
 }
@@ -108,6 +124,18 @@ pub struct StackOutput {
     pub plans: Vec<Path>,
     /// What the servers logged at WARN or ERROR, in order.
     pub log: Vec<StackLog>,
+    /// With an [`ExternalPlanner`]: the tree's `compute_path_to_pose` goals
+    /// and cancels, in order, for after this tick's [`StackOutput::clears`].
+    pub plan_requests: Vec<PlanRequest>,
+}
+
+/// A request of the tree for an external planner_server.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanRequest {
+    /// A `compute_path_to_pose` goal, numbered from 1 in the order sent.
+    Send { id: GoalId, goal: ComputePathToPose },
+    /// `handle_cancel` for a goal sent before.
+    Cancel(GoalId),
 }
 
 /// A server's WARN or ERROR line (upstream's `/rosout`), as data.
@@ -126,11 +154,111 @@ pub enum StackLog {
     PlannerMissedRate(f64),
 }
 
+/// The stack's planner_server: [`PlannerServer`], ticked inside
+/// [`NavStack::tick`], or an [`ExternalPlanner`] standing in for one that runs
+/// elsewhere (see the module doc).
+pub trait StackPlanner {
+    /// `handle_goal` + `handle_accepted`: the goal's id.
+    fn send_goal(&mut self, goal: ComputePathToPose) -> GoalId;
+    /// `handle_cancel`.
+    fn cancel_goal(&mut self, goal: GoalId) -> bool;
+    /// The executing goal.
+    fn current_goal(&self) -> Option<GoalId>;
+    /// A pass has something to do: tick.
+    fn has_work(&self) -> bool;
+    /// One worker pass.
+    fn tick(&mut self, input: PlanInput<'_>) -> PlanOutput;
+    /// The requests for a planner elsewhere since the last call, in order.
+    fn take_requests(&mut self) -> Vec<PlanRequest> {
+        Vec::new()
+    }
+}
+
+impl StackPlanner for PlannerServer {
+    fn send_goal(&mut self, goal: ComputePathToPose) -> GoalId {
+        PlannerServer::send_goal(self, goal)
+    }
+
+    fn cancel_goal(&mut self, goal: GoalId) -> bool {
+        PlannerServer::cancel_goal(self, goal)
+    }
+
+    fn current_goal(&self) -> Option<GoalId> {
+        PlannerServer::current_goal(self)
+    }
+
+    fn has_work(&self) -> bool {
+        PlannerServer::has_work(self)
+    }
+
+    fn tick(&mut self, input: PlanInput<'_>) -> PlanOutput {
+        PlannerServer::tick(self, input)
+    }
+}
+
+/// The stack's side of a planner_server that runs elsewhere: it numbers the
+/// tree's goals from 1, as [`PlannerServer`] does, and hands them and their
+/// cancels out as [`PlanRequest`]s. It plans nothing and logs nothing (the
+/// planner's [`PlanOutput`] is the planner's side's to report), and is never
+/// busy as far as the stack's schedule goes.
+#[derive(Debug, Clone)]
+pub struct ExternalPlanner {
+    next_goal: GoalId,
+    requests: Vec<PlanRequest>,
+}
+
+impl Default for ExternalPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExternalPlanner {
+    pub fn new() -> Self {
+        Self { next_goal: 1, requests: Vec::new() }
+    }
+
+    /// Goals sent so far (`PlannerServer::goals_received`).
+    pub fn goals_sent(&self) -> u64 {
+        self.next_goal - 1
+    }
+}
+
+impl StackPlanner for ExternalPlanner {
+    fn send_goal(&mut self, goal: ComputePathToPose) -> GoalId {
+        let id = self.next_goal;
+        self.next_goal += 1;
+        self.requests.push(PlanRequest::Send { id, goal });
+        id
+    }
+
+    fn cancel_goal(&mut self, goal: GoalId) -> bool {
+        self.requests.push(PlanRequest::Cancel(goal));
+        true
+    }
+
+    fn current_goal(&self) -> Option<GoalId> {
+        None
+    }
+
+    fn has_work(&self) -> bool {
+        false
+    }
+
+    fn tick(&mut self, _input: PlanInput<'_>) -> PlanOutput {
+        PlanOutput::default()
+    }
+
+    fn take_requests(&mut self) -> Vec<PlanRequest> {
+        std::mem::take(&mut self.requests)
+    }
+}
+
 /// The servers, their schedules, and who sent which goal.
 #[derive(Debug, Clone)]
-pub struct NavStack<C: Controller> {
+pub struct NavStack<C: Controller, P: StackPlanner = PlannerServer> {
     pub navigator: Navigator,
-    pub planner: PlannerServer,
+    pub planner: P,
     pub controller: ControllerServer<C>,
     bt_rate: Option<Rate>,
     next_bt_ns: Option<i64>,
@@ -149,15 +277,33 @@ impl NavStack<RotationShim<RegulatedPurePursuit>> {
     }
 }
 
+impl NavStack<RotationShim<RegulatedPurePursuit>, ExternalPlanner> {
+    /// The tree and the controller server as `nav2_no_map_params.yaml`
+    /// configures them, the planner_server elsewhere (`PlannerServer::mower`
+    /// on the global costmap, there).
+    pub fn mower_external_planner() -> Self {
+        Self::new(Navigator::mower(), ExternalPlanner::new(), ControllerServer::mower())
+    }
+}
+
+impl<C: Controller> NavStack<C, ExternalPlanner> {
+    /// The result of a goal from [`StackOutput::plan_requests`]. The tree
+    /// sees it at its next tick, as it sees an inline planner's (a result for
+    /// a goal it no longer waits on is dropped there).
+    pub fn on_compute_path_result(&mut self, r: ComputePathResult) {
+        self.navigator.on_compute_path_result(r);
+    }
+}
+
 /// [`NavServers`] for the tree: the stack's planner and controller.
-struct Servers<'a, C: Controller> {
-    planner: &'a mut PlannerServer,
+struct Servers<'a, C: Controller, P: StackPlanner> {
+    planner: &'a mut P,
     controller: &'a mut ControllerServer<C>,
     tree_follow_goals: &'a mut Vec<GoalId>,
     clears: &'a mut Vec<CostmapId>,
 }
 
-impl<C: Controller> NavServers for Servers<'_, C> {
+impl<C: Controller, P: StackPlanner> NavServers for Servers<'_, C, P> {
     fn send_compute_path(&mut self, goal: ComputePathToPose) -> GoalId {
         self.planner.send_goal(goal)
     }
@@ -181,8 +327,8 @@ impl<C: Controller> NavServers for Servers<'_, C> {
     }
 }
 
-impl<C: Controller> NavStack<C> {
-    pub fn new(navigator: Navigator, planner: PlannerServer, controller: ControllerServer<C>) -> Self {
+impl<C: Controller, P: StackPlanner> NavStack<C, P> {
+    pub fn new(navigator: Navigator, planner: P, controller: ControllerServer<C>) -> Self {
         Self {
             navigator,
             planner,
@@ -265,6 +411,7 @@ impl<C: Controller> NavStack<C> {
         } else if !self.navigator.has_work() {
             self.next_bt_ns = None;
         }
+        out.plan_requests.extend(self.planner.take_requests());
 
         // planner_server's worker
         if self.next_planner_ns.is_some_and(|t| t <= now) && self.planner.has_work() {

@@ -1,14 +1,14 @@
 //! In-process navigation (docs/ROS_FREE_PLAN.md section 8, D6):
 //! mower_nav_core's `NavStack` (navigator + planner server + controller
-//! server) and `VelocitySmoother` on a dedicated thread, in place of nav2's
+//! server) and `VelocitySmoother` on dedicated threads, in place of nav2's
 //! `navigate_to_pose` / `follow_path` actions and `bt_navigator/get_state`.
 //!
 //! Selected with the node parameter `nav_backend: nav_core`
 //! (`RUST_NAV_CORE=true`, which also stops nav2 from being launched);
 //! `nav_backend: nav2`, the default, keeps the r2r action clients.
 //!
-//! What the runtime does (one "nav-core" `std::thread`, not the shared tokio
-//! workers):
+//! What the runtime does (two `std::thread`s, "nav-core" and "nav-planner",
+//! not the shared tokio workers):
 //!
 //! * builds the global costmap from `/map_grid_global` and the 3 x 3 m
 //!   rolling local costmap from `/map_grid` (both `nav_msgs/OccupancyGrid`,
@@ -27,20 +27,33 @@
 //! * routes results and feedback to the `GoalHandle` of the goal they belong
 //!   to, and keeps a ring of recent warnings for mower_nav's failure messages.
 //!
-//! All of that is [`core_loop`], which is pure and runs on an explicit clock;
-//! this file is its IO. The subscriptions are drained by tokio tasks into
-//! shared state (latest odometry, maps not taken yet) and the transforms are
-//! read where they live (the tfbus, or a graph fed from `/tf`). The thread
-//! loops: take the new maps, the queued commands and the latest transforms
-//! and twist, tick the loop at `SystemTime::now()`, publish, send outcomes and
-//! feedback, then sleep until the loop is next due (at most 10 ms), or block
-//! on the command channel while nothing runs. The publishers live on the
-//! thread (an `r2r::Publisher` is `Send`, and `rcl_publish` is thread-safe).
+//! The work is pure and runs on an explicit clock: [`core_loop`] on nav-core
+//! (the tree, the controller server, the local costmap, the smoother, the
+//! goals and the events) and [`planner_loop`] on nav-planner (planner_server
+//! and the global costmap), the split upstream has, so a NavFn search on a
+//! big zone map (up to ~0.4 s on the RK3568) never holds up a controller pass
+//! or a smoother output. This file is their IO:
 //!
-//! The API never waits for the thread: a goal or a cancel is a message on an
-//! unbounded channel, and readiness, the events and the tick age are read
-//! from state the thread only locks for a moment. A stalled thread therefore
-//! shows in [`NavRuntime::last_tick_age`] and nowhere else.
+//! * the subscriptions are drained by tokio tasks: `/odom` and `/map_grid`
+//!   into nav-core's shared inputs, `/map_grid_global` onto the planner's
+//!   channel, `/tf` into a transform graph. The transforms are read where
+//!   they live (the tfbus, or that graph), by each thread when it needs them;
+//! * nav-core loops: take the new local map, the queued commands (goals,
+//!   cancels, what the planner sent) and the latest transforms and twist,
+//!   tick at `SystemTime::now()`, publish, send the planner its requests and
+//!   clears and the goals their outcomes and feedback, then sleep until it is
+//!   next due (at most 10 ms), or block on its channel while nothing runs.
+//!   The publishers live on it (an `r2r::Publisher` is `Send`, and
+//!   `rcl_publish` is thread-safe);
+//! * nav-planner loops the same way on its own channel: maps, clears and
+//!   requests in, a pass when due with the robot pose of that moment, results
+//!   and plans back onto nav-core's channel.
+//!
+//! The API never waits for either thread: a goal or a cancel is a message on
+//! an unbounded channel, and readiness, the events and the tick age are read
+//! from state the threads only lock for a moment. A stalled nav-core shows in
+//! [`NavRuntime::last_tick_age`]; a thread that panicked is logged and takes
+//! readiness down.
 
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
@@ -56,6 +69,8 @@ use mower_localize_core::tf::{Quaternion, Transform, Vector3};
 pub use mower_nav_core::action::GoalStatus;
 use mower_nav_core::costmap::OccupancyGrid;
 use mower_nav_core::geometry::{quaternion_from_yaw, yaw_from_quaternion, Pose2D, Transform2D, Twist2D};
+use mower_nav_core::nav_stack::StackLog;
+use mower_nav_core::smoother::TwistStamped as StampedTwist;
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped, Quaternion as RQuaternion, Transform as RTransform, Twist, TwistStamped, Vector3 as RVector3};
 use r2r::nav_msgs::msg::{OccupancyGrid as ROccupancyGrid, Odometry, Path};
@@ -64,8 +79,10 @@ use r2r::tf2_msgs::msg::TFMessage;
 use r2r::QosProfile;
 
 pub mod core_loop;
+pub mod planner_loop;
 
 use core_loop::{CoreLoop, Inputs, LoopParams, TickInput, TickOutput, SEC};
+use planner_loop::{FromPlanner, PlannerLoop, ToPlanner};
 
 /// Where the robot pose comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,21 +183,26 @@ impl Readiness {
     }
 }
 
-/// The longest the thread sleeps while something runs.
+
+/// The longest a thread sleeps while it has something to run.
 const MAX_SLEEP: Duration = Duration::from_millis(10);
-/// A tick that takes longer than a controller period is reported, at most
-/// once per `SLOW_TICK_REPORT` and server (a big map can make every replan
-/// that slow, and the ring has room for 40 lines).
+/// A nav-core tick that takes longer than a controller period is reported,
+/// and so is a plan that takes longer than `expected_planner_frequency`'s
+/// period (also 50 ms), each at most once per `SLOW_TICK_REPORT`: on a big
+/// map every replan is that slow.
 const SLOW_TICK: Duration = Duration::from_millis(50);
 const SLOW_TICK_REPORT: Duration = Duration::from_secs(10);
 
-/// The running stack. Dropping it stops the thread; goals still running end
+/// The running stack. Dropping it stops the threads; goals still running end
 /// without an outcome (their `result` receivers error).
 pub struct NavRuntime {
     shared: Arc<Shared>,
+    /// nav-core's channel.
     commands: mpsc::Sender<Command>,
+    /// nav-planner's channel.
+    planner_tx: mpsc::Sender<PlannerMsg>,
     next_key: AtomicU64,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
     /// The subscription tasks.
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -194,7 +216,7 @@ const _: () = {
 
 impl NavRuntime {
     /// Creates the subscriptions and publishers on `node` and starts the
-    /// thread. `logger` is the node's logger name. Call it inside a tokio
+    /// threads. `logger` is the node's logger name. Call it inside a tokio
     /// runtime (the subscriptions are drained by tokio tasks); the caller
     /// spins `node`.
     pub fn start(node: &mut r2r::Node, params: CoreParams, logger: &str) -> Result<Arc<Self>, r2r::Error> {
@@ -212,63 +234,42 @@ impl NavRuntime {
             )),
         };
 
-        let shared = Arc::new(Shared {
-            topic_tf: tf.is_some().then(|| Mutex::new(TopicTf::default())),
-            inputs: Mutex::new(Inputs::default()),
-            live: Mutex::new(HashSet::new()),
-            events: Mutex::new(Vec::new()),
-            last_tick: Mutex::new(Instant::now()),
-            idle: AtomicBool::new(false),
-            alive: AtomicBool::new(true),
-            params: params.clone(),
-        });
-        let core = CoreLoop::new(LoopParams {
-            map_frame: params.map_frame.clone(),
-            odom_frame: params.odom_frame.clone(),
-            base_frame: params.base_frame.clone(),
-            odom_timeout_ns: (params.odom_timeout_s * 1e9) as i64,
-        });
-        let (commands, rx) = mpsc::channel();
-        let io = Io {
-            shared: shared.clone(),
-            rx,
-            cmd_pub,
-            plan_pub,
-            logger: logger.to_string(),
-            sinks: HashMap::new(),
-            logged_seq: 0,
-            events_revision: 0,
-            publish_failed: HashSet::new(),
-            slow_reported: HashMap::new(),
-        };
-        let thread_logger = logger.to_string();
-        let thread = std::thread::Builder::new()
-            .name("nav-core".into())
-            .spawn(move || {
-                if let Err(e) = std::panic::catch_unwind(AssertUnwindSafe(|| io.run(core))) {
-                    let what = e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_default();
-                    r2r::log_error!(&thread_logger, "nav_core: the nav-core thread panicked ({what}); navigation is stopped");
+        let outputs = RosOutputs { cmd_pub, plan_pub, params: params.clone(), logger: logger.to_string(), failed: HashSet::new() };
+        let mut rt = Self::spawn(params.clone(), logger, Box::new(outputs))?;
+        let shared = rt.shared.clone();
+        rt.tasks.push({
+            let shared = shared.clone();
+            let mut odom = odom;
+            tokio::spawn(async move {
+                while let Some(msg) = odom.next().await {
+                    let t = &msg.twist.twist;
+                    lock(&shared.inputs).set_odom(Twist2D::new(t.linear.x, t.linear.y, t.angular.z), wall_ns());
                 }
             })
-            .map_err(|_| r2r::Error::RCL_RET_ERROR)?;
-
-        let mut tasks = vec![
-            {
-                let shared = shared.clone();
-                let mut odom = odom;
-                tokio::spawn(async move {
-                    while let Some(msg) = odom.next().await {
-                        let t = &msg.twist.twist;
-                        lock(&shared.inputs).set_odom(Twist2D::new(t.linear.x, t.linear.y, t.angular.z), wall_ns());
+        });
+        rt.tasks.push({
+            let shared = shared.clone();
+            let mut local_map = local_map;
+            tokio::spawn(async move {
+                while let Some(msg) = local_map.next().await {
+                    lock(&shared.inputs).set_local_map(grid_in(msg));
+                }
+            })
+        });
+        rt.tasks.push({
+            let planner = rt.planner_tx.clone();
+            let mut global_map = global_map;
+            tokio::spawn(async move {
+                while let Some(msg) = global_map.next().await {
+                    if planner.send(PlannerMsg::Map(grid_in(msg))).is_err() {
+                        return;
                     }
-                })
-            },
-            spawn_map(shared.clone(), local_map, false),
-            spawn_map(shared.clone(), global_map, true),
-        ];
+                }
+            })
+        });
         if let Some((tf, tf_static)) = tf {
-            tasks.push(spawn_tf(shared.clone(), tf, false));
-            tasks.push(spawn_tf(shared.clone(), tf_static, true));
+            rt.tasks.push(spawn_tf(shared.clone(), tf, false));
+            rt.tasks.push(spawn_tf(shared, tf_static, true));
         }
         let source = match params.pose_source {
             PoseSource::TfBus => "the tfbus",
@@ -281,17 +282,65 @@ impl NavRuntime {
             params.map_topic,
             params.cmd_vel_topic
         );
-        Ok(Arc::new(Self { shared, commands, next_key: AtomicU64::new(1), thread: Some(thread), tasks }))
+        Ok(Arc::new(rt))
+    }
+
+    /// The two threads, their output going to `outputs`; the inputs are
+    /// whoever writes the shared state and the planner's channel.
+    fn spawn(params: CoreParams, logger: &str, outputs: Box<dyn Outputs>) -> Result<Self, r2r::Error> {
+        let shared = Arc::new(Shared {
+            topic_tf: (params.pose_source == PoseSource::TfTopic).then(|| Mutex::new(TopicTf::default())),
+            inputs: Mutex::new(Inputs::default()),
+            live: Mutex::new(HashSet::new()),
+            events: Mutex::new(Vec::new()),
+            last_tick: Mutex::new(Instant::now()),
+            idle: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            planner_alive: AtomicBool::new(true),
+            global_map: AtomicBool::new(false),
+            params: params.clone(),
+        });
+        let core = CoreLoop::new(LoopParams {
+            map_frame: params.map_frame.clone(),
+            odom_frame: params.odom_frame.clone(),
+            base_frame: params.base_frame.clone(),
+            odom_timeout_ns: (params.odom_timeout_s * 1e9) as i64,
+        });
+        let (commands, rx) = mpsc::channel();
+        let (planner_tx, planner_rx) = mpsc::channel();
+        let io = Io {
+            shared: shared.clone(),
+            rx,
+            planner_tx: planner_tx.clone(),
+            outputs,
+            logger: logger.to_string(),
+            sinks: HashMap::new(),
+            logged_seq: 0,
+            events_revision: 0,
+            last_slow_report: None,
+        };
+        let planner = PlannerIo { shared: shared.clone(), rx: planner_rx, core_tx: commands.clone(), last_slow_report: None };
+        let core_thread = spawn_named("nav-core", logger, move || io.run(core))?;
+        let planner_thread = match spawn_named("nav-planner", logger, move || planner.run(PlannerLoop::new())) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = commands.send(Command::Stop);
+                let _ = core_thread.join();
+                return Err(e);
+            }
+        };
+        Ok(Self { shared, commands, planner_tx, next_key: AtomicU64::new(1), threads: vec![core_thread, planner_thread], tasks: Vec::new() })
     }
 
     pub fn readiness(&self) -> Readiness {
-        if !self.shared.alive.load(Ordering::Acquire) {
+        let s = &self.shared;
+        if !(s.alive.load(Ordering::Acquire) && s.planner_alive.load(Ordering::Acquire)) {
             return Readiness::default();
         }
-        let poses = self.shared.poses();
+        let poses = s.poses();
         let pose = poses.map_from_odom.is_some() && poses.odom_pose.is_some();
-        let timeout = (self.shared.params.odom_timeout_s * 1e9) as i64;
-        lock(&self.shared.inputs).readiness(wall_ns(), pose, timeout)
+        let timeout = (s.params.odom_timeout_s * 1e9) as i64;
+        lock(&s.inputs).readiness(wall_ns(), pose, s.global_map.load(Ordering::Acquire), timeout)
     }
 
     /// A `navigate_to_pose` goal (pose in `map`). Taken up at the thread's
@@ -362,16 +411,33 @@ impl Drop for NavRuntime {
             task.abort();
         }
         let _ = self.commands.send(Command::Stop);
-        if let Some(thread) = self.thread.take() {
+        let _ = self.planner_tx.send(PlannerMsg::Stop);
+        // the planner finishes the plan it is on first
+        for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
     }
 }
 
+/// A named thread whose panic is logged (its guards then take readiness
+/// down and close its goals' channels).
+fn spawn_named(name: &str, logger: &str, f: impl FnOnce() + Send + 'static) -> Result<JoinHandle<()>, r2r::Error> {
+    let (thread_name, logger) = (name.to_string(), logger.to_string());
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            if let Err(e) = std::panic::catch_unwind(AssertUnwindSafe(f)) {
+                let what = e.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_default();
+                r2r::log_error!(&logger, "nav_core: the {thread_name} thread panicked ({what}); navigation is stopped");
+            }
+        })
+        .map_err(|_| r2r::Error::RCL_RET_ERROR)
+}
+
 // --- shared state --------------------------------------------------------------
 
-/// What the subscription tasks, the thread and the API share. Every lock is
-/// held for a copy or a swap, never across a tick.
+/// What the subscription tasks, the threads and the API share. Every lock is
+/// held for a copy or a swap, never across a tick or a plan.
 struct Shared {
     params: CoreParams,
     inputs: Mutex<Inputs>,
@@ -379,22 +445,33 @@ struct Shared {
     topic_tf: Option<Mutex<TopicTf>>,
     /// Goals sent whose outcome has not been delivered.
     live: Mutex<HashSet<GoalKey>>,
-    /// The loop's event ring, rendered, with when each happened.
+    /// nav-core's event ring, rendered, with when each happened.
     events: Mutex<Vec<(Instant, String)>>,
     last_tick: Mutex<Instant>,
-    /// The thread waits for a command with nothing to run.
+    /// nav-core waits for a command with nothing to run.
     idle: AtomicBool,
-    /// Cleared when the thread ends, by return or panic.
+    /// Cleared when nav-core ends, by return or panic.
     alive: AtomicBool,
+    /// Cleared when nav-planner ends.
+    planner_alive: AtomicBool,
+    /// nav-planner has a global costmap (readiness' `global_map`).
+    global_map: AtomicBool,
 }
 
-/// The robot pose as the loop and readiness read it.
+/// The robot pose as the loops and readiness read it.
 #[derive(Debug, Clone, Copy, Default)]
 struct Poses {
     map_from_odom: Option<Transform2D>,
     odom_pose: Option<Pose2D>,
     /// Since the older of the two dynamic edges was updated.
     age: Option<Duration>,
+}
+
+impl Poses {
+    /// `map <- base_footprint`.
+    fn map_pose(&self) -> Option<Pose2D> {
+        Some(self.map_from_odom?.apply_pose(&self.odom_pose?))
+    }
 }
 
 impl Shared {
@@ -491,22 +568,6 @@ fn grid_in(msg: ROccupancyGrid) -> OccupancyGrid {
     }
 }
 
-fn spawn_map(
-    shared: Arc<Shared>, mut stream: impl Stream<Item = ROccupancyGrid> + Unpin + Send + 'static, global: bool,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        while let Some(msg) = stream.next().await {
-            let grid = grid_in(msg);
-            let mut inputs = lock(&shared.inputs);
-            if global {
-                inputs.set_global_map(grid);
-            } else {
-                inputs.set_local_map(grid);
-            }
-        }
-    })
-}
-
 fn spawn_tf(
     shared: Arc<Shared>, mut stream: impl Stream<Item = TFMessage> + Unpin + Send + 'static, statics: bool,
 ) -> tokio::task::JoinHandle<()> {
@@ -522,12 +583,73 @@ fn spawn_tf(
     })
 }
 
-// --- the thread ------------------------------------------------------------------
+// --- outputs -----------------------------------------------------------------
+
+/// Where nav-core's output goes: `/nav_cmd_vel` and `/plan`, or a test's
+/// recorder.
+trait Outputs: Send {
+    fn cmd_vel(&mut self, cmd: &StampedTwist);
+    fn plan(&mut self, plan: &[Pose2D], stamp_ns: i64);
+}
+
+struct RosOutputs {
+    cmd_pub: r2r::Publisher<TwistStamped>,
+    plan_pub: r2r::Publisher<Path>,
+    params: CoreParams,
+    logger: String,
+    /// Topics whose publish failed (logged once each).
+    failed: HashSet<String>,
+}
+
+impl RosOutputs {
+    fn warn_once(&mut self, topic: &str, r: Result<(), r2r::Error>) {
+        if let Err(e) = r {
+            if self.failed.insert(topic.to_string()) {
+                r2r::log_warn!(&self.logger, "nav_core: publishing on {topic} failed: {e}");
+            }
+        }
+    }
+}
+
+impl Outputs for RosOutputs {
+    fn cmd_vel(&mut self, c: &StampedTwist) {
+        let msg = TwistStamped {
+            header: Header { stamp: stamp(c.stamp_ns), frame_id: c.frame_id.clone() },
+            twist: Twist {
+                linear: RVector3 { x: c.twist.x, y: c.twist.y, z: 0.0 },
+                angular: RVector3 { x: 0.0, y: 0.0, z: c.twist.theta },
+            },
+        };
+        let r = self.cmd_pub.publish(&msg);
+        let topic = self.params.cmd_vel_topic.clone();
+        self.warn_once(&topic, r);
+    }
+
+    fn plan(&mut self, plan: &[Pose2D], stamp_ns: i64) {
+        let header = Header { stamp: stamp(stamp_ns), frame_id: self.params.map_frame.clone() };
+        let poses = plan
+            .iter()
+            .map(|p| {
+                let (x, y, z, w) = quaternion_from_yaw(p.yaw);
+                PoseStamped { header: header.clone(), pose: Pose { position: Point { x: p.x, y: p.y, z: 0.0 }, orientation: RQuaternion { x, y, z, w } } }
+            })
+            .collect();
+        let r = self.plan_pub.publish(&Path { header, poses });
+        let topic = self.params.plan_topic.clone();
+        self.warn_once(&topic, r);
+    }
+}
+
+// --- nav-core --------------------------------------------------------------------
 
 enum Command {
     Navigate { key: GoalKey, pose: Pose2D, sinks: Sinks },
     Follow { key: GoalKey, path: Vec<Pose2D>, sinks: Sinks },
     Cancel(GoalKey),
+    /// Results, plans and log lines from nav-planner.
+    Planner(FromPlanner),
+    /// nav-planner has ended.
+    PlannerGone,
     Stop,
 }
 
@@ -544,16 +666,7 @@ fn channels(key: GoalKey) -> (GoalHandle, Sinks) {
     (GoalHandle { key, result, feedback }, Sinks { result: result_tx, feedback: feedback_tx })
 }
 
-/// Logs the first failed publish on each topic.
-fn warn_once(failed: &mut HashSet<String>, logger: &str, topic: &str, r: Result<(), r2r::Error>) {
-    if let Err(e) = r {
-        if failed.insert(topic.to_string()) {
-            r2r::log_warn!(logger, "nav_core: publishing on {topic} failed: {e}");
-        }
-    }
-}
-
-/// Clears `alive` when the thread ends, also by panic.
+/// Clears `alive` when nav-core ends, also by panic.
 struct Alive(Arc<Shared>);
 
 impl Drop for Alive {
@@ -562,21 +675,18 @@ impl Drop for Alive {
     }
 }
 
-/// The thread's side: the command queue, the publishers, the goals' sinks.
+/// nav-core's side: its channel, the planner's, the outputs, the goals' sinks.
 struct Io {
     shared: Arc<Shared>,
     rx: mpsc::Receiver<Command>,
-    cmd_pub: r2r::Publisher<TwistStamped>,
-    plan_pub: r2r::Publisher<Path>,
+    planner_tx: mpsc::Sender<PlannerMsg>,
+    outputs: Box<dyn Outputs>,
     logger: String,
     sinks: HashMap<GoalKey, Sinks>,
     /// The newest event already logged.
     logged_seq: u64,
     events_revision: u64,
-    /// Topics whose publish failed (logged once each).
-    publish_failed: HashSet<String>,
-    /// When a slow tick was last reported, per server.
-    slow_reported: HashMap<&'static str, Instant>,
+    last_slow_report: Option<Instant>,
 }
 
 impl Io {
@@ -585,27 +695,29 @@ impl Io {
         let mut woken_by = None;
         loop {
             let now = wall_ns();
-            // maps first: one that came before a goal is the goal's map
-            self.take_maps(&mut core, now);
-            if !self.take_commands(&mut core, woken_by.take()) {
+            self.take_local_map(&mut core, now);
+            if !self.take_commands(&mut core, woken_by.take(), now) {
                 return;
             }
             let input = self.inputs();
             let started = Instant::now();
-            let out = core.tick(now, &input);
+            let mut out = core.tick(now, &input);
             let took = started.elapsed();
-            if took > SLOW_TICK {
-                // a planner pass is what usually takes this long (NavFn on a
-                // big map); the controller waits for it on this thread
-                let (server, which) = if out.plans.is_empty() { ("controller_server", "Control") } else { ("planner_server", "Planner") };
-                if self.slow_reported.get(server).is_none_or(|at| at.elapsed() >= SLOW_TICK_REPORT) {
-                    self.slow_reported.insert(server, Instant::now());
-                    let hz = 1.0 / SLOW_TICK.as_secs_f64();
-                    let rate = 1.0 / took.as_secs_f64();
-                    core.record(now, format!("[{server}] {which} loop missed its desired rate of {hz:.4} Hz. Current loop rate is {rate:.4} Hz"));
-                }
+            if took > SLOW_TICK && self.last_slow_report.is_none_or(|at| at.elapsed() >= SLOW_TICK_REPORT) {
+                self.last_slow_report = Some(Instant::now());
+                let (hz, rate) = (1.0 / SLOW_TICK.as_secs_f64(), 1.0 / took.as_secs_f64());
+                core.record(now, format!("[controller_server] Control loop missed its desired rate of {hz:.4} Hz. Current loop rate is {rate:.4} Hz"));
             }
-            self.publish(&out, now);
+            for msg in out.to_planner.drain(..) {
+                // a planner that is gone has said so (Command::PlannerGone)
+                let _ = self.planner_tx.send(PlannerMsg::Core(msg));
+            }
+            for c in &out.cmd_vel {
+                self.outputs.cmd_vel(c);
+            }
+            for plan in &out.plans {
+                self.outputs.plan(plan, now);
+            }
             self.deliver(out);
             self.sync_events(&core);
             *lock(&self.shared.last_tick) = Instant::now();
@@ -635,7 +747,7 @@ impl Io {
     }
 
     /// Takes up every queued command; `false` once the runtime is dropped.
-    fn take_commands(&mut self, core: &mut CoreLoop, first: Option<Command>) -> bool {
+    fn take_commands(&mut self, core: &mut CoreLoop, first: Option<Command>, now: i64) -> bool {
         let mut next = first;
         loop {
             let command = match next.take() {
@@ -658,22 +770,21 @@ impl Io {
                 Command::Cancel(key) => {
                     core.cancel(key);
                 }
+                Command::Planner(from) => core.on_planner(now, from),
+                Command::PlannerGone => core.planner_gone(now),
                 Command::Stop => return false,
             }
         }
     }
 
-    /// Maps that arrived since the last tick, into the loop.
-    fn take_maps(&mut self, core: &mut CoreLoop, now: i64) {
-        let (global, local, notes) = {
+    /// A local map that arrived since the last tick, and the rejected ones.
+    fn take_local_map(&mut self, core: &mut CoreLoop, now: i64) {
+        let (local, notes) = {
             let mut inputs = lock(&self.shared.inputs);
-            (inputs.global_map.take(), inputs.local_map.take(), std::mem::take(&mut inputs.notes))
+            (inputs.local_map.take(), std::mem::take(&mut inputs.notes))
         };
         for note in notes {
             core.record(now, note);
-        }
-        if let Some(grid) = global {
-            core.set_global_map(now, &grid);
         }
         if let Some(grid) = local {
             core.set_local_map(now, &grid);
@@ -688,34 +799,6 @@ impl Io {
             odom_pose: poses.odom_pose,
             pose_age_ns: poses.age.map(|a| a.as_nanos() as i64),
             odom: lock(&self.shared.inputs).odom,
-        }
-    }
-
-    fn publish(&mut self, out: &TickOutput, now: i64) {
-        let p = &self.shared.params;
-        for c in &out.cmd_vel {
-            let msg = TwistStamped {
-                header: Header { stamp: stamp(c.stamp_ns), frame_id: c.frame_id.clone() },
-                twist: Twist {
-                    linear: RVector3 { x: c.twist.x, y: c.twist.y, z: 0.0 },
-                    angular: RVector3 { x: 0.0, y: 0.0, z: c.twist.theta },
-                },
-            };
-            warn_once(&mut self.publish_failed, &self.logger, &p.cmd_vel_topic, self.cmd_pub.publish(&msg));
-        }
-        for plan in &out.plans {
-            let header = Header { stamp: stamp(now), frame_id: p.map_frame.clone() };
-            let poses = plan
-                .iter()
-                .map(|pose| {
-                    let (x, y, z, w) = quaternion_from_yaw(pose.yaw);
-                    PoseStamped {
-                        header: header.clone(),
-                        pose: Pose { position: Point { x: pose.x, y: pose.y, z: 0.0 }, orientation: RQuaternion { x, y, z, w } },
-                    }
-                })
-                .collect();
-            warn_once(&mut self.publish_failed, &self.logger, &p.plan_topic, self.plan_pub.publish(&Path { header, poses }));
         }
     }
 
@@ -756,6 +839,96 @@ impl Io {
             })
             .collect();
         *lock(&self.shared.events) = events;
+    }
+}
+
+// --- nav-planner -------------------------------------------------------------------
+
+enum PlannerMsg {
+    /// A `/map_grid_global`.
+    Map(OccupancyGrid),
+    /// From nav-core, in order.
+    Core(ToPlanner),
+    Stop,
+}
+
+/// When nav-planner ends (also by panic): readiness goes down and nav-core
+/// fails the plans it waits for instead of waiting for ever.
+struct PlannerGone {
+    shared: Arc<Shared>,
+    core_tx: mpsc::Sender<Command>,
+}
+
+impl Drop for PlannerGone {
+    fn drop(&mut self) {
+        self.shared.planner_alive.store(false, Ordering::Release);
+        let _ = self.core_tx.send(Command::PlannerGone);
+    }
+}
+
+/// nav-planner's side: its channel and nav-core's.
+struct PlannerIo {
+    shared: Arc<Shared>,
+    rx: mpsc::Receiver<PlannerMsg>,
+    core_tx: mpsc::Sender<Command>,
+    last_slow_report: Option<Instant>,
+}
+
+impl PlannerIo {
+    fn run(mut self, mut planner: PlannerLoop) {
+        let _gone = PlannerGone { shared: self.shared.clone(), core_tx: self.core_tx.clone() };
+        let mut woken_by = None;
+        loop {
+            let now = wall_ns();
+            let mut next = woken_by.take();
+            loop {
+                let msg = match next.take() {
+                    Some(msg) => msg,
+                    None => match self.rx.try_recv() {
+                        Ok(msg) => msg,
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    },
+                };
+                match msg {
+                    PlannerMsg::Map(grid) => {
+                        planner.set_global_map(now, &grid);
+                        self.shared.global_map.store(planner.has_map(), Ordering::Release);
+                    }
+                    PlannerMsg::Core(msg) => planner.handle(now, msg),
+                    PlannerMsg::Stop => return,
+                }
+            }
+            // the robot where it is now, at the start of the plan
+            let started = Instant::now();
+            let mut out = planner.tick(wall_ns(), self.shared.poses().map_pose());
+            let took = started.elapsed();
+            if !out.plans.is_empty() && took > SLOW_TICK && self.last_slow_report.is_none_or(|at| at.elapsed() >= SLOW_TICK_REPORT) {
+                // upstream times a plan on the wall clock, NavFn included;
+                // the server's own figure is its costmap wait
+                self.last_slow_report = Some(Instant::now());
+                let waited = out.log.iter().find_map(|l| if let StackLog::PlannerMissedRate(s) = l { Some(*s) } else { None });
+                out.log.retain(|l| !matches!(l, StackLog::PlannerMissedRate(_)));
+                out.log.push(StackLog::PlannerMissedRate(waited.unwrap_or(0.0) + took.as_secs_f64()));
+            }
+            if !out.is_empty() && self.core_tx.send(Command::Planner(out)).is_err() {
+                return;
+            }
+            woken_by = match planner.next_due_ns() {
+                Some(due) => {
+                    let wait = Duration::from_nanos((due - wall_ns()).max(0) as u64).min(MAX_SLEEP);
+                    match self.rx.recv_timeout(wait) {
+                        Ok(msg) => Some(msg),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                None => match self.rx.recv() {
+                    Ok(msg) => Some(msg),
+                    Err(_) => return,
+                },
+            };
+        }
     }
 }
 
@@ -969,5 +1142,102 @@ mod tests {
         listener.abort();
         let _ = mover.await;
         let _ = spin.await;
+    }
+
+    /// What nav-core published, with when.
+    #[derive(Clone, Default)]
+    struct Recorder {
+        cmd_vel: Arc<Mutex<Vec<(Instant, StampedTwist)>>>,
+        plans: Arc<Mutex<Vec<Instant>>>,
+    }
+
+    impl Outputs for Recorder {
+        fn cmd_vel(&mut self, cmd: &StampedTwist) {
+            lock(&self.cmd_vel).push((Instant::now(), cmd.clone()));
+        }
+
+        fn plan(&mut self, _plan: &[Pose2D], _stamp_ns: i64) {
+            lock(&self.plans).push(Instant::now());
+        }
+    }
+
+    /// The two threads on the wall clock, without ROS: a 60 m zone at
+    /// 0.05 m (1240 x 1240 cells) and a goal 40 m away, so every NavFn search
+    /// covers most of the map (seconds in a debug build; ~0.4 s on the
+    /// RK3568 in release). While the planner thread searches, the robot keeps
+    /// following the previous plan: nav-core's 20 Hz output must not pause.
+    #[test]
+    fn a_long_plan_on_a_big_map_does_not_hold_up_the_control_loop() {
+        let params = CoreParams {
+            // frames of its own on the process-global tfbus
+            map_frame: "slow_plan_map".into(),
+            odom_frame: "slow_plan_odom".into(),
+            base_frame: "slow_plan_base".into(),
+            ..CoreParams::default()
+        };
+        let rec = Recorder::default();
+        let rt = NavRuntime::spawn(params.clone(), "nav_core_slow_plan_test", Box::new(rec.clone())).unwrap();
+        let n = 1240u32;
+        let data = (0..n).flat_map(|j| (0..n).map(move |i| if i == 0 || j == 0 || i == n - 1 || j == n - 1 { 100 } else { 0 })).collect();
+        let map = OccupancyGrid { width: n, height: n, resolution: 0.05f32 as f64, origin_x: -31.0, origin_y: -31.0, data };
+        rt.planner_tx.send(PlannerMsg::Map(map.clone())).unwrap();
+        lock(&rt.shared.inputs).set_local_map(map);
+
+        // a 50 Hz kinematic robot driven by the recorded /nav_cmd_vel
+        let running = Arc::new(AtomicBool::new(true));
+        let robot = {
+            let (rec, running, shared, params) = (rec.clone(), running.clone(), rt.shared.clone(), params.clone());
+            std::thread::spawn(move || {
+                let mut pose = Pose2D::new(-20.0, 0.0, 0.0);
+                while running.load(Ordering::Relaxed) {
+                    let twist = lock(&rec.cmd_vel).last().map(|(_, c)| c.twist).unwrap_or_default();
+                    let (s, c) = pose.yaw.sin_cos();
+                    pose = Pose2D::new(pose.x + twist.x * c * 0.02, pose.y + twist.x * s * 0.02, pose.yaw + twist.theta * 0.02);
+                    tfbus::set(&params.map_frame, &params.odom_frame, Transform::identity());
+                    let base = Transform::from_parts(&Quaternion::from_rpy(0.0, 0.0, pose.yaw), Vector3::new(pose.x, pose.y, 0.0));
+                    tfbus::set(&params.odom_frame, &params.base_frame, base);
+                    lock(&shared.inputs).set_odom(twist, wall_ns());
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pose
+            })
+        };
+        let wait_for = |what: &str, limit: Duration, done: &dyn Fn() -> bool| {
+            let start = Instant::now();
+            while !done() {
+                assert!(start.elapsed() < limit, "{what} within {limit:?}");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait_for("ready", Duration::from_secs(30), &|| rt.readiness().ready());
+        let goal = rt.send_navigate(Pose2D::new(20.0, 0.0, 0.0));
+        // the first plan is in once the robot moves
+        wait_for("the first plan", Duration::from_secs(120), &|| lock(&rec.cmd_vel).iter().any(|(_, c)| c.twist.x > 0.1));
+        let first_plans = lock(&rec.plans).len();
+        let from = Instant::now();
+        // until two more plans have come in, the second of them searched for
+        // while the robot drove
+        wait_for("two replans", Duration::from_secs(120), &|| lock(&rec.plans).len() >= first_plans + 2);
+        let to = Instant::now();
+
+        let outputs: Vec<Instant> = lock(&rec.cmd_vel).iter().map(|(at, _)| *at).filter(|at| (from..to).contains(at)).collect();
+        let longest = outputs.windows(2).map(|w| w[1] - w[0]).max().expect("outputs while planning");
+        // a result is seen one tick after it comes in, and the 1 Hz replan
+        // timer restarts then: the spacing of the plans is ~1 s + a search
+        let plans = lock(&rec.plans).clone();
+        let spacing: Vec<Duration> = plans.windows(2).map(|w| w[1] - w[0]).collect();
+        println!("{} outputs over {:?}, longest gap {longest:?}; plans every {spacing:?}", outputs.len(), to - from);
+        // 20 Hz is a 50 ms gap; a plan here takes far longer than the bound
+        assert!(longest < Duration::from_millis(150), "a {longest:?} gap in {} outputs over {:?}", outputs.len(), to - from);
+        assert!(outputs.len() as f64 >= (to - from).as_secs_f64() * 15.0, "{} outputs over {:?}", outputs.len(), to - from);
+        assert!(rt.last_tick_age() < Duration::from_millis(150));
+        let events = rt.recent_events(from - Duration::from_secs(60));
+        assert!(!events.iter().any(|e| e.contains("Control loop missed")), "{events:?}");
+
+        assert!(rt.cancel(goal.key));
+        drop(rt);
+        running.store(false, Ordering::Relaxed);
+        let end = robot.join().unwrap();
+        assert!(end.x > -20.0 + 0.5, "the robot drove while the planner searched: {end:?}");
     }
 }

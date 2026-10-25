@@ -1,35 +1,29 @@
-//! The runtime's pure half: everything the nav-core thread does between
-//! reading its inputs and publishing, on an explicit clock (`now_ns`, wall
-//! time in ns, which is also what ROS stamps with on this robot). No r2r, no
-//! threads, no I/O, so it runs the same live and under test.
+//! The nav-core thread's pure half: everything it does between reading its
+//! inputs and publishing, on an explicit clock (`now_ns`, wall time in ns,
+//! which is also what ROS stamps with on this robot). No r2r, no threads, no
+//! I/O, so it runs the same live and under test.
 //!
 //! [`CoreLoop`] owns:
 //!
-//! * the stack. `NavStack::mower` is built when the first `/map_grid_global`
-//!   arrives; a goal that comes before any map builds it on a one-cell
-//!   placeholder that is never current, so the goal waits and times out the
-//!   way nav2's servers do without a map. A later map does not rebuild it:
-//!   NavFn re-sizes its arrays to the costmap it is handed
-//!   (`isPlannerOutOfDate`), so the planner follows a map of another size.
-//! * the global costmap (1 Hz, `track_unknown_space: true`). As in
-//!   `StaticLayer`, the map's own grid is kept apart from the master grid
-//!   the planner reads, which NavFn's `clearRobotCell` writes into. An
-//!   update repaints the master only for a newer map or after a clear
-//!   (`has_updated_data_`), so the holes NavFn leaves stay until then, as
-//!   upstream. A newer map that arrives during a navigate goal waits for the
-//!   next update (`map_buffer_`); between goals, which is when mower_map
-//!   changes them, it is taken at once, so the next goal never plans on the
-//!   old map (nav2 could, for up to a second).
+//! * the stack, `NavStack::mower_external_planner`: the tree and the
+//!   controller server. planner_server runs on a thread of its own on the
+//!   global costmap ([`super::planner_loop`]), as upstream's does, so a long
+//!   NavFn search never holds up a controller pass or the smoother. The
+//!   tree's requests and its clears of the global costmap go out in
+//!   [`TickOutput::to_planner`] (a tick's clears first, the order an inline
+//!   planner sees them in); the results, the plans for `/plan` and the
+//!   planner's log come back through [`CoreLoop::on_planner`] before a tick.
+//!   If the planner thread is gone ([`CoreLoop::planner_gone`]) every plan
+//!   fails (`UNKNOWN`, 200), so a navigate goal ends instead of waiting for
+//!   ever.
 //! * the local costmap (2 Hz): `/map_grid` through the static layer
 //!   (`track_unknown_space: false`) sampled into the 3 x 3 m rolling window
 //!   around the odom pose through `map <- odom`, at once for a new map. An
 //!   update needs the map, the pose and the transform and is skipped
 //!   without them, as `Costmap2DROS::updateMap` is when `getRobotPose`
-//!   fails.
-//! * the current flags, with nav2's semantics: a costmap is current once it
-//!   has been painted; a clear (`StackOutput::clears`) makes it not current
-//!   until its next update, which repaints it. The servers wait for a
-//!   current costmap (and time out after 1 s).
+//!   fails. It is current once it has been painted; a clear
+//!   (`StackOutput::clears`) makes it not current until its next update.
+//!   The controller waits for a current costmap (and times out after 1 s).
 //! * the velocity smoother: every command of the stack goes in, in order.
 //!   Its 20 Hz timer runs from the first command after rest until it times
 //!   out at rest, and its output is `/nav_cmd_vel`, stamped with the
@@ -40,37 +34,37 @@
 //!   Results and feedback go back by key, a nonzero code with a cause in
 //!   `error_msg`.
 //! * the event ring: the last [`EVENT_RING`] things nav2 would have logged
-//!   at WARN or ERROR (`StackOutput::log`, clears) and what the inputs
-//!   lacked, each with its time and prefixed with the nav2 node it belongs
-//!   to (`[controller_server] ...`), as mower_nav's failure summary quotes
-//!   nav2's `/rosout`. An event repeated back to back is one entry with a
-//!   count.
+//!   at WARN or ERROR (`StackOutput::log`, the planner's, clears) and what the
+//!   inputs lacked, each with its time and prefixed with the nav2 node it
+//!   belongs to (`[controller_server] ...`), as mower_nav's failure summary
+//!   quotes nav2's `/rosout`. An event repeated back to back is one entry
+//!   with a count.
 //!
 //! The clock is held when the wall clock steps back, so no stamp on
 //! `/nav_cmd_vel` ever goes backward (velocity_command_guard rejects those).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use mower_nav_core::action::GoalId;
+use mower_nav_core::action::{GoalId, GoalStatus};
 use mower_nav_core::controller_server;
 use mower_nav_core::costmap::{static_costmap, Costmap2D, OccupancyGrid, RollingWindow, StaticLayerParams, NO_INFORMATION};
 use mower_nav_core::geometry::{Pose2D, Transform2D, Twist2D};
-use mower_nav_core::nav_stack::{NavStack, StackInput, StackLog, StackOutput};
+use mower_nav_core::nav_stack::{ExternalPlanner, NavStack, PlanRequest, StackInput, StackLog, StackOutput};
 use mower_nav_core::navigator::CostmapId;
 use mower_nav_core::planner::PlannerError;
-use mower_nav_core::planner_server;
+use mower_nav_core::planner_server::{self, ComputePathResult, PlannerServerParams};
 use mower_nav_core::rpp::{ControllerError, RegulatedPurePursuit};
 use mower_nav_core::shim::RotationShim;
 use mower_nav_core::smoother::{TwistStamped, VelocitySmoother, VelocitySmootherParams};
 
+use super::planner_loop::{FromPlanner, ToPlanner};
 use super::{CoreFeedback, GoalKey, GoalOutcome, Readiness};
 
-type Stack = NavStack<RotationShim<RegulatedPurePursuit>>;
+type Stack = NavStack<RotationShim<RegulatedPurePursuit>, ExternalPlanner>;
 
 pub const MS: i64 = 1_000_000;
 pub const SEC: i64 = 1_000 * MS;
-/// `update_frequency` of the two costmaps (nav2_no_map_params.yaml).
-const GLOBAL_UPDATE_NS: i64 = SEC;
+/// `update_frequency` of the local costmap (nav2_no_map_params.yaml).
 const LOCAL_UPDATE_NS: i64 = SEC / 2;
 /// How many events the ring keeps.
 pub const EVENT_RING: usize = 40;
@@ -90,18 +84,17 @@ pub struct LoopParams {
     pub odom_timeout_ns: i64,
 }
 
-/// What the subscriptions have delivered: written by the IO tasks, read by
-/// the thread before every tick and by `NavRuntime::readiness`.
+/// What the subscriptions have delivered to nav-core: written by the IO
+/// tasks, read by the thread before every tick and by
+/// `NavRuntime::readiness`. (`/map_grid_global` goes to the planner thread.)
 #[derive(Debug, Default)]
 pub struct Inputs {
     /// The latest `/odom` twist (`linear.x`, `linear.y`, `angular.z`) and
     /// when it arrived (wall ns).
     pub odom: Option<(Twist2D, i64)>,
-    /// Maps the loop has not taken yet.
-    pub global_map: Option<OccupancyGrid>,
+    /// A local map the loop has not taken yet.
     pub local_map: Option<OccupancyGrid>,
-    /// A valid map has arrived on the topic.
-    pub has_global_map: bool,
+    /// A valid local map has arrived.
     pub has_local_map: bool,
     /// For the event ring (rejected maps); the loop takes them.
     pub notes: Vec<String>,
@@ -110,15 +103,6 @@ pub struct Inputs {
 impl Inputs {
     pub fn set_odom(&mut self, twist: Twist2D, now_ns: i64) {
         self.odom = Some((twist, now_ns));
-    }
-
-    pub fn set_global_map(&mut self, grid: OccupancyGrid) {
-        if valid_grid(&grid) {
-            self.global_map = Some(grid);
-            self.has_global_map = true;
-        } else {
-            self.notes.push("[global_costmap] Received map message is malformed. Rejecting.".into());
-        }
     }
 
     pub fn set_local_map(&mut self, grid: OccupancyGrid) {
@@ -130,11 +114,12 @@ impl Inputs {
         }
     }
 
-    /// Both maps, the pose (`pose`: `map <- odom` and `odom <- base` both
-    /// resolve) and odometry no older than `odom_timeout_ns`.
-    pub fn readiness(&self, now_ns: i64, pose: bool, odom_timeout_ns: i64) -> Readiness {
+    /// Both maps (`global_map`: the planner thread has one), the pose
+    /// (`pose`: `map <- odom` and `odom <- base` both resolve) and odometry no
+    /// older than `odom_timeout_ns`.
+    pub fn readiness(&self, now_ns: i64, pose: bool, global_map: bool, odom_timeout_ns: i64) -> Readiness {
         Readiness {
-            global_map: self.has_global_map,
+            global_map,
             local_map: self.has_local_map,
             pose,
             odometry: self.odom.is_some_and(|(_, at)| now_ns - at <= odom_timeout_ns),
@@ -143,7 +128,7 @@ impl Inputs {
 }
 
 /// `nav2_util::validateMsg` on what the static layer reads of a grid.
-fn valid_grid(g: &OccupancyGrid) -> bool {
+pub fn valid_grid(g: &OccupancyGrid) -> bool {
     g.width > 0
         && g.height > 0
         && g.data.len() == g.width as usize * g.height as usize
@@ -180,11 +165,13 @@ pub struct TickOutput {
     pub cmd_vel: Vec<TwistStamped>,
     /// The stack's commands, the smoother's input.
     pub commands: Vec<TwistStamped>,
-    /// `/plan`, in `map`.
+    /// `/plan`, in `map` (the planner's, received since the last tick).
     pub plans: Vec<Vec<Pose2D>>,
     pub feedback: Vec<(GoalKey, CoreFeedback)>,
     /// Goals that ended, in order; their keys are free again.
     pub outcomes: Vec<(GoalKey, GoalOutcome)>,
+    /// For the planner thread, in this order.
+    pub to_planner: Vec<ToPlanner>,
 }
 
 /// One entry of the event ring.
@@ -276,19 +263,16 @@ fn planner_what(e: PlannerError) -> &'static str {
     }
 }
 
-/// The global costmap.
-#[derive(Debug)]
-struct Global {
-    /// The static layer's own grid (`processMap`).
-    layer: Costmap2D,
-    /// The master grid the planner reads and NavFn writes into.
-    master: Costmap2D,
-    current: bool,
-    /// Not current because of a clear (not for want of a map).
-    cleared: bool,
-    /// A newer map, taken at the next update (`map_buffer_`).
-    buffered: Option<Costmap2D>,
-    next_update_ns: i64,
+/// What a plan request gets once the planner thread is gone.
+fn planner_gone_result(goal: GoalId) -> ComputePathResult {
+    ComputePathResult {
+        goal,
+        status: GoalStatus::Aborted,
+        error_code: planner_server::error_code::UNKNOWN,
+        error: Some(PlannerError::Unknown),
+        path: Vec::new(),
+        planning_time_ns: 0,
+    }
 }
 
 /// The local costmap.
@@ -313,7 +297,6 @@ struct Reported {
     map_from_odom: bool,
     pose_age: bool,
     local_wait: bool,
-    global_wait: bool,
     clock: bool,
 }
 
@@ -327,10 +310,10 @@ impl Reported {
 /// See the module doc.
 pub struct CoreLoop {
     p: LoopParams,
-    stack: Option<Stack>,
-    global: Option<Global>,
-    /// What the stack is built on before the first global map.
-    placeholder: Costmap2D,
+    stack: Stack,
+    /// `StackInput::global_costmap`, which the stack does not read with an
+    /// external planner.
+    unused_global: Costmap2D,
     local: Local,
     smoother: VelocitySmoother,
     /// The smoother timer's next firing; `None` at rest.
@@ -338,6 +321,11 @@ pub struct CoreLoop {
     navigate: HashMap<GoalId, GoalKey>,
     follow: HashMap<GoalId, GoalKey>,
     ids: HashMap<GoalKey, GoalId>,
+    /// Plan requests sent to the planner and not answered yet.
+    pending_plans: HashSet<GoalId>,
+    planner_alive: bool,
+    /// The planner's `/plan`s, for the next tick's output.
+    plans: Vec<Vec<Pose2D>>,
     /// The last failure per error code, `class: what()`, for the message of
     /// a navigate result (which carries only the code).
     failures: HashMap<u16, String>,
@@ -352,9 +340,8 @@ impl CoreLoop {
     pub fn new(p: LoopParams) -> Self {
         Self {
             p,
-            stack: None,
-            global: None,
-            placeholder: Costmap2D::new(1, 1, 0.05, 0.0, 0.0, NO_INFORMATION),
+            stack: NavStack::mower_external_planner(),
+            unused_global: Costmap2D::new(1, 1, 0.05, 0.0, 0.0, NO_INFORMATION),
             local: Local {
                 map: None,
                 window: RollingWindow::local_costmap(),
@@ -368,6 +355,9 @@ impl CoreLoop {
             navigate: HashMap::new(),
             follow: HashMap::new(),
             ids: HashMap::new(),
+            pending_plans: HashSet::new(),
+            planner_alive: true,
+            plans: Vec::new(),
             failures: HashMap::new(),
             events: VecDeque::new(),
             events_revision: 0,
@@ -382,39 +372,6 @@ impl CoreLoop {
         self.now_ns
     }
 
-    /// A `/map_grid_global`. The first one is painted at once (the static
-    /// layer processes it in its callback) and builds the stack; a later one
-    /// waits for the next update while a navigate goal runs, and is taken at
-    /// once otherwise.
-    pub fn set_global_map(&mut self, now_ns: i64, grid: &OccupancyGrid) {
-        let now = self.clock(now_ns);
-        let layer = static_costmap(grid, &StaticLayerParams::new(true));
-        let navigating = self.stack.as_ref().is_some_and(|s| s.navigator.is_executing() || s.planner.current_goal().is_some());
-        if let Some(g) = &mut self.global {
-            if navigating {
-                g.buffered = Some(layer);
-            } else {
-                g.layer = layer;
-                g.master.clone_from(&g.layer);
-                g.buffered = None;
-                g.current = true;
-                g.cleared = false;
-            }
-            return;
-        }
-        let g = self.global.insert(Global {
-            master: layer.clone(),
-            layer,
-            current: true,
-            cleared: false,
-            buffered: None,
-            next_update_ns: now + GLOBAL_UPDATE_NS,
-        });
-        if self.stack.is_none() {
-            self.stack = Some(NavStack::mower(&g.master));
-        }
-    }
-
     /// A `/map_grid`, sampled into the window by an update at the next tick.
     pub fn set_local_map(&mut self, now_ns: i64, grid: &OccupancyGrid) {
         let now = self.clock(now_ns);
@@ -423,52 +380,85 @@ impl CoreLoop {
     }
 
     pub fn send_navigate(&mut self, key: GoalKey, pose: Pose2D) {
-        let id = self.stack_mut().send_navigate(pose);
+        let id = self.stack.send_navigate(pose);
         self.navigate.insert(id, key);
         self.ids.insert(key, id);
     }
 
     pub fn send_follow_path(&mut self, key: GoalKey, path: Vec<Pose2D>) {
-        let id = self.stack_mut().send_follow_path(path);
+        let id = self.stack.send_follow_path(path);
         self.follow.insert(id, key);
         self.ids.insert(key, id);
     }
 
     /// `false` for a key that is unknown or has ended.
     pub fn cancel(&mut self, key: GoalKey) -> bool {
-        let (Some(&id), Some(stack)) = (self.ids.get(&key), self.stack.as_mut()) else {
+        let Some(&id) = self.ids.get(&key) else {
             return false;
         };
         match key {
-            GoalKey::Navigate(_) => stack.cancel_navigate(id),
-            GoalKey::Follow(_) => stack.cancel_follow_path(id),
+            GoalKey::Navigate(_) => self.stack.cancel_navigate(id),
+            GoalKey::Follow(_) => self.stack.cancel_follow_path(id),
+        }
+    }
+
+    /// What the planner thread sent: its log and notes into the ring, the
+    /// plans for the next `/plan`, the results into the stack (the tree sees
+    /// them at its next tick).
+    pub fn on_planner(&mut self, now_ns: i64, from: FromPlanner) {
+        let now = self.clock(now_ns);
+        for l in &from.log {
+            let text = self.log_text(l);
+            self.record(now, text);
+        }
+        for note in from.notes {
+            self.record(now, note);
+        }
+        for r in from.results {
+            self.pending_plans.remove(&r.goal);
+            self.stack.on_compute_path_result(r);
+        }
+        self.plans.extend(from.plans);
+    }
+
+    /// The planner thread has ended (a panic): every plan request out, and
+    /// every later one, fails with `UNKNOWN`.
+    pub fn planner_gone(&mut self, now_ns: i64) {
+        let now = self.clock(now_ns);
+        if !self.planner_alive {
+            return;
+        }
+        self.planner_alive = false;
+        self.record(now, "[planner_server] the planner thread stopped: every plan fails");
+        self.failures.insert(planner_server::error_code::UNKNOWN, "Unknown: the planner thread stopped".into());
+        for id in std::mem::take(&mut self.pending_plans) {
+            self.stack.on_compute_path_result(planner_gone_result(id));
         }
     }
 
     /// When the loop next has something to do; `None` while nothing runs
-    /// (no goal, the smoother at rest): the costmaps then wait too, and an
-    /// update that fell due meanwhile runs at the next tick.
+    /// (no goal, the smoother at rest): the local costmap then waits too,
+    /// and an update that fell due meanwhile runs at the next tick.
     pub fn next_due_ns(&self) -> Option<i64> {
-        let stack = self.stack.as_ref().and_then(Stack::next_tick_ns);
+        let stack = self.stack.next_tick_ns();
         if stack.is_none() && self.smoother_next_ns.is_none() {
             return None;
         }
-        let global = self.global.as_ref().map(|g| g.next_update_ns);
-        [stack, self.smoother_next_ns, global, self.local.next_update_ns].into_iter().flatten().min()
+        [stack, self.smoother_next_ns, self.local.next_update_ns].into_iter().flatten().min()
     }
 
-    /// One pass at `now_ns`: the costmap updates that are due, the input
+    /// One pass at `now_ns`: the local costmap update when due, the input
     /// checks, the stack when it is due, the smoother when it is due.
     pub fn tick(&mut self, now_ns: i64, input: &TickInput) -> TickOutput {
         let now = self.clock(now_ns);
-        let mut out = TickOutput::default();
-        self.update_costmaps(now, input);
-        if self.stack.as_ref().and_then(Stack::next_tick_ns).is_some() {
+        let mut out = TickOutput { plans: std::mem::take(&mut self.plans), ..TickOutput::default() };
+        self.update_local(now, input);
+        if self.stack.next_tick_ns().is_some() {
             self.check_inputs(now, input);
         } else {
             self.reported.reset_goal_flags();
         }
-        if self.stack.as_ref().and_then(Stack::next_tick_ns).is_some_and(|t| t <= now) {
+        if self.stack.next_tick_ns().is_some_and(|t| t <= now) {
             let s = self.tick_stack(now, input);
             self.apply(now, s, &mut out);
         }
@@ -521,25 +511,8 @@ impl CoreLoop {
         last
     }
 
-    fn stack_mut(&mut self) -> &mut Stack {
-        let costmap = self.global.as_ref().map_or(&self.placeholder, |g| &g.master);
-        self.stack.get_or_insert_with(|| NavStack::mower(costmap))
-    }
-
-    /// The two costmaps' update loops, when due.
-    fn update_costmaps(&mut self, now: i64, input: &TickInput) {
-        if let Some(g) = self.global.as_mut().filter(|g| g.next_update_ns <= now) {
-            if let Some(layer) = g.buffered.take() {
-                g.layer = layer;
-                g.master.clone_from(&g.layer);
-                g.current = true;
-            } else if !g.current {
-                g.master.clone_from(&g.layer);
-                g.current = true;
-            }
-            g.cleared = false;
-            g.next_update_ns = next_period(g.next_update_ns, GLOBAL_UPDATE_NS, now);
-        }
+    /// The local costmap's update loop, when due.
+    fn update_local(&mut self, now: i64, input: &TickInput) {
         let Some(due) = self.local.next_update_ns.filter(|&t| t <= now) else {
             return;
         };
@@ -594,10 +567,9 @@ impl CoreLoop {
         }
         self.reported.pose_age = stale;
 
-        // a server blocked on a costmap that is not current for want of an
-        // update (a clear has its own entry)
-        let stack = self.stack.as_ref().expect("checked while the stack runs");
-        let local_wait = stack.controller.is_executing() && !self.local.current && !self.local.cleared;
+        // the controller blocked on a costmap that is not current for want
+        // of an update (a clear has its own entry)
+        let local_wait = self.stack.controller.is_executing() && !self.local.current && !self.local.cleared;
         if local_wait && !self.reported.local_wait {
             let why = match (&self.local.map, self.local.skipped) {
                 (None, _) => "no local map received",
@@ -607,11 +579,6 @@ impl CoreLoop {
             found.push(format!("[controller_server] waiting for the local costmap: {why}"));
         }
         self.reported.local_wait = local_wait;
-        let global_wait = stack.planner.current_goal().is_some() && self.global.as_ref().is_none_or(|g| !g.current && !g.cleared);
-        if global_wait && !self.reported.global_wait {
-            found.push("[planner_server] waiting for the global costmap: no global map received".to_string());
-        }
-        self.reported.global_wait = global_wait;
 
         for text in found {
             self.record(now, text);
@@ -619,12 +586,7 @@ impl CoreLoop {
     }
 
     fn tick_stack(&mut self, now: i64, input: &TickInput) -> StackOutput {
-        let Self { stack, global, placeholder, local, .. } = self;
-        let stack = stack.as_mut().expect("ticked when due");
-        let (global_costmap, global_costmap_current) = match global {
-            Some(g) => (&mut g.master, g.current),
-            None => (placeholder, false),
-        };
+        let Self { stack, unused_global, local, .. } = self;
         stack.tick(StackInput {
             now_ns: now,
             map_pose: input.map_pose(),
@@ -633,21 +595,19 @@ impl CoreLoop {
             odom_from_map: input.map_from_odom.map(|t| t.inverse()),
             local_costmap: local.window.costmap(),
             local_costmap_current: local.current,
-            global_costmap,
-            global_costmap_current,
+            global_costmap: unused_global,
+            global_costmap_current: false,
         })
     }
 
-    /// The stack's output: clears and log lines into the ring, commands into
-    /// the smoother, results and feedback to their keys.
+    /// The stack's output: clears and log lines into the ring (the global
+    /// clears and the plan requests out to the planner, in that order),
+    /// commands into the smoother, results and feedback to their keys.
     fn apply(&mut self, now: i64, s: StackOutput, out: &mut TickOutput) {
         for c in &s.clears {
             let name = match c {
                 CostmapId::Global => {
-                    if let Some(g) = &mut self.global {
-                        g.current = false;
-                        g.cleared = true;
-                    }
+                    out.to_planner.push(ToPlanner::ClearGlobal);
                     "global_costmap"
                 }
                 CostmapId::Local => {
@@ -657,6 +617,17 @@ impl CoreLoop {
                 }
             };
             self.record(now, format!("[{name}] Received request to clear entirely the {name}"));
+        }
+        for r in s.plan_requests {
+            match r {
+                PlanRequest::Send { id, .. } if !self.planner_alive => self.stack.on_compute_path_result(planner_gone_result(id)),
+                PlanRequest::Cancel(_) if !self.planner_alive => {}
+                PlanRequest::Send { id, .. } => {
+                    self.pending_plans.insert(id);
+                    out.to_planner.push(ToPlanner::Request(r));
+                }
+                PlanRequest::Cancel(_) => out.to_planner.push(ToPlanner::Request(r)),
+            }
         }
         for l in &s.log {
             let text = self.log_text(l);
@@ -671,7 +642,6 @@ impl CoreLoop {
             }
         }
         out.commands.extend(s.commands);
-        out.plans.extend(s.plans);
         if let Some((id, fb)) = s.navigate_feedback {
             if let Some(&key) = self.navigate.get(&id) {
                 out.feedback.push((key, CoreFeedback::Navigate { distance_remaining: fb.distance_remaining }));
@@ -714,7 +684,7 @@ impl CoreLoop {
                 format!("[planner_server] GridBased plugin failed to plan: \"{}\"", planner_what(e))
             }
             StackLog::PlannerMissedRate(s) => {
-                let hz = self.stack.as_ref().map_or(20.0, |st| st.planner.params().expected_planner_frequency);
+                let hz = PlannerServerParams::mower().expected_planner_frequency;
                 format!("[planner_server] Planner loop missed its desired rate of {hz:.4} Hz. Current loop rate is {:.4} Hz", 1.0 / s)
             }
         }
@@ -739,18 +709,6 @@ impl CoreLoop {
 
 #[cfg(test)]
 impl CoreLoop {
-    fn global_current(&self) -> bool {
-        self.global.as_ref().is_some_and(|g| g.current)
-    }
-
-    fn global_next_update_ns(&self) -> Option<i64> {
-        self.global.as_ref().map(|g| g.next_update_ns)
-    }
-
-    fn global_size(&self) -> Option<(u32, u32)> {
-        self.global.as_ref().map(|g| (g.master.size_x(), g.master.size_y()))
-    }
-
     fn local_current(&self) -> bool {
         self.local.current
     }
@@ -764,8 +722,7 @@ impl CoreLoop {
 mod tests {
     use std::collections::HashSet;
 
-    use mower_nav_core::action::GoalStatus;
-
+    use super::super::planner_loop::PlannerLoop;
     use super::*;
 
     /// A plausible wall-clock time.
@@ -800,11 +757,19 @@ mod tests {
         (0..=n).map(|i| Pose2D::new(from.x + c * 0.1 * i as f64, from.y + s * 0.1 * i as f64, from.yaw)).collect()
     }
 
-    /// The loop on the IO thread's schedule (wake at the next due time, at
-    /// most 10 ms later), and a kinematic robot driven by `/nav_cmd_vel`
-    /// whose odometry reports what it was told.
+    /// The two loops on their threads' schedules (each wakes at its next due
+    /// time, at most 10 ms later, or when a message arrives), messages
+    /// between them taking `latency_ns`, and a kinematic robot driven by
+    /// `/nav_cmd_vel` whose odometry reports what it was told.
     struct Sim {
         core: CoreLoop,
+        planner: PlannerLoop,
+        /// In flight, with when each arrives.
+        to_planner: VecDeque<(i64, ToPlanner)>,
+        from_planner: VecDeque<(i64, FromPlanner)>,
+        latency_ns: i64,
+        /// Messages to it are lost and it never runs.
+        planner_dead: bool,
         now: i64,
         map_from_odom: Transform2D,
         /// The robot in `odom`.
@@ -824,6 +789,11 @@ mod tests {
             let map_from_odom = Transform2D::new(0.4, -0.3, 0.2);
             Self {
                 core: CoreLoop::new(params()),
+                planner: PlannerLoop::new(),
+                to_planner: VecDeque::new(),
+                from_planner: VecDeque::new(),
+                latency_ns: 0,
+                planner_dead: false,
                 now: T0,
                 map_from_odom,
                 odom: map_from_odom.inverse().apply_pose(&start),
@@ -839,7 +809,7 @@ mod tests {
 
         fn with_maps(start: Pose2D, global: &OccupancyGrid, local: &OccupancyGrid) -> Self {
             let mut sim = Self::new(start);
-            sim.core.set_global_map(sim.now, global);
+            sim.planner.set_global_map(sim.now, global);
             sim.core.set_local_map(sim.now, local);
             sim
         }
@@ -871,8 +841,13 @@ mod tests {
             }
         }
 
-        /// One tick, then the robot moves until the next one.
+        /// nav-core's tick (after what the planner sent), the planner's
+        /// (after what nav-core sent), then the robot moves until the next.
         fn step(&mut self) -> TickOutput {
+            while self.from_planner.front().is_some_and(|(at, _)| *at <= self.now) {
+                let (_, m) = self.from_planner.pop_front().unwrap();
+                self.core.on_planner(self.now, m);
+            }
             let out = self.core.tick(self.now, &self.input());
             self.cmd_vel.extend(out.cmd_vel.iter().map(|c| (self.now, c.clone())));
             self.commands.extend(out.commands.iter().cloned());
@@ -886,7 +861,29 @@ mod tests {
             if let Some(c) = out.cmd_vel.last() {
                 self.twist = c.twist;
             }
-            let next = self.core.next_due_ns().map_or(self.now + 10 * MS, |t| t.clamp(self.now + 1, self.now + 10 * MS));
+            if !self.planner_dead {
+                for m in &out.to_planner {
+                    self.to_planner.push_back((self.now + self.latency_ns, m.clone()));
+                }
+                while self.to_planner.front().is_some_and(|(at, _)| *at <= self.now) {
+                    let (_, m) = self.to_planner.pop_front().unwrap();
+                    self.planner.handle(self.now, m);
+                }
+                let p = self.planner.tick(self.now, self.input().map_pose());
+                if !p.is_empty() {
+                    self.from_planner.push_back((self.now + self.latency_ns, p));
+                }
+            }
+            let next = [
+                self.core.next_due_ns(),
+                self.planner.next_due_ns().filter(|_| !self.planner_dead),
+                self.to_planner.front().map(|m| m.0),
+                self.from_planner.front().map(|m| m.0),
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+            .map_or(self.now + 10 * MS, |t| t.clamp(self.now + 1, self.now + 10 * MS));
             let dt = (next - self.now) as f64 / 1e9;
             let (s, c) = (self.odom.yaw + 0.5 * self.twist.theta * dt).sin_cos();
             self.odom = Pose2D::new(self.odom.x + self.twist.x * c * dt, self.odom.y + self.twist.x * s * dt, self.odom.yaw + self.twist.theta * dt);
@@ -964,7 +961,27 @@ mod tests {
         // the smoother rests once the zero after the goal has timed out
         sim.run_for(2.0);
         assert_eq!(sim.core.next_due_ns(), None);
+        assert_eq!(sim.planner.next_due_ns(), None);
         assert!(sim.core.texts().is_empty(), "{:#?}", sim.core.texts());
+    }
+
+    #[test]
+    fn a_slow_planner_answers_late_and_the_controller_keeps_its_20_hz() {
+        // every plan comes back 400 ms after it was asked for (a NavFn
+        // search on a big map); the robot follows the previous plan meanwhile
+        let map = grid(10.0, 8.0, &[]);
+        let mut sim = Sim::with_maps(Pose2D::new(1.0, 1.0, 0.0), &map, &map);
+        sim.latency_ns = 200 * MS;
+        let goal = Pose2D::new(7.0, 3.0, 0.0);
+        let nav = sim.navigate(goal);
+        assert_eq!(sim.run_until_done(nav, 60.0), succeeded());
+        let p = sim.pose();
+        assert!((p.x - goal.x).hypot(p.y - goal.y) < 0.1, "ended at {p:?}");
+        assert!(sim.plans >= 10, "{} plans", sim.plans);
+        // from the first command to the goal's end, an output every 50 ms
+        let first = sim.cmd_vel.iter().position(|(_, c)| c.twist.x.abs() > 0.0 || c.twist.theta.abs() > 0.0).unwrap();
+        let gaps: Vec<i64> = sim.cmd_vel[first..].windows(2).map(|w| w[1].0 - w[0].0).collect();
+        assert!(gaps.iter().all(|&g| g <= 50 * MS), "longest gap {} ms", gaps.iter().max().unwrap() / MS);
     }
 
     #[test]
@@ -1031,7 +1048,8 @@ mod tests {
     #[test]
     fn a_cleared_global_costmap_is_not_current_until_its_next_update() {
         // the goal sits inside a closed ring: NavFn finds no path (208), and
-        // the tree clears the global costmap before it retries
+        // the tree clears the global costmap (on the planner thread) before
+        // it retries
         let ring = [(5.0, 1.0, 7.0, 1.2), (5.0, 2.8, 7.0, 3.0), (5.0, 1.0, 5.2, 3.0), (6.8, 1.0, 7.0, 3.0)];
         let global = grid(10.0, 8.0, &ring);
         let local = grid(10.0, 8.0, &[]);
@@ -1040,7 +1058,7 @@ mod tests {
         let mut cleared_at = None;
         while cleared_at.is_none() && sim.now < T0 + 5 * SEC {
             sim.step();
-            if !sim.core.global_current() {
+            if !sim.planner.current() {
                 cleared_at = Some(sim.now);
             }
         }
@@ -1049,14 +1067,14 @@ mod tests {
         assert!(texts.iter().any(|t| t.contains("Failed to create plan")), "{texts:#?}");
         assert!(texts.iter().any(|t| t == "[global_costmap] Received request to clear entirely the global_costmap"), "{texts:#?}");
         // current again exactly at the 1 Hz update after the clear
-        let update = sim.core.global_next_update_ns().unwrap();
+        let update = sim.planner.next_update_ns().unwrap();
         assert!(update > cleared_at - 10 * MS && update - cleared_at <= SEC);
         while sim.now < update {
             sim.step();
-            assert!(!sim.core.global_current(), "current before its update");
+            assert!(!sim.planner.current(), "current before its update");
         }
         sim.step();
-        assert!(sim.core.global_current());
+        assert!(sim.planner.current());
         sim.core.cancel(nav);
         assert_eq!(sim.run_until_done(nav, 2.0).status, GoalStatus::Canceled);
     }
@@ -1108,43 +1126,51 @@ mod tests {
         let texts = sim.core.texts();
         assert!(texts.contains(&"[controller_server] waiting for the local costmap: no local map received".to_string()), "{texts:#?}");
         assert!(texts.contains(&"[controller_server] Costmap timed out waiting for update".to_string()), "{texts:#?}");
-        // the maps arrive: the stack built on the placeholder takes them
+        // a navigate goal waits for the global costmap on the planner thread
+        let nav = sim.navigate(Pose2D::new(2.5, 1.5, 0.0));
+        sim.run_for(0.5);
+        assert!(sim.core.texts().contains(&"[planner_server] waiting for the global costmap: no global map received".to_string()));
+        sim.core.cancel(nav);
+        sim.run_until_done(nav, 3.0);
+        // the maps arrive: the next goals run
         let map = grid(10.0, 8.0, &[]);
-        sim.core.set_global_map(sim.now, &map);
+        sim.planner.set_global_map(sim.now, &map);
         sim.core.set_local_map(sim.now, &map);
         let nav = sim.navigate(Pose2D::new(2.5, 1.5, 0.0));
         assert_eq!(sim.run_until_done(nav, 30.0), succeeded());
     }
 
     #[test]
-    fn a_new_global_map_waits_for_its_update_during_a_goal_and_the_planner_follows_its_size() {
+    fn a_bigger_map_between_goals_is_planned_on_at_once() {
         let small = grid(10.0, 8.0, &[]);
-        let big = grid(16.0, 8.0, &[]);
         let mut sim = Sim::with_maps(Pose2D::new(1.0, 1.0, 0.0), &small, &small);
-        let nav = sim.navigate(Pose2D::new(3.0, 1.5, 0.0));
-        sim.run_for(0.3);
-        // during the goal: buffered until the next 1 Hz update (mower_map
-        // publishes both maps; the local one is resampled at once)
-        sim.core.set_global_map(sim.now, &big);
-        sim.core.set_local_map(sim.now, &big);
-        let update = sim.core.global_next_update_ns().unwrap();
-        while sim.now <= update {
-            assert_eq!(sim.core.global_size(), Some((200, 160)), "taken before its update");
-            sim.step();
-        }
-        assert_eq!(sim.core.global_size(), Some((320, 160)));
+        let nav = sim.navigate(Pose2D::new(2.0, 1.5, 0.0));
         assert_eq!(sim.run_until_done(nav, 30.0), succeeded());
-        // NavFn follows the size: a goal beyond the old map
+        // mower_map publishes both maps; the goal is beyond the old one
+        let big = grid(16.0, 8.0, &[]);
+        sim.planner.set_global_map(sim.now, &big);
+        sim.core.set_local_map(sim.now, &big);
         let nav = sim.navigate(Pose2D::new(10.0, 1.5, 0.0));
         assert_eq!(sim.run_until_done(nav, 60.0), succeeded());
         assert!(sim.pose().x > 9.9, "{:?}", sim.pose());
-        // between goals a map is taken at once: the robot is off it now
-        sim.core.set_global_map(sim.now, &small);
-        assert_eq!(sim.core.global_size(), Some((200, 160)));
-        let nav = sim.navigate(Pose2D::new(5.0, 1.5, 0.0));
-        let o = sim.run_until_done(nav, 2.0);
-        assert_eq!((o.status, o.error_code), (GoalStatus::Aborted, planner_server::error_code::START_OUTSIDE_MAP));
-        assert_eq!(o.error_msg, "StartOutsideMapBounds: Start Coordinates were outside bounds");
+    }
+
+    #[test]
+    fn without_the_planner_thread_a_navigate_goal_fails_instead_of_waiting() {
+        let map = grid(10.0, 8.0, &[]);
+        let mut sim = Sim::with_maps(Pose2D::new(1.0, 1.0, 0.0), &map, &map);
+        sim.planner_dead = true;
+        let nav = sim.navigate(Pose2D::new(5.0, 3.0, 0.0));
+        sim.run_for(0.5);
+        assert!(sim.outcome(nav).is_none(), "waits for the plan it asked for");
+        sim.core.planner_gone(sim.now);
+        let o = sim.run_until_done(nav, 30.0);
+        assert_eq!((o.status, o.error_code), (GoalStatus::Aborted, planner_server::error_code::UNKNOWN));
+        assert_eq!(o.error_msg, "Unknown: the planner thread stopped");
+        assert!(sim.core.texts().contains(&"[planner_server] the planner thread stopped: every plan fails".to_string()));
+        // follow goals do not need it
+        let follow = sim.follow(line(sim.pose(), 1.0));
+        assert_eq!(sim.run_until_done(follow, 20.0), succeeded());
     }
 
     #[test]
@@ -1164,7 +1190,6 @@ mod tests {
     fn missing_inputs_are_reported_once_while_a_goal_runs() {
         let map = grid(10.0, 8.0, &[]);
         let mut core = CoreLoop::new(params());
-        core.set_global_map(T0, &map);
         core.set_local_map(T0, &map);
         let follow = GoalKey::Follow(1);
         core.send_follow_path(follow, line(Pose2D::new(1.0, 1.0, 0.0), 1.0));
@@ -1208,20 +1233,20 @@ mod tests {
     fn readiness_needs_both_maps_the_pose_and_fresh_odometry() {
         let mut inputs = Inputs::default();
         let timeout = 500 * MS;
-        assert_eq!(inputs.readiness(T0, false, timeout), Readiness::default());
+        assert_eq!(inputs.readiness(T0, false, false, timeout), Readiness::default());
         let map = grid(2.0, 2.0, &[]);
-        inputs.set_global_map(map.clone());
         let mut bad = map.clone();
         bad.data.pop();
         inputs.set_local_map(bad);
         assert_eq!(inputs.notes, ["[local_costmap] Received map message is malformed. Rejecting."]);
-        let r = inputs.readiness(T0, true, timeout);
+        let r = inputs.readiness(T0, true, true, timeout);
         assert_eq!(r, Readiness { global_map: true, local_map: false, pose: true, odometry: false });
         inputs.set_local_map(map);
         inputs.set_odom(Twist2D::default(), T0);
-        assert!(inputs.readiness(T0 + timeout, true, timeout).ready());
-        assert!(!inputs.readiness(T0 + timeout, false, timeout).ready());
-        let stale = inputs.readiness(T0 + timeout + 1, true, timeout);
+        assert!(inputs.readiness(T0 + timeout, true, true, timeout).ready());
+        assert!(!inputs.readiness(T0 + timeout, false, true, timeout).ready());
+        assert!(!inputs.readiness(T0 + timeout, true, false, timeout).ready());
+        let stale = inputs.readiness(T0 + timeout + 1, true, true, timeout);
         assert_eq!(stale, Readiness { global_map: true, local_map: true, pose: true, odometry: false });
     }
 

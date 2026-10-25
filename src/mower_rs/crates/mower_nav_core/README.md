@@ -255,6 +255,15 @@ mower_nav sends one `navigate_to_pose` goal per mission, to the coverage start
   `StackOutput::clears` to the costmaps. `StackOutput::log` has what the
   servers would have logged at WARN or ERROR (tolerated `NoValidControl`,
   the exceptions that ended goals, the planner's missed rate).
+* The planner can run outside the stack (`NavStack::mower_external_planner`),
+  on its own thread as upstream's planner_server does, so a long NavFn search
+  does not hold up the controller: the tree's goals and cancels come out in
+  `StackOutput::plan_requests` (numbered from 1, as `PlannerServer` numbers
+  them), the results go back through `NavStack::on_compute_path_result`, and
+  the planner applies a tick's global clears before its requests.
+  `tests/nav_stack_external.rs`: answered at once it plays tick for tick like
+  the inline planner (reach, the 19-clear unreachable goal, cancel); answered
+  120 ms late it ends every goal the same way.
 * Not ported: per-goal `behavior_tree`, the feedback's
   `estimated_time_remaining` (no consumer), the result-callback wake-up
   (a result is seen at the next tick, ≤ 10 ms later), service and goal
