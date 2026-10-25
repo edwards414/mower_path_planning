@@ -119,6 +119,10 @@ struct Ctx {
     progress: Mutex<ProgressState>,
     progress_pub: Mutex<r2r::Publisher<CoverageProgress>>,
     backend: Backend,
+    /// `run()` has returned: the periodic tasks end, so this context (and a
+    /// nav_core runtime with it) is dropped before a restarted module builds
+    /// its own.
+    exiting: AtomicBool,
 }
 
 /// What runs the goals (`nav_backend`).
@@ -149,6 +153,12 @@ const CORE_STALL_TIMEOUT: Duration = Duration::from_secs(1);
 /// sent its last tick can be old without anything being wrong.
 fn core_stall_age(task_age: Duration, tick_age: Duration, limit: Duration) -> Option<Duration> {
     (task_age > limit && tick_age > limit).then_some(tick_age)
+}
+
+/// A goal for a runtime whose thread has ended would never be taken up: a
+/// definite rejection instead (and `run()` restarts the module).
+fn core_running(runtime: &NavRuntime) -> Result<(), String> {
+    runtime.stopped().map_or(Ok(()), |cause| Err(format!("in-process navigation stopped ({cause})")))
 }
 
 #[derive(Default)]
@@ -554,6 +564,20 @@ impl Ctx {
         }
     }
 
+    /// Resolves once the nav_core runtime can no longer run goals (never for
+    /// nav2). `run()` then returns an error, and mower_rsd restarts the
+    /// module with a new runtime: nothing else brings a dead thread back.
+    async fn core_stopped(&self) -> &'static str {
+        let Backend::Core(runtime) = &self.backend else { return std::future::pending().await };
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            tick.tick().await;
+            if let Some(cause) = runtime.stopped() {
+                return cause;
+            }
+        }
+    }
+
     /// The "recent Nav2 log" part of a task failure message: nav2's `/rosout`
     /// warnings, or the in-process runtime's own.
     fn recent_nav2_log_summary(&self, since: Instant) -> String {
@@ -572,7 +596,9 @@ impl Ctx {
             Backend::Nav2 { navigate_client, .. } => navigate_client.clone(),
             Backend::Core(runtime) => {
                 let generation = self.begin_dispatch();
-                let handle = geometry::core_goal_pose(&goal.pose).map(|pose| runtime.send_navigate(pose));
+                let handle = core_running(runtime)
+                    .and_then(|()| geometry::core_goal_pose(&goal.pose))
+                    .map(|pose| runtime.send_navigate(pose));
                 return self.await_core_goal(generation, runtime, handle, "Nav to coverage start").await;
             }
         };
@@ -593,7 +619,9 @@ impl Ctx {
             // the runtime has just the controller and goal checker the goal's ids name
             Backend::Core(runtime) => {
                 let generation = self.begin_dispatch();
-                let handle = geometry::core_goal_path(&goal.path).map(|path| runtime.send_follow_path(path));
+                let handle = core_running(runtime)
+                    .and_then(|()| geometry::core_goal_path(&goal.path))
+                    .map(|path| runtime.send_follow_path(path));
                 return self.await_core_goal(generation, runtime, handle, "Follow path").await;
             }
         };
@@ -992,13 +1020,21 @@ impl Execution {
             if self.cancel_requested() {
                 return (false, "canceled".into());
             }
+            if let Some(cause) = runtime.stopped() {
+                return (false, format!("Nav2 readiness failed: in-process navigation stopped ({cause}); the nav module restarts"));
+            }
             readiness = runtime.readiness();
             if readiness.ready() {
                 return (true, "Nav2 is active".into());
             }
             tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await;
         }
-        (false, format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: inactive); missing: {}", missing_inputs(&readiness)))
+        let mut message = format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: inactive); missing: {}", missing_inputs(&readiness));
+        let tick_age = runtime.last_tick_age();
+        if tick_age > CORE_STALL_TIMEOUT {
+            message += &format!("; the nav-core thread has not ticked for {:.1}s", tick_age.as_secs_f64());
+        }
+        (false, message)
     }
 
     fn clear_active_task(&self) {
@@ -1612,6 +1648,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 Backend::Core(NavRuntime::start(&mut node, core, &logger)?)
             }
         },
+        exiting: AtomicBool::new(false),
     });
     ctx.publish_nav_operation_active(false);
     ctx.update_progress(true, |_| true);
@@ -1953,6 +1990,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
+                if ctx.exiting.load(Ordering::Relaxed) {
+                    break;
+                }
                 ctx.monitor_navigation_health();
                 ctx.publish_safety_stop_if_needed();
             }
@@ -1964,12 +2004,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             let mut tick = tokio::time::interval(Duration::from_millis(500));
             loop {
                 tick.tick().await;
+                if ctx.exiting.load(Ordering::Relaxed) {
+                    break;
+                }
                 ctx.monitor_uncertain_nav2_task().await;
             }
         });
     }
 
-    // ---- spin until SIGINT / SIGTERM ---------------------------------------
+    // ---- spin until SIGINT / SIGTERM, or until the nav_core runtime stops --
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
@@ -1980,10 +2023,19 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             drop(node);
         })
     };
-    m.shutdown.wait().await;
+    let stopped = tokio::select! {
+        _ = m.shutdown.wait() => None,
+        cause = ctx.core_stopped() => Some(cause),
+    };
+    ctx.exiting.store(true, Ordering::Relaxed);
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
-    Ok(())
+    match stopped {
+        // the node is gone, so twist_mux's lock goes stale (locked) and the
+        // action server with it; mower_rsd starts the module again in 2 s
+        Some(cause) => Err(format!("nav_core: {cause}; restarting the nav module").into()),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

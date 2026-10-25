@@ -318,6 +318,7 @@ impl NavRuntime {
             logged_seq: 0,
             events_revision: 0,
             last_slow_report: None,
+            last_cmd: None,
         };
         let planner = PlannerIo { shared: shared.clone(), rx: planner_rx, core_tx: commands.clone(), last_slow_report: None };
         let core_thread = spawn_named("nav-core", logger, move || io.run(core))?;
@@ -383,6 +384,21 @@ impl NavRuntime {
     /// have logged it; one repeated back to back ends in `(xN)`.
     pub fn recent_events(&self, since: Instant) -> Vec<String> {
         lock(&self.shared.events).iter().filter(|(at, _)| *at >= since).map(|(_, text)| text.clone()).collect()
+    }
+
+    /// Why the runtime can no longer run goals: one of its threads has ended
+    /// (while the runtime lives only a panic ends them). mower_nav then
+    /// refuses new goals and returns, so mower_rsd restarts the nav module
+    /// with a new runtime.
+    pub fn stopped(&self) -> Option<&'static str> {
+        let s = &self.shared;
+        if !s.alive.load(Ordering::Acquire) {
+            Some("the nav-core thread stopped")
+        } else if !s.planner_alive.load(Ordering::Acquire) {
+            Some("the nav-planner thread stopped")
+        } else {
+            None
+        }
     }
 
     /// Time since the thread last completed a tick: a stalled runtime shows
@@ -687,6 +703,25 @@ struct Io {
     logged_seq: u64,
     events_revision: u64,
     last_slow_report: Option<Instant>,
+    /// The last command published on `/nav_cmd_vel`.
+    last_cmd: Option<StampedTwist>,
+}
+
+/// nav-core ending (dropped, stopped or by panic) right after telling the
+/// robot to move: one zero, so the drive does not run on that command until
+/// velocity_command_guard's 0.2 s watchdog. Never stamped before the last.
+fn final_zero(last: Option<&StampedTwist>, now_ns: i64) -> Option<StampedTwist> {
+    let last = last?;
+    (last.twist != Twist2D::default())
+        .then(|| StampedTwist { stamp_ns: now_ns.max(last.stamp_ns), twist: Twist2D::default(), other: [0.0; 3], ..last.clone() })
+}
+
+impl Drop for Io {
+    fn drop(&mut self) {
+        if let Some(zero) = final_zero(self.last_cmd.as_ref(), wall_ns()) {
+            self.outputs.cmd_vel(&zero);
+        }
+    }
 }
 
 impl Io {
@@ -714,6 +749,9 @@ impl Io {
             }
             for c in &out.cmd_vel {
                 self.outputs.cmd_vel(c);
+            }
+            if let Some(c) = out.cmd_vel.last() {
+                self.last_cmd = Some(c.clone());
             }
             for plan in &out.plans {
                 self.outputs.plan(plan, now);
@@ -953,6 +991,18 @@ mod tests {
         assert!((base.x - 10.0).abs() < 1e-12 && (base.y - 1.0).abs() < 1e-12, "{base:?}");
         assert_eq!(tf.received("odom", "base_footprint"), Some(now));
         assert_eq!(tf.received("map", "odom"), None);
+    }
+
+    #[test]
+    fn nav_core_ending_while_moving_leaves_one_zero() {
+        let moving = StampedTwist { stamp_ns: 2_000, frame_id: "base_footprint".into(), twist: Twist2D::new(0.2, 0.0, 0.1), other: [0.0; 3] };
+        let zero = final_zero(Some(&moving), 3_000).unwrap();
+        assert_eq!((zero.twist, zero.stamp_ns, zero.frame_id.as_str()), (Twist2D::default(), 3_000, "base_footprint"));
+        // never stamped before the last command, even with the clock behind
+        assert_eq!(final_zero(Some(&moving), 1_000).unwrap().stamp_ns, 2_000);
+        // already stopped, or never moved: nothing more
+        assert_eq!(final_zero(Some(&zero), 4_000), None);
+        assert_eq!(final_zero(None, 4_000), None);
     }
 
     #[test]
