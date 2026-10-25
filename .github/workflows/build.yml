@@ -179,6 +179,16 @@ jobs:
           python3 tools/nav_progress_check.py --restart-as "$PY_NAV" -- target/debug/mower_nav
           python3 tools/nav_progress_check.py --restart-as target/debug/mower_nav -- $PY_NAV
 
+      - name: pid_autotune telemetry only during a session (black box)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_pid_autotune
+          python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
+
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`
     # stage uses. Fails in ~1 min instead of after the 1 h image build, and
