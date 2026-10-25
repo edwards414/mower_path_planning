@@ -1074,8 +1074,6 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "r2r"
 version = "0.9.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fe8623ef13a4f3c25f4ef407c6032eee9e1c95d0912d8ed758f616cbb95a6cd"
 dependencies = [
  "force-send-sync",
  "futures",
