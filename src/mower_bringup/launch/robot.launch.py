@@ -139,11 +139,12 @@ def _require_nav_core_prerequisites(context):
 
 def _nav2_enabled(rust_nav_core):
     """mower.launch.py's enable_navigation: 'false' under rust_nav_core, so no
-    nav2 server starts, otherwise 'true', that file's own default. The same
-    spellings as _truthy, and always a value IfCondition accepts."""
+    nav2 server starts; otherwise whatever this launch was given (an explicit
+    enable_navigation:=false still works), else 'true', that file's own
+    default. The same spellings as _truthy."""
     return PythonExpression([
         "'false' if '", rust_nav_core, "'.strip().lower() in ", _TRUE,
-        " else 'true'",
+        " else '", LaunchConfiguration('enable_navigation', default='true'), "'",
     ])
 
 

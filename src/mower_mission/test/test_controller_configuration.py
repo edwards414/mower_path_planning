@@ -390,7 +390,9 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
     helper = robot.split('def _nav2_enabled(', 1)[1].split('\ndef ', 1)[0]
     assert ('''"'false' if '", rust_nav_core, "'.strip().lower() in ", _TRUE,'''
             in helper)
-    assert '''" else 'true'",''' in helper
+    # with the flag off an explicit enable_navigation:=false is kept
+    assert ('''" else '", LaunchConfiguration('enable_navigation', default='true'), "'",'''
+            in helper)
     robot_true = ast.literal_eval(re.search(
         r"return value\.strip\(\)\.lower\(\) in (\{[^}]*\})", robot).group(1))
     assert set(ast.literal_eval(re.search(
@@ -484,6 +486,8 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
     for value in spellings:
         assert module._nav2_enabled(value).perform(context()) == (
             'false' if module._truthy(value) else 'true'), repr(value)
+        assert module._nav2_enabled(value).perform(
+            context(enable_navigation='false')) == 'false', repr(value)
 
     needs = {switch: 'true' for switch in module._NAV_CORE_NEEDS}
     for value in spellings:
