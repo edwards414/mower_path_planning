@@ -15,7 +15,7 @@ the bottom drive an A/B measurement on the real robot.
 | `nav_progress_check.py` | `/coverage_progress` and `/coverage_progress_status` of a navigation server, black box: the server (`mower_nav` or the rclpy `nav_action_server`, given as the command line) against a fake Nav2 (lifecycle state, `navigate_to_pose`, `follow_path` with a falling `distance_to_goal`); a 3-segment run to success, a cancel halfway through segment 2, a restart that restores the checkpoint, rejected resume goals and a resume at segment 2. `--restart-as` restarts into the other server, so the checkpoint crosses implementations; CI's mower_rs tests job runs it both ways: `python3 tools/nav_progress_check.py --restart-as "python3 -m mower_mission.navigation.nav_action_server" -- target/debug/mower_nav` |
 | `autotune_telemetry_check.py` | `mower_pid_autotune` subscribes to `/mower_base/telemetry` only while a session runs, black box: the real binary against a fake 20 Hz telemetry frame; no subscriber while idle, one per session (the frame reaches the precheck), none 1 s after it, and "no /mower_base/telemetry" after ~1.5 s when the base is quiet. Run by CI's mower_rs tests job: `python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune` |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline and on content (robot online, base and odometry fresh, pose updating) |
-| `switch.sh`, `measure.sh` | put the robot on a test image with `NAV_COMPOSITION` / `RUST_DAEMON` / `RUST_BASE` / `RUST_LOCALIZE` / any `KEY=VAL`, check which drivers actually run, and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
+| `switch.sh`, `measure.sh` | put the robot on a test image with `NAV_COMPOSITION` / `RUST_DAEMON` / `RUST_BASE` / `RUST_LOCALIZE` / `RUST_NAV_CORE` / any `KEY=VAL`, check which drivers actually run, and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 
 ## Checking the app still works
 
@@ -116,25 +116,28 @@ ssh cat@<robot> 'sudo docker rmi ghcr.io/edwards414/mower_path_planning:rosfree-
 `switch.sh <tag> <nav_composition> <rust_daemon> <compose> [KEY=VAL ...]`:
 
 - Every switch is absolute. `.env` is rebuilt from the pre-test backup and
-  `NAV_COMPOSITION`, `RUST_DAEMON`, `RUST_BASE` and `RUST_LOCALIZE` are always
-  written (the last two `false` unless given), so nothing from an earlier call
-  sticks. `RUST_*` / `NAV_*` must be exactly `true` or `false`. Edit `.env`
-  during a test and the next switch refuses rather than silently dropping the
-  edit: make the same edit in `.env.bak-rosfree-test`, which is what
-  `restore` puts back.
+  `NAV_COMPOSITION`, `RUST_DAEMON`, `RUST_BASE`, `RUST_LOCALIZE` and
+  `RUST_NAV_CORE` are always written (the last three `false` unless given), so
+  nothing from an earlier call sticks. `RUST_*` / `NAV_*` must be exactly
+  `true` or `false`. Edit `.env` during a test and the next switch refuses
+  rather than silently dropping the edit: make the same edit in
+  `.env.bak-rosfree-test`, which is what `restore` puts back.
 - It exits 1 (`SWITCH_FAIL: ...`) if the image is not loaded or is not the
   expected build (above), `compose up` fails, the container's launch
   arguments are not the requested ones, or the expected drivers are not what
   runs: with `RUST_BASE=true` no `ros2_control_node` and a `mower_base` (or
   `mower_rsd --modules ...base...`), with `RUST_LOCALIZE=true` no `ekf_node` /
   `navsat_transform_node` and a `mower_localize` (or the daemon's `localize`
-  module), and the reverse for `false`. It reads the process table with
-  `docker top`, never the ros2 CLI (that causes controller overruns on the
-  robot), and waits up to `SWITCH_WAIT_S` (180 s) for the drivers to appear,
-  then requires the same PIDs for `SWITCH_STABLE_S` (30 s) with the container
-  log checked on every poll: a driver that dies or is respawned, or a
-  `mower_rsd` base/localize module that fails and restarts inside the same
-  PID, fails the switch. `SWITCH_OK` otherwise.
+  module), and the reverse for `false`; with `RUST_NAV_CORE=true` also no nav2
+  process (neither the component container nor a separate server) and the
+  daemon's `nav` module (`false`, nav2 as before, is not checked). It reads
+  the process table with `docker top`, never the ros2 CLI (that causes
+  controller overruns on the robot), and waits up to `SWITCH_WAIT_S` (180 s)
+  for the drivers to appear, then requires the same PIDs for
+  `SWITCH_STABLE_S` (30 s) with the container log checked on every poll: a
+  driver that dies or is respawned, or a `mower_rsd` base/localize module
+  that fails and restarts inside the same PID, fails the switch. `SWITCH_OK`
+  otherwise.
 - **After a `SWITCH_FAIL`, run `restore`.** A failure from `compose up` on
   stops `lawan_node` (nothing drives the wheels; so does Ctrl-C, a kill or a
   dropped ssh before `SWITCH_OK`). A failure before that leaves either nothing
@@ -146,6 +149,12 @@ ssh cat@<robot> 'sudo docker rmi ghcr.io/edwards414/mower_path_planning:rosfree-
 - For the first `RUST_BASE` / `RUST_LOCALIZE` runs keep `NAV_COMPOSITION=false`
   (the second argument): composed nav2 has never navigated on the robot
   either, and a failure should have one suspect.
+- `RUST_NAV_CORE=true` (mower_nav steers with `mower_nav_core` instead of
+  nav2, `../README.md`) is refused before anything changes unless the third
+  argument is `true` and `RUST_LOCALIZE=true RUST_NAV=true` are given, the
+  same rule `robot.launch.py` enforces: `switch.sh <tag> true true <compose>
+  RUST_BASE=true RUST_LOCALIZE=true RUST_NAV=true RUST_NAV_CORE=true`. The
+  first one on a robot is a supervised outdoor run with RTK.
 - **The test config outlives a reboot or power-off.** `mower.service` brings
   up whatever `.env` and the compose say, and `mower-update.sh` cannot pull a
   local-only tag, so after a power-button hold, a brownout or a host poweroff
