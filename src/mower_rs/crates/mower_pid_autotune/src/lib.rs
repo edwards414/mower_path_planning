@@ -35,14 +35,17 @@
 //! `/mower_base/wheel_override` (raw permille, bypasses diff_drive_controller's
 //! acceleration limits so a step is a step).
 //!
-//! Intentional difference from the Python node: the telemetry subscription
-//! is permanent (rclpy paid ~6 ms per 17 Hz frame, r2r pays microseconds);
-//! staleness is judged by the frame's arrival time exactly as before.
+//! As in the Python node, `/mower_base/telemetry` is only subscribed while a
+//! session runs: "start" asks the spin thread for a subscription, and it is
+//! dropped once the session is over. A permanent one cost ~10 % of mower_rsd's
+//! CPU on XR-02 while idle (perf, 2026-10-25): every 20 Hz frame woke this
+//! node's spin loop for nothing. Staleness is judged by the frame's arrival
+//! time.
 
 mod tuning;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -65,6 +68,11 @@ const MOTOR_FLAG_DRIVER_ALARM: i64 = 0x04;
 const POWER_STATE_RUNNING: i64 = 0;
 
 const WHEELS: [&str; 2] = ["left", "right"];
+
+// The telemetry subscription is made when a session starts: up to one 100 ms
+// spin before the spin thread creates it, then discovery. The first frame of a
+// session gets this much longer than `telemetry_timeout_s`.
+const SUBSCRIBE_GRACE_S: f64 = 1.0;
 
 // ---------------------------------------------------------------- status JSON
 
@@ -283,6 +291,10 @@ struct Ctx {
     override_pub: Mutex<r2r::Publisher<StringMsg>>,
     led_pub: Option<Mutex<r2r::Publisher<StringMsg>>>,
     lock_client: r2r::Client<MissionOperationLock::Service>,
+    // telemetry subscription (module doc): every "start" bumps the generation
+    // and sends it to the spin thread, which owns the node and subscribes
+    telemetry_gen: AtomicU64,
+    subscribe_telemetry: mpsc::Sender<u64>,
 }
 
 impl Ctx {
@@ -359,9 +371,10 @@ impl Ctx {
             return Err(RunError::Aborted);
         }
         let timeout_s = timeout_s.unwrap_or(self.settings.telemetry_timeout_s);
-        // The first frame of a session may still be in flight: give the base
-        // one timeout window.
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s.max(0.0));
+        // The first frame of a session may still be in flight and its
+        // subscription only just made: give the base one timeout window plus
+        // SUBSCRIBE_GRACE_S.
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s.max(0.0) + SUBSCRIBE_GRACE_S);
         while self.tel.lock().unwrap().latest.is_none() && Instant::now() < deadline {
             if self.abort.load(Ordering::Relaxed) {
                 return Err(RunError::Aborted);
@@ -827,6 +840,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let led_pub = if led_topic.is_empty() { None } else { Some(Mutex::new(node.create_publisher::<StringMsg>(&led_topic, latched)?)) };
     let lock_client = node.create_client::<MissionOperationLock::Service>(&lock_service, QosProfile::services_default())?;
     let lock_owner = format!("{}:{}", node.fully_qualified_name()?, uuid_hex());
+    let (subscribe_tx, subscribe_rx) = mpsc::channel();
 
     let ctx = Arc::new(Ctx {
         logger: logger.clone(),
@@ -846,6 +860,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         override_pub: Mutex::new(override_pub),
         led_pub,
         lock_client,
+        telemetry_gen: AtomicU64::new(0),
+        subscribe_telemetry: subscribe_tx,
     });
 
     // ---- inputs ------------------------------------------------------------
@@ -858,15 +874,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             }
         });
     }
-    {
-        let mut stream = node.subscribe::<StringMsg>(&telemetry_topic, best_effort)?;
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = stream.next().await {
-                ctx.on_telemetry(&msg.data);
-            }
-        });
-    }
+    // /mower_base/telemetry: per session, see subscribe_telemetry
 
     // ---- service ----------------------------------------------------------
     {
@@ -884,6 +892,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                             *ctx.decision.lock().unwrap() = None;
                             ctx.tel.lock().unwrap().latest = None;
                             ctx.active.store(true, Ordering::Release);
+                            let generation = ctx.telemetry_gen.fetch_add(1, Ordering::AcqRel) + 1;
+                            let _ = ctx.subscribe_telemetry.send(generation);
                             tokio::spawn(ctx.clone().run());
                             (true, "auto-tune started".to_string())
                         }
@@ -933,8 +943,13 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
+        let ctx = ctx.clone();
+        let rt = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             while running.load(Ordering::Relaxed) {
+                while let Ok(generation) = subscribe_rx.try_recv() {
+                    subscribe_telemetry(&mut node, &ctx, &telemetry_topic, &best_effort, generation, &rt);
+                }
                 node.spin_once(Duration::from_millis(100));
             }
             drop(node);
@@ -944,6 +959,30 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
     Ok(())
+}
+
+/// Subscribes to the base telemetry for session `generation`, on the spin
+/// thread that owns the node. The forwarder stops at the first frame after its
+/// session ended (or a newer one started); r2r destroys the subscription on
+/// the frame after that. If subscribing fails, the session's precheck reports
+/// that there is no telemetry.
+fn subscribe_telemetry(node: &mut r2r::Node, ctx: &Arc<Ctx>, topic: &str, qos: &QosProfile, generation: u64, rt: &tokio::runtime::Handle) {
+    let mut stream = match node.subscribe::<StringMsg>(topic, qos.clone()) {
+        Ok(stream) => stream,
+        Err(e) => {
+            r2r::log_error!(&ctx.logger, "could not subscribe to {}: {}", topic, e);
+            return;
+        }
+    };
+    let ctx = ctx.clone();
+    rt.spawn(async move {
+        while let Some(msg) = stream.next().await {
+            if ctx.telemetry_gen.load(Ordering::Acquire) != generation || !ctx.active.load(Ordering::Acquire) {
+                break;
+            }
+            ctx.on_telemetry(&msg.data);
+        }
+    });
 }
 
 /// Python `repr()` of a str for the "unknown op" message.

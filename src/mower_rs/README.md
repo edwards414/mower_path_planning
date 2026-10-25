@@ -802,10 +802,17 @@ for a persisted save, one retry with `flash_diag`), the review timeout, the
 restore of the previous gains in every exit path and the mission operation
 lock (missing service = bench, carry on).
 
-Intentional differences: the `/mower_base/telemetry` subscription is
-permanent (the Python node created it per session because rclpy paid ~6 ms
-per frame; staleness is still judged from the arrival time), and the
-progress-0.85 status (verify metrics attached) is usually coalesced into the
+The `/mower_base/telemetry` subscription is per session, as in the Python
+node: "start" asks the spin thread (which owns the node) for one, its
+forwarder stops at the first frame after the session, and r2r drops it on
+the next. It was permanent until 2026-10-25, when perf on XR-02 put it at
+~10 % of mower_rsd's CPU while idle (each 20 Hz frame woke the node).
+Because the subscription is new, the first frame of a session gets
+`telemetry_timeout_s` plus 1 s; it arrived 0.12-0.16 s after "start" in
+`tools/autotune_telemetry_check.py`. Staleness is still judged from the
+arrival time.
+
+Intentional difference: the progress-0.85 status (verify metrics attached) is usually coalesced into the
 0.90 `review` status by the depth-1 latched writer because the two publishes
 are microseconds apart -- `verify` stays in every later status.
 
