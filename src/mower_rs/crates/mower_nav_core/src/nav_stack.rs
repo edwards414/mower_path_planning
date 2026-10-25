@@ -23,6 +23,9 @@
 //! The costmaps are the caller's. A clear the tree asked for is in
 //! [`StackOutput::clears`]: the costmap is not current from then until its
 //! next update (and that tick's later passes already see it so).
+//!
+//! What the servers would have logged at WARN or ERROR is in
+//! [`StackOutput::log`], for the caller's diagnostics; nothing here reads it.
 
 use crate::action::GoalId;
 use crate::controller_server::{ControllerServer, CycleInput, Feedback, FollowPathResult};
@@ -30,8 +33,9 @@ use crate::costmap::Costmap2D;
 use crate::geometry::{Pose2D, Transform2D, Twist2D};
 use crate::navigator::{CostmapId, NavInput, NavServers, NavigateFeedback, NavigateResult, Navigator};
 use crate::path_handler::Path;
+use crate::planner::PlannerError;
 use crate::planner_server::{ComputePathToPose, PlanInput, PlannerServer};
-use crate::rpp::{Controller, RegulatedPurePursuit};
+use crate::rpp::{Controller, ControllerError, RegulatedPurePursuit};
 use crate::shim::RotationShim;
 use crate::smoother::TwistStamped;
 
@@ -102,6 +106,24 @@ pub struct StackOutput {
     pub clears: Vec<CostmapId>,
     /// `/plan`.
     pub plans: Vec<Path>,
+    /// What the servers logged at WARN or ERROR, in order.
+    pub log: Vec<StackLog>,
+}
+
+/// A server's WARN or ERROR line (upstream's `/rosout`), as data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StackLog {
+    /// controller_server tolerated a `NoValidControl` (`RCLCPP_WARN`, once
+    /// per pass until `failure_tolerance` runs out).
+    ControlTolerated(ControllerError),
+    /// The exception that ended a `follow_path` goal, the tree's or one
+    /// sent with [`NavStack::send_follow_path`] (`RCLCPP_ERROR`).
+    FollowPathFailed(ControllerError),
+    /// The exception that ended a `compute_path_to_pose` goal
+    /// (`exceptionWarning`).
+    ComputePathFailed(PlannerError),
+    /// "Planner loop missed its desired rate": seconds the plan took.
+    PlannerMissedRate(f64),
 }
 
 /// The servers, their schedules, and who sent which goal.
@@ -254,7 +276,13 @@ impl<C: Controller> NavStack<C> {
                 costmap: input.global_costmap,
             });
             for r in p.results {
+                if let Some(e) = r.error {
+                    out.log.push(StackLog::ComputePathFailed(e));
+                }
                 self.navigator.on_compute_path_result(r);
+            }
+            if let Some(s) = p.missed_rate {
+                out.log.push(StackLog::PlannerMissedRate(s));
             }
             out.plans.extend(p.plans);
             self.next_planner_ns = p.waiting_for_costmap.then_some(now + COSTMAP_POLL_NS);
@@ -277,8 +305,14 @@ impl<C: Controller> NavStack<C> {
                 odom_from_map: input.odom_from_map,
                 costmap: input.local_costmap,
             });
+            if let Some(w) = c.warning {
+                out.log.push(StackLog::ControlTolerated(w));
+            }
             out.commands.extend(c.commands);
             for r in c.results {
+                if let Some(e) = r.error {
+                    out.log.push(StackLog::FollowPathFailed(e));
+                }
                 if let Some(i) = self.tree_follow_goals.iter().position(|&g| g == r.goal) {
                     self.tree_follow_goals.swap_remove(i);
                     self.navigator.on_follow_path_result(r);

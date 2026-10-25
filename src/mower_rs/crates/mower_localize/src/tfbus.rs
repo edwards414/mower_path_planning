@@ -27,24 +27,49 @@
 //! `map -> odom` except these two filters (ros2_control's diff-drive
 //! controller has `enable_odom_tf: false`, see mower_controller's
 //! controllers.yaml).
+//!
+//! Other modules of the same process read it too: mower_nav's in-process
+//! navigation takes the robot pose from [`lookup`] (`map <- odom`,
+//! `odom <- base_footprint`) instead of subscribing to `/tf`, and how fresh
+//! each edge is from [`last_set`].
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use mower_localize_core::prepare::TransformTree;
 use mower_localize_core::tf::Transform;
 
 use crate::tfgraph::TfGraph;
 
-static BUS: OnceLock<Arc<Mutex<TfGraph>>> = OnceLock::new();
+#[derive(Default)]
+struct Bus {
+    graph: TfGraph,
+    /// When each edge was last set, keyed like the graph's edges.
+    set_at: BTreeMap<(String, String), Instant>,
+}
 
-fn bus() -> &'static Arc<Mutex<TfGraph>> {
-    BUS.get_or_init(|| Arc::new(Mutex::new(TfGraph::new())))
+impl Bus {
+    fn set(&mut self, parent: &str, child: &str, transform: Transform) {
+        self.graph.set(parent, child, transform);
+        self.set_at.insert((parent.to_string(), child.to_string()), Instant::now());
+    }
+
+    fn last_set(&self, parent: &str, child: &str) -> Option<Instant> {
+        self.set_at.get(&(parent.to_string(), child.to_string())).copied()
+    }
+}
+
+static BUS: OnceLock<Mutex<Bus>> = OnceLock::new();
+
+fn bus() -> &'static Mutex<Bus> {
+    BUS.get_or_init(|| Mutex::new(Bus::default()))
 }
 
 /// Record `parent <- child`, from `/tf_static` or from our own broadcast.
 pub fn set(parent: &str, child: &str, transform: Transform) {
-    if let Ok(mut g) = bus().lock() {
-        g.set(parent, child, transform);
+    if let Ok(mut b) = bus().lock() {
+        b.set(parent, child, transform);
     }
 }
 
@@ -53,17 +78,25 @@ pub fn set(parent: &str, child: &str, transform: Transform) {
 pub fn tree_if_changed(
     since: Option<u64>, base: &str, extra: &[(&str, &str)],
 ) -> Option<(u64, TransformTree)> {
-    let g = bus().lock().ok()?;
-    let rev = g.revision();
+    let b = bus().lock().ok()?;
+    let rev = b.graph.revision();
     if since == Some(rev) {
         return None;
     }
-    Some((rev, g.tree_for(base, extra)))
+    Some((rev, b.graph.tree_for(base, extra)))
 }
 
-#[cfg(test)]
+/// `lookupTransform(target, source, Time(0))` over the cached edges: the pose
+/// of `source` in `target` from the latest of each edge on the way, `None`
+/// when the two frames are not connected (see [`TfGraph::lookup`]).
 pub fn lookup(target: &str, source: &str) -> Option<Transform> {
-    bus().lock().ok()?.lookup(target, source)
+    bus().lock().ok()?.graph.lookup(target, source)
+}
+
+/// When the edge `parent <- child` was last [`set`], on this process's
+/// monotonic clock; `None` if it never was.
+pub fn last_set(parent: &str, child: &str) -> Option<Instant> {
+    bus().lock().ok()?.last_set(parent, child)
 }
 
 #[cfg(test)]
@@ -82,5 +115,25 @@ mod tests {
         set("map", "odom", Transform::identity());
         assert!(tree_if_changed(Some(rev), "base_footprint", &[]).is_some());
         assert!(lookup("map", "base_footprint").is_some());
+    }
+
+    #[test]
+    fn the_bus_composes_the_latest_edges_and_remembers_when_each_was_set() {
+        // A bus of its own: the global one is shared with the test above,
+        // which checks that nothing else moved it.
+        let xlate = |x: f64| Transform::from_parts(&Quaternion::identity(), Vector3::new(x, 0.0, 0.0));
+        let mut b = Bus::default();
+        assert!(b.last_set("map", "odom").is_none());
+        let before = Instant::now();
+        b.set("map", "odom", xlate(10.0));
+        b.set("odom", "base_footprint", xlate(1.0));
+        b.set("odom", "base_footprint", xlate(2.0));
+        let t = b.graph.lookup("map", "base_footprint").unwrap();
+        assert!((t.origin.x - 12.0).abs() < 1e-12, "{t:?}");
+        let at = b.last_set("odom", "base_footprint").unwrap();
+        assert!(at >= before && at <= Instant::now());
+        assert!(b.last_set("odom", "base_footprint") >= b.last_set("map", "odom"));
+        // keyed by direction, as the graph's edges are
+        assert!(b.last_set("base_footprint", "odom").is_none());
     }
 }
