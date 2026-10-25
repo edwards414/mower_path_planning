@@ -13,3 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 # sync primitives for wake-ups, time for Clock::system's async sleeps
 tokio.workspace = true
+
+[dev-dependencies]
+# test-util: tokio's paused time is the oracle for Interval's missed-tick rules.
+tokio = { workspace = true, features = ["test-util"] }
