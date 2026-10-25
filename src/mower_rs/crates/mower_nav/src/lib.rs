@@ -14,6 +14,7 @@
 //! own task; everything shares one state mutex that is never held across an
 //! await.
 
+pub mod core_backend;
 mod geometry;
 mod nav2;
 mod progress;

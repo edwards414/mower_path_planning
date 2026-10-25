@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 mower_rs_common = { path = "../mower_rs_common" }
+mower_nav_core = { path = "../mower_nav_core" }
 r2r.workspace = true
 futures.workspace = true
 tokio.workspace = true
