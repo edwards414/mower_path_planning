@@ -20,6 +20,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mower_bus::{BusError, Scope};
 use r2r::QosProfile;
@@ -149,6 +150,27 @@ impl From<r2r::Error> for BridgeError {
 /// scope closes.
 pub(crate) type Forwarder = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+/// The bounds of forwarded service calls (README.md, "Services").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceTimeouts {
+    /// `service_from_ros`: how long a DDS call may take; then the bus caller
+    /// gets `NoResponse`. 30 s by default, ws_bridge's `service_timeout`.
+    /// It is what ends a call whose server is replaced while holding it: a
+    /// server is matched at every check then, just not the one that has it.
+    pub dds_call: Duration,
+    /// `service_to_ros`: how long a DDS call that finds no bus server waits
+    /// for one, to be tried once more when it comes. 4 s by default, above
+    /// mower_rsd's 2 s restart delay, so that a call made while a module
+    /// restarts reaches the restarted module.
+    pub bus_server: Duration,
+}
+
+impl Default for ServiceTimeouts {
+    fn default() -> Self {
+        ServiceTimeouts { dds_call: Duration::from_secs(30), bus_server: Duration::from_secs(4) }
+    }
+}
+
 /// Forwards declared names between the bus and DDS (README.md).
 ///
 /// Declarations create both endpoints at once, so a bad name, a type that
@@ -164,6 +186,7 @@ pub struct RosBridge {
     forwarders: Vec<Forwarder>,
     claims: Claims,
     stats: BridgeStats,
+    timeouts: ServiceTimeouts,
 }
 
 impl RosBridge {
@@ -182,7 +205,15 @@ impl RosBridge {
             forwarders: Vec::new(),
             claims: Claims::default(),
             stats: BridgeStats::default(),
+            timeouts: ServiceTimeouts::default(),
         }
+    }
+
+    /// The bounds for the services declared from now on (the defaults until
+    /// then).
+    pub fn with_service_timeouts(mut self, timeouts: ServiceTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 
     /// The counters of every name this bridge forwards, also while it runs.
@@ -210,15 +241,17 @@ impl RosBridge {
 
     /// Serve bus service `name` on DDS: DDS clients call the bus server.
     pub fn service_to_ros<S: BridgeService>(&mut self, name: &str) -> Result<(), BridgeError> {
+        let wait = self.timeouts.bus_server;
         self.declare(name, Direction::ServiceToRos, &QosProfile::services_default(), |bridge, _, env| {
-            service::service_to_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log)
+            service::service_to_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, wait)
         })
     }
 
     /// Serve DDS service `name` on the bus: bus clients call the DDS server.
     pub fn service_from_ros<S: BridgeService>(&mut self, name: &str) -> Result<(), BridgeError> {
+        let deadline = self.timeouts.dds_call;
         self.declare(name, Direction::ServiceFromRos, &QosProfile::services_default(), |bridge, _, env| {
-            service::service_from_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log)
+            service::service_from_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, deadline)
         })
     }
 
@@ -257,7 +290,7 @@ impl RosBridge {
     /// Await it to the end: dropped half-way, it still stops the spin
     /// thread, but without waiting for it.
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<(), BridgeError> {
-        let RosBridge { node, scope, logger, handle, commands, forwarders, claims, stats: _ } = self;
+        let RosBridge { node, scope, logger, handle, commands, forwarders, claims, stats: _, timeouts: _ } = self;
         r2r::log_info!(&logger, "mower_bus_ros: forwarding {} names between the bus and DDS", forwarders.len());
         let running = Arc::new(AtomicBool::new(true));
         let stop = StopSpin(running.clone());

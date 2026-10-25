@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
-use mower_bus::{Client, Request, Scope};
+use mower_bus::{BusError, Client, Message, Request, Scope};
 use r2r::{QosProfile, ServiceRequest};
 
 use crate::log::{Failure, Log};
@@ -38,9 +38,10 @@ struct Env {
     log: Log,
 }
 
-/// `service_to_ros`: a DDS server whose requests become bus calls.
+/// `service_to_ros`: a DDS server whose requests become bus calls. A call
+/// that finds no bus server waits up to `wait` for one (`ServiceTimeouts`).
 pub(crate) fn service_to_ros<S: BridgeService>(
-    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log,
+    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log, wait: Duration,
 ) -> Result<Forwarder, BridgeError> {
     let client = scope.client::<S::Request, S::Response>(name)?;
     let mut requests = node.create_service::<S>(name, QosProfile::services_default())?;
@@ -50,7 +51,7 @@ pub(crate) fn service_to_ros<S: BridgeService>(
         loop {
             tokio::select! {
                 request = requests.next() => match request {
-                    Some(request) => calls.push(answer::<S>(client.clone(), request, env.clone())),
+                    Some(request) => calls.push(answer::<S>(client.clone(), request, env.clone(), wait)),
                     None => return,
                 },
                 Some(()) = calls.next() => {}
@@ -59,14 +60,32 @@ pub(crate) fn service_to_ros<S: BridgeService>(
     }))
 }
 
-/// One DDS request: call the bus server and answer with what it says. ROS
-/// has no error reply, so on a bus error the request is dropped unanswered:
-/// the ROS client sees what it sees of a crashed server, and times out.
-async fn answer<S: BridgeService>(client: Client<S::Request, S::Response>, request: ServiceRequest<S>, env: Arc<Env>) {
-    let response = match client.request(&request.message) {
-        Ok(response) => response.await,
-        Err(e) => Err(e),
-    };
+/// One DDS request: call the bus server and answer with what it says.
+///
+/// With no bus server, the call waits up to `wait` for one and is then tried
+/// once more. The DDS service stays advertised meanwhile (r2r cannot take it
+/// back), so a DDS client cannot learn that the server is gone; but mower_rsd
+/// starts a failed module again after 2 s, and a call made during that
+/// restart is answered by the restarted module. A server that went away with
+/// the call is the same `ServiceUnavailable` to the bus, so that call is
+/// tried once more too.
+///
+/// ROS has no error reply, so on any other bus error, or when the wait runs
+/// out, the request is dropped unanswered: the ROS client sees what it sees
+/// of a crashed server, and times out.
+async fn answer<S: BridgeService>(
+    client: Client<S::Request, S::Response>, request: ServiceRequest<S>, env: Arc<Env>, wait: Duration,
+) {
+    let mut response = bus_call(&client, &request.message).await;
+    let mut waited = "";
+    if matches!(response, Err(BusError::ServiceUnavailable { .. })) {
+        match tokio::time::timeout(wait, client.wait_for_service()).await {
+            Ok(Ok(())) => response = bus_call(&client, &request.message).await,
+            // The bridge's scope closed: the response stays the error.
+            Ok(Err(_)) => {}
+            Err(_) => waited = ", and none came in time",
+        }
+    }
     match response {
         Ok(response) => match request.respond(response) {
             Ok(()) => {
@@ -80,14 +99,23 @@ async fn answer<S: BridgeService>(client: Client<S::Request, S::Response>, reque
         },
         Err(e) => {
             env.counters.unanswered();
-            env.log.warn(Failure::of(&e), || format!("the bus call failed ({e}), so the ROS client gets no answer"));
+            env.log.warn(Failure::of(&e), || format!("the bus call failed ({e}{waited}), so the ROS client gets no answer"));
         }
     }
 }
 
-/// `service_from_ros`: a bus server whose requests become DDS calls.
+/// A bus call, its two levels of error in one.
+async fn bus_call<Req: Message, Resp: Message>(client: &Client<Req, Resp>, request: &Req) -> Result<Resp, BusError> {
+    match client.request(request) {
+        Ok(response) => response.await,
+        Err(e) => Err(e),
+    }
+}
+
+/// `service_from_ros`: a bus server whose requests become DDS calls, each
+/// given up at `deadline` (`ServiceTimeouts`).
 pub(crate) fn service_from_ros<S: BridgeService>(
-    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log,
+    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log, deadline: Duration,
 ) -> Result<Forwarder, BridgeError> {
     let mut service = scope.service::<S::Request, S::Response>(name)?;
     let client = node.create_client::<S>(name, QosProfile::services_default())?;
@@ -98,7 +126,7 @@ pub(crate) fn service_from_ros<S: BridgeService>(
         loop {
             tokio::select! {
                 request = service.next() => match request {
-                    Some(request) => calls.push(call(server.clone(), request, env.clone())),
+                    Some(request) => calls.push(call(server.clone(), request, env.clone(), deadline)),
                     // The bridge's scope closed.
                     None => return,
                 },
@@ -110,9 +138,16 @@ pub(crate) fn service_from_ros<S: BridgeService>(
 
 /// One bus request: call the DDS server, if there is one, and answer with
 /// what it says. Dropping `request` unanswered gives the bus caller
-/// `NoResponse`, which is what it gets while no DDS server is matched, and
-/// when the server goes away during the call.
-async fn call<S: BridgeService>(server: Arc<DdsServer<S>>, request: Request<S::Request, S::Response>, env: Arc<Env>) {
+/// `NoResponse`, which is what it gets while no DDS server is matched, when
+/// none is any more during the call, and when the call passes `deadline`.
+///
+/// The deadline is what ends a call whose server is replaced while it holds
+/// it (a crash and a respawn, or a second instance that comes up first): a
+/// server is matched at every check then, only not the one that has the
+/// call, and r2r's response future never completes.
+async fn call<S: BridgeService>(
+    server: Arc<DdsServer<S>>, request: Request<S::Request, S::Response>, env: Arc<Env>, deadline: Duration,
+) {
     if !server.available().await {
         env.counters.unanswered();
         env.log.warn(Failure::DdsUnavailable, || "no DDS server is matched, so the bus caller gets NoResponse".into());
@@ -125,7 +160,13 @@ async fn call<S: BridgeService>(server: Arc<DdsServer<S>>, request: Request<S::R
             return env.log.error(Failure::Dds, || format!("sending the DDS request failed: {e}"));
         }
     };
-    match server.watch(response).await {
+    let Ok(response) = tokio::time::timeout(deadline, server.watch(response)).await else {
+        env.counters.unanswered();
+        return env.log.warn(Failure::DdsTimeout, || {
+            format!("the DDS server did not answer within {deadline:?}, so the bus caller gets NoResponse")
+        });
+    };
+    match response {
         Some(Ok(response)) => {
             // `Closed` only: the bridge's scope closed meanwhile, and nobody
             // waits for the answer.

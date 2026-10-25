@@ -22,6 +22,8 @@ pub(crate) enum Failure {
     DdsUnavailable,
     /// The DDS server went away while a call was pending.
     DdsLost,
+    /// The DDS server did not answer within the call's deadline.
+    DdsTimeout,
     /// An r2r call failed: creating the DDS writer, publishing, counting
     /// its readers, sending a request or a response.
     Dds,

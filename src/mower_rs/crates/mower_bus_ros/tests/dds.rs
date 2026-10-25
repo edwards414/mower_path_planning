@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use futures::{FutureExt, Stream, StreamExt};
 use mower_bus::{Bus, BusError, Qos, Scope};
-use mower_bus_ros::{BridgeError, BridgeMessage, BridgeStats, Direction, EntryStats, RosBridge};
+use mower_bus_ros::{BridgeError, BridgeMessage, BridgeStats, Direction, EntryStats, RosBridge, ServiceTimeouts};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::std_msgs::msg::{Header, String as Text};
 use r2r::std_srvs::srv::SetBool;
@@ -713,16 +713,20 @@ fn service_to_ros_leaves_a_dds_call_unanswered_when_the_bus_call_fails() {
     within(async {
         let name = "/bridge_test/start_recording";
         let bus = Bus::new();
-        let mut bridge = new_bridge("start_recording_bridge", &bus.scope("bridge"));
+        let wait = Duration::from_millis(300);
+        let timeouts = ServiceTimeouts { bus_server: wait, ..ServiceTimeouts::default() };
+        let mut bridge = new_bridge("start_recording_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
         bridge.service_to_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
         let app = Peer::new("start_recording_app");
         let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
         wait_for_service(&client).await;
 
-        // No bus server: ServiceUnavailable on the bus, no answer on DDS.
+        // No bus server, and none comes within the wait: no answer on DDS.
+        let called = Instant::now();
         let mut unavailable = Box::pin(client.request(&set_bool(true)).unwrap());
         eventually("the call to be given up", || running.service(name).unanswered == 1).await;
+        assert!(called.elapsed() >= wait, "given up only after waiting for a server: {:?}", called.elapsed());
         // A bus server that drops its requests: NoResponse, no answer.
         let module = bus.scope("recorder");
         let mut dropping = module.service::<SetBool::Request, SetBool::Response>(name).unwrap();
@@ -742,6 +746,49 @@ fn service_to_ros_leaves_a_dds_call_unanswered_when_the_bus_call_fails() {
         assert_eq!(answer.message, "bus got true");
         eventually("the answer counted", || running.service(name).forwarded == 1).await;
         assert_eq!(running.service(name).unanswered, 2);
+        running.stop().await.unwrap();
+    });
+}
+
+/// The DDS service stays advertised while no bus server exists, so a DDS
+/// client that checks `is_available` first (ws_bridge does, with a 5 s
+/// bound) calls it while the module that serves it restarts. The call waits
+/// for the restarted server instead of being dropped, which would leave the
+/// client waiting for its own timeout (ws_bridge: 30 s).
+#[test]
+fn a_dds_call_made_while_the_bus_server_restarts_is_answered_once_it_is_back() {
+    within(async {
+        let name = "/bridge_test/restarting_save_map";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("restart_bridge", &bus.scope("bridge"));
+        bridge.service_to_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let module = bus.scope("map_manage");
+        let _first = serve_on_bus(&module, name);
+        let app = Peer::new("restart_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        wait_for_service(&client).await;
+        let first = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await;
+        assert!(matches!(first, Ok(Ok(_))), "the first call is answered");
+
+        // The module fails; the supervisor restarts it a while later.
+        module.close();
+        let still_available = r2r::Node::is_available(&client).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), still_available)
+            .await
+            .expect("the DDS server stays advertised while no bus server exists")
+            .unwrap();
+        let call = client.request(&set_bool(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let restarted = bus.scope("map_manage");
+        let _second = serve_on_bus(&restarted, name);
+        let answer = tokio::time::timeout(Duration::from_secs(5), call).await;
+        assert!(
+            matches!(answer, Ok(Ok(_))),
+            "the call made during the restart was dropped (unanswered: {}), so the client waits for its own timeout",
+            running.service(name).unanswered
+        );
+        assert_eq!(running.service(name).unanswered, 0);
         running.stop().await.unwrap();
     });
 }
@@ -830,6 +877,97 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
         let answer = tokio::time::timeout(WAIT, pending).await.unwrap();
         assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
         let _ = tokio::time::timeout(WAIT, holder).await;
+        running.stop().await.unwrap();
+    });
+}
+
+/// A DDS server that takes a call and never answers, while it stays matched:
+/// no availability check can end the call, the deadline does.
+#[test]
+fn a_dds_call_that_is_never_answered_ends_at_its_deadline() {
+    within(async {
+        let name = "/bridge_test/never_answered";
+        let deadline = Duration::from_secs(1);
+        let bus = Bus::new();
+        let timeouts = ServiceTimeouts { dds_call: deadline, ..ServiceTimeouts::default() };
+        let mut bridge = new_bridge("never_answered_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
+        bridge.service_from_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
+        let nav2 = Peer::new("never_answered_nav2");
+        let mut requests = nav2.with(|n| n.create_service::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        let (taken, mut held) = tokio::sync::mpsc::unbounded_channel();
+        let _holder = tokio::spawn(async move {
+            // Takes every call and keeps it, unanswered, for as long as it runs.
+            while let Some(request) = requests.next().await {
+                let _ = taken.send(request);
+            }
+        });
+        // Until the server is matched, calls come back NoResponse at once;
+        // the first one it takes runs into the deadline.
+        let deadline_at = Instant::now() + WAIT;
+        loop {
+            let started = Instant::now();
+            let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap();
+            assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
+            if held.try_recv().is_ok() {
+                let took = started.elapsed();
+                assert!(took >= deadline && took < deadline + Duration::from_secs(5), "ended after {took:?}");
+                break;
+            }
+            assert!(Instant::now() < deadline_at, "the DDS server never took a call");
+        }
+        eventually("the call counted", || running.service(name).unanswered >= 1).await;
+        running.stop().await.unwrap();
+    });
+}
+
+/// A DDS server that takes the call and is replaced (it crashes and launch
+/// respawns it, or a second instance comes up before the first dies) leaves
+/// a server matched at every check, so only the deadline ends the call.
+#[test]
+fn a_dds_call_whose_server_is_replaced_mid_call_still_ends() {
+    within(async {
+        let name = "/bridge_test/replaced_get_state";
+        let bus = Bus::new();
+        let timeouts = ServiceTimeouts { dds_call: Duration::from_secs(3), ..ServiceTimeouts::default() };
+        let mut bridge = new_bridge("replaced_server_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
+        bridge.service_from_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
+
+        // The first server takes calls and never answers them.
+        let first = Peer::new("replaced_server_first");
+        let mut requests = first.with(|n| n.create_service::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        let (taken, held) = tokio::sync::oneshot::channel();
+        let holder = tokio::spawn(async move {
+            if let Some(request) = requests.next().await {
+                let _ = taken.send(());
+                let _request = request;
+                while requests.next().await.is_some() {}
+            }
+        });
+        let deadline = Instant::now() + WAIT;
+        let pending = loop {
+            let mut call = Box::pin(client.request(&set_bool(true)).unwrap());
+            match tokio::time::timeout(Duration::from_secs(2), &mut call).await {
+                Ok(Err(BusError::NoResponse { .. })) => assert!(Instant::now() < deadline, "never matched"),
+                Ok(other) => panic!("a held call cannot be answered: {other:?}"),
+                Err(_) => break call,
+            }
+        };
+        tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
+
+        // Its replacement comes up, then the first one goes with its process.
+        let second = Peer::new("replaced_server_second");
+        let _answering = serve_on_dds(&second, name);
+        tokio::time::sleep(Duration::from_millis(300)).await; // the bridge's client matches it
+        drop(first);
+        let _ = tokio::time::timeout(WAIT, holder).await;
+
+        let answer = tokio::time::timeout(Duration::from_secs(8), pending).await;
+        assert!(answer.is_ok(), "the call the first server took never ended (unanswered so far: {})", running.service(name).unanswered);
+        assert_eq!(answer.unwrap(), Err(BusError::NoResponse { name: name.into() }));
         running.stop().await.unwrap();
     });
 }

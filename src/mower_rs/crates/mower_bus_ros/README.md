@@ -145,8 +145,8 @@ number of writers on the bridge's side, or let one writer own all static frames.
   together in E2: mower_base's arm latch asks whether `/drivetrain_guarded_cmd_vel` and `/mower_base/wheel_override`
   have a publisher.
 - **Likewise for services:**
-  - a `service_to_ros` DDS server is advertised all along, so a DDS client sees it as available and its calls go
-    unanswered while no bus server exists;
+  - a `service_to_ros` DDS server is advertised all along, so a DDS client sees it as available. While no bus server
+    exists, its calls wait up to 4 s for one, then go unanswered ("Services");
   - a `service_from_ros` bus server makes `wait_for_service` succeed at once.
 - **Readers too:** a `to_ros` bus reader counts in `Publisher::subscription_count()` all along. No module skips work on
   that count today.
@@ -173,10 +173,23 @@ the spin thread, which owns the node:
 
 ## Services
 
+`ServiceTimeouts` bounds the calls. Set it with `RosBridge::with_service_timeouts` before declaring the services.
+
 - **`service_to_ros`:** each DDS request becomes a bus call, and the answer goes back.
-  - On a bus error (`ServiceUnavailable`, `NoResponse`, `Closed`) the DDS request is dropped unanswered: ROS has no error
-    channel. The ROS client times out, as with a crashed server.
+  - **No bus server (`ServiceUnavailable`):** the call waits up to `bus_server` (4 s) for one, then is tried once more.
+    mower_rsd starts a failed module again after 2 s, so a call made during that restart is answered by the restarted
+    module.
+  - A server that went away holding the call gives the same `ServiceUnavailable`, so that call is tried again too. If
+    its handler had already run, it runs twice.
+  - **`NoResponse` or `Closed`, or no server by the end of the wait:** the DDS request is dropped unanswered, since ROS
+    has no error channel. The ROS client times out, as with a crashed server.
   - Each error kind is logged once, until a call succeeds again.
+  - **Proposal: withdraw the DDS service while no bus server exists,** so that a DDS client's `is_available` fails as it
+    does for a dead server. ws_bridge would then tell the app "unavailable" within 5 s instead of after its 30 s.
+    - r2r has no `destroy_service`. It destroys a service whose request stream was dropped only when the next request
+      comes, and that request is lost.
+    - So it needs a vendor/r2r patch that adds `Node::destroy_service` next to `destroy_publisher`.
+    - With the wait above, only a module that stays down longer than 4 s would still need it.
 - **`service_from_ros`:** each bus request becomes a DDS call.
   - r2r tells whether the DDS server is matched only through `Node::is_available`, a future that the node's next spin
     completes.
@@ -184,8 +197,11 @@ the spin thread, which owns the node:
   - One probe is kept, and reused while pending. New ones would pile up in r2r's client for as long as the server is
     missing.
   - A confirmed server counts as available for 1 s.
-  - A pending call re-checks its server every second, and is dropped (`NoResponse`) once the server has gone. r2r's
-    response future would otherwise never complete.
+  - A pending call re-checks every second that a server is still matched, and is dropped (`NoResponse`) once none is.
+    Otherwise r2r's response future would never complete.
+  - **Deadline:** every call is given up at `dds_call` (30 s, ws_bridge's `service_timeout`), and the bus caller gets
+    `NoResponse`. That is what ends a call whose server is replaced while holding it (a crash and a respawn, or a
+    second instance that comes up first): a server is matched at every check then, just not the one that has the call.
 - **Concurrency:** calls are forwarded concurrently. The servers still decide how they serve them.
 
 ## Lifecycle
