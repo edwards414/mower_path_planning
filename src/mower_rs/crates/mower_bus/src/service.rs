@@ -37,7 +37,7 @@
 //!   state over its clients' close signals (introspection), and the caller
 //!   table over the scope's hook list (`Registry::caller`).
 
-use std::collections::{hash_map, BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -50,6 +50,7 @@ use futures::channel::oneshot;
 use futures::{Stream, StreamExt};
 
 use crate::codec::{AnyMsg, Codec};
+use crate::wake::WakerSet;
 use crate::{check_name, ros_type_name, BusError, Message, Scope, ServiceInfo};
 
 /// How a call ends, before the response is typed again.
@@ -700,48 +701,6 @@ impl CloseSignal {
     }
 }
 
-/// Tasks waiting for one event, each under its own key, so that a waiter
-/// that gives up takes its waker back out instead of leaving it to pile up.
-///
-/// It lives under a lock, so a waker it lets go of is handed back to be
-/// dropped once the lock is released.
-#[derive(Default)]
-struct WakerSet {
-    last_key: u64,
-    wakers: HashMap<u64, Waker>,
-}
-
-impl WakerSet {
-    /// Add or refresh the waker under `key`, picking a key on first use.
-    /// Returns the waker it replaces.
-    #[must_use = "drop the replaced waker once the lock is released"]
-    fn register(&mut self, key: &mut Option<u64>, waker: &Waker) -> Option<Waker> {
-        let key = *key.get_or_insert_with(|| {
-            self.last_key += 1;
-            self.last_key
-        });
-        match self.wakers.entry(key) {
-            hash_map::Entry::Occupied(slot) if slot.get().will_wake(waker) => None,
-            hash_map::Entry::Occupied(mut slot) => Some(slot.insert(waker.clone())),
-            hash_map::Entry::Vacant(slot) => {
-                slot.insert(waker.clone());
-                None
-            }
-        }
-    }
-
-    /// Take the waker under `key` out.
-    #[must_use = "drop the removed waker once the lock is released"]
-    fn remove(&mut self, key: u64) -> Option<Waker> {
-        self.wakers.remove(&key)
-    }
-
-    /// Empty the set, to wake everyone once the lock is released.
-    fn take(&mut self) -> Vec<Waker> {
-        self.wakers.drain().map(|(_, waker)| waker).collect()
-    }
-}
-
 /// A message back in its own type: moved out of the `Arc` when nothing else
 /// holds it (always so for the bus's own requests and answers), else cloned.
 fn unerase<T: Message>(msg: AnyMsg) -> T {
@@ -772,8 +731,8 @@ mod tests {
             let mut wait = Box::pin(client.wait_for_service());
             assert!(wait.as_mut().poll(&mut cx).is_pending());
         }
-        assert!(lock(&client.inner.entry.state).waiting.wakers.is_empty());
-        assert!(lock(&client.inner.caller.state).watchers.wakers.is_empty());
+        assert!(lock(&client.inner.entry.state).waiting.is_empty());
+        assert!(lock(&client.inner.caller.state).watchers.is_empty());
 
         let server = bus.scope("server");
         let _srv = server.service::<u32, u32>("/x").unwrap();
@@ -781,7 +740,7 @@ mod tests {
             let mut call = client.request(&1).unwrap();
             assert!(Pin::new(&mut call).poll(&mut cx).is_pending());
         }
-        assert!(lock(&client.inner.caller.state).watchers.wakers.is_empty());
+        assert!(lock(&client.inner.caller.state).watchers.is_empty());
     }
 
     /// A waker that records, when its last clone drops, whether every lock

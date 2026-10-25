@@ -6,17 +6,19 @@
 //!
 //! No r2r, no ROS: what crosses to DDS goes through `mower_bus_ros`.
 
-use std::any::Any;
 use std::fmt;
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
 use std::thread::ThreadId;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::sync::Notify;
+
+use crate::wake::{UserCode, WakerSet};
 
 mod clock;
 mod codec;
@@ -74,9 +76,13 @@ impl Bus {
                 name: name.to_string(),
                 id,
                 state: AtomicU8::new(State::Open as u8),
-                life: Mutex::new(Life { hooks: Vec::new(), children: Vec::new(), closer: None }),
+                life: Mutex::new(Life {
+                    hooks: Vec::new(),
+                    children: Vec::new(),
+                    closer: None,
+                    waiters: WakerSet::default(),
+                }),
                 finished: Condvar::new(),
-                closed: Notify::new(),
             }),
         }
     }
@@ -132,8 +138,6 @@ struct ScopeInner {
     /// Signalled when a close finishes, for a `close` that waits for the one
     /// under way.
     finished: Condvar,
-    /// Woken when a close finishes: `Scope::closed`, and through it timers.
-    closed: Notify,
 }
 
 /// What closing a scope has to end. No user code ever runs under this
@@ -150,6 +154,9 @@ struct Life {
     /// The thread running the close, while it is closing: a close re-entered
     /// on that thread must not wait for itself.
     closer: Option<ThreadId>,
+    /// The `closed()` futures waiting, and through them timers: emptied, and
+    /// woken one call at a time, when the close has finished.
+    waiters: WakerSet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +182,19 @@ impl ScopeInner {
     /// Move to `state`, with `life` locked (the guard is the proof).
     fn set_state(&self, _locked: &mut Life, state: State) {
         self.state.store(state as u8, Ordering::Release);
+    }
+
+    /// The close is over: the scope is closed, a close waiting for this one
+    /// is released, and the `closed()` waiters are handed back, to be woken
+    /// with no lock held.
+    fn finish_close(&self) -> Vec<Waker> {
+        let mut life = lock(&self.life);
+        self.set_state(&mut life, State::Closed);
+        life.closer = None;
+        let waiters = life.waiters.take();
+        drop(life);
+        self.finished.notify_all();
+        waiters
     }
 }
 
@@ -256,25 +276,20 @@ impl Scope {
             life.closer = Some(me);
             (std::mem::take(&mut life.children), std::mem::take(&mut life.hooks))
         };
-        // Finishes the close when dropped, so that it finishes even if
-        // something unwinds past the `catch_unwind`s below.
-        let finish = FinishClose(inner);
-        let mut first_panic: Option<Box<dyn Any + Send>> = None;
-        let mut contain = |ran: std::thread::Result<()>| {
-            if let Err(panic) = ran {
-                first_panic.get_or_insert(panic);
-            }
-        };
+        // Each child's close and each hook on its own: what panics in one
+        // skips none of the others, and nothing unwinds out of
+        // `UserCode::run`, so the close always gets to finish.
+        let mut user = UserCode::default();
         for child in children {
-            contain(catch_unwind(AssertUnwindSafe(|| child.close())));
+            user.run(move || child.close());
         }
         for hook in hooks {
-            contain(catch_unwind(AssertUnwindSafe(hook)));
+            user.run(hook);
         }
-        drop(finish);
-        if let Some(panic) = first_panic {
-            resume_unwind(panic);
+        for waiter in inner.finish_close() {
+            user.wake(waiter);
         }
+        user.finish();
     }
 
     /// Resolves once the scope is closed: once a [`Scope::close`] has
@@ -285,14 +300,7 @@ impl Scope {
     /// `select!`), it leaves nothing behind, so a loop can poll a fresh one in
     /// every turn.
     pub async fn closed(&self) {
-        let mut notified = std::pin::pin!(self.inner.closed.notified());
-        // On the waiting list before the look, so that a close finishing in
-        // between still wakes it.
-        notified.as_mut().enable();
-        if self.inner.state() == State::Closed {
-            return;
-        }
-        notified.await;
+        Closed { scope: self, key: None }.await;
     }
 
     /// A new scope on the same bus that closes when this one closes, named
@@ -412,18 +420,41 @@ impl Scope {
     }
 }
 
-/// Finishes a close when dropped: the scope is closed, and whoever waits for
-/// that (a second `close`, `closed()`, timers) is woken.
-struct FinishClose<'a>(&'a ScopeInner);
+/// [`Scope::closed`]: waits in the scope's `waiters`, which the close
+/// empties (under the same lock as it marks the scope closed) and wakes. A
+/// future of its own, so that one dropped first takes its waker back out
+/// and one polled again replaces its waker instead of adding one.
+struct Closed<'a> {
+    scope: &'a Scope,
+    /// Its key in `waiters`, once it waits.
+    key: Option<u64>,
+}
 
-impl Drop for FinishClose<'_> {
-    fn drop(&mut self) {
-        let mut life = lock(&self.0.life);
-        self.0.set_state(&mut life, State::Closed);
-        life.closer = None;
+impl Future for Closed<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = &mut *self;
+        let inner = &this.scope.inner;
+        let mut life = lock(&inner.life);
+        if inner.state() == State::Closed {
+            // The close took the waker out already; nothing is left behind.
+            this.key = None;
+            return Poll::Ready(());
+        }
+        let replaced = life.waiters.register(&mut this.key, cx.waker());
         drop(life);
-        self.0.finished.notify_all();
-        self.0.closed.notify_waiters();
+        drop(replaced);
+        Poll::Pending
+    }
+}
+
+impl Drop for Closed<'_> {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            let removed = lock(&self.scope.inner.life).waiters.remove(key);
+            drop(removed);
+        }
     }
 }
 
@@ -514,6 +545,29 @@ mod tests {
         scope.close();
         assert_eq!(*late.lock().unwrap(), Some(Err(BusError::Closed { scope: "m".into() })));
         assert_eq!(scope.hook_count(), 0);
+    }
+
+    #[test]
+    fn closed_futures_take_their_wakers_back_and_the_close_empties_the_list() {
+        let bus = Bus::new();
+        let scope = bus.scope("m");
+        let waiters = || !lock(&scope.inner.life).waiters.is_empty();
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        for _ in 0..10 {
+            let mut closed = Box::pin(scope.closed());
+            assert!(closed.as_mut().poll(&mut cx).is_pending());
+        }
+        assert!(!waiters(), "dropped ones take their waker back");
+        let mut closed = Box::pin(scope.closed());
+        for _ in 0..10 {
+            assert!(closed.as_mut().poll(&mut cx).is_pending());
+        }
+        assert_eq!(lock(&scope.inner.life).waiters.take().len(), 1, "polled again: still one");
+        let mut closed = Box::pin(scope.closed());
+        assert!(closed.as_mut().poll(&mut cx).is_pending());
+        scope.close();
+        assert!(!waiters(), "the close empties the list");
+        assert!(closed.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]

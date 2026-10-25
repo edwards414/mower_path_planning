@@ -532,6 +532,50 @@ fn closed_futures_given_up_or_polled_again_leave_no_waker_behind() {
     assert!(poll_once(&mut closed).is_ready());
 }
 
+/// A waker that panics when woken.
+struct Exploding;
+
+impl Wake for Exploding {
+    fn wake(self: Arc<Self>) {
+        panic!("waker exploded");
+    }
+}
+
+/// Second review pass: `closed()` sat on tokio's `Notify`, whose
+/// `notify_waiters()` wakes a batch through `WakeList::wake_all`, which
+/// drops the rest of the batch unwoken when one waker panics ("If this
+/// panics, then `guard` will clean up the remaining wakers"). The other
+/// `closed()` waiters (timers, `select!` loops, the bridge's `run`) then
+/// missed the close. The scope now wakes a list of its own, one call at a
+/// time.
+#[test]
+fn a_closed_waiter_whose_waker_panics_keeps_no_other_waiter_asleep() {
+    let bus = Bus::new();
+    let (clock, _mc) = Clock::manual(Time::default());
+    let m = bus.scope("ros_bridge");
+    let mut broken = Box::pin(m.closed()); // the first to wait, so the first woken
+    assert!(poll_with(&mut broken, &Waker::from(Arc::new(Exploding))).is_pending());
+    let (other_future, ticking) = (Count::new(), Count::new());
+    let mut fine = Box::pin(m.closed());
+    assert!(poll_with(&mut fine, &other_future.waker()).is_pending());
+    let mut timer = m.wall_timer(&clock, ms(100)).unwrap();
+    let mut tick = Box::pin(timer.tick());
+    assert!(poll_with(&mut tick, &ticking.waker()).is_pending());
+    let blocked = {
+        let m = m.clone();
+        thread::spawn(move || futures::executor::block_on(m.closed()))
+    };
+    thread::sleep(ms(20)); // let it wait
+
+    let panic = catch_unwind(AssertUnwindSafe(|| m.close())).expect_err("the waker's panic goes on");
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&"waker exploded"));
+    assert_eq!((other_future.get(), ticking.get()), (1, 1), "the other future and the timer were woken");
+    blocked.join().expect("the blocked thread was woken");
+    assert!(poll_once(&mut fine).is_ready());
+    assert_eq!(poll_once(&mut tick), Poll::Ready(Err(closed("ros_bridge"))));
+    drop(broken);
+}
+
 #[tokio::test]
 async fn a_select_loop_on_closed_ends_when_the_scope_closes() {
     let bus = Bus::new();

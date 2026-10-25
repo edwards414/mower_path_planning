@@ -8,10 +8,63 @@
 //! sleeps for good. [`UserCode`] runs each call on its own and re-raises the
 //! first panic once the batch is done. Callers run it with no lock held,
 //! after the bus's own state is consistent.
+//!
+//! [`WakerSet`] keeps the wakers of the tasks waiting for one event, each
+//! under its own key, so that a task that gives up takes its waker back out.
 
 use std::any::Any;
+use std::collections::{btree_map, BTreeMap};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::task::Waker;
+
+/// Tasks waiting for one event, each under its own key, so that a waiter
+/// that gives up takes its waker back out instead of leaving it to pile up,
+/// and one polled again replaces its waker instead of adding one. Woken in
+/// the order they started waiting.
+///
+/// It lives under a lock, so a waker it lets go of is handed back to be
+/// dropped (or woken) once the lock is released.
+#[derive(Default)]
+pub(crate) struct WakerSet {
+    last_key: u64,
+    wakers: BTreeMap<u64, Waker>,
+}
+
+impl WakerSet {
+    /// Add or refresh the waker under `key`, picking a key on first use.
+    /// Returns the waker it replaces.
+    #[must_use = "drop the replaced waker once the lock is released"]
+    pub(crate) fn register(&mut self, key: &mut Option<u64>, waker: &Waker) -> Option<Waker> {
+        let key = *key.get_or_insert_with(|| {
+            self.last_key += 1;
+            self.last_key
+        });
+        match self.wakers.entry(key) {
+            btree_map::Entry::Occupied(slot) if slot.get().will_wake(waker) => None,
+            btree_map::Entry::Occupied(mut slot) => Some(slot.insert(waker.clone())),
+            btree_map::Entry::Vacant(slot) => {
+                slot.insert(waker.clone());
+                None
+            }
+        }
+    }
+
+    /// Take the waker under `key` out.
+    #[must_use = "drop the removed waker once the lock is released"]
+    pub(crate) fn remove(&mut self, key: u64) -> Option<Waker> {
+        self.wakers.remove(&key)
+    }
+
+    /// Empty the set, to wake everyone once the lock is released.
+    pub(crate) fn take(&mut self) -> Vec<Waker> {
+        std::mem::take(&mut self.wakers).into_values().collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.wakers.is_empty()
+    }
+}
 
 /// A batch of calls into user code, each run on its own: one that panics
 /// skips none of the others. [`UserCode::finish`] re-raises the first
