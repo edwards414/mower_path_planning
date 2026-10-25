@@ -695,7 +695,8 @@ impl Interval {
         std::future::poll_fn(|cx| self.poll_tick(cx)).await
     }
 
-    fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Mono> {
+    /// [`Interval::tick`] as a poll, for `Timer`.
+    pub(crate) fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Mono> {
         ready!(Pin::new(&mut self.sleep).poll(cx));
         Poll::Ready(self.fire())
     }

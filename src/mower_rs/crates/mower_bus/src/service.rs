@@ -733,7 +733,7 @@ mod tests {
     }
 
     fn hooks(scope: &Scope) -> usize {
-        lock(&scope.inner.hooks).len()
+        scope.hook_count()
     }
 
     #[test]
