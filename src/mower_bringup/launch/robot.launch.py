@@ -209,6 +209,7 @@ def _rust_daemon_node(context):
             'save_dir': LaunchConfiguration('zone_record_dir').perform(context),
             'sites_dir': LaunchConfiguration('sites_dir').perform(context),
         }))
+    env = {}
     if 'nav' in modules and _truthy(
             LaunchConfiguration('rust_nav_core').perform(context)):
         # rust_nav_core:=true: NavStack instead of nav2 (which mower.launch.py
@@ -221,6 +222,10 @@ def _rust_daemon_node(context):
             'nav_backend': 'nav_core',
             'nav_core': {'pose_source': 'tfbus'},
         }))
+        # navigation.launch.py sets this for the rest of the launch (Jazzy
+        # does not scope an include's environment), and mower_rsd has always
+        # inherited it; keep its log buffering the same without nav2.
+        env['RCUTILS_LOGGING_BUFFERED_STREAM'] = '1'
     remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
     if 'localize' in modules:
         # The file the C++ nodes read, keyed by the same node names: the one
@@ -246,6 +251,7 @@ def _rust_daemon_node(context):
         respawn_delay=2.0,
         arguments=arguments,
         parameters=parameters,
+        additional_env=env or None,
     )]
 
 
