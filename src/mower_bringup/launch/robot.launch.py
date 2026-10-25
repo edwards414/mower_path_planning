@@ -11,7 +11,7 @@ from launch.actions import (
     OpaqueFunction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 import yaml
@@ -103,6 +103,51 @@ def _truthy(value):
     return value.strip().lower() in {'true', '1', 'yes', 'on'}
 
 
+# _truthy's spellings as a PythonExpression, for the one value decided while
+# the launch runs instead of in an OpaqueFunction (_nav2_enabled).
+_TRUE = "('true', '1', 'yes', 'on')"
+
+# rust_nav_core:=true -- the nav module (mower_nav, node nav_action_server)
+# drives navigation with mower_nav_core::NavStack, the in-process Rust port of
+# the nav2 servers (docs/ROS_FREE_PLAN.md Phase D), instead of dispatching to
+# nav2, which then does not start. This file sets that only on mower_rsd's nav
+# module, which reads the robot pose from the localize module's in-process
+# transform cache (nav_core.pose_source: tfbus), hence these three switches.
+# With any of them off nothing could navigate -- nav2 is down, and whichever
+# nav server runs would wait for it or for that pose -- so launch refuses the
+# combination.
+_NAV_CORE_NEEDS = ('rust_daemon', 'rust_nav', 'rust_localize')
+
+
+def _require_nav_core_prerequisites(context):
+    if not _truthy(LaunchConfiguration('rust_nav_core').perform(context)):
+        return []
+    off = [switch for switch in _NAV_CORE_NEEDS
+           if not _truthy(LaunchConfiguration(switch).perform(context))]
+    if off:
+        raise RuntimeError(
+            'robot.launch.py rust_nav_core:=true requires rust_daemon:=true, '
+            'rust_nav:=true and rust_localize:=true, got '
+            + ', '.join(
+                f'{switch}:={LaunchConfiguration(switch).perform(context)}'
+                for switch in off)
+            + ": mower_nav_core runs inside mower_rsd as its nav module, on "
+            "the localize module's pose, and nav2 is not started with it"
+        )
+    return []
+
+
+def _nav2_enabled(rust_nav_core):
+    """mower.launch.py's enable_navigation: 'false' under rust_nav_core, so no
+    nav2 server starts; otherwise whatever this launch was given (an explicit
+    enable_navigation:=false still works), else 'true', that file's own
+    default. The same spellings as _truthy."""
+    return PythonExpression([
+        "'false' if '", rust_nav_core, "'.strip().lower() in ", _TRUE,
+        " else '", LaunchConfiguration('enable_navigation', default='true'), "'",
+    ])
+
+
 def _node_params_file(node, params):
     """Write a --params-file that sets `params` on one node of mower_rsd.
 
@@ -165,6 +210,23 @@ def _rust_daemon_node(context):
             'save_dir': LaunchConfiguration('zone_record_dir').perform(context),
             'sites_dir': LaunchConfiguration('sites_dir').perform(context),
         }))
+    env = {}
+    if 'nav' in modules and _truthy(
+            LaunchConfiguration('rust_nav_core').perform(context)):
+        # rust_nav_core:=true: NavStack instead of nav2 (which mower.launch.py
+        # then does not start, _nav2_enabled), on the localize module's pose.
+        # Node-scoped like the recorder's directories and after the yaml, so
+        # it wins; rcl reads the nested key as nav_core.pose_source. With
+        # rust_nav_core:=false neither is set and mower_nav keeps its default
+        # backend, nav2.
+        parameters.append(_node_params_file('nav_action_server', {
+            'nav_backend': 'nav_core',
+            'nav_core': {'pose_source': 'tfbus'},
+        }))
+        # navigation.launch.py sets this for the rest of the launch (Jazzy
+        # does not scope an include's environment), and mower_rsd has always
+        # inherited it; keep its log buffering the same without nav2.
+        env['RCUTILS_LOGGING_BUFFERED_STREAM'] = '1'
     remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]
     if 'localize' in modules:
         # The file the C++ nodes read, keyed by the same node names: the one
@@ -190,6 +252,7 @@ def _rust_daemon_node(context):
         respawn_delay=2.0,
         arguments=arguments,
         parameters=parameters,
+        additional_env=env or None,
     )]
 
 
@@ -236,6 +299,7 @@ def generate_launch_description():
     rust_bridge = LaunchConfiguration('rust_bridge')
     rust_base = LaunchConfiguration('rust_base')
     rust_daemon = LaunchConfiguration('rust_daemon')
+    rust_nav_core = LaunchConfiguration('rust_nav_core')
 
     mower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -257,6 +321,11 @@ def generate_launch_description():
             'rust_base': rust_base,
             'rust_localize': rust_localize,
             'nav_composition': nav_composition,
+            # rust_nav_core:=true: no nav2 at all. In mower.launch.py this
+            # gates only the navigation.launch.py include (the nav2 servers or
+            # their component container); twist_mux, robot_state_publisher
+            # and localization start either way.
+            'enable_navigation': _nav2_enabled(rust_nav_core),
             'rust_daemon': rust_daemon,
         }.items(),
     )
@@ -500,6 +569,17 @@ def generate_launch_description():
                         'services and parameters are unchanged.',
         ),
         DeclareLaunchArgument(
+            'rust_nav_core',
+            default_value='false',
+            description='mower_nav drives navigation with mower_nav_core '
+                        '(the in-process Rust port of the nav2 servers) '
+                        'instead of nav2, which is then not started: sets '
+                        'nav_backend nav_core and nav_core.pose_source tfbus '
+                        'on the nav module and passes enable_navigation:=false '
+                        'to mower.launch.py. Requires rust_daemon, rust_nav '
+                        'and rust_localize; false keeps nav2.',
+        ),
+        DeclareLaunchArgument(
             'rust_daemon_params_file',
             default_value=os.path.join(
                 mower_bringup_dir, 'config', 'mower_rsd.yaml'
@@ -509,6 +589,8 @@ def generate_launch_description():
                         'image',
         ),
         OpaqueFunction(function=_enforce_production_safety),
+        # before the includes, so a refused combination starts nothing
+        OpaqueFunction(function=_require_nav_core_prerequisites),
         mower_launch,
         mission_launch,
         OpaqueFunction(function=_rust_daemon_node),

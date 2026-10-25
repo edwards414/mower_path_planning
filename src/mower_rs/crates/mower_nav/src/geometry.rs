@@ -1,6 +1,8 @@
 //! ROS-free helpers of `nav_action_server.py`: dispatch-id canonicalisation,
-//! path validation, coverage-path splitting and the covariance gates.
+//! path validation, coverage-path splitting and the covariance gates; and
+//! the goal conversion for the in-process runtime (`nav_backend: nav_core`).
 
+use mower_nav_core::geometry::{yaw_from_quaternion, Pose2D};
 use r2r::geometry_msgs::msg::{Pose, PoseStamped};
 use r2r::nav_msgs::msg::Path;
 
@@ -287,6 +289,41 @@ pub fn split_paths_by_max_distance(paths: &[Path], max_distance_m: f64) -> Vec<P
     paths.iter().flat_map(|p| split_path_by_max_distance(p, max_distance_m)).collect()
 }
 
+/// (x, y, yaw) with `tf2::getYaw`'s yaw, the way nav2 reads a planar pose.
+fn pose_2d(p: &Pose) -> Pose2D {
+    let q = &p.orientation;
+    Pose2D::new(p.position.x, p.position.y, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+}
+
+/// A NavigateToPose pose for the in-process runtime. It takes `map` poses
+/// only: there is no tf lookup to bring another frame into `map` as nav2 has.
+pub fn core_goal_pose(pose: &PoseStamped) -> Result<Pose2D, String> {
+    if pose.header.frame_id != "map" {
+        return Err(format!("goal pose frame must be map, got \"{}\"", pose.header.frame_id));
+    }
+    Ok(pose_2d(&pose.pose))
+}
+
+/// A FollowPath path for the in-process runtime, `map` only, with the frame
+/// rules of [`navigation_path_block_reason`] (an empty pose frame is the path's).
+pub fn core_goal_path(path: &Path) -> Result<Vec<Pose2D>, String> {
+    let path_frame = path_frame_id(path);
+    if path_frame != "map" {
+        return Err(format!("path frame must be map, got \"{path_frame}\""));
+    }
+    path.poses
+        .iter()
+        .enumerate()
+        .map(|(index, stamped)| {
+            let frame = if stamped.header.frame_id.is_empty() { path_frame } else { &stamped.header.frame_id };
+            if frame != "map" {
+                return Err(format!("path pose {index} frame must be map, got \"{frame}\""));
+            }
+            Ok(pose_2d(&stamped.pose))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +419,45 @@ mod tests {
         // 0.20 m is above the 0.15 m floor
         let short = path(&[(0.0, 0.0), (0.05, 0.0), (0.05, 0.05), (0.1, 0.05), (0.1, 0.0)]);
         assert!(coverage_segments_block_reason(&[short], 0.15).is_none());
+    }
+
+    #[test]
+    fn core_goal_pose_is_a_map_pose_with_the_tf2_yaw() {
+        let mut goal = PoseStamped::default();
+        goal.header.frame_id = "map".into();
+        goal.pose.position.x = 1.5;
+        goal.pose.position.y = -2.0;
+        let (_, _, z, w) = mower_nav_core::geometry::quaternion_from_yaw(-2.5);
+        goal.pose.orientation.z = z;
+        goal.pose.orientation.w = w;
+        let pose = core_goal_pose(&goal).unwrap();
+        assert_eq!((pose.x, pose.y), (1.5, -2.0));
+        assert!((pose.yaw + 2.5).abs() < 1e-12);
+        goal.header.frame_id = "odom".into();
+        assert_eq!(core_goal_pose(&goal), Err("goal pose frame must be map, got \"odom\"".into()));
+        // a lone pose has no path frame to fall back on
+        goal.header.frame_id.clear();
+        assert_eq!(core_goal_pose(&goal), Err("goal pose frame must be map, got \"\"".into()));
+    }
+
+    #[test]
+    fn core_goal_path_keeps_every_pose_and_only_takes_map() {
+        let mut p = densify_path(&path(&[(0.0, 0.0), (0.0, 0.25), (1.0, 0.25)]), 0.1);
+        let poses = core_goal_path(&p).unwrap();
+        assert_eq!(poses.len(), p.poses.len());
+        for (pose, stamped) in poses.iter().zip(&p.poses) {
+            assert_eq!((pose.x, pose.y), (stamped.pose.position.x, stamped.pose.position.y));
+        }
+        assert_eq!(poses[0].yaw, 0.0, "the given poses keep their orientation");
+        assert!((poses[1].yaw - std::f64::consts::FRAC_PI_2).abs() < 1e-12, "inserted poses face along their stretch");
+        // an empty pose frame is the path's, an empty path frame is map
+        p.header.frame_id.clear();
+        p.poses[1].header.frame_id.clear();
+        assert_eq!(core_goal_path(&p).unwrap(), poses);
+        p.poses[2].header.frame_id = "odom".into();
+        assert_eq!(core_goal_path(&p), Err("path pose 2 frame must be map, got \"odom\"".into()));
+        p.header.frame_id = "odom".into();
+        assert_eq!(core_goal_path(&p), Err("path frame must be map, got \"odom\"".into()));
     }
 
     #[test]

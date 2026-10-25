@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use crate::core_backend::{GoalOutcome, GoalStatus as CoreStatus};
 use crate::state::TaskResult;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -67,4 +68,38 @@ pub fn terminal_from_status(status: r2r::GoalStatus, error_code: u16, error_msg:
         _ => return Err(()),
     };
     Ok(Terminal { result, error_code, error_msg })
+}
+
+/// The in-process runtime's outcome as the same evidence (it only reports
+/// terminal statuses).
+pub fn terminal_from_core(outcome: GoalOutcome) -> Result<(r2r::GoalStatus, Terminal), ()> {
+    let status = match outcome.status {
+        CoreStatus::Succeeded => r2r::GoalStatus::Succeeded,
+        CoreStatus::Canceled => r2r::GoalStatus::Canceled,
+        CoreStatus::Aborted => r2r::GoalStatus::Aborted,
+    };
+    terminal_from_status(status, outcome.error_code, outcome.error_msg).map(|t| (status, t))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_outcomes_map_like_nav2_results() {
+        let outcome = |status, error_code, error_msg: &str| GoalOutcome { status, error_code, error_msg: error_msg.into() };
+        let cases = [
+            (outcome(CoreStatus::Succeeded, 0, ""), r2r::GoalStatus::Succeeded, TaskResult::Succeeded),
+            (outcome(CoreStatus::Canceled, 0, ""), r2r::GoalStatus::Canceled, TaskResult::Canceled),
+            // preempted: the empty result
+            (outcome(CoreStatus::Aborted, 0, ""), r2r::GoalStatus::Aborted, TaskResult::Failed),
+            (outcome(CoreStatus::Aborted, 105, "Failed to make progress"), r2r::GoalStatus::Aborted, TaskResult::Failed),
+        ];
+        for (outcome, status, result) in cases {
+            let (code, msg) = (outcome.error_code, outcome.error_msg.clone());
+            let (s, t) = terminal_from_core(outcome).unwrap();
+            assert_eq!(s, status);
+            assert_eq!((t.result, t.error_code, t.error_msg), (result, code, msg));
+        }
+    }
 }

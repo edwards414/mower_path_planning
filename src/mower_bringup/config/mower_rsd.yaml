@@ -137,6 +137,9 @@ boustrophedon_coverage:
     use_sim_time: false
 
 # --- nav (rust_nav) ----------------------------------------------------------
+# No nav_backend here, so mower_nav keeps its default, nav2. robot.launch.py
+# rust_nav_core:=true sets nav_backend: nav_core and nav_core.pose_source:
+# tfbus for this node, after this file, and then starts no nav2.
 nav_action_server:
   ros__parameters:
     require_navigation_health: true

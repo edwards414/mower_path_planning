@@ -787,6 +787,9 @@ name = "mower_nav"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_localize",
+ "mower_localize_core",
+ "mower_nav_core",
  "mower_rs_common",
  "r2r",
  "serde_json",

@@ -335,6 +335,198 @@ def test_rust_daemon_recorder_uses_the_launch_directories():
         in robot_launch
 
 
+def _flat_ros_parameters(section, prefix=''):
+    """A ros__parameters mapping the way rcl names it: nested keys joined by
+    dots."""
+    flat = {}
+    for key, value in section.items():
+        if isinstance(value, dict):
+            flat.update(_flat_ros_parameters(value, f'{prefix}{key}.'))
+        else:
+            flat[prefix + key] = value
+    return flat
+
+
+def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
+        monkeypatch):
+    """rust_nav_core:=true (compose RUST_NAV_CORE, default false): the nav
+    module steers with mower_nav_core's NavStack (nav_backend nav_core,
+    nav_core.pose_source tfbus, scoped to nav_action_server and listed after
+    mower_rsd.yaml) and mower.launch.py gets enable_navigation:=false, which
+    gates the navigation.launch.py include -- every nav2 server, or their
+    container -- and nothing else. It needs rust_daemon, rust_nav and
+    rust_localize and is refused before anything starts without them. False
+    sets no nav parameter and nav2 runs, as before the switch existed."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mower = MOWER_LAUNCH.read_text(encoding='utf-8')
+    nav2 = NAV2_LAUNCH.read_text(encoding='utf-8')
+
+    # declared off; .env switches it like the others
+    argument = re.search(
+        r"DeclareLaunchArgument\(\s*'rust_nav_core'(.*?)\n\s*\),",
+        robot, flags=re.DOTALL)
+    assert argument is not None
+    assert "default_value='false'" in argument.group(1)
+    lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
+    assert '- rust_nav_core:=${RUST_NAV_CORE:-false}' in lawan
+    assert re.search(r'^RUST_NAV_CORE=false$',
+                     ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+
+    # refused before the includes start anything
+    items = robot.split('return LaunchDescription([', 1)[1]
+    assert (items.index('OpaqueFunction(function=_require_nav_core_prerequisites),')
+            < items.index('mower_launch,'))
+    assert ("_NAV_CORE_NEEDS = ('rust_daemon', 'rust_nav', 'rust_localize')"
+            in robot)
+
+    # forwarded to mower.launch.py only, with _truthy's spellings, and always
+    # as a value IfCondition accepts
+    mower_include = robot.split("'mower.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert "'enable_navigation': _nav2_enabled(rust_nav_core)," in mower_include
+    mission_include = robot.split("'mission.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert 'enable_navigation' not in mission_include
+    helper = robot.split('def _nav2_enabled(', 1)[1].split('\ndef ', 1)[0]
+    assert ('''"'false' if '", rust_nav_core, "'.strip().lower() in ", _TRUE,'''
+            in helper)
+    # with the flag off an explicit enable_navigation:=false is kept
+    assert ('''" else '", LaunchConfiguration('enable_navigation', default='true'), "'",'''
+            in helper)
+    robot_true = ast.literal_eval(re.search(
+        r"return value\.strip\(\)\.lower\(\) in (\{[^}]*\})", robot).group(1))
+    assert set(ast.literal_eval(re.search(
+        r'^_TRUE = "(.*)"$', robot, re.M).group(1))) == robot_true
+
+    # mower.launch.py reads enable_navigation (default true, the value it gets
+    # with rust_nav_core off) once: as the condition of the
+    # navigation.launch.py include, whose one non-nav2 node, the battery
+    # simulator, it switches off
+    tree = ast.parse(mower)
+    reads = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Name) and node.id == 'enable_navigation'
+             and isinstance(node.ctx, ast.Load)]
+    navigation_launch = next(
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and [t.id for t in node.targets if isinstance(t, ast.Name)]
+        == ['navigation_launch'])
+    assert len(reads) == 1
+    assert any(node is reads[0] for node in ast.walk(navigation_launch))
+    assert mower.count("LaunchConfiguration('enable_navigation')") == 1
+    assert re.search(r"'enable_navigation',\s*default_value='true',", mower)
+    nav_include = mower.split('navigation_launch = IncludeLaunchDescription(',
+                              1)[1].split('\n    )\n', 1)[0]
+    assert "'navigation.launch.py'," in nav_include
+    assert 'condition=IfCondition(enable_navigation),' in nav_include
+    assert "'launch_battery_simulator': 'false'," in nav_include
+    # ... which starts nav2 and nothing else
+    for package in re.findall(r"package='([^']+)'", nav2):
+        assert package.startswith('nav2_') or package in (
+            'rclcpp_components', 'mower_mission'), package
+    assert nav2.count("package='mower_mission'") == 1
+    assert "executable='battery_simulator_node'" in nav2
+    assert 'condition=IfCondition(launch_battery_simulator),' in nav2
+    # ... and nav2 starts from nowhere else, while the mux and
+    # robot_state_publisher are not behind that switch
+    for launch in (ROBOT_LAUNCH, MOWER_LAUNCH, MISSION_LAUNCH,
+                   TWIST_MUX_LAUNCH, DUAL_EKF_LAUNCH, ROSBRIDGE_LAUNCH,
+                   REAL_CONTROLLER_LAUNCH):
+        text = launch.read_text(encoding='utf-8')
+        assert "package='nav2_" not in text, launch.name
+        assert "executable='component_container" not in text, launch.name
+    for name in ('twist_mux_launch = IncludeLaunchDescription(',
+                 'robot_state_publisher = Node('):
+        block = mower.split(name, 1)[1].split('\n    )\n', 1)[0]
+        assert 'condition=' not in block, name
+
+    # the nav module's backend, node-scoped like the recorder's directories,
+    # after mower_rsd.yaml -- which sets neither key, so with the switch off
+    # mower_nav keeps its own defaults (backend nav2)
+    block = robot.split("if 'nav' in modules and _truthy(", 1)[1].split(
+        'remaps =', 1)[0]
+    assert "LaunchConfiguration('rust_nav_core').perform(context)" in block
+    assert "parameters.append(_node_params_file('nav_action_server', {" in block
+    assert "'nav_backend': 'nav_core'," in block
+    assert "'nav_core': {'pose_source': 'tfbus'}," in block
+    assert robot.count("'nav_backend'") == 1
+    import yaml
+    nav_section = yaml.safe_load(MOWER_RSD_PARAMS.read_text(encoding='utf-8'))[
+        'nav_action_server']['ros__parameters']
+    assert not [key for key in _flat_ros_parameters(nav_section)
+                if key == 'nav_backend' or key.startswith('nav_core.')]
+
+    # switch.sh writes it on every switch (false unless given), checks the
+    # compose passes it and the container got it
+    switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
+    passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
+                            re.M | re.S).group(1)
+    assert "'rust_nav_core:=${RUST_NAV_CORE'" in passthrough
+    for text in re.findall(r"'([^']+)'", passthrough):
+        assert text in lawan, text
+    assert '[RUST_NAV_CORE]=false' in switch
+    assert ('for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON '
+            'RUST_NAV_CORE; do') in switch
+
+    # the behavioural half needs ROS launch (not in the python-tests job)
+    pytest.importorskip('launch')
+    pytest.importorskip('launch_ros')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    module = _load_launch_module(ROBOT_LAUNCH)
+
+    def context(**configurations):
+        ctx = LaunchContext()
+        ctx.launch_configurations.update(configurations)
+        return ctx
+
+    spellings = ('true', 'True', ' on', 'ON', 'yes', '1',
+                 'false', 'FALSE', '0', 'off', 'no', 'maybe', '')
+    for value in spellings:
+        assert module._nav2_enabled(value).perform(context()) == (
+            'false' if module._truthy(value) else 'true'), repr(value)
+        assert module._nav2_enabled(value).perform(
+            context(enable_navigation='false')) == 'false', repr(value)
+
+    needs = {switch: 'true' for switch in module._NAV_CORE_NEEDS}
+    for value in spellings:
+        assert module._require_nav_core_prerequisites(
+            context(rust_nav_core=value, **needs)) == [], repr(value)
+        for switch in needs:
+            missing = context(rust_nav_core=value, **{**needs, switch: 'off'})
+            if not module._truthy(value):
+                assert module._require_nav_core_prerequisites(missing) == []
+                continue
+            with pytest.raises(RuntimeError, match=f'got {switch}:=off:'):
+                module._require_nav_core_prerequisites(missing)
+
+    monkeypatch.setattr(module, 'get_package_share_directory',
+                        lambda package: f'/share/{package}')
+    monkeypatch.setattr(module, 'Node', lambda **kwargs: kwargs)
+    configured = {switch: 'false' for _, switch in module._DAEMON_MODULES
+                  if switch}
+    configured.update(rust_daemon='true', rust_nav='true',
+                      rust_localize='true', gps_fix_topic='/fix',
+                      rust_daemon_params_file='/cfg/mower_rsd.yaml',
+                      localize_params_file='/cfg/localize.yaml')
+    for value in spellings:
+        [node] = module._rust_daemon_node(
+            context(rust_nav_core=value, **configured))
+        first, *extra, last = node['parameters']
+        assert (first, last) == ('/cfg/mower_rsd.yaml', '/cfg/localize.yaml')
+        if not module._truthy(value):
+            assert extra == [], repr(value)
+            continue
+        [path] = extra
+        written = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+        Path(path).unlink()
+        assert list(written) == ['nav_action_server'], repr(value)
+        assert _flat_ros_parameters(
+            written['nav_action_server']['ros__parameters']) == {
+                'nav_backend': 'nav_core', 'nav_core.pose_source': 'tfbus'}
+
+
 def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     """rust_localize:=true swaps the two robot_localization ekf_node processes
     and navsat_transform_node for one mower_rs mower_localize process with the

@@ -13,7 +13,12 @@
 //! The 20 Hz coordinator-lock heartbeat and the health monitor run on their
 //! own task; everything shares one state mutex that is never held across an
 //! await.
+//!
+//! `nav_backend` picks what runs the goals: nav2's `navigate_to_pose` /
+//! `follow_path` actions (`nav2`, the default) or mower_nav_core's stack in
+//! this process (`nav_core`, see [`core_backend`]), behind the same protocol.
 
+pub mod core_backend;
 mod geometry;
 mod nav2;
 mod progress;
@@ -41,7 +46,8 @@ use r2r::visualization_msgs::msg::Marker;
 use r2r::{ActionServerGoal, QosProfile};
 use tokio::sync::Notify;
 
-use crate::nav2::{terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
+use crate::core_backend::{CoreFeedback, CoreParams, GoalHandle, GoalKey, GoalOutcome, NavRuntime, PoseSource, Readiness};
+use crate::nav2::{terminal_from_core, terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
 use crate::progress::{Checkpoint, Progress, Status as ProgressStatus};
 use crate::state::{NavState, SafetyParams, TaskResult};
 
@@ -112,14 +118,48 @@ struct Ctx {
     split_points_pub: Mutex<r2r::Publisher<Marker>>,
     progress: Mutex<ProgressState>,
     progress_pub: Mutex<r2r::Publisher<CoverageProgress>>,
-    navigate_client: r2r::ActionClient<NavigateToPose::Action>,
-    follow_client: r2r::ActionClient<FollowPath::Action>,
-    state_client: r2r::Client<GetState::Service>,
+    backend: Backend,
+    /// `run()` has returned: the periodic tasks end, so this context (and a
+    /// nav_core runtime with it) is dropped before a restarted module builds
+    /// its own.
+    exiting: AtomicBool,
+}
+
+/// What runs the goals (`nav_backend`).
+enum Backend {
+    /// nav2's actions; `bt_navigator/get_state` is the readiness check.
+    Nav2 {
+        navigate_client: r2r::ActionClient<NavigateToPose::Action>,
+        follow_client: r2r::ActionClient<FollowPath::Action>,
+        state_client: r2r::Client<GetState::Service>,
+    },
+    /// mower_nav_core's NavStack on its own thread in this process.
+    Core(Arc<NavRuntime>),
 }
 
 /// Minimum spacing of feedback-driven `/coverage_progress` messages; state
 /// transitions publish immediately.
 const PROGRESS_FEEDBACK_PERIOD: Duration = Duration::from_millis(500);
+
+/// nav_core: a task whose runtime thread has not completed a tick for this
+/// long is stalled (the thread ticks at least every 10 ms while a goal runs).
+/// The drive is safe either way, since `/nav_cmd_vel` comes from that thread
+/// and twist_mux (0.5 s) and the final guard (0.2 s) zero a silent input;
+/// this keeps the task from waiting forever on a result that cannot come.
+const CORE_STALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How long the runtime has not ticked, once both that and the task's own
+/// age exceed `limit`. The thread sleeps while idle, so right after a goal is
+/// sent its last tick can be old without anything being wrong.
+fn core_stall_age(task_age: Duration, tick_age: Duration, limit: Duration) -> Option<Duration> {
+    (task_age > limit && tick_age > limit).then_some(tick_age)
+}
+
+/// A goal for a runtime whose thread has ended would never be taken up: a
+/// definite rejection instead (and `run()` restarts the module).
+fn core_running(runtime: &NavRuntime) -> Result<(), String> {
+    runtime.stopped().map_or(Ok(()), |cause| Err(format!("in-process navigation stopped ({cause})")))
+}
 
 #[derive(Default)]
 struct ProgressState {
@@ -524,12 +564,44 @@ impl Ctx {
         }
     }
 
+    /// Resolves once the nav_core runtime can no longer run goals (never for
+    /// nav2). `run()` then returns an error, and mower_rsd restarts the
+    /// module with a new runtime: nothing else brings a dead thread back.
+    async fn core_stopped(&self) -> &'static str {
+        let Backend::Core(runtime) = &self.backend else { return std::future::pending().await };
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            tick.tick().await;
+            if let Some(cause) = runtime.stopped() {
+                return cause;
+            }
+        }
+    }
+
+    /// The "recent Nav2 log" part of a task failure message: nav2's `/rosout`
+    /// warnings, or the in-process runtime's own.
+    fn recent_nav2_log_summary(&self, since: Instant) -> String {
+        match &self.backend {
+            Backend::Nav2 { .. } => self.state.lock().unwrap().recent_nav2_log_summary(since),
+            Backend::Core(runtime) => state::nav2_log_summary(&runtime.recent_events(since)),
+        }
+    }
+
     // ── Nav2 dispatch ────────────────────────────────────────────────────────
 
     /// `_start_nav2_dispatch` + `_send_nav2_goal_bounded`: Ok(true) accepted
     /// and correlated, Ok(false) definitively rejected, Err = uncertain.
     async fn dispatch_navigate(self: &Arc<Self>, goal: NavigateToPose::Goal) -> Result<bool, String> {
-        let client = self.navigate_client.clone();
+        let client = match &self.backend {
+            Backend::Nav2 { navigate_client, .. } => navigate_client.clone(),
+            Backend::Core(runtime) => {
+                let generation = self.begin_dispatch();
+                let handle = core_running(runtime)
+                    .and_then(|()| geometry::core_goal_pose(&goal.pose))
+                    .map(|pose| runtime.send_navigate(pose));
+                return self.await_core_goal(generation, runtime, handle, "Nav to coverage start").await;
+            }
+        };
         let generation = self.begin_dispatch();
         let available = r2r::Node::is_available(&client).map_err(|e| format!("{e:?}"))?;
         let server_timeout = Duration::from_secs_f64(self.exec.nav2_action_server_timeout_s.max(0.1));
@@ -542,7 +614,17 @@ impl Ctx {
     }
 
     async fn dispatch_follow(self: &Arc<Self>, goal: FollowPath::Goal) -> Result<bool, String> {
-        let client = self.follow_client.clone();
+        let client = match &self.backend {
+            Backend::Nav2 { follow_client, .. } => follow_client.clone(),
+            // the runtime has just the controller and goal checker the goal's ids name
+            Backend::Core(runtime) => {
+                let generation = self.begin_dispatch();
+                let handle = core_running(runtime)
+                    .and_then(|()| geometry::core_goal_path(&goal.path))
+                    .map(|path| runtime.send_follow_path(path));
+                return self.await_core_goal(generation, runtime, handle, "Follow path").await;
+            }
+        };
         let generation = self.begin_dispatch();
         let available = r2r::Node::is_available(&client).map_err(|e| format!("{e:?}"))?;
         let server_timeout = Duration::from_secs_f64(self.exec.nav2_action_server_timeout_s.max(0.1));
@@ -552,6 +634,20 @@ impl Ctx {
         }
         let fut = adapt_follow(client.send_goal_request(goal).map_err(|e| format!("Nav2 goal request failed: {e:?}"))?);
         self.await_goal_response(generation, fut, "Follow path").await
+    }
+
+    /// nav_core: the runtime takes every goal at once, so there is no server
+    /// to wait for and the response is immediate; a goal it cannot take (not
+    /// in `map`) is a definite rejection.
+    async fn await_core_goal(self: &Arc<Self>, generation: u64, runtime: &Arc<NavRuntime>, handle: Result<GoalHandle, String>, label: &str) -> Result<bool, String> {
+        match handle {
+            Ok(handle) => self.await_goal_response(generation, adapt_core(runtime.clone(), handle), label).await,
+            Err(e) => {
+                self.error(&format!("{label} not sent to nav_core: {e}"));
+                self.resolve_definitive_nav2_rejection(generation);
+                Ok(false)
+            }
+        }
     }
 
     fn begin_dispatch(&self) -> u64 {
@@ -727,6 +823,44 @@ fn adapt_follow(
     }
 }
 
+/// A goal on the in-process runtime. Cancel only asks (the runtime takes it
+/// up at its next tick): the `Canceled` outcome arrives on the result channel,
+/// as does the outcome of a goal that had already ended (`cancel` false), so
+/// the callers' bounded waits decide either way.
+struct CoreGoal {
+    runtime: Arc<NavRuntime>,
+    key: GoalKey,
+}
+
+impl CancelableGoal for CoreGoal {
+    fn cancel(&self) -> nav2::BoxFuture<Result<(), String>> {
+        let _ = self.runtime.cancel(self.key);
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+/// A runtime goal in the same type-erased shape; the runtime accepts every
+/// goal, so the response is ready at once.
+fn adapt_core(runtime: Arc<NavRuntime>, handle: GoalHandle) -> impl std::future::Future<Output = GoalResponse<CoreGoal>> + Send + 'static {
+    let GoalHandle { key, result, feedback } = handle;
+    std::future::ready(Ok((CoreGoal { runtime, key }, core_result(result), Some(core_feedback(feedback)))))
+}
+
+/// The goal's outcome as terminal evidence; a dropped sender (the runtime
+/// stopped first) is none.
+fn core_result(result: tokio::sync::oneshot::Receiver<GoalOutcome>) -> nav2::BoxFuture<Result<(r2r::GoalStatus, Terminal), ()>> {
+    Box::pin(async move { result.await.map_err(|_| ()).and_then(terminal_from_core) })
+}
+
+/// The runtime's feedback in the nav2 adapters' text; FollowPath's
+/// distance_to_goal drives the coverage progress here too.
+fn core_feedback(mut feedback: tokio::sync::mpsc::UnboundedReceiver<CoreFeedback>) -> Box<dyn futures::Stream<Item = (String, Option<f64>)> + Send + Unpin> {
+    Box::new(futures::stream::poll_fn(move |cx| feedback.poll_recv(cx)).map(|f| match f {
+        CoreFeedback::Navigate { distance_remaining } => (format!("distance_remaining={distance_remaining:.3}"), None),
+        CoreFeedback::Follow { distance_to_goal, speed } => (format!("distance_to_goal={distance_to_goal:.3}, speed={speed:.3}"), Some(distance_to_goal as f64)),
+    }))
+}
+
 // ── the action execution ────────────────────────────────────────────────────
 
 struct Execution {
@@ -749,6 +883,12 @@ enum Outcome {
 }
 
 impl Execution {
+    /// nav_core only: the runtime thread's stall, see [`CORE_STALL_TIMEOUT`].
+    fn core_stall(&self, task_started_at: Instant) -> Option<Duration> {
+        let Backend::Core(runtime) = &self.ctx.backend else { return None };
+        core_stall_age(task_started_at.elapsed(), runtime.last_tick_age(), CORE_STALL_TIMEOUT)
+    }
+
     fn action_cancel_requested(&self) -> bool {
         self.action_cancel_accepted.load(Ordering::SeqCst)
     }
@@ -820,20 +960,24 @@ impl Execution {
         let timeout_s = self.ctx.exec.nav2_ready_timeout_s.max(0.1);
         let poll = Duration::from_secs_f64(self.ctx.exec.nav2_ready_poll_s.max(0.05));
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_s);
+        let state_client = match &self.ctx.backend {
+            Backend::Nav2 { state_client, .. } => state_client,
+            Backend::Core(runtime) => return self.wait_for_core_ready(runtime, timeout_s, poll, deadline).await,
+        };
         let mut last_state = "unavailable".to_string();
         while Instant::now() < deadline {
             if self.cancel_requested() {
                 return (false, "canceled".into());
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let available = match r2r::Node::is_available(&self.ctx.state_client) {
+            let available = match r2r::Node::is_available(state_client) {
                 Ok(f) => tokio::time::timeout(remaining.min(poll), f).await.is_ok(),
                 Err(_) => false,
             };
             if !available {
                 continue;
             }
-            let Ok(fut) = self.ctx.state_client.request(&GetState::Request::default()) else { continue };
+            let Ok(fut) = state_client.request(&GetState::Request::default()) else { continue };
             let mut fut = Box::pin(fut);
             let mut answered = None;
             while Instant::now() < deadline {
@@ -866,6 +1010,31 @@ impl Execution {
             tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await;
         }
         (false, format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: {last_state})"))
+    }
+
+    /// nav_core: the same bounded wait for the runtime's inputs (both
+    /// costmaps, a pose and odometry) in place of bt_navigator's state.
+    async fn wait_for_core_ready(&self, runtime: &NavRuntime, timeout_s: f64, poll: Duration, deadline: Instant) -> (bool, String) {
+        let mut readiness = Readiness::default();
+        while Instant::now() < deadline {
+            if self.cancel_requested() {
+                return (false, "canceled".into());
+            }
+            if let Some(cause) = runtime.stopped() {
+                return (false, format!("Nav2 readiness failed: in-process navigation stopped ({cause}); the nav module restarts"));
+            }
+            readiness = runtime.readiness();
+            if readiness.ready() {
+                return (true, "Nav2 is active".into());
+            }
+            tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await;
+        }
+        let mut message = format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: inactive); missing: {}", missing_inputs(&readiness));
+        let tick_age = runtime.last_tick_age();
+        if tick_age > CORE_STALL_TIMEOUT {
+            message += &format!("; the nav-core thread has not ticked for {:.1}s", tick_age.as_secs_f64());
+        }
+        (false, message)
     }
 
     fn clear_active_task(&self) {
@@ -915,7 +1084,19 @@ impl Execution {
                     terminal = t;
                     break;
                 }
-                None => {}
+                None => {
+                    if let Some(age) = self.core_stall(started_at) {
+                        // The goal is still correlated: monitor_uncertain_nav2_task
+                        // keeps retrying its cancel until the runtime proves it
+                        // ended, and the mux stays locked until then.
+                        let message = format!("{task_name}: in-process navigation stopped ticking {:.1}s ago", age.as_secs_f64());
+                        self.ctx.error(&message);
+                        self.terminate(&Outcome::Aborted);
+                        self.clear_active_task();
+                        self.ctx.mark_nav2_task_uncertain(&message, None);
+                        return false;
+                    }
+                }
             }
             let external = self.ctx.state.lock().unwrap().external_cancel_requested;
             if self.action_cancel_requested() || external {
@@ -995,7 +1176,7 @@ impl Execution {
                 let elapsed = started_at.elapsed().as_secs_f64();
                 let task_error = format!("Nav2 task error: code={}, msg=\"{}\"", terminal.error_code, terminal.error_msg);
                 let feedback_summary = last_feedback.clone().unwrap_or_else(|| "last_feedback=None".into());
-                let log_summary = self.ctx.state.lock().unwrap().recent_nav2_log_summary(started_at);
+                let log_summary = self.ctx.recent_nav2_log_summary(started_at);
                 self.ctx.error(&format!("{task_name} 失敗: {}，耗時 {elapsed:.1}s，{feedback_summary}，{task_error}，{log_summary}", terminal.result));
                 self.terminate(&Outcome::Aborted);
                 self.clear_active_task();
@@ -1209,6 +1390,12 @@ impl Execution {
     }
 }
 
+/// What a runtime that is not ready still lacks.
+fn missing_inputs(r: &Readiness) -> String {
+    let inputs = [(r.global_map, "global map"), (r.local_map, "local map"), (r.pose, "robot pose"), (r.odometry, "odometry")];
+    inputs.iter().filter(|(present, _)| !present).map(|(_, name)| *name).collect::<Vec<_>>().join(", ")
+}
+
 /// Goal admission (`_goal_callback`) + the reserved-goal bookkeeping around
 /// one execution (`_run_reserved_goal`).
 async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Waypoint::Action>) {
@@ -1344,6 +1531,32 @@ fn latched() -> QosProfile {
     QosProfile::default().keep_last(1).reliable().transient_local()
 }
 
+/// `nav_core.*`: what the in-process runtime reads and publishes.
+fn core_params(node: &r2r::Node) -> Result<CoreParams, String> {
+    let d = CoreParams::default();
+    Ok(CoreParams {
+        pose_source: pose_source(&params::string(node, "nav_core.pose_source", "tfbus"))?,
+        odom_topic: params::string(node, "nav_core.odom_topic", &d.odom_topic),
+        map_topic: params::string(node, "nav_core.map_topic", &d.map_topic),
+        global_map_topic: params::string(node, "nav_core.global_map_topic", &d.global_map_topic),
+        cmd_vel_topic: params::string(node, "nav_core.cmd_vel_topic", &d.cmd_vel_topic),
+        plan_topic: params::string(node, "nav_core.plan_topic", &d.plan_topic),
+        map_frame: params::string(node, "nav_core.map_frame", &d.map_frame),
+        odom_frame: params::string(node, "nav_core.odom_frame", &d.odom_frame),
+        base_frame: params::string(node, "nav_core.base_frame", &d.base_frame),
+        odom_timeout_s: params::f64(node, "nav_core.odom_timeout_s", d.odom_timeout_s),
+    })
+}
+
+/// `nav_core.pose_source`: `tfbus` (mower_localize in this process) or `tf`.
+fn pose_source(value: &str) -> Result<PoseSource, String> {
+    match value {
+        "tfbus" => Ok(PoseSource::TfBus),
+        "tf" => Ok(PoseSource::TfTopic),
+        other => Err(format!("Unknown nav_core.pose_source \"{other}\"; expected \"tfbus\" or \"tf\"")),
+    }
+}
+
 /// The `nav_action_server` node. Runs either as the `mower_nav` binary or as one
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
@@ -1400,6 +1613,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let t = params::string(&node, "imu_topic", "/imu/data");
         if t.trim().is_empty() { "/imu/data".to_string() } else { t.trim().to_string() }
     };
+    let nav_core = match params::string(&node, "nav_backend", "nav2").as_str() {
+        "nav2" => None,
+        "nav_core" => Some(core_params(&node)?),
+        other => return Err(format!("Unknown nav_backend \"{other}\"; expected \"nav2\" or \"nav_core\"").into()),
+    };
 
     let ctx = Arc::new(Ctx {
         logger: logger.clone(),
@@ -1419,9 +1637,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             ..Default::default()
         }),
         progress_pub: Mutex::new(node.create_publisher::<CoverageProgress>("/coverage_progress", latched())?),
-        navigate_client: node.create_action_client::<NavigateToPose::Action>("navigate_to_pose")?,
-        follow_client: node.create_action_client::<FollowPath::Action>("follow_path")?,
-        state_client: node.create_client::<GetState::Service>("bt_navigator/get_state", QosProfile::services_default())?,
+        backend: match nav_core {
+            None => Backend::Nav2 {
+                navigate_client: node.create_action_client::<NavigateToPose::Action>("navigate_to_pose")?,
+                follow_client: node.create_action_client::<FollowPath::Action>("follow_path")?,
+                state_client: node.create_client::<GetState::Service>("bt_navigator/get_state", QosProfile::services_default())?,
+            },
+            Some(core) => {
+                r2r::log_info!(&logger, "nav_backend nav_core: mower_nav_core in process, pose source {:?}", core.pose_source);
+                Backend::Core(NavRuntime::start(&mut node, core, &logger)?)
+            }
+        },
+        exiting: AtomicBool::new(false),
     });
     ctx.publish_nav_operation_active(false);
     ctx.update_progress(true, |_| true);
@@ -1549,7 +1776,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             }
         });
     }
-    {
+    // nav2's warnings for the failure messages (the runtime keeps its own)
+    if matches!(ctx.backend, Backend::Nav2 { .. }) {
         let mut stream = node.subscribe::<Log>("/rosout", QosProfile::default().keep_last(100))?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
@@ -1762,6 +1990,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
+                if ctx.exiting.load(Ordering::Relaxed) {
+                    break;
+                }
                 ctx.monitor_navigation_health();
                 ctx.publish_safety_stop_if_needed();
             }
@@ -1773,12 +2004,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             let mut tick = tokio::time::interval(Duration::from_millis(500));
             loop {
                 tick.tick().await;
+                if ctx.exiting.load(Ordering::Relaxed) {
+                    break;
+                }
                 ctx.monitor_uncertain_nav2_task().await;
             }
         });
     }
 
-    // ---- spin until SIGINT / SIGTERM ---------------------------------------
+    // ---- spin until SIGINT / SIGTERM, or until the nav_core runtime stops --
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
@@ -1789,8 +2023,72 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             drop(node);
         })
     };
-    m.shutdown.wait().await;
+    let stopped = tokio::select! {
+        _ = m.shutdown.wait() => None,
+        cause = ctx.core_stopped() => Some(cause),
+    };
+    ctx.exiting.store(true, Ordering::Relaxed);
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
-    Ok(())
+    match stopped {
+        // the node is gone, so twist_mux's lock goes stale (locked) and the
+        // action server with it; mower_rsd starts the module again in 2 s
+        Some(cause) => Err(format!("nav_core: {cause}; restarting the nav module").into()),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core_backend::GoalStatus as CoreStatus;
+
+    #[test]
+    fn nav_core_pose_source_parameter() {
+        assert_eq!(pose_source("tfbus"), Ok(PoseSource::TfBus));
+        assert_eq!(pose_source("tf"), Ok(PoseSource::TfTopic));
+        assert_eq!(pose_source("TF"), Err("Unknown nav_core.pose_source \"TF\"; expected \"tfbus\" or \"tf\"".into()));
+    }
+
+    #[test]
+    fn core_readiness_timeout_names_the_missing_inputs() {
+        assert_eq!(missing_inputs(&Readiness::default()), "global map, local map, robot pose, odometry");
+        assert_eq!(missing_inputs(&Readiness { global_map: true, pose: true, ..Default::default() }), "local map, odometry");
+    }
+
+    #[test]
+    fn core_stall_needs_both_an_old_tick_and_an_old_task() {
+        let s = Duration::from_secs_f64;
+        let limit = CORE_STALL_TIMEOUT;
+        // just sent: the thread may still be waking from its idle sleep
+        assert_eq!(core_stall_age(s(0.05), s(30.0), limit), None);
+        // running and ticking
+        assert_eq!(core_stall_age(s(12.0), s(0.01), limit), None);
+        assert_eq!(core_stall_age(s(12.0), s(1.0), limit), None);
+        // running, silent for longer than the limit
+        assert_eq!(core_stall_age(s(12.0), s(1.2), limit), Some(s(1.2)));
+    }
+
+    #[tokio::test]
+    async fn core_results_are_terminal_evidence_until_the_runtime_is_gone() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(GoalOutcome { status: CoreStatus::Aborted, error_code: 105, error_msg: "Failed to make progress".into() }).unwrap();
+        let (status, t) = core_result(rx).await.unwrap();
+        assert_eq!(status, r2r::GoalStatus::Aborted);
+        assert_eq!((t.result, t.error_code, t.error_msg.as_str()), (TaskResult::Failed, 105, "Failed to make progress"));
+        // the runtime was dropped before the goal ended: no proof either way
+        let (tx, rx) = tokio::sync::oneshot::channel::<GoalOutcome>();
+        drop(tx);
+        assert!(core_result(rx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn core_feedback_reads_like_the_nav2_adapters() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(CoreFeedback::Navigate { distance_remaining: 12.34567 }).unwrap();
+        tx.send(CoreFeedback::Follow { distance_to_goal: 3.5, speed: 0.2 }).unwrap();
+        drop(tx);
+        let items: Vec<(String, Option<f64>)> = core_feedback(rx).collect().await;
+        assert_eq!(items, [("distance_remaining=12.346".to_string(), None), ("distance_to_goal=3.500, speed=0.200".to_string(), Some(3.5))]);
+    }
 }

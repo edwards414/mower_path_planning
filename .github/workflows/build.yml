@@ -179,6 +179,19 @@ jobs:
           python3 tools/nav_progress_check.py --restart-as "$PY_NAV" -- target/debug/mower_nav
           python3 tools/nav_progress_check.py --restart-as target/debug/mower_nav -- $PY_NAV
 
+      - name: In-process navigation of mower_nav (black box)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_nav
+          # nav_backend:=nav_core, no Nav2: maps, tf and /odom from a kinematic
+          # robot that follows /nav_cmd_vel; about 1.5 min (scenario C waits
+          # out the tree's recoveries)
+          python3 tools/nav_core_check.py -- target/debug/mower_nav
+
       - name: pid_autotune telemetry only during a session (black box)
         timeout-minutes: 5
         shell: bash
