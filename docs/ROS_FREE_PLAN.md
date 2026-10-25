@@ -340,6 +340,8 @@ local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/glo
 
 **D 之前的兩個前置**：map EKF 的 `initial_estimate_covariance` 根治（handoff「還沒做的 1」）要先決定，否則 shadow 是在比兩個都歪 10–15° 的軌跡；戶外要有 RTK fix，D7 的 bag 必須在真實場地錄。
 
+2026-10-25：datum 根治已做（map EKF 的 `initial_estimate_covariance`，handoff 同段；戶外 `datum_check.py` 待驗）。戶外 RTK 使用者回報 LoRa 修正已穩定（`gps_test/` 的 10-20 桌面測試；上機 4 Hz 仍待驗）。
+
 2026-10-12 兩個都還沒成立。datum 根治仍未決定；戶外 RTK 沒有 fix，原因在天線訊號與修正資料、不在軟體：F9P 每顆衛星 C/N0 只有 17–28 dBHz（開闊天空應 40–50，各仰角一起低，干擾指標很低），
 基站電台應該接的 UART1 從上電 0 byte，UART2 有斷續資料但 98.5 % 解不出來，沒有衛星帶差分修正。
 同日 22:20 後衛星回到 12–15 顆、3D 約 4 m，天線那一路應已改善；接收器確認是移動站設定（TMODE 0、無 RTCM 輸出），把它滿載的 UART1 輸出關掉後 RX1 仍是 0 byte，
