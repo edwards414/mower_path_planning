@@ -65,9 +65,25 @@ pub struct Node {
     // time source that provides simulated time
     #[cfg(r2r__rosgraph_msgs__msg__Clock)]
     time_source: TimeSource,
+    // mower_rs patch: the wait set spin_once waits on, kept between calls
+    wait_set: Option<CachedWaitSet>,
 }
 
 unsafe impl Send for Node {}
+
+/// mower_rs patch (see vendor/r2r/VENDORED.md): upstream `spin_once` creates
+/// and finalizes an `rcl_wait_set_t` on every call. With rmw_cyclonedds that
+/// is a DDS waitset created, every entity attached, then detached and deleted
+/// again, on each wakeup of every node. The wait set is now kept and only
+/// rebuilt when the number of entities it holds changes; `rcl_wait_set_clear`
+/// and the adds still run on every call, so a destroyed entity is never
+/// waited on. Keeping the same rmw wait set also lets rmw_cyclonedds skip
+/// re-attaching entities that are unchanged since the last wait.
+struct CachedWaitSet {
+    ws: rcl_wait_set_t,
+    // subscriptions, timers, clients, services
+    sizes: (usize, usize, usize, usize),
+}
 
 impl Node {
     /// Returns the name of the node.
@@ -225,6 +241,7 @@ impl Node {
                 ros_clock,
                 #[cfg(r2r__rosgraph_msgs__msg__Clock)]
                 time_source,
+                wait_set: None,
             };
             node.load_params()?;
             Ok(node)
@@ -1038,7 +1055,6 @@ impl Node {
         }
 
         let timeout = timeout.as_nanos() as i64;
-        let mut ws = unsafe { rcl_get_zero_initialized_wait_set() };
 
         // #[doc = "* This function is thread-safe for unique wait sets with unique contents."]
         // #[doc = "* This function cannot operate on the same wait set in multiple threads, and"]
@@ -1106,23 +1122,38 @@ impl Node {
             total_action_services += num_services;
         }
 
-        {
-            let mut ctx = self.context.context_handle.lock().unwrap();
-
-            unsafe {
-                rcl_wait_set_init(
-                    &mut ws,
-                    self.subscribers.len() + total_action_subs,
-                    0,
-                    self.timers.len() + total_action_timers,
-                    self.clients.len() + total_action_clients,
-                    self.services.len() + total_action_services,
-                    0,
-                    ctx.as_mut(),
-                    rcutils_get_default_allocator(),
-                );
+        let sizes = (
+            self.subscribers.len() + total_action_subs,
+            self.timers.len() + total_action_timers,
+            self.clients.len() + total_action_clients,
+            self.services.len() + total_action_services,
+        );
+        let mut ws = match self.wait_set.take() {
+            Some(cached) if cached.sizes == sizes => cached.ws,
+            cached => {
+                let mut ctx = self.context.context_handle.lock().unwrap();
+                if let Some(mut old) = cached {
+                    unsafe {
+                        rcl_wait_set_fini(&mut old.ws);
+                    }
+                }
+                let mut ws = unsafe { rcl_get_zero_initialized_wait_set() };
+                unsafe {
+                    rcl_wait_set_init(
+                        &mut ws,
+                        sizes.0,
+                        0,
+                        sizes.1,
+                        sizes.2,
+                        sizes.3,
+                        0,
+                        ctx.as_mut(),
+                        rcutils_get_default_allocator(),
+                    );
+                }
+                ws
             }
-        }
+        };
         unsafe {
             rcl_wait_set_clear(&mut ws);
         }
@@ -1179,9 +1210,7 @@ impl Node {
         let ret = unsafe { rcl_wait(&mut ws, timeout) };
 
         if ret == RCL_RET_TIMEOUT as i32 {
-            unsafe {
-                rcl_wait_set_fini(&mut ws);
-            }
+            self.keep_wait_set(ws, sizes);
             return;
         }
 
@@ -1338,8 +1367,15 @@ impl Node {
             }
         }
 
-        unsafe {
-            rcl_wait_set_fini(&mut ws);
+        self.keep_wait_set(ws, sizes);
+    }
+
+    /// mower_rs patch: store the wait set for the next `spin_once`. Entities
+    /// destroyed during this call changed the counts, so the next call
+    /// rebuilds it; one whose init failed is not kept (and needs no fini).
+    fn keep_wait_set(&mut self, ws: rcl_wait_set_t, sizes: (usize, usize, usize, usize)) {
+        if unsafe { rcl_wait_set_is_valid(&ws) } {
+            self.wait_set = Some(CachedWaitSet { ws, sizes });
         }
     }
 
@@ -1673,6 +1709,11 @@ impl Drop for Node {
         // fini functions are not thread safe so lock the context.
         let _ctx_handle = self.context.context_handle.lock().unwrap();
 
+        if let Some(mut cached) = self.wait_set.take() {
+            unsafe {
+                rcl_wait_set_fini(&mut cached.ws);
+            }
+        }
         for s in &mut self.subscribers {
             s.destroy(&mut self.node_handle);
         }
