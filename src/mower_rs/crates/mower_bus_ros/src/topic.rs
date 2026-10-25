@@ -15,9 +15,11 @@
 //! - **Transient local:** a resync also replaces the bus reader with a fresh
 //!   one, which starts with exactly the retained history of the writers live
 //!   now; the old reader may still hold messages of writers that are gone.
-//!   If the DDS writer holds something that history no longer has, it is
-//!   destroyed and created again with the history, so a DDS late joiner
-//!   never gets a value the bus has dropped. With no live bus writer,
+//!   If, once given the messages still queued, the DDS writer would hold
+//!   something that history no longer has (or lack something it has), it
+//!   is destroyed and created again with the history, so a DDS late joiner
+//!   never gets a value the bus has dropped. A held value that a queued one
+//!   supersedes is no reason: the writer stays. With no live bus writer,
 //!   nothing is published and no DDS writer exists.
 //!
 //! The bus reader stands in for every DDS reader, so its queue is at least
@@ -82,7 +84,7 @@ pub(crate) fn to_ros<T: BridgeMessage>(
         changes,
         reader,
         dds: None,
-        held: VecDeque::new(),
+        sent: VecDeque::new(),
         env,
     };
     Ok(Box::pin(forwarder.run()))
@@ -128,11 +130,13 @@ struct ToRos<T: BridgeMessage> {
     changes: PublisherChanges,
     reader: Reader<T>,
     dds: Option<r2r::Publisher<T>>,
-    /// Transient local: what the DDS writer holds, oldest first, at most
-    /// `depth` messages. Identity, not value, tells whether the bus still
-    /// retains them: the bus hands every reader the publisher's own `Arc`.
-    /// `Weak`, so that a map the bus has dropped is not kept alive here.
-    held: VecDeque<Weak<T>>,
+    /// Transient local: what this DDS writer was given, oldest first, up to
+    /// the reader's depth. Its newest `depth` are what the writer holds; the
+    /// rest tells, at a resync, the messages given already from the queued
+    /// ones (`keep_writer`). Identity, not value, decides: the bus hands
+    /// every reader the publisher's own `Arc`. `Weak`, so that a map the bus
+    /// has dropped is not kept alive here.
+    sent: VecDeque<Weak<T>>,
     env: Env,
 }
 
@@ -208,19 +212,19 @@ impl<T: BridgeMessage> ToRos<T> {
             self.destroy().await;
             return;
         }
-        let agreed = match self.dds {
-            Some(_) => agreed_end(&replay, &self.held, self.depth),
+        let kept = match self.dds {
+            Some(_) => keep_writer(&replay, &self.sent, self.depth),
             None => None,
         };
-        let skip = match agreed {
-            Some(end) => end,
+        let queued = match kept {
+            Some(queued) => queued,
             None => {
                 self.destroy().await;
                 self.create().await;
                 0
             }
         };
-        for msg in &replay[skip..] {
+        for msg in &replay[queued..] {
             self.publish(msg);
         }
     }
@@ -255,10 +259,10 @@ impl<T: BridgeMessage> ToRos<T> {
                 self.env.counters.forwarded();
                 self.env.log.ok();
                 if self.latched {
-                    if self.held.len() >= self.depth {
-                        self.held.pop_front();
+                    if self.sent.len() >= self.reader_qos.depth {
+                        self.sent.pop_front();
                     }
-                    self.held.push_back(Arc::downgrade(msg));
+                    self.sent.push_back(Arc::downgrade(msg));
                 }
             }
             Err(e) => self.env.log.error(Failure::Dds, || format!("publishing on DDS failed: {e}")),
@@ -279,7 +283,7 @@ impl<T: BridgeMessage> ToRos<T> {
     }
 
     async fn destroy(&mut self) {
-        self.held.clear();
+        self.sent.clear();
         if let Some(publisher) = self.dds.take() {
             self.env.counters.set_dds_writer(false);
             // Awaited, so that the next writer never lives next to this one.
@@ -288,27 +292,30 @@ impl<T: BridgeMessage> ToRos<T> {
     }
 }
 
-/// Whether the DDS writer still agrees with the bus, given `replay` (what a
-/// fresh reader got: the retained history, oldest first, then anything
-/// published since) and `held` (what the DDS writer keeps of what it was
-/// given, at most `depth`). It agrees when `held` is a run of `replay` and
-/// is all of the newest `depth` messages up to the run's end; then the
-/// returned end is where the messages it has not been given begin. `None`:
-/// it holds a value the bus has dropped, or lacks one the bus retains.
+/// Whether the DDS writer can stay, given `replay` (what a fresh reader got:
+/// the retained history in publish order, then anything published since) and
+/// `sent` (what this writer was given, oldest first).
 ///
-/// The last matching run is taken: only a module that publishes one `Arc`
-/// twice makes two, and for the same `Arc` either gives DDS the same values.
-fn agreed_end<T>(replay: &[Arc<T>], held: &VecDeque<Weak<T>>, depth: usize) -> Option<usize> {
-    if held.is_empty() {
-        return Some(0);
-    }
-    let same = |held: &Weak<T>, msg: &Arc<T>| std::ptr::eq(held.as_ptr(), Arc::as_ptr(msg));
-    let last_start = replay.len().checked_sub(held.len())?;
-    let start = (0..=last_start)
-        .rev()
-        .find(|&start| held.iter().zip(&replay[start..]).all(|(held, msg)| same(held, msg)))?;
-    let end = start + held.len();
-    (start == end.saturating_sub(depth)).then_some(end)
+/// Messages are forwarded in publish order, so everything in `replay` up to
+/// the last message it shares with `sent` has been given (or was lost to a
+/// full queue before it could be), and the rest is queued. The writer can
+/// stay when, once given the queued messages, it holds the newest `depth` of
+/// `replay`, which is what a bus late joiner gets. Then `Some(i)`:
+/// `replay[i..]` is what is queued. `None`: it would still hold a value the
+/// bus no longer retains, or lack one the bus does, so it must be created
+/// again with `replay`.
+///
+/// A held message that a queued one pushes out is no reason to re-create it
+/// (a value superseded, not dropped): every DDS reader would see its
+/// publisher leave and come back, and a volatile one would miss the queued
+/// message.
+fn keep_writer<T>(replay: &[Arc<T>], sent: &VecDeque<Weak<T>>, depth: usize) -> Option<usize> {
+    let given = |msg: &Arc<T>| sent.iter().any(|sent| std::ptr::eq(sent.as_ptr(), Arc::as_ptr(msg)));
+    let queued = replay.iter().rposition(given).map_or(0, |last| last + 1);
+    let held = sent.iter().skip(sent.len().saturating_sub(depth)).map(Weak::as_ptr);
+    let after: Vec<*const T> = held.chain(replay[queued..].iter().map(Arc::as_ptr)).collect();
+    let newest = replay[replay.len().saturating_sub(depth)..].iter().map(Arc::as_ptr);
+    after[after.len().saturating_sub(depth)..].iter().copied().eq(newest).then_some(queued)
 }
 
 /// `from_ros`: a DDS reader with the source's QoS, and a bus writer that
@@ -333,36 +340,45 @@ pub(crate) fn from_ros<T: BridgeMessage>(
 mod tests {
     use super::*;
 
-    fn held(msgs: &[&Arc<u32>]) -> VecDeque<Weak<u32>> {
+    fn sent(msgs: &[&Arc<u32>]) -> VecDeque<Weak<u32>> {
         msgs.iter().map(|msg| Arc::downgrade(msg)).collect()
     }
 
     #[test]
-    fn identity_not_value_decides_what_the_dds_writer_still_agrees_with() {
-        let (a, b, c, a_again) = (Arc::new(1u32), Arc::new(2u32), Arc::new(3u32), Arc::new(1u32));
-        // one writer, depth 1: unchanged, or something new after it
-        assert_eq!(agreed_end(std::slice::from_ref(&a), &held(&[&a]), 1), Some(1));
-        assert_eq!(agreed_end(&[a.clone(), b.clone()], &held(&[&a]), 1), Some(1));
-        // an equal value from another publish is another message
-        assert_eq!(agreed_end(std::slice::from_ref(&a_again), &held(&[&a]), 1), None);
-        // its writer is gone: nothing, or another writer's older value, retained
-        assert_eq!(agreed_end(&[], &held(&[&a]), 1), None);
-        assert_eq!(agreed_end(std::slice::from_ref(&c), &held(&[&a]), 1), None);
-        // two writers, depth 1: the DDS writer keeps the newer, which is the
-        // run's end; a writer that comes changes nothing
-        assert_eq!(agreed_end(&[a.clone(), b.clone()], &held(&[&b]), 1), Some(2));
-        // b retained but not given yet (it was still queued): given next
-        assert_eq!(agreed_end(&[a.clone(), b.clone()], &held(&[&a]), 1), Some(1));
-        // depth 2: all of the newest two, in order
-        assert_eq!(agreed_end(&[a.clone(), b.clone()], &held(&[&a, &b]), 2), Some(2));
-        assert_eq!(agreed_end(&[a.clone(), b.clone(), c.clone()], &held(&[&b, &c]), 2), Some(3));
-        assert_eq!(agreed_end(&[a.clone(), b.clone(), c.clone()], &held(&[&c]), 2), None, "b is among the newest two");
-        assert_eq!(agreed_end(&[b.clone(), a.clone()], &held(&[&a, &b]), 2), None, "reordered");
-        // a DDS writer given nothing yet agrees with anything
-        assert_eq!(agreed_end(&[a.clone(), b.clone()], &VecDeque::new(), 1), Some(0));
+    fn the_dds_writer_stays_unless_it_would_hold_what_the_bus_dropped_or_lack_what_it_retains() {
+        let [a, b, c, a_again] = [1u32, 2, 3, 1].map(Arc::new);
+        let one = |m: &Arc<u32>| vec![m.clone()];
+        // one writer, depth 1: unchanged, or something new queued after it
+        assert_eq!(keep_writer(&one(&a), &sent(&[&a]), 1), Some(1));
+        assert_eq!(keep_writer(&[a.clone(), b.clone()], &sent(&[&a]), 1), Some(1));
+        // the writer holds a, and b, which supersedes it, is still queued (an
+        // unrelated writer change came first): it stays, and gets b
+        assert_eq!(keep_writer(&one(&b), &sent(&[&a]), 1), Some(0));
+        // a restarted module's first value supersedes the old one the same way
+        assert_eq!(keep_writer(&one(&a_again), &sent(&[&a]), 1), Some(0));
+        // its writer is gone and nothing supersedes a: it must not stay
+        assert_eq!(keep_writer(&[], &sent(&[&a]), 1), None);
+        // two writers, depth 1: the DDS writer holds the newer, b
+        assert_eq!(keep_writer(&[a.clone(), b.clone()], &sent(&[&a, &b]), 1), Some(2));
+        // b's writer goes: a is retained, b is not, nothing queued
+        assert_eq!(keep_writer(&one(&a), &sent(&[&a, &b]), 1), None);
+        // a given so long ago that `sent` has let it go: it comes before b,
+        // which was given, so it counts as given too
+        assert_eq!(keep_writer(&[a.clone(), b.clone()], &sent(&[&b]), 1), Some(2));
+        // depth 2: what the queued message pushes out is fine
+        assert_eq!(keep_writer(&[b.clone(), c.clone()], &sent(&[&a, &b]), 2), Some(1));
+        // b's writer goes: the writer holds b and lacks a among the newest two
+        assert_eq!(keep_writer(&[a.clone(), c.clone()], &sent(&[&a, &b, &c]), 2), None);
+        // depth 2, the writer was given c alone, but the bus retains b and c
+        assert_eq!(keep_writer(&[b.clone(), c.clone()], &sent(&[&c]), 2), None);
+        // nothing given yet: it stays and gets everything
+        assert_eq!(keep_writer(&[a.clone(), b.clone()], &VecDeque::new(), 1), Some(0));
+        assert_eq!(keep_writer(&[], &VecDeque::<Weak<u32>>::new(), 1), Some(0));
+        // one Arc published twice: what it holds cannot be told, so it goes
+        assert_eq!(keep_writer(&[a.clone(), a.clone()], &sent(&[&a]), 2), None);
         // a dropped message matches nothing new: the Weak keeps its
         // allocation, so its address is not reused
-        let gone = held(&[&Arc::new(4u32)]);
-        assert_eq!(agreed_end(&[Arc::new(4u32)], &gone, 1), None);
+        let gone = sent(&[&Arc::new(4u32)]);
+        assert_eq!(keep_writer(&[], &gone, 1), None);
     }
 }

@@ -68,10 +68,14 @@ The forwarder watches the bus topic's live writers (`publisher_changes`).
 - **Transient local:**
   - At a resync the bus reader is replaced by a fresh one, which starts with exactly the retained history of the writers
     live now. The old one may still hold messages of writers that are gone.
-  - If the DDS writer holds a value that history no longer has, the DDS writer is destroyed and created again with the
-    history. Which values match is decided by the message's `Arc` identity, not by its value.
-  - A module restart that the stream reports as one item with the count unchanged still replaces the DDS writer when
-    its value came from the old instance.
+  - The messages still queued are given to the DDS writer. If it would then hold a value that history no longer has, or
+    lack one it has, it is destroyed and created again with the history. Which values match is decided by the
+    message's `Arc` identity, not by its value.
+  - A held value that a queued one supersedes is no reason. An unrelated writer change while a message is queued (a
+    ws_bridge session's JSON writer coming) keeps the DDS writer, which nav2's StaticLayer would otherwise see leave
+    and come back.
+  - A module restart that the stream reports as one item with the count unchanged still drops the old instance's
+    value: the DDS writer is replaced, unless the new instance's first value is queued already and supersedes it.
   - Each fresh reader lives in a child scope of the bridge's, closed when the reader is replaced. A child takes no close
     hook in the bridge's scope, so resyncs leave nothing behind there, and it closes with the bridge's scope.
 - **Volatile:** a resync forwards what is queued first (it was published before the change), then creates or destroys

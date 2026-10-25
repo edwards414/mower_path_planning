@@ -59,6 +59,16 @@ fn within(test: impl Future<Output = ()>) {
     });
 }
 
+/// Like `within`, on one thread: a spawned task (the bridge's forwarders)
+/// runs only when the test awaits, so two bus events with no await between
+/// them reach a forwarder together.
+fn on_one_thread(test: impl Future<Output = ()>) {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(120), test).await.expect("the test hung");
+    });
+}
+
 /// A node of the process that is not the bridge: spun on a thread of its
 /// own, its endpoints made between two spins. Dropping it takes the node
 /// off the graph, as a ROS process that exits.
@@ -429,6 +439,83 @@ fn with_several_bus_writers_dds_keeps_what_the_bus_retains() {
         assert_eq!(next("what the bus retains", &mut late).await.data, "from status");
         let mut on_bus = bus.scope("probe").subscribe::<Text>(topic, Qos::latched()).unwrap();
         assert_eq!(on_bus.try_recv().unwrap().data, "from status");
+        running.stop().await.unwrap();
+    });
+}
+
+/// The DDS writer holds v1. The module publishes v2 and, before the forwarder
+/// has handled it, some other writer comes on the name (a ws_bridge
+/// session's `publisher_json`). The change is taken first, and the fresh
+/// reader's replay is [v2]: v1 is gone from the bus, but only because v2,
+/// still queued, superseded it. Re-creating the DDS writer for that would
+/// make nav2's StaticLayer see its publisher leave and come back, and a
+/// volatile DDS reader miss v2.
+#[test]
+fn an_unrelated_writer_change_while_a_latched_message_is_queued_keeps_the_dds_writer() {
+    on_one_thread(async {
+        let topic = "/bridge_test/queued_at_a_change";
+        let bus = Bus::new();
+        let module = bus.scope("map_manage");
+        let publisher = module.publisher::<Text>(topic, Qos::latched()).unwrap();
+        let mut bridge = new_bridge("queued_at_a_change_bridge", &bus.scope("bridge"));
+        bridge.to_ros::<Text>(topic, latched()).unwrap();
+        let running = start(bridge);
+        publisher.publish(&text("v1")).unwrap();
+        eventually("v1 on DDS", || running.topic(topic).forwarded == 1).await;
+        let nav2 = Peer::new("queued_at_a_change_nav2");
+        eventually("the bridge's DDS writer on the graph", || nav2.writer_gids(topic).len() == 1).await;
+        let writer = nav2.writer_gids(topic);
+        let resyncs = running.topic(topic).resyncs;
+
+        // No await between the two: the forwarder finds both at once.
+        publisher.publish(&text("v2")).unwrap();
+        let _session = bus.scope("ws_bridge_session").publisher_json(topic, Qos::default()).unwrap();
+
+        eventually("the change handled and v2 on DDS", || {
+            let stats = running.topic(topic);
+            stats.resyncs > resyncs && stats.forwarded >= 2
+        })
+        .await;
+        // Long enough for the graph to show a replacement, had there been one.
+        // The same writer, given v2: a matched volatile reader got it too.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let now = nav2.writer_gids(topic);
+            assert!(now == writer, "the DDS writer was replaced for an unrelated writer change: {now:?} (was {writer:?})");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        running.stop().await.unwrap();
+    });
+}
+
+/// The same writer change once v2 has been forwarded keeps the DDS writer
+/// too, as it always did: the case above differs only by v2 being queued.
+#[test]
+fn a_writer_change_after_the_message_is_forwarded_keeps_the_dds_writer() {
+    on_one_thread(async {
+        let topic = "/bridge_test/change_after_forwarding";
+        let bus = Bus::new();
+        let module = bus.scope("map_manage");
+        let publisher = module.publisher::<Text>(topic, Qos::latched()).unwrap();
+        let mut bridge = new_bridge("change_after_forwarding_bridge", &bus.scope("bridge"));
+        bridge.to_ros::<Text>(topic, latched()).unwrap();
+        let running = start(bridge);
+        publisher.publish(&text("v1")).unwrap();
+        eventually("v1 on DDS", || running.topic(topic).forwarded == 1).await;
+        let nav2 = Peer::new("change_after_forwarding_nav2");
+        eventually("the bridge's DDS writer on the graph", || nav2.writer_gids(topic).len() == 1).await;
+        let writer = nav2.writer_gids(topic);
+        let resyncs = running.topic(topic).resyncs;
+
+        publisher.publish(&text("v2")).unwrap();
+        eventually("v2 on DDS", || running.topic(topic).forwarded == 2).await;
+        let _session = bus.scope("ws_bridge_session").publisher_json(topic, Qos::default()).unwrap();
+        eventually("the change handled", || running.topic(topic).resyncs > resyncs).await;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            assert_eq!(nav2.writer_gids(topic), writer, "replaced");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         running.stop().await.unwrap();
     });
 }
