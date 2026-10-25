@@ -438,6 +438,55 @@ fn advance_to_next_jumps_to_the_earliest_pending_deadline() {
     assert_eq!(mc.next_deadline(), Some(at_ms(235)));
 }
 
+/// Review 2026-10-26: clock.rs said "`mono + Duration::MAX` is a deadline
+/// that never comes", yet on a manual clock `advance_to_next()` jumped
+/// straight to it: a `timeout(Duration::MAX, ..)` ("no timeout") elapsed,
+/// and the clock was left at `Mono(u64::MAX)`, where every `mono() + d`
+/// saturates to `mono()`, so every later sleep was due at once.
+#[test]
+fn a_deadline_of_duration_max_never_comes_on_a_manual_clock() {
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut no_timeout = clock.timeout(Duration::MAX, futures::future::pending::<()>());
+    assert!(poll_once(&mut no_timeout).is_pending());
+
+    let jumped = mc.advance_to_next();
+    let elapsed = poll_once(&mut no_timeout).is_ready();
+    let later_sleep_due_at_once = poll_once(&mut clock.sleep(Duration::from_secs(1))).is_ready();
+    assert_eq!(jumped, None, "advance_to_next jumped to the end of time ({:?})", clock.mono());
+    assert!(!elapsed, "a timeout of Duration::MAX elapsed");
+    assert!(!later_sleep_due_at_once, "a 1 s sleep made afterwards was due at once");
+    assert_ne!(clock.mono(), Mono::from_ns(u64::MAX));
+}
+
+#[test]
+fn a_deadline_of_mono_max_comes_only_when_the_clock_is_moved_there() {
+    let never = Mono::from_ns(u64::MAX);
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut forever = clock.sleep(Duration::MAX);
+    let mut also = clock.sleep_until(never);
+    let mut soon = clock.sleep(ms(10));
+    let blocked = std::thread::spawn({
+        let clock = clock.clone();
+        move || {
+            clock.sleep_blocking(Duration::MAX);
+            clock.mono()
+        }
+    });
+    assert!(poll_once(&mut forever).is_pending() && poll_once(&mut also).is_pending());
+    assert_eq!(mc.next_deadline(), Some(at_ms(10)), "the deadlines that can come are still reported");
+    assert_eq!(mc.advance_to_next(), Some(at_ms(10)));
+    assert!(poll_once(&mut soon).is_ready());
+    assert_eq!((mc.next_deadline(), mc.advance_to_next()), (None, None), "never is not pending");
+
+    mc.advance(Duration::from_secs(100 * 365 * 86_400));
+    assert!(poll_once(&mut forever).is_pending(), "a century is not the end of time");
+    assert!(!blocked.is_finished());
+    mc.advance(Duration::MAX); // saturates at the end of time: an explicit move there
+    assert_eq!(clock.mono(), never);
+    assert!(poll_once(&mut forever).is_ready() && poll_once(&mut also).is_ready());
+    assert_eq!(blocked.join().unwrap(), never);
+}
+
 #[test]
 fn set_wall_steps_wall_time_only_and_wakes_nothing() {
     let start = Time::from_parts(1_792_900_000, 0);
@@ -846,6 +895,70 @@ fn dropping_a_timeout_deregisters_its_deadline() {
     drop(polled);
     assert_eq!(mc.next_deadline(), None);
     assert_eq!(mc.advance_to_next(), None);
+}
+
+/// Review 2026-10-26 (a stress test that passed: evidence for "nothing
+/// found"). Task and thread sleepers on a manual clock race two threads that
+/// move it: every one of them wakes, and none before its deadline.
+#[test]
+fn manual_sleepers_racing_concurrent_moves_all_wake_at_or_after_their_deadline() {
+    const HANG: Duration = Duration::from_secs(10);
+    // time enabled only for the hang detector; the sleepers use the manual clock
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(3).enable_time().build().unwrap();
+    let (clock, mc) = Clock::manual(Time::default());
+    let mut tasks = Vec::new();
+    for i in 0..400u64 {
+        let clock = clock.clone();
+        tasks.push(rt.spawn(async move {
+            let deadline = Mono::from_ns(1 + (i * 7919) % 5_000);
+            if i % 3 == 0 {
+                let mut it = clock.interval_at(deadline, Duration::from_nanos(97));
+                for _ in 0..5 {
+                    let due = it.tick().await;
+                    assert!(clock.mono() >= due);
+                }
+            } else {
+                clock.sleep_until(deadline).await;
+                assert!(clock.mono() >= deadline);
+            }
+        }));
+    }
+    let threads: Vec<_> = (0..3)
+        .map(|t| {
+            let clock = clock.clone();
+            std::thread::spawn(move || {
+                let deadline = Mono::from_ns(100 + t * 1_000);
+                clock.sleep_until_blocking(deadline);
+                assert!(clock.mono() >= deadline);
+            })
+        })
+        .collect();
+    let movers: Vec<_> = (0..2)
+        .map(|m| {
+            let mc = mc.clone();
+            std::thread::spawn(move || {
+                for step in 0..20_000u64 {
+                    if (step + m) % 2 == 0 {
+                        mc.advance(Duration::from_nanos(1));
+                    } else {
+                        mc.advance_to_next();
+                    }
+                }
+            })
+        })
+        .collect();
+    for m in movers {
+        m.join().unwrap();
+    }
+    mc.advance(Duration::from_secs(1));
+    rt.block_on(async {
+        for t in tasks {
+            tokio::time::timeout(HANG, t).await.expect("a sleeper was never woken").unwrap();
+        }
+    });
+    for t in threads {
+        t.join().unwrap();
+    }
 }
 
 #[test]

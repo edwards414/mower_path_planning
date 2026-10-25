@@ -10,9 +10,12 @@
 //!   blocking ones on `std::thread::sleep`;
 //! - `Clock::manual(start)`: mono starts at `Mono(0)` and wall at `start`;
 //!   both move only through the `ManualClock` (`advance*` moves both,
-//!   `set_wall` steps wall only); no runtime needed; sleepers (async and
-//!   blocking) and intervals whose deadline has passed wake in deadline
-//!   order on every move, each observing the new time;
+//!   `set_wall` steps wall only); no runtime needed; on every move the tasks
+//!   (sleeps, intervals, timeouts) whose deadline has passed are woken in
+//!   deadline order, then the threads blocked in a sleep, every one of them
+//!   observing the new time; a deadline of `Mono(u64::MAX)` means never:
+//!   `next_deadline` and `advance_to_next` pass over it, and only a move to
+//!   `Mono(u64::MAX)` itself makes it due;
 //! - `Sleep` is `Send + Unpin`; a `Sleep` or `Interval` whose deadline has
 //!   already passed is ready on its first poll;
 //! - `Interval`: `interval(p)` ticks at once then every `p`
@@ -30,8 +33,8 @@
 //! re-armed, not on its first poll, so `ManualClock::next_deadline` knows a
 //! deadline from the moment it exists; it deregisters when it drops. A move
 //! takes the due entries out under the lock and wakes them once the lock is
-//! released: tasks through the `Waker` of their last poll, std threads
-//! through the condvar they wait on.
+//! released: tasks through the `Waker` of their last poll, in order, then
+//! std threads all at once through the condvar they wait on.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -139,7 +142,11 @@ impl Sub<Duration> for Time {
 ///
 /// Readings of one clock compare, and so do those of any two
 /// `Clock::system()` handles (one origin per process). Adding saturates at
-/// 584 years, so `mono + Duration::MAX` is a deadline that never comes.
+/// `Mono::from_ns(u64::MAX)`, 584 years on, which as a deadline means never:
+/// `mono + Duration::MAX` (a `sleep(Duration::MAX)`, a `timeout` of
+/// `Duration::MAX`) waits for good. The system clock never gets there; a
+/// manual clock only when it is moved there explicitly
+/// ([`ManualClock::advance_to_next`] passes over it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Mono(u64);
 
@@ -183,6 +190,10 @@ impl Sub<Duration> for Mono {
 fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
+
+/// The deadline `mono + Duration::MAX` saturates to: never. A manual clock
+/// does not count it as pending (`next_deadline`, `advance_to_next`).
+const NEVER: Mono = Mono(u64::MAX);
 
 /// Where `Clock::system()`'s `mono` counts from: its first use in the
 /// process.
@@ -250,9 +261,10 @@ impl ManualState {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Move to `target` if it is later, then wake what is due in deadline
-    /// order. Waking happens after `inner` is released, because a waker may
-    /// run anything, this clock included.
+    /// Move to `target` if it is later, then wake what is due: the tasks in
+    /// deadline order, then the blocking threads. Waking happens after
+    /// `inner` is released, because a waker may run anything, this clock
+    /// included.
     fn move_to(&self, mut inner: MutexGuard<'_, Manual>, target: Mono) {
         if target <= inner.mono {
             return;
@@ -282,6 +294,14 @@ impl ManualState {
 }
 
 impl Manual {
+    /// The earliest deadline that can come without an explicit move to the
+    /// end of time. The map is sorted, so when the first entry is `NEVER`,
+    /// every entry is.
+    fn next_deadline(&self) -> Option<Mono> {
+        let &(next, _) = self.pending.keys().next()?;
+        (next != NEVER).then_some(next)
+    }
+
     fn register(&mut self, deadline: Mono, waiter: Waiter) -> (Mono, u64) {
         self.registrations += 1;
         let key = (deadline, self.registrations);
@@ -421,7 +441,10 @@ impl std::fmt::Debug for Clock {
 ///
 /// "Pending" below means every live [`Sleep`] and [`Interval`] of the clock
 /// whose deadline is still ahead (from the moment it is created, polled or
-/// not), and every thread blocked in a sleep on it.
+/// not), and every thread blocked in a sleep on it, except those whose
+/// deadline is `Mono::from_ns(u64::MAX)`: that one means never, and becomes
+/// due only when the clock is moved there explicitly (`advance` by
+/// `Duration::MAX`, or `advance_to` that instant).
 #[derive(Clone)]
 pub struct ManualClock {
     state: Arc<ManualState>,
@@ -445,20 +468,21 @@ impl ManualClock {
     }
 
     /// Jump to the earliest pending sleeper / interval deadline and return
-    /// it; `None` (and no move) when nothing is pending.
+    /// it; `None` (and no move) when nothing is pending. A deadline that
+    /// means never is not pending, so this never jumps to the end of time.
     ///
     /// Woken tasks have to run before they register their next deadline, so
     /// an event-driven test lets its tasks settle between calls.
     pub fn advance_to_next(&self) -> Option<Mono> {
         let inner = self.state.lock();
-        let &(next, _) = inner.pending.keys().next()?;
+        let next = inner.next_deadline()?;
         self.state.move_to(inner, next);
         Some(next)
     }
 
     /// The earliest pending deadline, without moving.
     pub fn next_deadline(&self) -> Option<Mono> {
-        self.state.lock().pending.keys().next().map(|&(deadline, _)| deadline)
+        self.state.lock().next_deadline()
     }
 
     /// Step wall time (as NTP would); mono is untouched, so sleepers are not
