@@ -414,7 +414,14 @@ async fn supervise(
                 }
             }
         } else {
-            reports.recv().await
+            // A shutdown that trips while nothing reports must still start
+            // the stop window above, or one module that ignores it keeps the
+            // process up forever. `recv` is cancel-safe: a report that races
+            // the shutdown is read on the next turn.
+            tokio::select! {
+                next = reports.recv() => next,
+                () = shutdown.wait() => continue,
+            }
         };
         let Some((slot_idx, outcome)) = next else { break };
         match outcome {
@@ -720,6 +727,30 @@ mod tests {
             assert!(!imu.lock().unwrap()[0].is_closed(), "imu's scope closed inside its stop window");
 
             let failures = supervisor.await.unwrap();
+            assert!(matches!(&failures[..], [why] if why.contains("did not stop")), "{failures:?}");
+            assert!(imu.lock().unwrap()[0].is_closed(), "the window is over, imu's scope still open");
+        });
+    }
+
+    /// The supervisor used to wait for a report without a timeout when the
+    /// shutdown tripped during that wait, so an instance that ignored the
+    /// shutdown, with no other instance left to report, kept the process up.
+    #[test]
+    fn a_shutdown_with_no_instance_reporting_still_ends_after_the_stop_window() {
+        paused().block_on(async {
+            let imu = Arc::new(Mutex::new(Vec::new()));
+            let shutdown = Shutdown::new();
+            let slots = vec![test_slot("imu", &[Run::Wedge], &imu)];
+            let stop_timeout = Duration::from_secs(10);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            shutdown.trigger();
+            let failures = tokio::time::timeout(stop_timeout * 2, supervisor)
+                .await
+                .expect("the stop window never started")
+                .unwrap();
             assert!(matches!(&failures[..], [why] if why.contains("did not stop")), "{failures:?}");
             assert!(imu.lock().unwrap()[0].is_closed(), "the window is over, imu's scope still open");
         });
