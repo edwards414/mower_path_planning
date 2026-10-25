@@ -19,6 +19,8 @@ pub struct TopicInfo {
     pub retained: usize,
     /// Messages published on this name since the bus started.
     pub published: u64,
+    /// When the last one was: a std `Instant`, not a reading of the bus
+    /// clock (a manual clock does not move it).
     pub last_published: Option<Instant>,
 }
 

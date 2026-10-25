@@ -29,19 +29,41 @@ Later steps build on it:
 - **`Scope`:** one per module instance. It plays the part of an `r2r::Node`, and its name is the
   node name (used only for introspection).
   - Everything a module creates goes through its scope: publishers, subscribers, services, clients,
-    erased endpoints.
+    erased endpoints, wall timers and child scopes.
   - **Closing a scope ends all of it:**
     - subscriber streams return `None`;
     - `publish` returns `BusError::Closed`;
     - the scope's latched history is dropped;
-    - its services disappear, and calls in flight to them fail with `ServiceUnavailable`.
+    - its services disappear, and calls in flight to them fail with `ServiceUnavailable`;
+    - its wall timers' `tick()` returns `Err(BusError::Closed)`, also while it waits;
+    - its child scopes close too.
+  - **When a close is done:**
+    - `close()` returns once all of the above has happened. A `close()` that finds another one under
+      way on another thread waits for it, so returning always means every endpoint has ended.
+    - `is_closed()` is true from the moment a close starts. From then on nothing new attaches:
+      creating an endpoint or a timer fails with `Closed`, and a child comes out closed.
+    - `scope.closed().await` resolves once the close has finished. It needs no runtime, and a
+      `select!` loop can poll a fresh one in every turn.
+  - **Panics in a close:** a close frees messages and wakes tasks, which runs user code (drop glue,
+    wakers). If that panics, the close still ends everything else and wakes its waiters, then
+    re-raises the first panic. The supervisor logs it and goes on.
   - The supervisor closes an instance's scope when the instance ends, however it ends, before
     restarting it. A task the old instance spawned and nobody aborted therefore cannot keep
-    publishing next to the new instance. r2r gives the same guarantee today by dropping the node.
+    publishing next to the new instance, and its `while timer.tick().await.is_ok()` loops end. r2r
+    gives the same guarantee today by dropping the node: its publishers fail, and its timers'
+    `tick()` returns `Err`.
+    - A dedicated std thread has no task to wake: it checks `scope.is_closed()` in its loop (it
+      takes no lock), or ends when its subscriber's `recv_timeout` returns `Closed`.
+  - **Child scopes:** `scope.child(name)` is a scope of its own, with its own node name, that closes
+    when its parent closes; a child of a closed or closing scope is created closed. It can also be
+    closed on its own. `mower_localize::run_all` gives each of its three roles one, and ws_bridge
+    (E3) gives one to each session. Neither keeps the other alive.
   - **Hooks of dropped endpoints:** an endpoint dropped before its scope closes leaves a small
-    close hook (about 200 B) until the close. That is fine for modules, which create their
-    endpoints at start. A component that opens endpoints per session, like ws_bridge in E3, uses
-    one scope per session and closes it on disconnect.
+    close hook (about 200 B) until the close. Modules mostly create their endpoints at start. The
+    exception today is pid_autotune, which subscribes to the base telemetry once per tuning
+    session: a hook per session, which is negligible. A component that opens endpoints per session,
+    like ws_bridge in E3, uses a child scope per session and closes it on disconnect. A child takes
+    no hook in its parent, and a dropped one is pruned when the next child is made.
 - **Names:** absolute ROS names (`/odometry/global`, `/robot/info`, `/map_manage/get_parameters`).
   - A relative name is refused.
   - Resolving launch remappings, name parameters and namespaces into absolute names is the
@@ -54,6 +76,9 @@ Later steps build on it:
   - r2r's generated message types qualify: they derive `Clone, Serialize, Deserialize`. E2 can
     therefore carry today's types unchanged, and ROS-free mirrors of them can replace them later
     by changing imports.
+  - That switch is all or nothing per name. Every endpoint of a name, the ROS bridge's included,
+    must move to the mirror type in the same step. Otherwise the first endpoint fixes one type and
+    the others fail with `TypeMismatch` (next item), and the run fails.
 - **Type checking:** the first typed endpoint on a name fixes its type (`TypeId`, plus
   `type_name` for messages). A later endpoint with another type gets `BusError::TypeMismatch`.
   - The type stays fixed for the bus's lifetime, even after every endpoint is gone.
@@ -71,7 +96,13 @@ while let Some(msg) = sub.next().await {   // futures::Stream<Item = Arc<T>>
     use_it(&msg.pose.pose.position);
 }
 // from a dedicated std thread:
-match sub.recv_timeout(Duration::from_millis(50)) { Ok(msg) => .., Err(RecvError::Timeout) => .., Err(RecvError::Closed) => break }
+loop {
+    match sub.recv_timeout(Duration::from_millis(50)) {
+        Ok(msg) => use_it(&msg.pose.pose.position),
+        Err(RecvError::Timeout | RecvError::Empty) => {}   // Empty: only try_recv returns it
+        Err(RecvError::Closed) => break,                     // the scope closed
+    }
+}
 ```
 
 **Delivery**
@@ -97,7 +128,10 @@ match sub.recv_timeout(Duration::from_millis(50)) { Ok(msg) => .., Err(RecvError
 - A writer's history goes away when its last clone drops or its scope closes.
 
 **`publish`**
-- It never blocks.
+- It never waits for a reader. It takes the channel's lock briefly, to queue the message for every
+  reader. After unlocking, it wakes the readers and drops the messages it pushed out of full
+  queues. Both happen on the publisher's thread: waking runs the readers' wakers, and the last
+  reference to a big message (a 160 kB grid) takes a while to free.
 - It returns `Err(BusError::Closed)` only when the writer's scope is closed. The `Result` exists
   so that r2r-style call sites (`publisher.publish(&msg)?`) keep compiling.
 
@@ -109,10 +143,12 @@ producer skip expensive work nobody wants.
 writer counts once, clones included, and only while its scope is open. It is rclcpp's
 `get_publisher_count()`; mower_base's arm latch asks exactly this question.
 
-**`publisher_changes()`** is a stream that yields that count each time writers come or go.
+**`publisher_changes()`** is a stream (`PublisherChanges`) that yields that count each time
+writers come or go.
 - Changes in between coalesce, so a module restart can yield an unchanged count.
 - It is not ordered with the message queue, so treat every item as "resync".
-- It ends when the reader's scope closes.
+- It ends when the reader's scope closes. It can outlive the reader; dropping the reader still
+  frees what the reader had queued.
 - The ROS bridge uses it to drop a latched value on the DDS side once the last bus writer is gone.
 
 **Differences from DDS, all deliberate**
@@ -147,7 +183,7 @@ while let Some(req) = srv.next().await {           // Stream<Item = Request<Req,
 }
 
 let client = scope.client::<Trigger_Request, Trigger_Response>("/save_map")?;
-client.wait_for_service().await;
+client.wait_for_service().await?;                  // Err(Closed) if the scope closes first
 let resp = client.request(&Trigger_Request {})?.await?;   // the same two-level Result as r2r
 ```
 
@@ -190,6 +226,9 @@ subscribe / publish / call_service), the recorder and `mowerctl`.
 - **The JSON layout is serde's layout of the message type.** For r2r types that is what ws_bridge
   sends the app today: its untyped r2r path converts through the same derives. E3 verifies this
   byte for byte against the app contract (`tools/probe_app.py`).
+- **Names are never forgotten.** `subscribe_erased` and `publisher_json` create the channel of any
+  valid name they are given, and channels are never removed. E3 must therefore keep ws_bridge's
+  allow-list in front of them, or an app could grow the registry without bound.
 
 ## Clock
 
@@ -212,7 +251,8 @@ clock.sleep_blocking(d);              // for dedicated std threads
   - the clock moves only when the `ManualClock` handle is told to: `advance(d)`,
     `advance_to_next()` (jump to the earliest pending deadline), `set_wall(t)` (a wall step, as
     from NTP, while `mono` keeps running);
-  - when it moves, sleepers and intervals whose deadline has passed wake in deadline order;
+  - when it moves, the tasks whose deadline has passed (sleeps, intervals, timeouts) are woken in
+    deadline order, then the threads blocked in a sleep are notified;
   - it needs no runtime and works for blocking sleepers too.
   - Tests use it instead of tokio's process-wide paused time. Replay (E8) feeds it recorded
     stamps.
@@ -221,7 +261,8 @@ clock.sleep_blocking(d);              // for dedicated std threads
     default (tokio's semantics).
   - **`interval_at(start, period)` with `MissedTick::Skip`:** reproduces an r2r / rcl wall timer.
     The first tick comes after one period, and after an overrun it fires once and stays on the
-    original phase.
+    original phase. `scope.wall_timer(&clock, period)` is that schedule tied to a scope (see
+    "Model"): it is what a port of `node.create_wall_timer` uses.
 - **Where `Skip` differs from rcl:** both cases are inherited from tokio's interval.
   - An overrun that ends exactly on a phase point moves on to the next point, where rcl fires at
     once. This only shows on a manual clock, where times are exact.
@@ -234,6 +275,11 @@ clock.sleep_blocking(d);              // for dedicated std threads
 - **Pending deadlines:** a `Sleep`, an `Interval`'s next tick or a `Timeout` counts as pending from
   the moment it is created until it completes or is dropped, for `next_deadline` and
   `advance_to_next`.
+- **A deadline of `Mono::from_ns(u64::MAX)` means never.** That is where `mono + Duration::MAX`
+  saturates, so `sleep(Duration::MAX)` and `timeout(Duration::MAX, ..)` wait for good.
+  - The system clock never gets there.
+  - A manual clock does not count it as pending: `advance_to_next` never jumps to it. It comes only
+    when the clock is moved there explicitly (`advance(Duration::MAX)`).
 - **Under tokio's paused time** (`start_paused`), the system clock's sleeps follow tokio, but
   `mono()` and `now()` stay real. Tests drive a `Clock::manual` instead.
 - **`Time` converts to and from `(sec: i32, nanosec: u32)`**, the `builtin_interfaces/Time`
@@ -248,7 +294,8 @@ clock.sleep_blocking(d);              // for dedicated std threads
     `nav_msgs/msg/Odometry`);
   - the names of the scopes that publish and subscribe to it;
   - its retained history;
-  - how many messages have been published, and when the last one was.
+  - how many messages have been published, and when the last one was. That time is a std
+    `Instant`, not a reading of the bus clock: a manual clock does not move it.
 - **`bus.services()`** returns the same kind of record for services.
 - These feed `/rosapi/topics` (E3) and `mowerctl` (E8).
 
@@ -262,9 +309,9 @@ clock.sleep_blocking(d);              // for dedicated std threads
 | `node.subscribe::<T>(topic, qos)` (Stream of `T`) | `m.bus.subscribe::<T>(abs_topic, qos)` (Stream of `Arc<T>`; field access is unchanged, moving a field out needs `Arc::unwrap_or_clone`) |
 | `node.create_service::<S>(name, qos)` and `req.respond(resp)` | `m.bus.service::<S::Request, S::Response>(name)` and the same `respond` |
 | `node.create_client::<S>(name, qos)` and `client.request(&req)?.await?` | `m.bus.client::<..>(name)` and unchanged |
-| `node.is_available(&client)?.await` | `client.wait_for_service().await` |
-| `node.create_wall_timer(p)` and `timer.tick().await` | `m.clock.interval_at(m.clock.mono() + p, p)` with `MissedTick::Skip`, then `tick().await` |
+| `node.is_available(&client)?.await` | `client.wait_for_service().await?` |
+| `node.create_wall_timer(p)?` and `while timer.tick().await.is_ok()` | `m.bus.wall_timer(&m.clock, p)?`, the loop unchanged (`tick()` returns the deadline, where r2r's returns the time since the last tick; none of today's loops uses it) |
 | `tokio::time::sleep(d)` / `Instant::now()` / `SystemTime::now()` | `m.clock.sleep(d)` / `m.clock.mono()` / `m.clock.now()` |
-| `tokio::time::timeout(d, fut)` | `m.clock.timeout(d, fut)` (`Err(Elapsed)` as in tokio) |
+| `tokio::time::timeout(d, fut)` | `m.clock.timeout(d, fut)` (`Err(Elapsed)` as in tokio, but `Elapsed` is `mower_bus::Elapsed`: code that names tokio's `Elapsed` type changes) |
 | `node.spin_once(..)` thread | gone: the bus needs no spinning |
 | parameters (`mower_rs_common::params`) | unchanged in E1; E2 moves them to one YAML read by mowerd |

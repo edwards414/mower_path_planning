@@ -652,7 +652,9 @@ impl<F> fmt::Debug for Timeout<F> {
     }
 }
 
-/// The error of a [`Timeout`] whose deadline came first.
+/// The error of a [`Timeout`] whose deadline came first. The bus's own
+/// type: code that names `tokio::time::error::Elapsed` changes with the
+/// port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Elapsed;
 
