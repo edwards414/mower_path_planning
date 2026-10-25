@@ -21,10 +21,15 @@ bt_navigator:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # navigate_to_pose: upstream's navigate_to_pose_w_replanning_and_recovery.xml
+    # without Spin / Wait / BackUp (a failure is retried after clearing the
+    # costmaps, up to 6 times), the tree mower_nav_core ports. Resolved by
+    # navigation.launch.py (ParameterFile allow_substs); a node started with
+    # this file directly gets the literal string.
+    default_nav_to_pose_bt_xml: "$(find-pkg-share mower_nav2)/config/navigate_to_pose_w_replanning_and_clearing.xml"
+    # 'default_nav_through_poses_bt_xml' stays upstream's
     # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    # (nothing sends navigate_through_poses).
 
     # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
     # Built-in plugins are added automatically

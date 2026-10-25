@@ -226,10 +226,10 @@ mower_nav sends one `navigate_to_pose` goal per mission, to the coverage start
   * Upstream's outer recovery cycles through clear, Spin, Wait and BackUp;
     here every recovery is the clear. Until the second recovery the two
     trees are the same.
-  * The tree as XML: `tests/oracle/navigator/navigate_to_pose_w_replanning_and_clearing.xml`
-    (the default with three lines deleted). Setting it as
-    `default_nav_to_pose_bt_xml` makes nav2 on the robot behave like the port
-    before D6 switches over.
+  * The tree as XML: `src/mower_nav2/config/navigate_to_pose_w_replanning_and_clearing.xml`
+    (the default with three lines deleted). The robot's nav2 runs it too
+    (`default_nav_to_pose_bt_xml` in `nav2_no_map_params.yaml`), so the
+    behaviour changes before D6 swaps the implementation.
 
   Quirks kept:
   * The result code is the smallest nonzero of the two error codes. A
@@ -288,11 +288,19 @@ Checked:
   * For comparison, the default tree with its motion recoveries: unreachable
     takes 17.3 s instead of 12.7 s and the robot turns about 180° and backs
     up; the wall takes 47.5 s instead of 35.1 s. Both end with the same code.
-  * One count may differ in the wall scenario. A replan reaches nav2's tree
-    10–30 ms after it is asked for, and here one tick later, so whether the
-    last replan of a round lands before that round's FollowPath failure can
-    flip. The port then sends one more preempting FollowPath goal per round
-    (43 vs 38 over 7 rounds); the outcome does not change.
+  * The wall scenario is not repeatable on nav2 itself. Three runs of the
+    real nodes took 35.05 s, 37.04 s and 39.5 s, with the same code and
+    recovery count each time. A replan whose result reaches the tree while
+    the controller's 104 for the running goal is still in flight (a few ms)
+    goes out as a FollowPath update. The idle controller then starts a fresh
+    loop with a fresh patience clock, and the tree drops the 104, since it
+    no longer waits on that goal. That round lasts 2.05 s longer.
+  * The port hands results over in the same tick and always takes the
+    race-free path, 35.07 s. Its replans also run slightly earlier (nav2's
+    plan takes 10–30 ms from request to result, here one tick). So the test
+    lets nav2 be late by up to three such rounds there, and lets the plan and
+    follow_path counts differ by a few (43 vs 38 follow_path goals in the
+    first run).
 
 ## Checkers (D3) and velocity smoother (D4)
 
