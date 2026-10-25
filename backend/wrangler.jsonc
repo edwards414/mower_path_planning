@@ -4,7 +4,14 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // No log line per invocation: every relayed WebSocket frame wakes the hub,
+  // which used up the free plan's daily Observability events. console.* lines
+  // are still kept.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "invocation_logs": false }
+  },
   "durable_objects": {
     "bindings": [{ "name": "ROBOT_HUB", "class_name": "RobotHub" }]
   },
