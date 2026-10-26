@@ -6,6 +6,8 @@ message bus that replaces DDS *between the modules of one process*.
 - **What it provides:**
   - typed publish/subscribe, keyed by the topic names in use today;
   - request/response services;
+  - actions: goals with cancel requests, feedback and a result (added in E2 for mower_nav and
+    mower_coverage);
   - type-erased (JSON) access for the bridge to the app, the recorder and tooling;
   - a `Clock` that can be driven by hand for tests and replay.
 - **What it depends on:** no r2r and no ROS, so it builds and tests with a plain `cargo test` on any
@@ -35,6 +37,8 @@ Later steps build on it:
     - `publish` returns `BusError::Closed`;
     - the scope's latched history is dropped;
     - its services disappear, and calls in flight to them fail with `ServiceUnavailable`;
+    - its action servers disappear, and the goals they accepted are lost for their clients
+      (`ServiceUnavailable`); its action clients' goals run on, abandoned ("Actions");
     - its wall timers' `tick()` returns `Err(BusError::Closed)`, also while it waits;
     - its child scopes close too.
   - **When a close is done:**
@@ -217,9 +221,146 @@ let resp = client.request(&Trigger_Request {})?.await?;   // the same two-level 
   clones.
 - **Timeouts:** none at the bus level. Callers combine `request` with `clock.sleep`, as they
   combine r2r calls with `tokio::time::timeout` today.
-- **Actions are not in E1.** mower_nav's `nav_action*` and coverage's client of it are the only
-  action pairs inside the process. They are built from a goal service, a feedback topic and a
-  result service when E2 gets there; nav2's actions disappear in E9.
+- **Actions** have a section of their own, next.
+
+## Actions
+
+Added in E2 for the one action pair inside the process: mower_coverage's client of mower_nav's
+`/nav_action_follow_path` (mower_nav also serves `/nav_action`). The API is r2r's as those two use
+it, so their port is a swap of names (cheat sheet below).
+
+```rust
+// what r2r calls Waypoint::Action: an action is its three message types
+type WaypointAction = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback);
+
+// the server (mower_nav)
+let mut requests = scope.action_server::<WaypointAction>("/nav_action_follow_path")?;
+while let Some(req) = requests.next().await {           // Stream<Item = ActionServerGoalRequest<A>>
+    if !admissible(&req.goal) {
+        let _ = req.reject();                           // the client gets GoalRejected
+        continue;
+    }
+    let (mut goal, mut cancels) = req.accept()?;       // ActionServerGoal<A>, CancelRequests
+    tokio::spawn(async move {
+        while let Some(request) = cancels.next().await { request.accept() }   // or reject()
+    });
+    goal.publish_feedback(feedback)?;
+    goal.succeed(Waypoint::Result { success: true })?;   // or abort(..) / cancel(..)
+}
+
+// the client (mower_coverage)
+let client = scope.action_client::<WaypointAction>("/nav_action_follow_path")?;
+client.wait_for_server().await?;
+let (goal, result, mut feedback) = client.send_goal_request(g)?.await?;   // Err(GoalRejected)
+goal.cancel()?.await?;                                  // Err(CancelRejected), ...
+let (status, result) = result.await?;                   // a terminal GoalStatus
+```
+
+- **Built natively,** not from services and topics the way rcl_action builds actions on DDS:
+  - the two ends of a goal share one state: its status, its result, the feedback queued for the
+    client and the cancel requests queued for the server;
+  - so there is no goal, cancel or result service and no feedback or status topic to see in
+    `bus.services()` / `bus.topics()`. `bus.actions()` lists actions ("Introspection").
+- **Like a service:** one server per name (`ServiceTaken`), the first endpoint fixes the name's three
+  types (`TypeMismatch`), names are absolute, no runtime is needed. Actions are a namespace of their
+  own: a topic or a service may have the same name.
+- **Action names resolve like topic names.** rcl_action resolves them with the topic rules
+  (`rostopic://` rules apply, `rosservice://` rules do not; checked against rcl on Jazzy), so a port
+  uses `resolve_topic`.
+
+**Goal requests**
+- They queue without a limit and are handed out one at a time, like service requests. A server that
+  runs goals concurrently spawns a task per request, as mower_nav does.
+- With no live server at send time, `send_goal_request` fails at once with `ServiceUnavailable`.
+  (rcl_action sends it anyway, and the client waits forever.)
+- The server's answer:
+  - `accept()`: the goal is `Executing` at once, as r2r has it (`Accepted` never shows), and the
+    client gets the goal's handle, its result future and its feedback stream;
+  - `reject()`: the client gets `GoalRejected`;
+  - dropping the request unanswered: the client gets `NoResponse` (r2r's client would wait forever).
+- **Giving a request up:** dropping the response future does not withdraw the request. The server
+  still gets it and may accept it; the goal then runs with nobody to read its feedback or result, as
+  with r2r. mower_coverage keeps the future after its 3 s acceptance timeout, to adopt and cancel
+  such a goal. Nothing can cancel a goal before it is accepted: there is no handle yet.
+- **Goal ids** (`GoalId`) are numbered by the bus per name, from 1 up, not UUIDs that clients pick.
+  Both ends see the same id.
+
+**Status and the end of a goal**
+- `get_status()` reads the goal's state as it is now: `Executing`, `Canceling` (a cancel request
+  accepted), then `Succeeded`, `Canceled` or `Aborted`, or `Unknown` once the goal is lost (below).
+  r2r returns the last status message it saw.
+- The server ends a goal with `succeed`, `abort` or `cancel`, from `Executing` or `Canceling`. The
+  first call counts. A later one, and feedback after the end, fail with `GoalTerminated`.
+- **Results** go to the goal's own result future, once: `(status, result)` with a terminal status.
+  There is no result service that another client could ask, and no expiry. The result is kept until
+  that future takes it or every handle of the goal is gone.
+
+**Cancel requests**
+- `goal.cancel()` queues a request for the server's `CancelRequests` stream (r2r's cancel stream).
+  The server answers:
+  - `accept()`: the goal is `Canceling` and the client's future resolves `Ok`. The server still
+    ends the goal itself, usually with `cancel`;
+  - `reject()`: `CancelRejected`, and the goal runs on;
+  - dropping the request unanswered: `NoResponse`.
+- Answered at once, without asking the server:
+  - a goal that has ended: `GoalTerminated`;
+  - a goal that is canceling already: also `GoalTerminated`, which is what rcl_action answers
+    (checked against rcl on Jazzy);
+  - a goal whose server dropped its `CancelRequests`: `CancelRejected`. r2r lets rcl_action report
+    such a request accepted without asking the server.
+- A request still queued when the goal ends, or accepted after the end, gets `GoalTerminated`.
+- Both streams end with the goal: `CancelRequests` once it has ended, the feedback stream once it
+  has ended and the client has read what came before. r2r's streams never end.
+
+**Feedback**
+- Each goal queues up to 10 messages for its client (KEEP_LAST 10, the depth of rcl_action's
+  feedback topic). When the queue is full, the oldest message is dropped and counted in
+  `FeedbackStream::dropped()`.
+- Feedback arrives in publish order, and all of it before the stream ends.
+- Feedback that no client reads (the feedback stream was dropped, or the client gave the request
+  up) is dropped at once.
+
+**Servers that go away (what mower_nav's restart looks like to mower_coverage)**
+- **The server's scope closes:**
+  - its queued and handed-out goal requests fail with `ServiceUnavailable`;
+  - its goals that have not ended are **lost**: the result future fails with `ServiceUnavailable`,
+    the status becomes `Unknown`, cancel requests fail with `ServiceUnavailable`, and the feedback
+    stream ends once read;
+  - the server's handles get `Closed` from then on.
+  - A lost goal never gets a terminal status. It may still be running in the world (nav2 driving a
+    path), so mower_coverage takes its "outcome is uncertain" path: an action cancel, which fails at
+    once, then the correlated cancel through `/cancel_navigation_dispatch`, which the restarted nav
+    answers. With r2r the client sees nothing at all when the server's node goes: no result, no end of
+    feedback, no answer to a cancel, until its own timeouts fire.
+- **The server drops the last clone of a goal's handle before ending it:** the goal is lost the same
+  way, with `NoResponse`. rclcpp would end it CANCELED and rclpy ABORTED, r2r leaves it executing;
+  none of those tells the client the truth.
+- **The server drops its `ActionServer` while its scope stays open:** the name is free for a new
+  server and the queued requests fail with `ServiceUnavailable`. The requests it handed out and the
+  goals it accepted go on, and end with their own handles or the scope.
+
+**Clients that go away**
+- **The client's scope closes:** its goals are abandoned, as a ROS client process that exits leaves
+  them. They run on; the server is not told.
+  - The client's response futures, result futures and cancel futures resolve to `Closed`, whatever
+    the server did, so a stale task of an ended module does not act on them. Its feedback streams
+    end at once.
+  - Goal requests sent before the close still reach the server, as service calls do.
+- **The client drops a goal's handles:** the goal runs on, as in ROS.
+
+**Timeouts:** none at the bus level, as for services. Clients combine the futures with
+`clock.timeout`, as they combine r2r's with `tokio::time::timeout` today.
+
+**Differences from rcl_action and r2r, besides the ones above**
+- `succeed` and `abort` work after an accepted cancel request, as rcl_action allows. r2r refuses them
+  there (it forgets the goal), which is why mower_nav's `terminate` falls back to `cancel`; that
+  fallback keeps working.
+- `is_cancelling()` is `true` after an accepted cancel request; r2r fails with an error there.
+- `cancel` ends a goal `Canceled` also when no cancel request was accepted. r2r allows it (and
+  leaves rcl's status `EXECUTING`); rcl_action reaches CANCELED only from CANCELING.
+- Cancel requests are per goal, through its handle. rcl_action's "cancel all goals" and "cancel
+  goals accepted before a stamp" do not exist on the bus. Through the bridge they do, since rcl
+  splits them into one request per goal.
 
 ## Erased access (JSON)
 
@@ -243,6 +384,9 @@ subscribe / publish / call_service), the recorder and `mowerctl`.
 - **Names are never forgotten.** `subscribe_erased` and `publisher_json` create the channel of any
   valid name they are given, and channels are never removed. E3 must therefore keep ws_bridge's
   allow-list in front of them, or an app could grow the registry without bound.
+- **Actions have no erased access.** The app uses no action, so E3 does not need one. A goal's
+  state already holds its messages erased, with the name's codecs, so a JSON client would be a set of
+  handle types around the same state, like `call_json` for services.
 
 ## Clock
 
@@ -312,6 +456,9 @@ clock.sleep_blocking(d);              // for dedicated std threads
   - how many messages have been published, and when the last one was. That time is a std
     `Instant`, not a reading of the bus clock: a manual clock does not move it.
 - **`bus.services()`** returns the same kind of record for services.
+- **`bus.actions()`** returns, for each action: its three Rust types and its ROS type
+  (`mower_interface/action/Waypoint`), its server's and its clients' scope names, the goal requests
+  that reached a server, and the goals running now.
 - These feed `/rosapi/topics` (E3) and `mowerctl` (E8).
 
 ## r2r to mower_bus cheat sheet (for E2)
@@ -325,6 +472,14 @@ clock.sleep_blocking(d);              // for dedicated std threads
 | `node.create_service::<S>(name, qos)` and `req.respond(resp)` | `m.bus.service::<S::Request, S::Response>(name)` and the same `respond` |
 | `node.create_client::<S>(name, qos)` and `client.request(&req)?.await?` | `m.bus.client::<..>(name)` and unchanged |
 | `node.is_available(&client)?.await` | `client.wait_for_service().await?` |
+| `node.create_action_server::<Waypoint::Action>(name)?` (Stream of `ActionServerGoalRequest`) | `m.bus.action_server::<WaypointAction>(abs_name)?` with `type WaypointAction = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback)`; `abs_name` from `resolve_topic` |
+| `r2r::ActionServerGoalRequest<Waypoint::Action>`, `r2r::ActionServerGoal<..>`, `ActionServerCancelRequest` | `mower_bus::` the same names, over `WaypointAction`; `req.goal`, `req.accept()?`, `req.reject()`, the cancel stream's `accept()` / `reject()`, `goal.succeed/abort/cancel(r)`, `publish_feedback(f)`, `is_cancelling()` unchanged |
+| `node.create_action_client::<Waypoint::Action>(name)?` | `m.bus.action_client::<WaypointAction>(abs_name)?` |
+| `r2r::Node::is_available(&action_client)?.await` | `client.wait_for_server().await?` |
+| `client.send_goal_request(goal)?.await?` → `(ActionClientGoal, result future, feedback stream)` | unchanged |
+| `Err(r2r::Error::RCL_RET_ACTION_GOAL_REJECTED)` | `Err(BusError::GoalRejected { .. })` |
+| `goal.cancel()?.await` (`GoalCancelRejected`, `GoalCancelAlreadyTerminated`, ...), `goal.get_status()` | unchanged; the errors are `CancelRejected`, `GoalTerminated`, ... |
+| `r2r::GoalStatus`, the handles' `uuid` | `mower_bus::GoalStatus` (the same seven variants), `id: GoalId` |
 | `node.create_wall_timer(p)?` and `while timer.tick().await.is_ok()` | `m.bus.wall_timer(&m.clock, p)?`, the loop unchanged (`tick()` returns the deadline, where r2r's returns the time since the last tick; none of today's loops uses it) |
 | `tokio::time::sleep(d)` / `Instant::now()` / `SystemTime::now()` | `m.clock.sleep(d)` / `m.clock.mono()` / `m.clock.now()` |
 | `tokio::time::timeout(d, fut)` | `m.clock.timeout(d, fut)` (`Err(Elapsed)` as in tokio, but `Elapsed` is `mower_bus::Elapsed`: code that names tokio's `Elapsed` type changes) |

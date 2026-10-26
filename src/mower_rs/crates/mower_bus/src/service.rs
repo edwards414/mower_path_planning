@@ -103,8 +103,8 @@ impl Registry {
 
     /// `scope`'s close signal, made together with its close hook on first
     /// use: one hook per calling scope, however many clients it creates and
-    /// JSON calls it makes.
-    fn caller(&self, scope: &Scope) -> Result<Arc<CloseSignal>, BusError> {
+    /// JSON calls it makes (and action clients: action.rs uses it too).
+    pub(crate) fn caller(&self, scope: &Scope) -> Result<Arc<CloseSignal>, BusError> {
         let mut callers = lock(&self.callers);
         if let Some(signal) = callers.get(&scope.id()).and_then(Weak::upgrade) {
             return Ok(signal);
@@ -665,9 +665,10 @@ impl Drop for Call {
 }
 
 /// Fired once, when a scope that makes calls closes: its calls in flight and
-/// its `wait_for_service`s wake up and end with `Closed`.
-struct CloseSignal {
-    scope: String,
+/// its `wait_for_service`s wake up and end with `Closed`, and so do its
+/// action clients' futures and streams.
+pub(crate) struct CloseSignal {
+    pub(crate) scope: String,
     state: Mutex<CloseState>,
 }
 
@@ -682,16 +683,16 @@ impl CloseSignal {
         CloseSignal { scope: scope.to_string(), state: Mutex::default() }
     }
 
-    fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         lock(&self.state).fired
     }
 
-    fn closed(&self) -> BusError {
+    pub(crate) fn closed(&self) -> BusError {
         BusError::Closed { scope: self.scope.clone() }
     }
 
     /// Have `waker` woken when the scope closes; `false` if it has.
-    fn watch(&self, key: &mut Option<u64>, waker: &Waker) -> bool {
+    pub(crate) fn watch(&self, key: &mut Option<u64>, waker: &Waker) -> bool {
         let mut state = lock(&self.state);
         if state.fired {
             return false;
@@ -702,7 +703,19 @@ impl CloseSignal {
         true
     }
 
-    fn unwatch(&self, key: &mut Option<u64>) {
+    /// Whether its lock is held: the lock probes of action.rs's tests.
+    #[cfg(test)]
+    pub(crate) fn is_locked(&self) -> bool {
+        self.state.try_lock().is_err()
+    }
+
+    /// Whether a waker waits on it: action.rs's tests of given-up waits.
+    #[cfg(test)]
+    pub(crate) fn is_watched(&self) -> bool {
+        !lock(&self.state).watchers.is_empty()
+    }
+
+    pub(crate) fn unwatch(&self, key: &mut Option<u64>) {
         if let Some(key) = key.take() {
             let removed = lock(&self.state).watchers.remove(key);
             drop(removed);
