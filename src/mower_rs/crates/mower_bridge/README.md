@@ -178,8 +178,10 @@ say so.
 4. Flip its flag in `src/on_bus.rs`.
 5. Update what looks at its DDS endpoints by node. In mower_rsd they now belong to `mower_bus_bridge`; a binary's
    belong to `/mower_bus_bridge/<node>`, which a tool that compares node names only (`nav_core_check.py`) takes for
-   the module's. A bridge endpoint that exists all along changes a count (`autotune_telemetry_check.py`'s subscriber
-   count while idle, BUS_TOPICS.md 5.5 f).
+   the module's. The bridge's DDS endpoints come and go with the module's bus ones (mower_bus_ros README, "Graph
+   presence"), so counts on DDS stay what they were, up to its 200 ms dwell: `autotune_telemetry_check.py` still finds
+   no subscriber while pid_autotune is idle (BUS_TOPICS.md 5.5 f). A bus endpoint of the bridge that exists all along
+   (a `to_ros` reader, a volatile `from_ros` writer) changes a count on the bus.
 
 ## Tests
 

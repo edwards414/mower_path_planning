@@ -27,6 +27,9 @@ pub(crate) enum Failure {
     /// An r2r call failed: creating the DDS writer, publishing, counting
     /// its readers, sending a request or a response.
     Dds,
+    /// r2r cannot convert a value to its C message (convert.rs): a module
+    /// made one the ROS type cannot carry.
+    Invalid,
 }
 
 impl Failure {

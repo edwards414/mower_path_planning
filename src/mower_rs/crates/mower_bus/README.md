@@ -155,7 +155,10 @@ loop {
 
 **`Publisher::subscription_count()`** counts the live subscribers of the channel: typed and
 erased ones, including the ROS bridge's. Like `get_subscription_count()` in ROS, it lets a
-producer skip expensive work nobody wants.
+producer skip expensive work nobody wants. **`subscription_changes()`** is its mirror of
+`publisher_changes()` below (`SubscriptionChanges`): the count each time readers come or go,
+coalesced, ending when the writer's scope closes, also after the publisher is dropped. The ROS
+bridge's `from_ros` holds its DDS reader only while the bus has a reader.
 
 **`Subscriber::publisher_count()`** counts the channel's live writers, typed and JSON. Each
 writer counts once, clones included, and only while its scope is open. It is rclcpp's
@@ -219,6 +222,11 @@ let resp = client.request(&Trigger_Request {})?.await?;   // the same two-level 
   - After the server's scope closes, `respond` returns `Closed`.
 - **Client clones** are one client: one registration and one introspection entry, like publisher
   clones.
+- **Presence:** `is_available()` says whether a server is live now. `wait_for_service()` waits for
+  one and `wait_for_no_service()` for none, both ending with `Closed` if the client's scope closes
+  first. A server replaced before the waiting task runs again is not seen to go. mower_bus_ros's
+  `service_to_ros` follows the server with the two: its DDS service exists only while a bus server
+  does.
 - **Timeouts:** none at the bus level. Callers combine `request` with `clock.sleep`, as they
   combine r2r calls with `tokio::time::timeout` today.
 - **Actions** have a section of their own, next.
