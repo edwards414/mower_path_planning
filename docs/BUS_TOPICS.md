@@ -329,8 +329,8 @@ therefore finds nothing.
 
 | Action | Type | Server | Clients in mower_rsd | Outside | E2 |
 |---|---|---|---|---|---|
-| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | the bus has no actions in E1: build this from a goal service, a feedback topic and a result service (bus/README:143-145). Move nav and coverage together |
-| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | same construction, or drop it |
+| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | the bus's actions (bus/README, "Actions", added in E2). Move nav and coverage together. Standalone, the tools reach nav through `action_to_ros` and coverage through `action_from_ros` (bus_ros/README, "Actions") |
+| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | the same, or drop it |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | nav2 bt_navigator | `nav_action_server`, by a relative name (mower_nav:1642) | the recorder records its `_action/feedback` and `_action/status` (record_topics.yaml:40-41) | stays an r2r client until E9 (*nav_core* replaces it) |
 | `/follow_path` | `nav2_msgs/action/FollowPath` | nav2 controller_server | `nav_action_server`, by a relative name (mower_nav:1643) | — | stays an r2r client until E9 |
 
@@ -673,12 +673,14 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
      display-only steps.
    - Check with localize_compare.py and datum_check.py.
 5. **coverage and nav.**
-   - This is the only in-process action pair. It needs the goal-service, feedback-topic and result-service construction
-     (bus/README:143-145), plus the five dispatch and lock services. nav's IO is the largest (`mower_nav/src/lib.rs`,
-     2094 lines).
+   - This is the only in-process action pair. It uses the bus's actions (bus/README, "Actions"; the cheat sheet maps
+     every r2r call nav and coverage make), plus the five dispatch and lock services. nav's IO is the largest
+     (`mower_nav/src/lib.rs`, 2094 lines).
+   - Action names resolve with the topic rules (rcl_action), so `resolve_topic` names them.
    - nav keeps r2r for nav2's two actions, `/bt_navigator/get_state` and `/rosout` until E9, or until *nav_core* is the
-     default.
-   - Check with nav_progress_check.py, coverage_cancel_check.py and nav_core_check.py.
+     default. Moving nav2's actions onto `action_from_ros` is not mechanical (bus_ros/README, "nav2's actions").
+   - Check with nav_progress_check.py, coverage_cancel_check.py and nav_core_check.py. Standalone, nav serves its two
+     actions to the tools through `action_to_ros`, and coverage reaches the tool's server through `action_from_ros`.
 6. **base, pid_autotune and the final `velocity_command_guard`, together.**
    - Base and guard are pure core plus thin IO (`mower_base_core`, `core.rs`; PLAN:355).
    - Moving the three together makes the drivetrain edge and the wheel-override edge in-process, so the arm latch's

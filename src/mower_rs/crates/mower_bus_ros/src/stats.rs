@@ -54,7 +54,8 @@ impl Counters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntryStats {
     pub direction: Direction,
-    /// Messages published on the other side; for services, calls answered.
+    /// Messages published on the other side; for services, calls answered;
+    /// for actions, goal requests answered (accepted or rejected).
     pub forwarded: u64,
     /// `to_ros`, volatile: bus messages not published because no DDS reader
     /// was matched.
@@ -65,6 +66,8 @@ pub struct EntryStats {
     /// `to_ros`: writer changes handled (`publisher_changes` items).
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
+    /// Actions: goal requests left unanswered, and accepted goals whose
+    /// result never reached the other side (README.md, "Actions").
     pub unanswered: u64,
     /// `to_ros`: bus messages the bridge's reader lost to its full queue,
     /// because the forwarder fell more than its depth (at least 64) behind.
@@ -103,6 +106,11 @@ impl BridgeStats {
     /// The forwarder of service `name`, if the bridge has one.
     pub fn service(&self, name: &str) -> Option<EntryStats> {
         self.get(Kind::Service, name)
+    }
+
+    /// The forwarder of action `name`, if the bridge has one.
+    pub fn action(&self, name: &str) -> Option<EntryStats> {
+        self.get(Kind::Action, name)
     }
 
     fn get(&self, kind: Kind, name: &str) -> Option<EntryStats> {

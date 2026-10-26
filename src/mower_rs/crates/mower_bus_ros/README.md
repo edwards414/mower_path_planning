@@ -4,7 +4,7 @@ The bridge between the in-process bus ([`mower_bus`](../mower_bus/README.md)) an
 [`docs/ROS_FREE_PLAN.md`](../../../../docs/ROS_FREE_PLAN.md) (Phase E).
 
 - **Why:** E2 moves each `mower_rsd` module's IO from r2r to the bus, one module at a time. Until the last ROS consumer is
-  gone, every topic and service that straddles the bus/DDS boundary has to be forwarded. The consumers are nav2 (until
+  gone, every topic, service and action that straddles the bus/DDS boundary has to be forwarded. The consumers are nav2 (until
   E9), twist_mux and robot_state_publisher (E4), the Python recorder (E5) and the app's ws_bridge (E3).
   [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 5.3 lists which names, in which direction, until when.
 - **What it is:** a library. A module gives a `RosBridge` its own r2r node and its bus `Scope`, declares the names, and
@@ -19,12 +19,15 @@ bridge.to_ros::<Odometry>("/odom", QosProfile::system_default())?;              
 bridge.from_ros::<TwistStamped>("/app_joy_cmd", QosProfile::default().keep_last(10))?;  // DDS writers -> bus
 bridge.service_to_ros::<Trigger::Service>("/save_map")?;                                // DDS clients -> bus server
 bridge.service_from_ros::<GetState::Service>("/bt_navigator/get_state")?;               // bus clients -> DDS server
+bridge.action_to_ros::<Waypoint::Action>("/nav_action_follow_path")?;                   // DDS action clients -> bus server
+bridge.action_from_ros::<Waypoint::Action>("/nav_action_follow_path")?;                 // bus action clients -> DDS server
 let stats = bridge.stats();                                                             // counters, readable while it runs
 bridge.run(m.shutdown.wait()).await?;
 ```
 
 - **Types:** the same r2r message type on both sides (`BridgeMessage`: r2r's types are bus messages as they are), so
-  nothing is converted and no conversion can fail.
+  nothing is converted and no conversion can fail. An r2r action type (`BridgeAction`) is the bus action
+  `(Goal, Result, Feedback)` of its three message types.
 - **Names:** absolute, as on the bus.
 - **The node** is the bridge's alone, and needs a name of its own. A module that keeps an r2r node calls the bridge's
   `<node>_bus_bridge`; only a module whose one node is the bridge's may give it the module's name.
@@ -117,7 +120,8 @@ The forwarder watches the bus topic's live writers (`publisher_changes`).
   - `to_ros` and `from_ros` on the same name. The bridge's DDS reader would take back its own samples: r2r drops
     `rmw_message_info`, so publisher GIDs cannot filter them.
   - Declaring a name twice.
-  - The same for services. Topics and services are separate namespaces, as on DDS and on the bus.
+  - The same for services and for actions. Topics, services and actions are separate namespaces, as on DDS (an action
+    is `<name>/_action/...`) and on the bus.
 - **The registry is process-wide, not per bridge.** The echo travels through DDS, and `mower_rsd` is one participant.
   - A second bridge reading what the first writes would echo too.
   - Two bridges writing one name would put each bus message on DDS twice.
@@ -159,6 +163,8 @@ number of writers on the bridge's side, or let one writer own all static frames.
   - a `service_to_ros` DDS server is advertised all along, so a DDS client sees it as available. While no bus server
     exists, its calls wait up to 4 s for one, then go unanswered ("Services");
   - a `service_from_ros` bus server makes `wait_for_service` succeed at once.
+- **And for actions:** an `action_to_ros` DDS action server is advertised all along (r2r cannot destroy one either), and
+  an `action_from_ros` bus action server makes `wait_for_server` succeed at once.
 - **Readers too:** a `to_ros` bus reader counts in `Publisher::subscription_count()` all along. No module skips work on
   that count today.
 
@@ -217,6 +223,92 @@ the spin thread, which owns the node:
     second instance that comes up first): a server is matched at every check then, just not the one that has the call.
 - **Concurrency:** calls are forwarded concurrently. The servers still decide how they serve them.
 
+## Actions
+
+`action_to_ros` serves a bus action on DDS, `action_from_ros` a DDS action on the bus. Both carry everything of a goal
+across: the answer to its request, its feedback, its cancel requests and its result. Each goal is forwarded in a future of
+its own, and each of its cancel requests too, so goals run concurrently and a server that takes its time over one holds
+up none of the others. The bus side is described in the mower_bus README, "Actions".
+
+**Who needs them** (docs/BUS_TOPICS.md 4 and step 5):
+
+- In `mower_rsd`, coverage and nav both move to the bus in step 5, so `/nav_action_follow_path` needs no bridge there.
+- `action_to_ros::<Waypoint::Action>` on `/nav_action_follow_path` (and `/nav_action`): `nav_progress_check.py` and
+  `nav_core_check.py` drive a standalone `mower_nav` with rclpy clients.
+- `action_from_ros::<Waypoint::Action>` on `/nav_action_follow_path`: `coverage_cancel_check.py` runs a standalone
+  `mower_coverage` against an rclpy server.
+- nav2's `/navigate_to_pose` and `/follow_path` stay r2r clients of mower_nav until E9 ("nav2's actions", below).
+
+### `action_to_ros`
+
+- **Goal requests** follow the rule of `service_to_ros`:
+  - No bus server when the request comes: the bus refuses it at once and nothing has run for it, so it waits up to
+    `bus_server` (4 s) for a server, then is sent once more. A request a bus server has taken is never sent again.
+  - Accepted or rejected on the bus: accepted or rejected on DDS (the CI tools check both).
+  - Any other end (the bus server ended or dropped the request, no server came in time, the bridge's scope closed): the
+    DDS request is left unanswered, as a crashed server leaves it, and counted in `unanswered`.
+- **Feedback** reaches DDS in order, and what the bus server published before the end reaches it before the result.
+- **Cancel requests** from DDS go to the bus server, and its answer comes back:
+  - accepted: accepted;
+  - every refusal (`CancelRejected`, `GoalTerminated`, a lost goal): rejected. DDS has no other word for it.
+  - rcl splits "cancel all goals" and "cancel goals accepted before a stamp" into one request per goal, so those work
+    as well.
+- **The result** reaches DDS with the bus server's status and message, with one exception: once the bridge has accepted a
+  cancel request of the goal, the goal ends CANCELED on DDS, whatever the bus server ended it with. r2r forgets a goal
+  when it applies an accepted cancel, and from then on delivers a result only through `cancel`. mower_nav's own r2r
+  server falls back to `cancel` there too (`terminate`), so the CI tools see what they saw before.
+- **A goal the bus lost** (its server's scope closed, or it dropped the goal before ending it) gets no result on DDS,
+  as a goal of a crashed server gets none. It is counted in `unanswered`.
+  - r2r keeps listing the goal as executing in its status, and reports a later cancel of it accepted without asking
+    anyone: the same r2r bug as for any goal it ended through `cancel`.
+  - This happens only when the bridge outlives the bus server. A standalone module's bridge does not: a failed module
+    ends its process, so the CI tools see the DDS server go, as before.
+
+### `action_from_ros`
+
+- **Goal requests** follow the rules of `service_from_ros`:
+  - No DDS server matched within the probe window (500 ms): the bus request is dropped, and the bus client gets
+    `NoResponse`.
+  - Accepted or rejected on DDS: accepted or rejected on the bus.
+  - The DDS server goes away while the request is pending (checked every second), or its answer does not come by
+    `dds_call` (30 s): `NoResponse`. A goal the server accepts after that, within one more `dds_call`, is canceled on DDS,
+    since no bus client can see it. That is what mower_coverage does with a goal accepted after its own 3 s, and
+    `coverage_cancel_check.py`'s scenario B (accepted after 3.5 s) relies on: within `dds_call` the bridge waits, so the
+    late acceptance reaches coverage, which cancels the goal itself.
+- **Feedback** from DDS goes to the bus goal. DDS orders feedback and the result on separate entities, so feedback that
+  comes after the result is lost.
+- **Cancel requests** from the bus go to DDS:
+  - accepted: accepted;
+  - `GoalCancelRejected`, `GoalCancelAlreadyTerminated` (rcl's answer also for a goal that is canceling) and
+    `GoalCancelUnknownGoalID`: rejected;
+  - no answer by `dds_call`, or the server gone: dropped, so the bus client gets `NoResponse`. r2r's cancel future
+    never completes then.
+- **The result:** SUCCEEDED, ABORTED and CANCELED end the bus goal the same way, with the server's message.
+- **A goal is lost on the bus** (dropped, so its client gets `NoResponse`, never a terminal status) when:
+  - the DDS server goes away during the goal: r2r's result future never completes then, so it is watched like a pending
+    service call;
+  - the result comes with status UNKNOWN: the server that answered did not know the goal.
+- **Limit: a DDS server replaced while it holds a goal** (a crash and a respawn within a second, or a second instance)
+  stays matched, and r2r's result future never completes. The bus goal then runs until its client gives up on it
+  (coverage's leg timeout), as with a direct r2r client. Doing better needs the result asked for again, or the goal
+  looked up in the new server's status array; r2r exposes neither.
+- The bridge never cancels a DDS goal because the bus side went away (the bridge's scope closed): a direct r2r client
+  whose node goes does not either.
+
+### nav2's actions
+
+mower_nav keeps its r2r node, its clients of `/navigate_to_pose` and `/follow_path` and its "uncertain" machinery as
+they are until E9 (or until *nav_core* is the default). `action_from_ros` would carry those goals, but not mechanically:
+
+- mower_nav reads any error from a goal response as a definite rejection (`await_goal_response`: `Ok(Err(_))` →
+  `resolve_definitive_nav2_rejection`), and only a response that does not come in time as uncertain.
+- Through the bridge, `NoResponse` also means "sent, outcome unknown" (the server went away or missed the deadline).
+  Ported as is, nav would treat a goal nav2 may be running as rejected.
+- So a port must read only `GoalRejected` as definite, and every other error as uncertain, as mower_coverage already
+  does for its own client. That includes the late answer nav still awaits after its own response timeout
+  (`nav2_goal_response_timeout_s`, well below `dds_call`): a `NoResponse` there, from the bridge's deadline or a server
+  gone, must leave the dispatch uncertain, where nav today resolves any late error as a rejection.
+
 ## Lifecycle
 
 - **`run(shutdown)` returns when `shutdown` completes or the bridge's scope closes** (`Scope::closed()`).
@@ -230,9 +322,9 @@ the spin thread, which owns the node:
   - creating and destroying the `to_ros` DDS writers runs there, between two spins, as commands from the forwarders;
   - publishing, requests, responses and probes run in the forwarders. r2r allows that from any thread.
 - **Forwarders:** `run` aborts them all before it returns, which is what ends some of them.
-  - A `to_ros` and a `service_from_ros` forwarder end on their own when the scope closes.
+  - A `to_ros`, a `service_from_ros` and an `action_from_ros` forwarder end on their own when the scope closes.
   - A `from_ros` forwarder would notice only at its next DDS sample.
-  - A `service_to_ros` forwarder never would, since its DDS requests keep coming.
+  - A `service_to_ros` and an `action_to_ros` forwarder never would, since their DDS requests keep coming.
 - **A panic** in the spin thread (r2r's `spin_once` unwraps its own locks) or in a forwarder (a bug: there are no user
   conversions) makes `run` stop everything and return `BridgeError::Panicked` at once, so that the module fails and is
   restarted. Without the spin thread nothing would cross any more. Await `run` to the end: dropped half-way, it still
@@ -242,11 +334,12 @@ the spin thread, which owns the node:
 
 `bridge.stats()` is a handle that is cheap to clone, readable while the bridge runs. For each name it holds:
 
-- `forwarded`;
+- `forwarded` (for services, calls answered; for actions, goal requests answered, accepted or rejected);
 - `skipped` (volatile, no DDS reader);
 - `stale` (no live bus writer);
 - `resyncs`;
-- `unanswered` (service calls left without an answer);
+- `unanswered` (service calls left without an answer; for actions, goal requests left without an answer and accepted
+  goals whose result never reached the other side);
 - `dropped` (`to_ros` bus messages lost to the bridge's full reader queue: a forwarder stalled for more than 64);
 - `dds_writer` (whether the `to_ros` DDS writer exists).
 
@@ -284,7 +377,8 @@ Findings:
 app and the rest, on one participant, as in production.
 
 - **Isolation:** `ROS_DOMAIN_ID=77` and `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` are set before the process's context
-  exists, and every test uses names of its own.
+  exists, and every test uses names of its own. The action tests (`tests/dds_actions.rs`) are a test binary of their own,
+  on domain 89.
 - **CI:** CI's `ros:jazzy-ros-base` image ships only Fast DDS, so the `mower-rs-tests` job installs
   `ros-jazzy-rmw-cyclonedds-cpp`.
 - **Waiting:** discovery is polled for, never slept for. An absence is asserted only after the bridge's stats say what it

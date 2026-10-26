@@ -15,6 +15,8 @@
 //! bridge.from_ros::<TwistStamped>("/app_joy_cmd", QosProfile::default().keep_last(10))?;   // DDS -> bus
 //! bridge.service_to_ros::<Trigger::Service>("/save_map")?;                                 // DDS clients -> bus server
 //! bridge.service_from_ros::<GetState::Service>("/bt_navigator/get_state")?;                // bus clients -> DDS server
+//! bridge.action_to_ros::<Waypoint::Action>("/nav_action_follow_path")?;                    // DDS clients -> bus server
+//! bridge.action_from_ros::<FollowPath::Action>("/follow_path")?;                           // bus clients -> DDS server
 //! bridge.run(m.shutdown.wait()).await?;
 //! ```
 
@@ -28,6 +30,7 @@ use std::time::Duration;
 use mower_bus::{BusError, Scope};
 use r2r::QosProfile;
 
+mod action;
 mod claims;
 mod log;
 mod node;
@@ -63,6 +66,22 @@ where
 {
 }
 
+/// An r2r action type (`…::action::<Name>::Action`) whose goal, result and
+/// feedback are bus messages. On the bus it is the action
+/// `(A::Goal, A::Result, A::Feedback)` (mower_bus README, "Actions").
+pub trait BridgeAction:
+    r2r::WrappedActionTypeSupport<Goal: BridgeMessage, Result: BridgeMessage, Feedback: BridgeMessage> + 'static
+{
+}
+impl<A> BridgeAction for A
+where
+    A: r2r::WrappedActionTypeSupport + 'static,
+    A::Goal: BridgeMessage,
+    A::Result: BridgeMessage,
+    A::Feedback: BridgeMessage,
+{
+}
+
 /// Which way a name crosses; named after the [`RosBridge`] method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -74,14 +93,20 @@ pub enum Direction {
     ServiceToRos,
     /// Bus clients to the DDS server.
     ServiceFromRos,
+    /// DDS action clients to the bus action server.
+    ActionToRos,
+    /// Bus action clients to the DDS action server.
+    ActionFromRos,
 }
 
 impl Direction {
-    /// Topics and services are separate namespaces, on DDS as on the bus.
+    /// Topics, services and actions are separate namespaces, on DDS as on
+    /// the bus.
     fn kind(self) -> Kind {
         match self {
             Direction::ToRos | Direction::FromRos => Kind::Topic,
             Direction::ServiceToRos | Direction::ServiceFromRos => Kind::Service,
+            Direction::ActionToRos | Direction::ActionFromRos => Kind::Action,
         }
     }
 }
@@ -93,6 +118,8 @@ impl fmt::Display for Direction {
             Direction::FromRos => "from_ros",
             Direction::ServiceToRos => "service_to_ros",
             Direction::ServiceFromRos => "service_from_ros",
+            Direction::ActionToRos => "action_to_ros",
+            Direction::ActionFromRos => "action_from_ros",
         })
     }
 }
@@ -101,6 +128,7 @@ impl fmt::Display for Direction {
 pub(crate) enum Kind {
     Topic,
     Service,
+    Action,
 }
 
 /// Why declaring or running a bridge failed.
@@ -153,19 +181,23 @@ impl From<r2r::Error> for BridgeError {
 /// scope closes.
 pub(crate) type Forwarder = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// The bounds of forwarded service calls (README.md, "Services").
+/// The bounds of forwarded service calls and goals (README.md, "Services"
+/// and "Actions").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServiceTimeouts {
     /// `service_from_ros`: how long a DDS call may take; then the bus caller
     /// gets `NoResponse`. 30 s by default, ws_bridge's `service_timeout`.
     /// It is what ends a call whose server is replaced while holding it: a
     /// server is matched at every check then, just not the one that has it.
+    /// `action_from_ros`: the same bound on the DDS server's answer to a
+    /// goal request and to a cancel request (not on the goal itself).
     pub dds_call: Duration,
     /// `service_to_ros`: how long a DDS call that the bus refuses because no
     /// server is live waits for one, to be made once more when it comes. 4 s
     /// by default, above mower_rsd's 2 s restart delay, so that a call made
     /// while a module restarts reaches the restarted module. A call a server
-    /// had taken is never made again.
+    /// had taken is never made again. `action_to_ros`: the same for a goal
+    /// request.
     pub bus_server: Duration,
 }
 
@@ -256,6 +288,24 @@ impl RosBridge {
         let deadline = self.timeouts.dds_call;
         self.declare(name, Direction::ServiceFromRos, &QosProfile::services_default(), |bridge, _, env| {
             service::service_from_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, deadline)
+        })
+    }
+
+    /// Serve bus action `name` on DDS: DDS action clients send their goals
+    /// to the bus server (README.md, "Actions").
+    pub fn action_to_ros<A: BridgeAction>(&mut self, name: &str) -> Result<(), BridgeError> {
+        let wait = self.timeouts.bus_server;
+        self.declare(name, Direction::ActionToRos, &QosProfile::services_default(), |bridge, _, env| {
+            action::action_to_ros::<A>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, wait)
+        })
+    }
+
+    /// Serve DDS action `name` on the bus: bus action clients send their
+    /// goals to the DDS server (README.md, "Actions").
+    pub fn action_from_ros<A: BridgeAction>(&mut self, name: &str) -> Result<(), BridgeError> {
+        let deadline = self.timeouts.dds_call;
+        self.declare(name, Direction::ActionFromRos, &QosProfile::services_default(), |bridge, _, env| {
+            action::action_from_ros::<A>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, deadline)
         })
     }
 
