@@ -798,6 +798,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",

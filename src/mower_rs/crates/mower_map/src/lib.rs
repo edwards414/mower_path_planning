@@ -28,8 +28,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
+use mower_bus::{BusError, Clock, Message, Qos};
 use mower_rs_common::guard::{Guard, RELEASE_UNCONFIRMED};
-use mower_rs_common::{params, ModuleCtx, ModuleResult};
+use mower_rs_common::{params, BoxError, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::Pose;
 use r2r::mower_interface::msg::ZoneMap;
@@ -60,13 +61,8 @@ const PARAMETER_NOT_SET: u8 = 0;
 const PARAMETER_BOOL: u8 = 1;
 const PARAMETER_DOUBLE: u8 = 3;
 
-fn stamp_now() -> Time {
-    let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
-    Time { sec: (ns / 1_000_000_000) as i32, nanosec: (ns % 1_000_000_000) as u32 }
-}
-
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
 /// An OccupancyGrid plus the resolution as the node computed it. rclpy keeps
@@ -143,18 +139,20 @@ fn build_demo_map() -> Map {
 }
 
 struct Pubs {
-    free_space: r2r::Publisher<OccupancyGrid>,
-    free_space_inflated: r2r::Publisher<OccupancyGrid>,
-    risk_map: r2r::Publisher<OccupancyGrid>,
-    risk_map_inflated: r2r::Publisher<OccupancyGrid>,
-    chennal_map: r2r::Publisher<OccupancyGrid>,
-    chennal_map_inflated: r2r::Publisher<OccupancyGrid>,
-    nav_base: r2r::Publisher<OccupancyGrid>,
-    nav_global: r2r::Publisher<OccupancyGrid>,
+    free_space: mower_bus::Publisher<OccupancyGrid>,
+    free_space_inflated: mower_bus::Publisher<OccupancyGrid>,
+    risk_map: mower_bus::Publisher<OccupancyGrid>,
+    risk_map_inflated: mower_bus::Publisher<OccupancyGrid>,
+    chennal_map: mower_bus::Publisher<OccupancyGrid>,
+    chennal_map_inflated: mower_bus::Publisher<OccupancyGrid>,
+    nav_base: mower_bus::Publisher<OccupancyGrid>,
+    nav_global: mower_bus::Publisher<OccupancyGrid>,
 }
 
 struct App {
     logger: String,
+    /// Header stamps and the service calls' timeouts.
+    clock: Clock,
     guard: Guard,
     inflate_radius_m: f64,
     chennal_width_m: f64,
@@ -173,9 +171,9 @@ struct App {
     map_msg: Map,
     global_map_msg: Map,
     pubs: Pubs,
-    risk_zone_list_client: r2r::Client<GetZoneList::Service>,
-    record_zone_list_client: r2r::Client<GetZoneList::Service>,
-    chennal_path_list_client: r2r::Client<ChennalPathList::Service>,
+    risk_zone_list_client: mower_bus::Client<GetZoneList::Request, GetZoneList::Response>,
+    record_zone_list_client: mower_bus::Client<GetZoneList::Request, GetZoneList::Response>,
+    chennal_path_list_client: mower_bus::Client<ChennalPathList::Request, ChennalPathList::Response>,
 }
 
 type Shared = Arc<Mutex<App>>;
@@ -189,6 +187,11 @@ impl App {
     }
     fn error(&self, msg: impl AsRef<str>) {
         r2r::log_error!(&self.logger, "{}", msg.as_ref());
+    }
+
+    fn stamp_now(&self) -> Time {
+        let (sec, nanosec) = self.clock.now().to_parts();
+        Time { sec, nanosec }
     }
 
     fn inflate_radius(&self, override_m: Option<f64>) -> f64 {
@@ -223,7 +226,7 @@ impl App {
 
     fn occupied_navigation_map(&self, base: &Map) -> Map {
         let mut nav = base.with_data(vec![100; (base.width() as usize) * (base.height() as usize)]);
-        nav.msg.header.stamp = stamp_now();
+        nav.msg.header.stamp = self.stamp_now();
         nav
     }
 
@@ -265,7 +268,7 @@ impl App {
         match fused {
             Ok(data) => {
                 let mut nav = base.with_data(data);
-                nav.msg.header.stamp = stamp_now();
+                nav.msg.header.stamp = self.stamp_now();
                 (nav, true)
             }
             Err(e) => {
@@ -319,7 +322,7 @@ impl App {
     }
 
     fn publish_current_navigation_maps(&self) {
-        let stamp = stamp_now();
+        let stamp = self.stamp_now();
         let mut m = self.map_msg.msg.clone();
         let mut g = self.global_map_msg.msg.clone();
         m.header.stamp = stamp.clone();
@@ -377,11 +380,11 @@ impl App {
 
     /// `_create_risk_map_sync`.
     async fn create_risk_map_sync(&mut self) -> Result<(bool, String), String> {
-        if !service_available(&self.risk_zone_list_client, 5.0).await {
+        if !service_available(&self.risk_zone_list_client, &self.clock, 5.0).await {
             self.error("風險區域列表服務不可用");
             return Ok((false, "風險區域列表服務不可用".into()));
         }
-        let resp = match call_with_timeout(self.risk_zone_list_client.request(&GetZoneList::Request::default()), 30.0).await {
+        let resp = match call_with_timeout(self.risk_zone_list_client.request(&GetZoneList::Request::default()), &self.clock, 30.0).await {
             Some(r) => r,
             None => {
                 self.error("獲取風險區域列表逾時");
@@ -429,11 +432,11 @@ impl App {
 
     /// `_create_free_space_sync`.
     async fn create_free_space_sync(&mut self) -> Result<(bool, String), String> {
-        if !service_available(&self.record_zone_list_client, 5.0).await {
+        if !service_available(&self.record_zone_list_client, &self.clock, 5.0).await {
             self.error("記錄區域列表服務不可用");
             return Ok((false, "記錄區域列表服務不可用".into()));
         }
-        let resp = match call_with_timeout(self.record_zone_list_client.request(&GetZoneList::Request::default()), 30.0).await {
+        let resp = match call_with_timeout(self.record_zone_list_client.request(&GetZoneList::Request::default()), &self.clock, 30.0).await {
             Some(r) => r,
             None => {
                 self.error("獲取記錄區域列表逾時");
@@ -487,7 +490,7 @@ impl App {
             self.warn(format!("zone {id}: 僅 {n} 個點，無法構成多邊形，略過"));
         }
         let g = raster.geometry;
-        let header = Header { stamp: stamp_now(), frame_id: "map".into() };
+        let header = Header { stamp: self.stamp_now(), frame_id: "map".into() };
         let masked_template = occupancy_grid(header, g.resolution, g.width, g.height, g.origin_x, g.origin_y, Vec::new());
         let mut zone_maps = Vec::with_capacity(raster.zones.len());
         for (id, data) in raster.zones {
@@ -505,11 +508,11 @@ impl App {
 
     /// `_create_chennal_map_sync`.
     async fn create_chennal_map_sync(&mut self) -> Result<(bool, String), String> {
-        if !service_available(&self.chennal_path_list_client, 5.0).await {
+        if !service_available(&self.chennal_path_list_client, &self.clock, 5.0).await {
             self.error("通道路徑列表服務不可用");
             return Ok((false, "通道路徑列表服務不可用".into()));
         }
-        let resp = match call_with_timeout(self.chennal_path_list_client.request(&ChennalPathList::Request::default()), 30.0).await {
+        let resp = match call_with_timeout(self.chennal_path_list_client.request(&ChennalPathList::Request::default()), &self.clock, 30.0).await {
             Some(r) => r,
             None => {
                 self.error("獲取通道路徑列表逾時");
@@ -573,7 +576,7 @@ impl App {
         match grid::chennal_map_data(&geometry_of(base), &base_frame, &segments, width) {
             Ok(data) => {
                 let mut m = base.with_data(data);
-                m.msg.header = Header { stamp: stamp_now(), frame_id: base.msg.header.frame_id.clone() };
+                m.msg.header = Header { stamp: self.stamp_now(), frame_id: base.msg.header.frame_id.clone() };
                 Some(m)
             }
             Err(e) => {
@@ -627,7 +630,7 @@ impl App {
         if header.frame_id != "map" {
             return Err("robot_pose_header.frame_id must be map".into());
         }
-        header.stamp = stamp_now();
+        header.stamp = self.stamp_now();
         let free_map = occupancy_grid(header.clone(), resolution, r.width, r.height, r.min_x, r.min_y, free_grid);
         let image_map = free_map.with_data(r.free_grid);
         let risk_map = occupancy_grid(header.clone(), resolution, r.width, r.height, r.min_x, r.min_y, r.risk_grid);
@@ -864,16 +867,16 @@ fn number_of(v: &ParameterValue) -> Option<f64> {
     }
 }
 
-async fn service_available<T: r2r::WrappedServiceTypeSupport + 'static>(client: &r2r::Client<T>, timeout_s: f64) -> bool {
-    match r2r::Node::is_available(client) {
-        Ok(f) => tokio::time::timeout(Duration::from_secs_f64(timeout_s), f).await.is_ok(),
-        Err(_) => false,
-    }
+async fn service_available<Req: Message, Resp: Message>(client: &mower_bus::Client<Req, Resp>, clock: &Clock, timeout_s: f64) -> bool {
+    clock.timeout(Duration::from_secs_f64(timeout_s), client.wait_for_service()).await.is_ok()
 }
 
-async fn call_with_timeout<R>(fut: r2r::Result<impl std::future::Future<Output = r2r::Result<R>>>, timeout_s: f64) -> Option<R> {
+/// `None` for a call without an answer: one the bus cannot deliver or the
+/// server drops (`ServiceUnavailable`, `NoResponse`), or one not answered in
+/// time.
+async fn call_with_timeout<R: Message>(fut: Result<mower_bus::ResponseFuture<R>, BusError>, clock: &Clock, timeout_s: f64) -> Option<R> {
     let fut = fut.ok()?;
-    tokio::time::timeout(Duration::from_secs_f64(timeout_s), fut).await.ok()?.ok()
+    clock.timeout(Duration::from_secs_f64(timeout_s), fut).await.ok()?.ok()
 }
 
 #[derive(Clone, Copy)]
@@ -956,6 +959,12 @@ fn uuid_hex() -> String {
 /// The `map_manage` node. Runs either as the `mower_map` binary or as one
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
+///
+/// Its topics, the Trigger / mask / zone-list services and the clients it
+/// calls are on the bus (`m.bus`, step E2). The r2r node stays for the
+/// parameters, `/rosout` and the six `/map_manage/*` parameter services,
+/// which stay on DDS for `ros2 param` (docs/BUS_TOPICS.md 3.1); it is spun
+/// for them.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
@@ -968,22 +977,28 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let chennal_width_m = params::f64(&node, "chennal_width_m", 1.2);
     let use_sim_time = params::bool(&node, "use_sim_time", false);
 
-    let pubs = Pubs {
-        free_space: node.create_publisher::<OccupancyGrid>("/free_space", latched())?,
-        free_space_inflated: node.create_publisher::<OccupancyGrid>("/free_space_inflated", latched())?,
-        risk_map: node.create_publisher::<OccupancyGrid>("/risk_map", latched())?,
-        risk_map_inflated: node.create_publisher::<OccupancyGrid>("/risk_map_inflated", latched())?,
-        chennal_map: node.create_publisher::<OccupancyGrid>("/chennal_map", latched())?,
-        chennal_map_inflated: node.create_publisher::<OccupancyGrid>("/chennal_map_inflated", latched())?,
-        nav_base: node.create_publisher::<OccupancyGrid>("/map_grid", latched())?,
-        nav_global: node.create_publisher::<OccupancyGrid>("/map_grid_global", latched())?,
+    let grid = |topic: &str| -> Result<mower_bus::Publisher<OccupancyGrid>, BoxError> {
+        Ok(m.bus.publisher::<OccupancyGrid>(&m.resolve_topic(topic)?, latched())?)
     };
-    let lock_client = node.create_client::<MissionOperationLock::Service>("/mission_operation_lock", QosProfile::services_default())?;
+    let pubs = Pubs {
+        free_space: grid("/free_space")?,
+        free_space_inflated: grid("/free_space_inflated")?,
+        risk_map: grid("/risk_map")?,
+        risk_map_inflated: grid("/risk_map_inflated")?,
+        chennal_map: grid("/chennal_map")?,
+        chennal_map_inflated: grid("/chennal_map_inflated")?,
+        nav_base: grid("/map_grid")?,
+        nav_global: grid("/map_grid_global")?,
+    };
+    let lock_client = m.bus.client::<MissionOperationLock::Request, MissionOperationLock::Response>(
+        &m.resolve_service("/mission_operation_lock")?,
+    )?;
     let owner = format!("{}:{}", node.fully_qualified_name()?, uuid_hex());
-    let guard = Guard::new(owner, lock_client, logger.clone());
+    let guard = Guard::on_bus(owner, lock_client, m.clock.clone(), logger.clone());
     let map_msg = build_demo_map();
     let app: Shared = Arc::new(Mutex::new(App {
         logger: logger.clone(),
+        clock: m.clock.clone(),
         guard,
         inflate_radius_m,
         chennal_width_m,
@@ -1000,14 +1015,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         global_map_msg: map_msg.clone(),
         map_msg,
         pubs,
-        risk_zone_list_client: node.create_client::<GetZoneList::Service>("/get_risk_zone_list", QosProfile::services_default())?,
-        record_zone_list_client: node.create_client::<GetZoneList::Service>("/get_record_zone_list", QosProfile::services_default())?,
-        chennal_path_list_client: node.create_client::<ChennalPathList::Service>("/get_chennal_path_list", QosProfile::services_default())?,
+        risk_zone_list_client: m.bus.client::<GetZoneList::Request, GetZoneList::Response>(&m.resolve_service("/get_risk_zone_list")?)?,
+        record_zone_list_client: m.bus.client::<GetZoneList::Request, GetZoneList::Response>(&m.resolve_service("/get_record_zone_list")?)?,
+        chennal_path_list_client: m.bus.client::<ChennalPathList::Request, ChennalPathList::Response>(&m.resolve_service("/get_chennal_path_list")?)?,
     }));
 
     // ---- navigation activity flag (fail-closed until seen) ----------------
     {
-        let mut stream = node.subscribe::<Bool>("/nav_operation_active", latched())?;
+        let mut stream = m.bus.subscribe::<Bool>(&m.resolve_topic("/nav_operation_active")?, latched())?;
         let app = app.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -1025,7 +1040,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         ("/create_chennal_map", Op::ChennalMap),
         ("/restore_free_space_coverage", Op::Restore),
     ] {
-        let mut stream = node.create_service::<Trigger::Service>(name, QosProfile::services_default())?;
+        let mut stream = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service(name)?)?;
         let app = app.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1035,7 +1050,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<ImportImageMask::Service>("/import_image_mask", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<ImportImageMask::Request, ImportImageMask::Response>(&m.resolve_service("/import_image_mask")?)?;
         let app = app.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1059,7 +1074,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<ZoneMapList::Service>("/get_zone_map_list_srv", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<ZoneMapList::Request, ZoneMapList::Response>(&m.resolve_service("/get_zone_map_list_srv")?)?;
         let app = app.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1069,7 +1084,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
 
-    // ---- parameter services (/map_manage/*) --------------------------------
+    // ---- parameter services (/map_manage/*), on r2r ------------------------
     const PARAM_NAMES: [&str; 4] = ["chennal_width_m", "inflate_radius_m", "start_type_description_service", "use_sim_time"];
     {
         let mut stream = node.create_service::<GetParameters::Service>("/map_manage/get_parameters", QosProfile::services_default())?;
