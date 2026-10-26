@@ -26,7 +26,9 @@ pub const STANDALONE_NAMESPACE: &str = "/mower_bus_bridge";
 /// flags of `on_bus.rs`. Empty while none of them is on the bus: mower_rsd
 /// then starts no bridge.
 pub fn rsd_plan<S: AsRef<str>>(ids: &[S], remaps: &Remaps) -> Result<Plan, PlanError> {
-    plan(&Running::rsd(ids, crate::on_bus), remaps)
+    let plan = plan(&Running::rsd(ids, crate::on_bus), remaps)?;
+    plan.check_names(remaps, NODE, "")?;
+    Ok(plan)
 }
 
 /// mower_rsd's bridge module. `m.args` are the module ids of `--modules`;
@@ -34,14 +36,17 @@ pub fn rsd_plan<S: AsRef<str>>(ids: &[S], remaps: &Remaps) -> Result<Plan, PlanE
 /// ([`NODE`]) and scope `m.bus`, until the shutdown.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let plan = rsd_plan(&m.args, &m.remaps)?;
-    let bridge = new_bridge(ctx, &m.node_name, &m.namespace, &plan, m.bus.clone())?;
+    let bridge = new_bridge(ctx, &m.node_name, &m.namespace, &plan, &m.remaps, m.bus.clone())?;
     bridge.run(m.shutdown.wait()).await?;
     Ok(())
 }
 
 /// A bridge of node `node` in `namespace` and scope `scope`, with `plan`
-/// declared.
-fn new_bridge(ctx: r2r::Context, node: &str, namespace: &str, plan: &Plan, scope: Scope) -> Result<RosBridge, BoxError> {
+/// declared, once its names are the module's on this node too.
+fn new_bridge(
+    ctx: r2r::Context, node: &str, namespace: &str, plan: &Plan, remaps: &Remaps, scope: Scope,
+) -> Result<RosBridge, BoxError> {
+    plan.check_names(remaps, node, namespace)?;
     let node_handle = r2r::Node::create(ctx, node, namespace)?;
     let logger = node_handle.logger().to_string();
     let named = node_handle.fully_qualified_name()?;
@@ -107,7 +112,7 @@ where
     let plan = plan(&running, &m.remaps)?;
     let bus = Bus::new();
     let module_scope = bus.scope(&node);
-    let bridge = new_bridge(ctx.clone(), &node, STANDALONE_NAMESPACE, &plan, bus.scope(NODE))?;
+    let bridge = new_bridge(ctx.clone(), &node, STANDALONE_NAMESPACE, &plan, &m.remaps, bus.scope(NODE))?;
     let (stop, stopped) = futures::channel::oneshot::channel::<()>();
     let mut bridging = tokio::spawn(bridge.run(async move {
         let _ = stopped.await;

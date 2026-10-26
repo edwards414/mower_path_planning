@@ -8,7 +8,7 @@ use std::fmt;
 
 use mower_bus::{Durability, Qos, Reliability};
 use mower_bus_ros::{BridgeError, Direction, RosBridge};
-use mower_rs_common::Remaps;
+use mower_rs_common::{NameKind, Remaps};
 
 use crate::manifest::{MODULES, OUTSIDE};
 use crate::types::{Endpoint, Iface, Instance, Kind, Module, Profile, Space};
@@ -133,6 +133,43 @@ impl Plan {
     /// One line per declaration, as tests and logs write them.
     pub fn lines(&self) -> Vec<String> {
         self.declarations.iter().map(Declaration::to_string).collect()
+    }
+
+    /// The plan for a bridge whose node is created as `node` in `namespace`.
+    /// rcl applies the process's `-r` rules to the bridge's names as to any
+    /// node's, and the policy has resolved them already, as the module's node
+    /// did: a rule that matches a resolved name again (a chain, a swap, a rule
+    /// for the module's node name on a standalone bridge) would put the
+    /// bridge's DDS endpoint on another name than the module's. Such a name is
+    /// an error (README.md, "The policy").
+    pub fn check_names(&self, remaps: &Remaps, node: &str, namespace: &str) -> Result<(), PlanError> {
+        let problems: Vec<String> = self
+            .declarations
+            .iter()
+            .filter_map(|d| match remaps.resolve(name_kind(d.direction), node, namespace, &d.name) {
+                Ok(again) if again == d.name => None,
+                Ok(again) => Some(format!(
+                    "{d}: a -r rule renames {} again on the bridge's node {node}, to {again}, so the bridge would \
+                     not carry it on the module's name",
+                    d.name
+                )),
+                Err(e) => Some(format!("{d}: {e}")),
+            })
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(PlanError { problems })
+        }
+    }
+}
+
+/// The rules a declaration's name meets: rcl_action resolves an action's name
+/// as a topic's.
+fn name_kind(direction: Direction) -> NameKind {
+    match direction {
+        Direction::ServiceToRos | Direction::ServiceFromRos => NameKind::Service,
+        Direction::ToRos | Direction::FromRos | Direction::ActionToRos | Direction::ActionFromRos => NameKind::Topic,
     }
 }
 

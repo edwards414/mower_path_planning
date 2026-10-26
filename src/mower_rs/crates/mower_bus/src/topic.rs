@@ -44,7 +44,8 @@
 //!   of the others;
 //! - a reader can count the channel's live writers and watch them come and
 //!   go (`publisher_count`, `publisher_changes`); a writer coming or going
-//!   wakes the watches, which costs publishing nothing;
+//!   wakes the watches, which costs publishing nothing. A writer can do the
+//!   same for the readers (`subscription_count`, `subscription_changes`);
 //! - lock order: registry, then channel, then inbox. Readers only ever take
 //!   their own inbox's lock.
 
@@ -142,6 +143,19 @@ impl<T: Message> Publisher<T> {
     /// Live readers of the channel, typed and erased.
     pub fn subscription_count(&self) -> usize {
         self.writer.channel.subscription_count()
+    }
+
+    /// The channel's live reader count each time readers have come or gone,
+    /// the mirror of [`Subscriber::publisher_changes`]: an item means at
+    /// least one did since the previous item (or since the stream was made),
+    /// and several changes in between give one item. The stream ends when
+    /// this publisher's scope closes, also after the publisher is dropped.
+    ///
+    /// Make it before reading [`Publisher::subscription_count`] for the
+    /// starting state, so that no change falls in between. Costs nothing on
+    /// the publish path.
+    pub fn subscription_changes(&self) -> SubscriptionChanges {
+        self.writer.watch_subscriptions()
     }
 }
 
@@ -290,6 +304,13 @@ struct ChannelState {
     /// them all) or for their reader's close.
     watchers: Vec<Watcher>,
     next_watch: u64,
+    /// Readers registered or unregistered so far: what a
+    /// `SubscriptionChanges` compares with the count it saw last.
+    reader_changes: u64,
+    /// `SubscriptionChanges` waiting, by id: woken and removed all by the
+    /// next reader change, and by any writer's close (each looks whether it
+    /// was its own).
+    reader_watchers: Vec<(u64, Waker)>,
 }
 
 /// A `PublisherChanges` that waits.
@@ -325,6 +346,29 @@ impl ChannelState {
     fn take_watcher(&mut self, id: u64) -> Option<Waker> {
         let i = self.watchers.iter().position(|watcher| watcher.id == id)?;
         Some(self.watchers.swap_remove(i).waker)
+    }
+
+    /// A reader came or went: wake every waiting subscription watch.
+    fn readers_changed(&mut self, wake: &mut Vec<Waker>) {
+        self.reader_changes += 1;
+        wake.extend(self.reader_watchers.drain(..).map(|(_, waker)| waker));
+    }
+
+    /// As `register_watcher`, for subscription watch `id`.
+    fn register_reader_watcher(&mut self, id: u64, waker: &Waker) -> Option<Waker> {
+        match self.reader_watchers.iter_mut().find(|(watcher, _)| *watcher == id) {
+            Some((_, current)) if current.will_wake(waker) => None,
+            Some((_, current)) => Some(std::mem::replace(current, waker.clone())),
+            None => {
+                self.reader_watchers.push((id, waker.clone()));
+                None
+            }
+        }
+    }
+
+    fn take_reader_watcher(&mut self, id: u64) -> Option<Waker> {
+        let i = self.reader_watchers.iter().position(|(watcher, _)| *watcher == id)?;
+        Some(self.reader_watchers.swap_remove(i).1)
     }
 }
 
@@ -401,32 +445,44 @@ impl Channel {
     /// history; doing both under the lock publishes take means it neither
     /// misses nor repeats a message published meanwhile.
     fn add_reader(&self, inbox: &Arc<Inbox>, transient_local: bool) {
-        let mut state = lock(&self.state);
-        if transient_local {
-            lock(&inbox.queue).msgs.extend(retained(&state.writers, inbox.depth));
+        let mut watches = Vec::new();
+        {
+            let mut state = lock(&self.state);
+            if transient_local {
+                lock(&inbox.queue).msgs.extend(retained(&state.writers, inbox.depth));
+            }
+            state.readers.push(Arc::clone(inbox));
+            state.readers_changed(&mut watches);
         }
-        state.readers.push(Arc::clone(inbox));
+        wake_all(watches);
     }
 
     /// The caller holds its own reference to `inbox`, so this never frees
     /// it (or the messages in it) under the lock.
     fn remove_reader(&self, inbox: &Arc<Inbox>) {
-        let mut state = lock(&self.state);
-        if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
-            state.readers.remove(i);
+        let mut watches = Vec::new();
+        {
+            let mut state = lock(&self.state);
+            if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
+                state.readers.remove(i);
+                state.readers_changed(&mut watches);
+            }
         }
+        wake_all(watches);
     }
 
     /// Unregister a reader whose scope closed, and take out the wakers of
-    /// its waiting watches, for the caller to wake. The inbox is closed
-    /// first: a watch that looks after that sees it closed, and one that
-    /// looked before is registered by now and woken by the caller.
+    /// its waiting watches, and of the subscription watches it changes, for
+    /// the caller to wake. The inbox is closed first: a watch that looks
+    /// after that sees it closed, and one that looked before is registered
+    /// by now and woken by the caller.
     fn close_reader(&self, inbox: &Arc<Inbox>) -> Vec<Waker> {
         let mut state = lock(&self.state);
+        let mut watches = Vec::new();
         if let Some(i) = state.readers.iter().position(|r| Arc::ptr_eq(r, inbox)) {
             state.readers.remove(i);
+            state.readers_changed(&mut watches);
         }
-        let mut watches = Vec::new();
         let mut i = 0;
         while i < state.watchers.len() {
             if Weak::as_ptr(&state.watchers[i].inbox) == Arc::as_ptr(inbox) {
@@ -436,6 +492,13 @@ impl Channel {
             }
         }
         watches
+    }
+
+    /// A writer's scope closed: every waiting subscription watch looks again,
+    /// and those of that writer end.
+    fn writer_closed(&self) {
+        let watches: Vec<Waker> = lock(&self.state).reader_watchers.drain(..).map(|(_, waker)| waker).collect();
+        wake_all(watches);
     }
 
     fn add_writer(&self, entry: WriterEntry) {
@@ -498,6 +561,18 @@ impl Channel {
         after.run();
         true
     }
+}
+
+/// Wake each of `wakers` on its own (`UserCode`), with no lock held.
+fn wake_all(wakers: Vec<Waker>) {
+    if wakers.is_empty() {
+        return;
+    }
+    let mut user = UserCode::default();
+    for waker in wakers {
+        user.wake(waker);
+    }
+    user.finish();
 }
 
 /// What a new transient-local reader of `depth` starts with: the newest
@@ -802,6 +877,63 @@ impl fmt::Debug for PublisherChanges {
     }
 }
 
+/// The reader count of a writer's topic each time readers have come or gone
+/// ([`Publisher::subscription_changes`]), the mirror of [`PublisherChanges`]:
+/// a `Stream<Item = usize>` that ends when the writer's scope closes.
+///
+/// `Send + Sync + Unpin + 'static`, so it can be spawned or kept next to the
+/// writer in a `select!`, and it can outlive the publisher.
+pub struct SubscriptionChanges {
+    channel: Arc<Channel>,
+    /// The writer's closed flag: set when its scope closes, which ends the
+    /// stream. Held strongly, so the stream can outlive the publisher.
+    closed: Arc<AtomicBool>,
+    /// Its slot in `ChannelState::reader_watchers`.
+    id: u64,
+    /// `ChannelState::reader_changes` at the last item, or when it was made.
+    seen: u64,
+}
+
+impl Stream for SubscriptionChanges {
+    type Item = usize;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<usize>> {
+        let this = self.get_mut();
+        let stale_waker;
+        let poll = {
+            let mut state = lock(&this.channel.state);
+            // Read under the channel's lock: the close sets the flag before
+            // it takes the lock to wake the watches.
+            if this.closed.load(Ordering::Acquire) {
+                stale_waker = state.take_reader_watcher(this.id);
+                Poll::Ready(None)
+            } else if state.reader_changes != this.seen {
+                this.seen = state.reader_changes;
+                stale_waker = state.take_reader_watcher(this.id);
+                Poll::Ready(Some(state.readers.len()))
+            } else {
+                stale_waker = state.register_reader_watcher(this.id, cx.waker());
+                Poll::Pending
+            }
+        };
+        drop(stale_waker);
+        poll
+    }
+}
+
+impl Drop for SubscriptionChanges {
+    fn drop(&mut self) {
+        let waker = lock(&self.channel.state).take_reader_watcher(self.id);
+        drop(waker);
+    }
+}
+
+impl fmt::Debug for SubscriptionChanges {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SubscriptionChanges").field("name", &self.channel.name()).finish_non_exhaustive()
+    }
+}
+
 /// The sending half shared by a [`Publisher`] or `JsonPublisher` and its
 /// clones: one writer, one history. The last clone to go unregisters it.
 pub(crate) struct Writer {
@@ -810,8 +942,9 @@ pub(crate) struct Writer {
     /// The scope's name, for `BusError::Closed`.
     scope: String,
     qos: Qos,
-    /// Set when the scope closes, before the writer is unregistered.
-    closed: AtomicBool,
+    /// Set when the scope closes, before the writer is unregistered. Shared
+    /// with its `SubscriptionChanges`, which can outlive it.
+    closed: Arc<AtomicBool>,
 }
 
 impl Writer {
@@ -820,21 +953,36 @@ impl Writer {
         let id = scope.bus().topic_registry().next_writer.fetch_add(1, Ordering::Relaxed);
         let history = qos.is_transient_local().then(|| History { depth: qos.effective_depth(), msgs: VecDeque::new() });
         channel.add_writer(WriterEntry { id, scope: scope.name().to_string(), qos, history });
-        let writer =
-            Arc::new(Writer { channel, id, scope: scope.name().to_string(), qos, closed: AtomicBool::new(false) });
-        let weak = Arc::downgrade(&writer);
+        let closed = Arc::new(AtomicBool::new(false));
+        let writer = Arc::new(Writer { channel, id, scope: scope.name().to_string(), qos, closed: Arc::clone(&closed) });
+        let (weak, closed, channel) = (Arc::downgrade(&writer), Arc::downgrade(&closed), Arc::clone(&writer.channel));
         // As for readers: on failure, dropping `writer` unregisters it again.
         scope.on_close(Box::new(move || {
+            // Its subscription watches end, the publisher dropped or not.
+            let Some(closed) = closed.upgrade() else { return };
+            closed.store(true, Ordering::Release);
             if let Some(writer) = weak.upgrade() {
-                writer.closed.store(true, Ordering::Release);
                 writer.channel.remove_writer(writer.id);
             }
+            channel.writer_closed();
         }))?;
         Ok(writer)
     }
 
     pub(crate) fn channel(&self) -> &Channel {
         &self.channel
+    }
+
+    /// The stream behind `subscription_changes`, starting from now.
+    pub(crate) fn watch_subscriptions(&self) -> SubscriptionChanges {
+        let mut state = lock(&self.channel.state);
+        state.next_watch += 1;
+        SubscriptionChanges {
+            channel: Arc::clone(&self.channel),
+            closed: Arc::clone(&self.closed),
+            id: state.next_watch,
+            seen: state.reader_changes,
+        }
     }
 
     /// `Closed` once the writer's scope has closed.
@@ -1051,6 +1199,49 @@ mod tests {
         assert_eq!(*probe.wakes.lock().unwrap(), [true, true, true]);
         assert_eq!(poll(&mut watch), Poll::Ready(None));
         assert!(lock(&channel.state).watchers.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_subscription_watch_is_woken_with_no_lock_held_and_leaves_no_slot_behind() {
+        let bus = Bus::new();
+        let scope = bus.scope("ros_bridge");
+        let p = scope.publisher::<u32>("/n", Qos::default()).unwrap();
+        // a reader to lend its inbox to the probe; it is the count's 1
+        let sub = scope.subscribe::<u32>("/n", Qos::default()).unwrap();
+        let channel = Arc::clone(&p.writer.channel);
+        let probe =
+            Arc::new(Probe { channel: Arc::clone(&channel), inbox: Arc::downgrade(&sub.reader.inbox), wakes: Mutex::default() });
+        let waker = Waker::from(Arc::clone(&probe));
+        let mut cx = Context::from_waker(&waker);
+        let mut watch = p.subscription_changes();
+        let mut poll = |watch: &mut SubscriptionChanges| Pin::new(watch).poll_next(&mut cx);
+
+        assert!(poll(&mut watch).is_pending());
+        assert!(poll(&mut watch).is_pending(), "polled again: same slot");
+        assert_eq!(lock(&channel.state).reader_watchers.len(), 1);
+        let other = bus.scope("map_manage").subscribe::<u32>("/n", Qos::default()).unwrap();
+        assert_eq!(*probe.wakes.lock().unwrap(), [true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(Some(2)));
+        assert!(poll(&mut watch).is_pending());
+        drop(other);
+        assert_eq!(*probe.wakes.lock().unwrap(), [true, true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(Some(1)));
+
+        // a watch dropped while it waits takes its slot with it
+        let mut second = p.subscription_changes();
+        assert!(poll(&mut second).is_pending());
+        assert!(poll(&mut watch).is_pending());
+        assert_eq!(lock(&channel.state).reader_watchers.len(), 2);
+        drop(second);
+        assert_eq!(lock(&channel.state).reader_watchers.len(), 1);
+
+        // the writer's scope closing wakes it the same way, the publisher
+        // gone or not
+        drop(p);
+        scope.close();
+        assert_eq!(*probe.wakes.lock().unwrap(), [true, true, true]);
+        assert_eq!(poll(&mut watch), Poll::Ready(None));
+        assert!(lock(&channel.state).reader_watchers.is_empty());
     }
 
     thread_local! {

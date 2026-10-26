@@ -32,6 +32,7 @@ use r2r::QosProfile;
 
 mod action;
 mod claims;
+mod convert;
 mod log;
 mod node;
 mod qos;
@@ -192,12 +193,14 @@ pub struct ServiceTimeouts {
     /// `action_from_ros`: the same bound on the DDS server's answer to a
     /// goal request and to a cancel request (not on the goal itself).
     pub dds_call: Duration,
-    /// `service_to_ros`: how long a DDS call that the bus refuses because no
-    /// server is live waits for one, to be made once more when it comes. 4 s
-    /// by default, above mower_rsd's 2 s restart delay, so that a call made
-    /// while a module restarts reaches the restarted module. A call a server
-    /// had taken is never made again. `action_to_ros`: the same for a goal
-    /// request.
+    /// `service_to_ros`: how long a DDS call in hand that the bus refuses
+    /// because no server is live waits for one, to be made once more when it
+    /// comes. 4 s by default. The DDS server goes with the bus server, so
+    /// only a call that came as the server went meets it, and only until the
+    /// DDS server is gone. A call a server had taken is never made again.
+    /// `action_to_ros`: the same for a goal request, whose DDS server stays
+    /// advertised while no bus server exists, so that a goal sent while a
+    /// module restarts (mower_rsd waits 2 s) reaches the restarted module.
     pub bus_server: Duration,
 }
 
@@ -209,10 +212,12 @@ impl Default for ServiceTimeouts {
 
 /// Forwards declared names between the bus and DDS (README.md).
 ///
-/// Declarations create both endpoints at once, so a bad name, a type that
+/// Declarations check both sides at once, so a bad name, a type that
 /// differs from the bus's or a QoS without a bus equivalent fails at the
-/// call; only `to_ros`'s DDS writer waits for [`RosBridge::run`], because it
-/// exists only while a bus writer does.
+/// call. The endpoints that follow the other side's presence come once the
+/// bridge runs ([`RosBridge::run`]): `to_ros`'s DDS writer, `from_ros`'s DDS
+/// reader, a transient-local `from_ros`'s bus writer, `service_to_ros`'s DDS
+/// server and `service_from_ros`'s bus server (README.md, "Graph presence").
 pub struct RosBridge {
     node: r2r::Node,
     scope: Scope,
@@ -266,20 +271,21 @@ impl RosBridge {
         })
     }
 
-    /// Forward DDS topic `name` to the bus. `qos` is the profile its source,
-    /// the DDS writer, has: the DDS reader uses it, the bus writer its
-    /// [`bus_qos`].
+    /// Forward DDS topic `name` to the bus, while the bus has a reader of it.
+    /// `qos` is the profile its source, the DDS writer, has: the DDS reader
+    /// uses it, the bus writer its [`bus_qos`].
     pub fn from_ros<T: BridgeMessage>(&mut self, name: &str, qos: QosProfile) -> Result<(), BridgeError> {
         self.declare(name, Direction::FromRos, &qos, |bridge, bus_qos, env| {
             topic::from_ros::<T>(&bridge.scope, &mut bridge.node, name, qos.clone(), bus_qos, env)
         })
     }
 
-    /// Serve bus service `name` on DDS: DDS clients call the bus server.
+    /// Serve bus service `name` on DDS, while the bus has a server for it:
+    /// DDS clients call the bus server.
     pub fn service_to_ros<S: BridgeService>(&mut self, name: &str) -> Result<(), BridgeError> {
         let wait = self.timeouts.bus_server;
         self.declare(name, Direction::ServiceToRos, &QosProfile::services_default(), |bridge, _, env| {
-            service::service_to_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, wait)
+            service::service_to_ros::<S>(&bridge.scope, name, env, wait)
         })
     }
 
@@ -423,7 +429,7 @@ mod tests {
 
     /// The process's r2r context, on the DDS tests' domain and RMW
     /// (tests/dds.rs has why).
-    fn context() -> r2r::Context {
+    pub(crate) fn context() -> r2r::Context {
         static CONTEXT: std::sync::OnceLock<r2r::Context> = std::sync::OnceLock::new();
         CONTEXT
             .get_or_init(|| {

@@ -65,3 +65,15 @@ pub(crate) fn spin(mut node: r2r::Node, commands: Commands, running: Arc<AtomicB
     }
     drop(node);
 }
+
+/// For unit tests: the spin thread without its spins. It runs what the
+/// forwarders ask for, and the test spins the node with a command of its
+/// own, so that it says when r2r takes what DDS has delivered.
+#[cfg(test)]
+pub(crate) fn serve(mut node: r2r::Node, commands: Commands, running: Arc<AtomicBool>) {
+    while running.load(Ordering::Acquire) {
+        if let Ok(command) = commands.queue.recv_timeout(SPIN_TIMEOUT) {
+            command(&mut node);
+        }
+    }
+}

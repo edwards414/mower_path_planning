@@ -264,6 +264,9 @@ fn the_start_up_maps_are_latched_and_stamped_on_the_module_s_clock() {
         }
         // The parameter services stay on DDS, not on the bus.
         assert!(!services.iter().any(|s| s.name.starts_with("/map_manage/")));
+        // Every endpoint is one mower_bridge's manifest has, so that the bridge carries it (its README, "Moving a
+        // module").
+        mower_bridge::coverage::assert_in_manifest(&ModuleCtx::new("map_manage", Shutdown::new()).with_bus(map.scope.clone()));
         map.stop().await;
     });
 }

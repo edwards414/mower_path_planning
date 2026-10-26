@@ -392,6 +392,14 @@ async fn the_system_services_write_the_host_request_and_answer_as_before() {
 async fn the_endpoints_are_on_the_bus_under_their_ros_names() {
     let s = Status::start("endpoints", &[]);
     s.up().await;
+    // and as mower_bridge's manifest has them, so that the bridge carries each (its README, "Moving a module"), but
+    // the odometry: the manifest has mower_rsd.yaml's `odom_topic`, /odom_slow, and the test runs on the code's default
+    let m = ModuleCtx::new("robot_status", Shutdown::new()).with_bus(s.scope.clone());
+    assert_eq!(
+        mower_bridge::coverage::gaps_of(&m),
+        ["robot_status subscribes to /odom (nav_msgs/msg/Odometry, R V 10) on the bus, but the manifest has no such \
+          endpoint for robot_status, so nothing bridges it"]
+    );
     let writes = [
         ("/robot/online", "std_msgs/msg/Bool"),
         ("/robot/info", "std_msgs/msg/String"),
