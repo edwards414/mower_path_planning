@@ -473,14 +473,16 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert_eq!(o.ros_type.as_deref(), Some("nav_msgs/msg/Odometry"));
     assert_eq!(o.publishers, ["localize", "ws_bridge"]);
+    assert_eq!(o.publisher_qos, [Qos::latched().keep_last(2), Qos::default()], "one per writer, clones included");
     assert_eq!(o.subscribers, ["nav", "ws_bridge"]);
+    assert_eq!(o.subscriber_qos, [Qos::default(), Qos::default()]);
     assert_eq!((o.retained, o.published), (2, 3));
     let last = o.last_published.unwrap();
     assert!(before <= last && last <= after);
 
     let untyped = by_name["/app/only"];
     assert_eq!((untyped.type_name, untyped.ros_type.as_deref()), (None, None));
-    assert!(untyped.publishers.is_empty());
+    assert!(untyped.publishers.is_empty() && untyped.publisher_qos.is_empty());
     assert_eq!(untyped.subscribers, ["ws_bridge"]);
     assert_eq!((untyped.published, untyped.last_published), (0, None));
 
@@ -492,6 +494,7 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     let o = bus.topics().into_iter().find(|t| t.name == "/odometry/global").unwrap();
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert!(o.publishers.is_empty() && o.subscribers.is_empty());
+    assert!(o.publisher_qos.is_empty() && o.subscriber_qos.is_empty());
     assert_eq!((o.retained, o.published), (0, 3));
 }
 

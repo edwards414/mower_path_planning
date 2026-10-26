@@ -331,8 +331,9 @@ impl ChannelState {
 /// A writer as its channel sees it.
 struct WriterEntry {
     id: u64,
-    /// The scope's name, for introspection.
+    /// The scope's name and the writer's QoS, for introspection.
     scope: String,
+    qos: Qos,
     /// A transient-local writer's last messages with their numbers; `None`
     /// for a volatile writer, which keeps nothing.
     history: Option<History>,
@@ -387,7 +388,9 @@ impl Channel {
             type_name,
             ros_type,
             publishers: state.writers.iter().map(|writer| writer.scope.clone()).collect(),
+            publisher_qos: state.writers.iter().map(|writer| writer.qos).collect(),
             subscribers: state.readers.iter().map(|inbox| inbox.scope.clone()).collect(),
+            subscriber_qos: state.readers.iter().map(|inbox| inbox.qos).collect(),
             retained: state.writers.iter().filter_map(|writer| writer.history.as_ref()).map(|h| h.msgs.len()).sum(),
             published: state.published,
             last_published: state.last_published,
@@ -511,8 +514,9 @@ fn retained(writers: &[WriterEntry], depth: usize) -> Vec<AnyMsg> {
 
 /// One reader's KEEP_LAST queue and what wakes it.
 pub(crate) struct Inbox {
-    /// The reader's scope name, for introspection.
+    /// The reader's scope name and QoS, for introspection.
     scope: String,
+    qos: Qos,
     depth: usize,
     queue: Mutex<Queue>,
     /// Signals the thread waiting in `recv_timeout`, if there is one.
@@ -533,8 +537,9 @@ struct Queue {
 }
 
 impl Inbox {
-    fn new(scope: &str, depth: usize) -> Self {
-        Inbox { scope: scope.to_string(), depth, queue: Mutex::new(Queue::default()), ready: Condvar::new() }
+    fn new(scope: &str, qos: Qos) -> Self {
+        let depth = qos.effective_depth();
+        Inbox { scope: scope.to_string(), qos, depth, queue: Mutex::new(Queue::default()), ready: Condvar::new() }
     }
 
     /// Queue `msg`, pushing out the oldest message if the queue is full. The
@@ -596,7 +601,7 @@ pub(crate) struct Reader {
 impl Reader {
     pub(crate) fn open(scope: &Scope, name: &str, qos: Qos, codec: Option<Codec>) -> Result<Reader, BusError> {
         let channel = open_channel(scope, name, codec)?;
-        let inbox = Arc::new(Inbox::new(scope.name(), qos.effective_depth()));
+        let inbox = Arc::new(Inbox::new(scope.name(), qos));
         channel.add_reader(&inbox, qos.is_transient_local());
         // The hook keeps the channel (the registry does anyway) but only a
         // `Weak` inbox: a reader dropped early is not kept alive by it.
@@ -814,7 +819,7 @@ impl Writer {
         let channel = open_channel(scope, name, codec)?;
         let id = scope.bus().topic_registry().next_writer.fetch_add(1, Ordering::Relaxed);
         let history = qos.is_transient_local().then(|| History { depth: qos.effective_depth(), msgs: VecDeque::new() });
-        channel.add_writer(WriterEntry { id, scope: scope.name().to_string(), history });
+        channel.add_writer(WriterEntry { id, scope: scope.name().to_string(), qos, history });
         let writer =
             Arc::new(Writer { channel, id, scope: scope.name().to_string(), qos, closed: AtomicBool::new(false) });
         let weak = Arc::downgrade(&writer);
