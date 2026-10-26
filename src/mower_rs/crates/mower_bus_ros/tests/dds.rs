@@ -886,8 +886,10 @@ fn service_from_ros_calls_the_dds_server_for_bus_clients() {
         bridge.service_from_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
         let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
-        // Discovery may still be under way: the first calls may come back
-        // NoResponse, never anything else.
+        // The bus server comes once the bridge has seen the DDS server on the
+        // graph; the bridge's client may match it a little later, and calls
+        // until then come back NoResponse, never anything else.
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
         let deadline = Instant::now() + WAIT;
         let answer = loop {
             match client.request(&set_bool(true)).unwrap().await {
@@ -905,8 +907,11 @@ fn service_from_ros_calls_the_dds_server_for_bus_clients() {
     });
 }
 
+/// Until the bus caller's call is in flight, there is no bus server while
+/// there is no DDS server; a held call ends when its server goes with its
+/// process.
 #[test]
-fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_goes() {
+fn a_call_held_by_a_dds_server_that_goes_ends_and_the_bus_server_goes_with_it() {
     within(async {
         let name = "/bridge_test/navigate";
         let bus = Bus::new();
@@ -914,11 +919,9 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
         bridge.service_from_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
         let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
-        let started = Instant::now();
-        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap();
-        assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
-        assert!(started.elapsed() < Duration::from_secs(5), "given up within the probe window: {:?}", started.elapsed());
-        assert_eq!(running.service(name).unanswered, 1);
+        eventually("the bridge to look at the graph", || running.service(name).resyncs >= 2).await;
+        assert!(!running.service(name).bus_server);
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })), "refused at the call");
 
         // A server that takes the call and then goes away with its process.
         let nav2 = Peer::new("navigate_nav2");
@@ -932,11 +935,12 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
                 while requests.next().await.is_some() {}
             }
         });
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
         let deadline = Instant::now() + WAIT;
         let pending = loop {
             let call = client.request(&set_bool(true)).unwrap();
             let mut call = Box::pin(call);
-            // Until the server is matched, calls come back NoResponse.
+            // Until the bridge's client is matched, calls come back NoResponse.
             match tokio::time::timeout(Duration::from_secs(2), &mut call).await {
                 Ok(Err(BusError::NoResponse { .. })) => assert!(Instant::now() < deadline, "the DDS server never matched"),
                 Ok(other) => panic!("a held call cannot be answered: {other:?}"),
@@ -945,9 +949,76 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
         };
         tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
         drop(nav2);
+        // The bus server goes with it (ServiceUnavailable), or a check of the
+        // pending call finds it gone first (NoResponse).
         let answer = tokio::time::timeout(WAIT, pending).await.unwrap();
-        assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
+        assert!(
+            matches!(answer, Err(BusError::ServiceUnavailable { .. } | BusError::NoResponse { .. })),
+            "{answer:?}"
+        );
+        eventually("the bus server to go", || !running.service(name).bus_server).await;
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })));
         let _ = tokio::time::timeout(WAIT, holder).await;
+        running.stop().await.unwrap();
+    });
+}
+
+/// mower_rs_common's guard waits a second for the lock service, then says
+/// "unavailable", which a caller retries; a call that gets no answer is a
+/// lock that may have been granted, and it stops. Through the bridge it must
+/// see what it saw on r2r: no server while nav is down, one when it is up,
+/// and none again once nav goes, never a server that takes calls nobody
+/// answers.
+#[test]
+fn service_from_ros_serves_on_the_bus_only_while_a_dds_server_is_there() {
+    within(async {
+        let name = "/bridge_test/mission_operation_lock";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("comes_and_goes_bridge", &bus.scope("bridge"));
+        bridge.service_from_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("map_manage").client::<SetBool::Request, SetBool::Response>(name).unwrap();
+        // The guard's two outcomes: the call's answer, or "unavailable".
+        let guard = || async {
+            match tokio::time::timeout(Duration::from_secs(1), client.wait_for_service()).await {
+                Err(_) => None,
+                Ok(waited) => {
+                    waited.unwrap();
+                    Some(client.request(&set_bool(true)))
+                }
+            }
+        };
+
+        // nav is down
+        eventually("the bridge to look at the graph", || running.service(name).resyncs >= 2).await;
+        assert!(guard().await.is_none(), "unavailable, retryable");
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })));
+
+        for round in 0..2 {
+            // nav comes up
+            let nav = Peer::new(&format!("comes_and_goes_nav_{round}"));
+            let server = serve_on_dds(&nav, name);
+            let deadline = Instant::now() + WAIT;
+            let answer = loop {
+                match guard().await {
+                    None => assert!(Instant::now() < deadline, "round {round}: the bus server never came"),
+                    Some(call) => match call.unwrap().await {
+                        Ok(answer) => break answer,
+                        // the bridge's client not matched yet
+                        Err(BusError::NoResponse { .. }) => assert!(Instant::now() < deadline, "round {round}: never matched"),
+                        Err(e) => panic!("round {round}: {e}"),
+                    },
+                }
+            };
+            assert_eq!(answer.message, "dds got true");
+            assert!(running.service(name).bus_server);
+
+            // nav goes
+            server.abort();
+            drop(nav);
+            eventually("the bus server to go", || !running.service(name).bus_server).await;
+            assert!(guard().await.is_none(), "round {round}: unavailable again");
+        }
         running.stop().await.unwrap();
     });
 }
@@ -974,8 +1045,10 @@ fn a_dds_call_that_is_never_answered_ends_at_its_deadline() {
                 let _ = taken.send(request);
             }
         });
-        // Until the server is matched, calls come back NoResponse at once;
-        // the first one it takes runs into the deadline.
+        // Once the bus server is there, and until the server is matched,
+        // calls come back NoResponse at once; the first one it takes runs
+        // into the deadline.
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
         let deadline_at = Instant::now() + WAIT;
         loop {
             let started = Instant::now();
@@ -1018,6 +1091,7 @@ fn a_dds_call_whose_server_is_replaced_mid_call_still_ends() {
                 while requests.next().await.is_some() {}
             }
         });
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
         let deadline = Instant::now() + WAIT;
         let pending = loop {
             let mut call = Box::pin(client.request(&set_bool(true)).unwrap());

@@ -18,6 +18,7 @@ pub(crate) struct Counters {
     unanswered: AtomicU64,
     dropped: AtomicU64,
     dds_writer: AtomicBool,
+    bus_server: AtomicBool,
 }
 
 impl Counters {
@@ -48,6 +49,10 @@ impl Counters {
     pub(crate) fn set_dds_writer(&self, exists: bool) {
         self.dds_writer.store(exists, Ordering::Relaxed);
     }
+
+    pub(crate) fn set_bus_server(&self, exists: bool) {
+        self.bus_server.store(exists, Ordering::Relaxed);
+    }
 }
 
 /// A snapshot of one bridged name.
@@ -63,6 +68,7 @@ pub struct EntryStats {
     /// any more when they came up (README.md, "Writer lifetime").
     pub stale: u64,
     /// `to_ros`: writer changes handled (`publisher_changes` items).
+    /// `service_from_ros`: looks at the graph for a DDS server.
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
     pub unanswered: u64,
@@ -72,6 +78,9 @@ pub struct EntryStats {
     pub dropped: u64,
     /// `to_ros`: whether the bridge's DDS writer exists now.
     pub dds_writer: bool,
+    /// `service_from_ros`: whether the bridge's bus server exists now, which
+    /// it does while the graph shows a DDS server.
+    pub bus_server: bool,
 }
 
 /// Every forwarder's counters, by kind and name.
@@ -118,6 +127,7 @@ impl BridgeStats {
             unanswered: load(&c.unanswered),
             dropped: load(&c.dropped),
             dds_writer: c.dds_writer.load(Ordering::Relaxed),
+            bus_server: c.bus_server.load(Ordering::Relaxed),
         })
     }
 

@@ -255,7 +255,7 @@ impl RosBridge {
     pub fn service_from_ros<S: BridgeService>(&mut self, name: &str) -> Result<(), BridgeError> {
         let deadline = self.timeouts.dds_call;
         self.declare(name, Direction::ServiceFromRos, &QosProfile::services_default(), |bridge, _, env| {
-            service::service_from_ros::<S>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, deadline)
+            service::service_from_ros::<S>(&bridge.scope, &mut bridge.node, env.node, name, env.counters, env.log, deadline)
         })
     }
 

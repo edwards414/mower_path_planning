@@ -155,10 +155,19 @@ number of writers on the bridge's side, or let one writer own all static frames.
   counts in `Subscriber::publisher_count()` all along. This is why mower_base, the final guard and pid_autotune move
   together in E2: mower_base's arm latch asks whether `/drivetrain_guarded_cmd_vel` and `/mower_base/wheel_override`
   have a publisher.
-- **Likewise for services:**
+- **Services:**
   - a `service_to_ros` DDS server is advertised all along, so a DDS client sees it as available. While no bus server
     exists, its calls wait up to 4 s for one, then go unanswered ("Services");
-  - a `service_from_ros` bus server makes `wait_for_service` succeed at once.
+  - a `service_from_ros` bus server exists only while the graph shows a DDS server, so a bus caller finds what an r2r
+    caller found. The forwarder looks every 200 ms, on the spin thread (`get_publishers_info_by_topic` of the
+    server's `rr<name>Reply` writer: the bridge never serves the name on DDS itself, one direction per name).
+    - No DDS server: no bus server. A call is refused at once with `ServiceUnavailable`, `wait_for_service` waits and
+      `is_available` is false, as r2r's `is_available` never completes. mower_rs_common's guard then says "Mission
+      operation guard is unavailable" and the caller retries, where a bus server that answered nothing would have
+      looked like a lock that may have been granted.
+    - A DDS server comes: within 200 ms the bus server does, and `wait_for_service` returns.
+    - It goes: within 200 ms the bus server goes too, and the calls it still holds end with `ServiceUnavailable`.
+    - The name, the type and a bus server already there are still checked at the declaration.
 - **Readers too:** a `to_ros` bus reader counts in `Publisher::subscription_count()` all along. No module skips work on
   that count today.
 
@@ -203,9 +212,10 @@ the spin thread, which owns the node:
       comes, and that request is lost.
     - So it needs a vendor/r2r patch that adds `Node::destroy_service` next to `destroy_publisher`.
     - With the wait above, only a module that stays down longer than 4 s would still need it.
-- **`service_from_ros`:** each bus request becomes a DDS call.
+- **`service_from_ros`:** each bus request becomes a DDS call. The bus server exists only while the graph shows a DDS
+  server ("Graph presence").
   - r2r tells whether the DDS server is matched only through `Node::is_available`, a future that the node's next spin
-    completes.
+    completes. The graph can show a server the bridge's client has not matched yet.
   - While no server is matched within 500 ms, the bus request is dropped, so the bus caller gets `NoResponse`.
   - One probe is kept, and reused while pending. New ones would pile up in r2r's client for as long as the server is
     missing.
@@ -245,10 +255,11 @@ the spin thread, which owns the node:
 - `forwarded`;
 - `skipped` (volatile, no DDS reader);
 - `stale` (no live bus writer);
-- `resyncs`;
+- `resyncs` (`to_ros`: writer changes; `service_from_ros`: looks at the graph);
 - `unanswered` (service calls left without an answer);
 - `dropped` (`to_ros` bus messages lost to the bridge's full reader queue: a forwarder stalled for more than 64);
-- `dds_writer` (whether the `to_ros` DDS writer exists).
+- `dds_writer` (whether the `to_ros` DDS writer exists);
+- `bus_server` (whether the `service_from_ros` bus server exists).
 
 It is for diagnostics (E8's `mowerctl`) and for the tests, which cannot see a skipped publish from DDS.
 
