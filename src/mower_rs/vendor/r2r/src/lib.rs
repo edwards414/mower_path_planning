@@ -89,12 +89,13 @@ mod utils;
 pub use utils::*;
 
 mod subscribers;
+pub use subscribers::Subscription;
 
 mod publishers;
 pub use publishers::{Publisher, PublisherUntyped};
 
 mod services;
-pub use services::ServiceRequest;
+pub use services::{Service, ServiceRequest};
 
 mod clients;
 pub use clients::{Client, ClientUntyped};
@@ -109,7 +110,9 @@ mod action_clients_untyped;
 pub use action_clients_untyped::{ActionClientGoalUntyped, ActionClientUntyped};
 
 mod action_servers;
-pub use action_servers::{ActionServerCancelRequest, ActionServerGoal, ActionServerGoalRequest};
+pub use action_servers::{
+    ActionServer, ActionServerCancelRequest, ActionServerGoal, ActionServerGoalRequest,
+};
 
 mod context;
 pub use context::Context;

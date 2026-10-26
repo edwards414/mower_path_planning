@@ -1,9 +1,45 @@
-use futures::channel::mpsc;
+use futures::{channel::mpsc, stream::Stream};
 use std::ffi::CString;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use crate::{error::*, msg_types::*, qos::QosProfile};
 use r2r_rcl::*;
 use std::ffi::{c_void, CStr};
+
+/// mower_rs patch (vendor/r2r/VENDORED.md): what `Node::subscribe` returns,
+/// the stream of the subscription's messages, which
+/// `Node::destroy_subscription` takes back to take the subscription off the
+/// graph.
+///
+/// Dropping it instead is upstream's way: the subscription is destroyed only
+/// at its next message, and until then stays on the graph, matched with
+/// every writer of its topic.
+pub struct Subscription<T> {
+    pub(crate) messages: mpsc::Receiver<T>,
+    // The node's subscriber, compared with theirs and never dereferenced.
+    // While this stream lives, so does its subscriber: the node removes one
+    // on its own only once its stream is dropped.
+    pub(crate) handle: *const rcl_subscription_t,
+}
+
+// The stream `subscribe` returned before was Send + Sync for a Send `T`.
+unsafe impl<T: Send> Send for Subscription<T> {}
+unsafe impl<T: Send> Sync for Subscription<T> {}
+
+impl<T> Stream for Subscription<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        Pin::new(&mut self.messages).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.messages.size_hint()
+    }
+}
 
 pub trait Subscriber_ {
     fn handle(&self) -> &rcl_subscription_t;

@@ -1,12 +1,50 @@
-use futures::channel::mpsc;
+use futures::{channel::mpsc, stream::Stream};
 use std::{
     ffi::CString,
     mem::MaybeUninit,
+    pin::Pin,
     sync::{Arc, Mutex, Weak},
+    task::{Context, Poll},
 };
 
 use crate::{error::*, msg_types::*, QosProfile};
 use r2r_rcl::*;
+
+/// mower_rs patch (vendor/r2r/VENDORED.md): what `Node::create_service`
+/// returns, the stream of the service's requests, which
+/// `Node::destroy_service` takes back to take the service off the graph.
+///
+/// Dropping it instead is upstream's way: the service is destroyed only at
+/// the next request, which nobody answers, and stays on the graph until
+/// then.
+pub struct Service<T>
+where
+    T: WrappedServiceTypeSupport,
+{
+    pub(crate) requests: mpsc::Receiver<ServiceRequest<T>>,
+    // Only compared with the node's services, on the node's thread.
+    pub(crate) service: Weak<Mutex<dyn Service_>>,
+}
+
+// The stream `create_service` returned before was Send + Sync. The `Weak`
+// is upgraded only by `Node::destroy_service`, which has the node.
+unsafe impl<T> Send for Service<T> where T: WrappedServiceTypeSupport {}
+unsafe impl<T> Sync for Service<T> where T: WrappedServiceTypeSupport {}
+
+impl<T> Stream for Service<T>
+where
+    T: WrappedServiceTypeSupport,
+{
+    type Item = ServiceRequest<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.requests).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.requests.size_hint()
+    }
+}
 
 /// Encapsulates a service request.
 ///
