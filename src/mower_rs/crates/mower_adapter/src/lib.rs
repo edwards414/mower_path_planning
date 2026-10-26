@@ -11,6 +11,11 @@
 //!   coverage / map_manage parameter services, the zone map list service
 //!   and navsat_transform's toLL.
 //!
+//! Its topics, the zone map list and toLL clients and its timers are on the
+//! bus (`m.bus`, step E2). The two parameter services are polled through
+//! the r2r node, which is spun for them: parameter services stay on DDS in
+//! E2 (docs/BUS_TOPICS.md 3.1).
+//!
 //! Encoding a 214 KB map grid takes ~60 ms in Python and ~2 ms here.
 
 mod dto;
@@ -21,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
+use mower_bus::{Clock, Qos};
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::geometry_msgs::msg::{Point, PoseStamped};
 use r2r::mower_interface::srv::ZoneMapList;
@@ -64,25 +70,20 @@ const DATUM_PROBE_M: f64 = 10.0;
 /// A service call that does not answer within this is treated as failed.
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
 fn json_string(v: &Value) -> StringMsg {
     StringMsg { data: serde_json::to_string(v).expect("json") }
 }
 
-fn now_ns() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
-}
-
 struct PoseGate {
     max_age_s: f64,
     source_frame: String,
     child_frame: String,
+    /// Its wall time is what a sample's stamp is aged against.
+    clock: Clock,
 }
 
 impl PoseGate {
@@ -90,7 +91,7 @@ impl PoseGate {
     /// 5 Hz pose relay (wrong frames, non-finite, bad quaternion, stale).
     fn relay(&self, odom: &Odometry) -> Option<PoseStamped> {
         let stamp_ns = odom.header.stamp.sec as i64 * 1_000_000_000 + odom.header.stamp.nanosec as i64;
-        let age_s = if stamp_ns > 0 { (now_ns() - stamp_ns) as f64 / 1e9 } else { f64::INFINITY };
+        let age_s = if stamp_ns > 0 { (self.clock.now().ns() - stamp_ns) as f64 / 1e9 } else { f64::INFINITY };
         let p = &odom.pose.pose.position;
         let q = &odom.pose.pose.orientation;
         let values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w];
@@ -111,12 +112,13 @@ impl PoseGate {
 /// Fetch `names` from a node's get_parameters service into `cache`.
 async fn refresh_param_cache(
     client: &r2r::Client<GetParameters::Service>,
+    clock: &Clock,
     names: &[&str],
     cache: &Arc<Mutex<Option<Map<String, Value>>>>,
 ) {
     let req = GetParameters::Request { names: names.iter().map(|n| n.to_string()).collect() };
     let Ok(fut) = client.request(&req) else { return };
-    let Ok(Ok(resp)) = tokio::time::timeout(SERVICE_TIMEOUT, fut).await else { return };
+    let Ok(Ok(resp)) = clock.timeout(SERVICE_TIMEOUT, fut).await else { return };
     let mut m = Map::new();
     for (name, value) in names.iter().zip(resp.values.iter()) {
         m.insert(name.to_string(), dto::parameter_value_to_json(value));
@@ -124,7 +126,7 @@ async fn refresh_param_cache(
     *cache.lock().unwrap() = Some(m);
 }
 
-fn publish_datum(publisher: &r2r::Publisher<StringMsg>, lat: f64, lon: f64, bearing: f64, source: &str) {
+fn publish_datum(publisher: &mower_bus::Publisher<StringMsg>, lat: f64, lon: f64, bearing: f64, source: &str) {
     let _ = publisher.publish(&json_string(&json!({
         "origin_lat": lat, "origin_lon": lon, "bearing_rad": bearing, "source": source,
     })));
@@ -138,7 +140,7 @@ struct DatumFallback {
 }
 
 impl DatumFallback {
-    fn publish(&self, publisher: &r2r::Publisher<StringMsg>, logger: &str, logged: &mut bool) {
+    fn publish(&self, publisher: &mower_bus::Publisher<StringMsg>, logger: &str, logged: &mut bool) {
         if self.enabled {
             publish_datum(publisher, self.lat, self.lon, self.bearing, "fallback");
         } else if !*logged {
@@ -148,16 +150,20 @@ impl DatumFallback {
     }
 }
 
-/// One toLL call; `None` when the service is unavailable or does not answer.
-async fn to_ll(client: &r2r::Client<ToLL::Service>, x: f64) -> Option<ToLL::Response> {
+/// One toLL call; `None` when the service is unavailable or does not answer
+/// (on the bus: no server at call time, a request it dropped, or no answer
+/// in time).
+async fn to_ll(client: &mower_bus::Client<ToLL::Request, ToLL::Response>, clock: &Clock, x: f64) -> Option<ToLL::Response> {
     let req = ToLL::Request { map_point: Point { x, y: 0.0, z: 0.0 } };
     let fut = client.request(&req).ok()?;
-    tokio::time::timeout(SERVICE_TIMEOUT, fut).await.ok()?.ok()
+    clock.timeout(SERVICE_TIMEOUT, fut).await.ok()?.ok()
 }
 
 /// The `flutter_adapter` node. Runs either as the `mower_adapter` binary or as one
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
+///
+/// Every endpoint but the two parameter clients is on the bus (crate docs).
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
@@ -167,6 +173,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         max_age_s: params::f64(&node, "robot_pose_max_age_s", 1.0).max(0.1),
         source_frame: params::string(&node, "robot_pose_source_frame", "map"),
         child_frame: params::string(&node, "robot_pose_child_frame", "base_footprint"),
+        clock: m.clock.clone(),
     });
     let pose_source_topic = params::string(&node, "robot_pose_source_topic", "/odometry/global");
     // A configured fallback datum is opt-in only: publishing a real-looking
@@ -181,8 +188,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- map and marker relays ---------------------------------------------
     for (src, name) in MAP_TOPICS {
-        let publisher = node.create_publisher::<StringMsg>(&format!("/adapter/map_layers/{name}"), latched())?;
-        let mut stream = node.subscribe::<OccupancyGrid>(src, latched())?;
+        let publisher = m.bus.publisher::<StringMsg>(&m.resolve_topic(&format!("/adapter/map_layers/{name}"))?, latched())?;
+        let mut stream = m.bus.subscribe::<OccupancyGrid>(&m.resolve_topic(src)?, latched())?;
         let logger = logger.clone();
         tokio::spawn(async move {
             while let Some(grid) = stream.next().await {
@@ -200,8 +207,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         // Marker arrays are complete layer snapshots. Keep both relay legs
         // latched so an adapter or app that starts later receives the same
         // current layer instead of retaining demo/previous-session data.
-        let publisher = node.create_publisher::<StringMsg>(&format!("/adapter/marker_layers/{name}"), latched())?;
-        let mut stream = node.subscribe::<MarkerArray>(src, latched())?;
+        let publisher = m.bus.publisher::<StringMsg>(&m.resolve_topic(&format!("/adapter/marker_layers/{name}"))?, latched())?;
+        let mut stream = m.bus.subscribe::<MarkerArray>(&m.resolve_topic(src)?, latched())?;
         publisher.publish(&json_string(&dto::empty_marker_layer(name)))?;
         let logger = logger.clone();
         let coverage_points = (src == "/coverage_path_markers").then(|| coverage_points.clone());
@@ -220,8 +227,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- robot pose --------------------------------------------------------
     {
-        let publisher = node.create_publisher::<PoseStamped>("/adapter/robot_pose", QosProfile::default())?;
-        let mut stream = node.subscribe::<Odometry>(&pose_source_topic, QosProfile::default())?;
+        let publisher = m.bus.publisher::<PoseStamped>(&m.resolve_topic("/adapter/robot_pose")?, Qos::default())?;
+        let mut stream = m.bus.subscribe::<Odometry>(&m.resolve_topic(&pose_source_topic)?, Qos::default())?;
         let gate = pose_gate.clone();
         tokio::spawn(async move {
             while let Some(odom) = stream.next().await {
@@ -234,7 +241,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- coverage settings snapshot (1 Hz) ---------------------------------
     {
-        let publisher = node.create_publisher::<StringMsg>("/adapter/coverage_settings", latched())?;
+        let publisher = m.bus.publisher::<StringMsg>(&m.resolve_topic("/adapter/coverage_settings")?, latched())?;
+        // The parameter services stay on r2r (see the crate docs).
         let coverage_client = node.create_client::<GetParameters::Service>(
             "/boustrophedon_coverage/get_parameters",
             QosProfile::services_default(),
@@ -242,32 +250,34 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let map_client = node.create_client::<GetParameters::Service>("/map_manage/get_parameters", QosProfile::services_default())?;
         let coverage_ready = r2r::Node::is_available(&coverage_client)?;
         let map_ready = r2r::Node::is_available(&map_client)?;
-        let mut timer = node.create_wall_timer(Duration::from_secs(1))?;
+        let mut timer = m.bus.wall_timer(&m.clock, Duration::from_secs(1))?;
         let coverage_cache: Arc<Mutex<Option<Map<String, Value>>>> = Arc::new(Mutex::new(None));
         let map_cache: Arc<Mutex<Option<Map<String, Value>>>> = Arc::new(Mutex::new(None));
         // Parameter snapshots are refreshed in the background once each
         // service is up; every tick publishes the latest cached values.
         {
             let cache = coverage_cache.clone();
+            let clock = m.clock.clone();
             tokio::spawn(async move {
                 if coverage_ready.await.is_err() {
                     return;
                 }
                 loop {
-                    refresh_param_cache(&coverage_client, &COVERAGE_PARAM_NAMES, &cache).await;
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    refresh_param_cache(&coverage_client, &clock, &COVERAGE_PARAM_NAMES, &cache).await;
+                    clock.sleep(Duration::from_secs(1)).await;
                 }
             });
         }
         {
             let cache = map_cache.clone();
+            let clock = m.clock.clone();
             tokio::spawn(async move {
                 if map_ready.await.is_err() {
                     return;
                 }
                 loop {
-                    refresh_param_cache(&map_client, &MAP_PARAM_NAMES, &cache).await;
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    refresh_param_cache(&map_client, &clock, &MAP_PARAM_NAMES, &cache).await;
+                    clock.sleep(Duration::from_secs(1)).await;
                 }
             });
         }
@@ -286,18 +296,21 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- zone summaries (2 Hz) ---------------------------------------------
     {
-        let publisher = node.create_publisher::<StringMsg>("/adapter/zone_summaries", latched())?;
-        let client = node.create_client::<ZoneMapList::Service>("/get_zone_map_list_srv", QosProfile::services_default())?;
-        let ready = r2r::Node::is_available(&client)?;
+        let publisher = m.bus.publisher::<StringMsg>(&m.resolve_topic("/adapter/zone_summaries")?, latched())?;
+        let client =
+            m.bus.client::<ZoneMapList::Request, ZoneMapList::Response>(&m.resolve_service("/get_zone_map_list_srv")?)?;
         let logger = logger.clone();
         let coverage_points = coverage_points.clone();
+        let clock = m.clock.clone();
         tokio::spawn(async move {
-            if ready.await.is_err() {
+            if client.wait_for_service().await.is_err() {
                 return;
             }
             loop {
+                // No server at call time (map_manage restarting) fails here at
+                // once, where r2r lost the request and timed out.
                 if let Ok(fut) = client.request(&ZoneMapList::Request::default()) {
-                    match tokio::time::timeout(SERVICE_TIMEOUT, fut).await {
+                    match clock.timeout(SERVICE_TIMEOUT, fut).await {
                         Ok(Ok(resp)) => {
                             let points = coverage_points.lock().unwrap().clone();
                             let dto = dto::zone_map_list_to_summaries(&resp.zone_map_list, &points);
@@ -307,39 +320,45 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                         Err(_) => r2r::log_warn!(&logger, "zone_map_list call timed out"),
                     }
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                clock.sleep(Duration::from_millis(500)).await;
             }
         });
     }
 
     // ---- map datum (satellite geo-reference) -------------------------------
+    // The task below ends once it has published the datum. On the bus a
+    // writer's latched history goes with its last clone (r2r's node kept the
+    // writer), so this one keeps the datum for late joiners until the module
+    // stops.
+    let map_datum = m.bus.publisher::<StringMsg>(&m.resolve_topic("/adapter/map_datum")?, latched())?;
     {
-        let publisher = node.create_publisher::<StringMsg>("/adapter/map_datum", latched())?;
-        let client = node.create_client::<ToLL::Service>("/toLL", QosProfile::services_default())?;
-        let ready = r2r::Node::is_available(&client)?;
+        let publisher = map_datum.clone();
+        let client = m.bus.client::<ToLL::Request, ToLL::Response>(&m.resolve_service("/toLL")?)?;
         let logger = logger.clone();
         let fallback = DatumFallback { enabled: fallback_enabled, lat: fallback.0, lon: fallback.1, bearing: fallback.2 };
+        let clock = m.clock.clone();
         tokio::spawn(async move {
             let mut fallback_logged = false;
             // Until navsat's toLL service exists the fallback is all we have.
-            let mut ready = Box::pin(ready);
+            let mut ready = Box::pin(client.wait_for_service());
             loop {
                 tokio::select! {
                     r = &mut ready => { if r.is_err() { return; } break; }
-                    _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    _ = clock.sleep(Duration::from_secs(2)) => {
                         fallback.publish(&publisher, &logger, &mut fallback_logged);
                     }
                 }
             }
+            drop(ready);
             // Once navsat gives a real datum we lock it (latched pub keeps it live).
             loop {
                 // navsat datum not established (default (0, 0, 0) answer, or a
                 // non-finite one) -> fallback.
                 let is_datum =
                     |r: &ToLL::Response| dto::is_navsat_datum_point(r.ll_point.latitude, r.ll_point.longitude);
-                let origin = to_ll(&client, 0.0).await.filter(is_datum);
+                let origin = to_ll(&client, &clock, 0.0).await.filter(is_datum);
                 if let Some(origin) = origin {
-                    if let Some(probe) = to_ll(&client, DATUM_PROBE_M).await.filter(is_datum) {
+                    if let Some(probe) = to_ll(&client, &clock, DATUM_PROBE_M).await.filter(is_datum) {
                         let (lat0, lon0) = (origin.ll_point.latitude, origin.ll_point.longitude);
                         let bearing = dto::bearing_to_north(lat0, lon0, probe.ll_point.latitude, probe.ll_point.longitude);
                         publish_datum(&publisher, lat0, lon0, bearing, "navsat");
@@ -354,7 +373,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     }
                 }
                 fallback.publish(&publisher, &logger, &mut fallback_logged);
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                clock.sleep(Duration::from_secs(2)).await;
             }
         });
     }
@@ -373,5 +392,6 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     m.shutdown.wait().await;
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
+    drop(map_datum);
     Ok(())
 }
