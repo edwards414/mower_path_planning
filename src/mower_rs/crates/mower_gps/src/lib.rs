@@ -25,18 +25,23 @@
 //! satellite) and the base -> rover vector (`relpos`, NAV-RELPOSNED) for the
 //! desktop dashboard and the app's base station marker; their layout is in
 //! `status.rs`.
+//!
+//! Both topics are on the in-process bus (step E2 of docs/ROS_FREE_PLAN.md),
+//! under the names rcl gives `fix_topic` and `status_topic` on the node
+//! (`/fix` and `/gps/status` in production). The r2r node stays for the
+//! parameters, the log and the node's place in the graph.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use mower_bus::Qos;
 use mower_rs_common::{json_number, params, ModuleCtx, ModuleResult};
 use mower_ubx::{class, id, Ack, CarrierSolution, Fix, Frame, NavHpPosLlh, NavPvt, NavRelPosNed, NavSat, Parser};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::String as StringMsg;
-use r2r::QosProfile;
 
 mod epoch;
 mod status;
@@ -101,8 +106,8 @@ struct Latest {
 }
 
 struct Driver {
-    fix_pub: r2r::Publisher<NavSatFix>,
-    status_pub: r2r::Publisher<StringMsg>,
+    fix_pub: mower_bus::Publisher<NavSatFix>,
+    status_pub: mower_bus::Publisher<StringMsg>,
     logger: String,
     stop: Arc<AtomicBool>,
     settings: Settings,
@@ -371,7 +376,13 @@ fn positive_secs(node: &r2r::Node, name: &str, default: f64) -> Result<Duration,
 /// returned here becomes an orderly shutdown and exit 1) so launch respawns
 /// it and the navigation health gate closes in between.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    run_node(node, m).await
+}
+
+/// Everything after `Node::create`, so a test can hand in a node whose
+/// parameters it has set itself.
+async fn run_node(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
 
     let rate_hz = params::f64(&node, "rate_hz", 4.0);
@@ -387,23 +398,29 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         startup_timeout: positive_secs(&node, "startup_timeout_s", 20.0)?,
         stale_timeout: positive_secs(&node, "stale_timeout_s", 5.0)?,
     };
+    // Named as the parameters name them, resolved as rcl resolves them on the
+    // node: `gps/status` is relative, and comes out as /gps/status.
     let fix_topic = params::string(&node, "fix_topic", "/fix");
     let status_topic = params::string(&node, "status_topic", "gps/status");
-    let fix_pub = node.create_publisher::<NavSatFix>(&fix_topic, QosProfile::default())?;
-    let status_pub = node.create_publisher::<StringMsg>(&status_topic, QosProfile::default())?;
+    let fix_pub = m.bus.publisher::<NavSatFix>(&m.resolve_topic(&fix_topic)?, Qos::default())?;
+    let status_pub = m.bus.publisher::<StringMsg>(&m.resolve_topic(&status_topic)?, Qos::default())?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let driver = Driver { fix_pub, status_pub, logger: logger.clone(), stop: stop.clone(), settings };
     let serial_thread = std::thread::Builder::new().name("ublox-serial".into()).spawn(move || driver.run())?;
 
-    // Publish-only node: nothing to spin, keep the process alive until a
-    // signal or until the serial thread ends (which must end the process,
-    // see the module comment).
+    // Publish-only module: the node is kept alive for its parameters, the log
+    // and the graph, with nothing to spin, and the bus needs no spinning. The
+    // process lives until a signal or until the serial thread ends (which
+    // must end the process, see the module comment).
     let mut failure: Option<String> = None;
     loop {
         tokio::select! {
             _ = m.shutdown.wait() => break,
-            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+            // Closed under the node (its instance ended): nothing published
+            // arrives any more, so stop the serial thread as for a shutdown.
+            _ = m.bus.closed() => break,
+            _ = m.clock.sleep(Duration::from_millis(200)) => {
                 if serial_thread.is_finished() {
                     failure = Some("GPS serial thread stopped".to_string());
                     break;
@@ -435,7 +452,155 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
+    use mower_rs_common::{Remaps, Shutdown};
+    use serialport::SerialPort;
+
     use super::*;
+
+    /// The process's r2r context, on ROS domain 87: the module still creates
+    /// its node (parameters, log), and other containers on a dev host speak
+    /// DDS. Set before the process's one context exists.
+    fn context() -> Option<r2r::Context> {
+        static CONTEXT: OnceLock<Option<r2r::Context>> = OnceLock::new();
+        CONTEXT
+            .get_or_init(|| {
+                std::env::set_var("ROS_DOMAIN_ID", "87");
+                r2r::Context::create().ok()
+            })
+            .clone()
+    }
+
+    /// A 3D fix at 23.69 N 120.54 E, 0.5 m / 1.0 m accuracy, 17 satellites.
+    fn pvt(itow: u32) -> Vec<u8> {
+        let mut p = vec![0u8; NavPvt::LEN];
+        p[0..4].copy_from_slice(&itow.to_le_bytes());
+        p[4..6].copy_from_slice(&2026u16.to_le_bytes());
+        p[6] = 9;
+        p[7] = 19;
+        p[8] = 15;
+        p[9] = 30;
+        p[10] = 5;
+        p[11] = 0x07; // validDate | validTime | fullyResolved
+        p[20] = 3;
+        p[21] = NavPvt::FLAG_GNSS_FIX_OK;
+        p[23] = 17;
+        p[24..28].copy_from_slice(&1_205_387_000i32.to_le_bytes());
+        p[28..32].copy_from_slice(&236_950_000i32.to_le_bytes());
+        p[32..36].copy_from_slice(&45_123i32.to_le_bytes());
+        p[40..44].copy_from_slice(&500u32.to_le_bytes());
+        p[44..48].copy_from_slice(&1_000u32.to_le_bytes());
+        p[76..78].copy_from_slice(&150u16.to_le_bytes());
+        mower_ubx::encode(class::NAV, id::PVT, &p)
+    }
+
+    fn eoe(itow: u32) -> Vec<u8> {
+        mower_ubx::encode(class::NAV, id::EOE, &itow.to_le_bytes())
+    }
+
+    /// The receiver's epochs on a pseudo terminal come out on the bus as the
+    /// fix and the status, under the names the production parameters and
+    /// rules give them, from the `gps` scope.
+    #[test]
+    fn epochs_from_the_receiver_go_out_on_the_bus_as_fix_and_status() {
+        let Some(ctx) = context() else { return };
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (mut receiver, port) = serialport::TTYPort::pair().expect("a pseudo terminal");
+            let device = port.name().expect("the terminal's name");
+            // The driver opens the port by name, as it opens /dev/gps_rtk.
+            drop(port);
+            // A namespace of the test's own: nothing on the graph meets it.
+            let node = r2r::Node::create(ctx, "gps", "/mower_gps_test").unwrap();
+            for (key, value) in [
+                ("device", r2r::ParameterValue::String(device)),
+                // no CFG round trip: the pty does not answer
+                ("configure_receiver", r2r::ParameterValue::Bool(false)),
+                // mower_rsd.yaml and gps.yaml
+                ("fix_topic", r2r::ParameterValue::String("/fix".into())),
+                ("status_topic", r2r::ParameterValue::String("gps/status".into())),
+            ] {
+                node.params.lock().unwrap().insert(key.to_string(), r2r::Parameter::new(value));
+            }
+            let argv: Vec<String> = "--modules gps,localize --ros-args -r navsat_transform:gps/fix:=/fix"
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let bus = mower_bus::Bus::new();
+            let shutdown = Shutdown::new();
+            let m = ModuleCtx::new("gps", shutdown.clone())
+                .with_bus(bus.scope("gps"))
+                .with_remaps(Arc::new(Remaps::from_args(&argv).unwrap()));
+            let reader = bus.scope("reader");
+            let mut fixes = reader.subscribe::<NavSatFix>("/fix", Qos::sensor_data()).unwrap();
+            let mut statuses = reader.subscribe::<StringMsg>("/gps/status", Qos::default()).unwrap();
+            let driver = tokio::spawn(run_node(node, m));
+
+            // An epoch every 250 ms (4 Hz), closed by its NAV-EOE, until the
+            // driver has opened the port and a fix comes out. Until it has,
+            // the terminal has no other end and refuses the write.
+            let mut got = None;
+            for k in 0..80u32 {
+                let itow = 100_000 + 250 * k;
+                let _ = receiver.write_all(&[pvt(itow), eoe(itow)].concat());
+                if let Ok(msg) = tokio::time::timeout(Duration::from_millis(250), fixes.recv()).await {
+                    got = msg;
+                    break;
+                }
+            }
+            let fix = got.expect("no /fix within 20 s");
+            assert_eq!(fix.header.frame_id, "gps_link");
+            assert_eq!((fix.status.status, fix.status.service), (0, SERVICE_ALL));
+            assert!((fix.latitude - 23.695).abs() < 1e-9 && (fix.longitude - 120.5387).abs() < 1e-9, "{fix:?}");
+            assert!((fix.altitude - 45.123).abs() < 1e-9);
+            assert_eq!(fix.position_covariance, [0.25, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(fix.position_covariance_type, COVARIANCE_TYPE_DIAGONAL_KNOWN);
+            // The first epoch's status goes out with its fix.
+            let status = tokio::time::timeout(Duration::from_secs(5), statuses.recv()).await.unwrap().unwrap();
+            let status: serde_json::Value = serde_json::from_str(&status.data).unwrap();
+            assert_eq!(status["fix_type"], 3);
+            assert_eq!(status["fix_ok"], true);
+            assert_eq!(status["carrier_solution"], "none");
+            assert_eq!(status["num_sv"], 17);
+            assert_eq!(status["h_acc_m"], 0.5);
+            assert_eq!(status["rate_hz"], 4.0);
+            assert_eq!(status["utc"], "2026-09-19T15:30:05Z");
+            let topics = bus.topics();
+            for name in ["/fix", "/gps/status"] {
+                let topic = topics.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}"));
+                assert_eq!(topic.publishers, ["gps"], "{name}");
+            }
+            let fix_type = topics.iter().find(|t| t.name == "/fix").unwrap().ros_type.clone();
+            assert_eq!(fix_type.as_deref(), Some("sensor_msgs/msg/NavSatFix"));
+
+            shutdown.trigger();
+            tokio::time::timeout(Duration::from_secs(5), driver)
+                .await
+                .expect("the driver did not stop")
+                .unwrap()
+                .expect("a clean stop");
+        });
+    }
+
+    /// A receiver that cannot be opened still ends the module with an error,
+    /// so that it is restarted and the navigation gate closes meanwhile.
+    #[test]
+    fn a_device_that_does_not_open_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let node = r2r::Node::create(ctx, "gps", "/mower_gps_test").unwrap();
+            let device = r2r::ParameterValue::String("/dev/mower_gps_test_no_such_device".into());
+            node.params.lock().unwrap().insert("device".to_string(), r2r::Parameter::new(device));
+            let m = ModuleCtx::new("gps", Shutdown::new());
+            let err = tokio::time::timeout(Duration::from_secs(5), run_node(node, m))
+                .await
+                .expect("still running with no receiver")
+                .expect_err("must fail");
+            assert!(err.to_string().contains("GPS serial open failed"), "{err}");
+        });
+    }
 
     #[test]
     fn uart1_output_off_is_the_frame_the_rover_acknowledged() {

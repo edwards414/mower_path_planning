@@ -755,6 +755,7 @@ dependencies = [
 name = "mower_gps"
 version = "0.1.0"
 dependencies = [
+ "mower_bus",
  "mower_rs_common",
  "mower_ubx",
  "r2r",
