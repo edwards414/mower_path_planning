@@ -3,6 +3,8 @@
 
 use std::time::Instant;
 
+use crate::Qos;
+
 /// One topic, as the bus sees it now.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TopicInfo {
@@ -13,8 +15,12 @@ pub struct TopicInfo {
     pub ros_type: Option<String>,
     /// Scope names, one entry per live writer.
     pub publishers: Vec<String>,
+    /// Each live writer's QoS, in the order of `publishers`.
+    pub publisher_qos: Vec<Qos>,
     /// Scope names, one entry per live reader (typed and erased).
     pub subscribers: Vec<String>,
+    /// Each live reader's QoS, in the order of `subscribers`.
+    pub subscriber_qos: Vec<Qos>,
     /// Messages held for late joiners, over all writers.
     pub retained: usize,
     /// Messages published on this name since the bus started.

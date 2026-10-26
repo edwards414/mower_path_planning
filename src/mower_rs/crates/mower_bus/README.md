@@ -451,7 +451,8 @@ clock.sleep_blocking(d);              // for dedicated std threads
 - **`bus.topics()`** returns, for each topic:
   - its name, Rust type and ROS type (`ros_type_name` maps `r2r::nav_msgs::msg::Odometry` to
     `nav_msgs/msg/Odometry`);
-  - the names of the scopes that publish and subscribe to it;
+  - the names of the scopes that publish and subscribe to it, and each endpoint's QoS (the
+    manifest check of `mower_bridge` compares it with what the module used on r2r);
   - its retained history;
   - how many messages have been published, and when the last one was. That time is a std
     `Instant`, not a reading of the bus clock: a manual clock does not move it.

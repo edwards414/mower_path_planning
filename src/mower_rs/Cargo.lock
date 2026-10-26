@@ -713,6 +713,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_bridge"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_bus",
+ "mower_bus_ros",
+ "mower_rs_common",
+ "r2r",
+ "serde_yaml",
+ "tokio",
+]
+
+[[package]]
 name = "mower_bus"
 version = "0.1.0"
 dependencies = [
@@ -879,6 +892,7 @@ dependencies = [
  "mower_agent",
  "mower_base",
  "mower_battery",
+ "mower_bridge",
  "mower_bus",
  "mower_coverage",
  "mower_gps",

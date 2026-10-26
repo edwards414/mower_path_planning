@@ -1,6 +1,6 @@
 //! Service forwarders: `service_to_ros` (DDS clients call a bus server) and
 //! `service_from_ros` (bus clients call a DDS server). Contract: README.md,
-//! "Services".
+//! "Services" and "Graph presence".
 //!
 //! Calls are forwarded concurrently, each in its own future of the
 //! forwarder's task: one slow call must not hold up the others (the bus and
@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
-use mower_bus::{BusError, Client, Message, Request, Scope};
+use mower_bus::{BusError, Client, Message, Request, Scope, Service};
 use r2r::{QosProfile, ServiceRequest};
 
 use crate::log::{Failure, Log};
+use crate::node::NodeHandle;
 use crate::stats::Counters;
 use crate::{BridgeError, BridgeService, Forwarder};
 
@@ -31,6 +32,10 @@ const FRESH: Duration = Duration::from_secs(1);
 
 /// How often a pending DDS call checks that its server is still there.
 const WATCH_PERIOD: Duration = Duration::from_secs(1);
+
+/// How often `service_from_ros` looks at the graph for a DDS server, which
+/// its bus server follows.
+const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
 
 /// What the calls of one forwarder share.
 struct Env {
@@ -123,18 +128,61 @@ async fn bus_call<Req: Message, Resp: Message>(client: &Client<Req, Resp>, reque
 
 /// `service_from_ros`: a bus server whose requests become DDS calls, each
 /// given up at `deadline` (`ServiceTimeouts`).
+///
+/// The bus server exists only while the graph shows a DDS server, looked at
+/// every `PRESENCE_PERIOD` on the spin thread (`node`), so that a bus caller
+/// finds what an r2r caller found: no server while there is none
+/// (`ServiceUnavailable` at the call, `wait_for_service` waits), one as soon as
+/// there is. What the graph shows is never the bridge's own: one direction per
+/// name. A server that goes takes the bus server with it, and the calls it
+/// still holds end with `ServiceUnavailable`.
 pub(crate) fn service_from_ros<S: BridgeService>(
-    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log, deadline: Duration,
+    scope: &Scope, node: &mut r2r::Node, handle: NodeHandle, name: &str, counters: Arc<Counters>, log: Log,
+    deadline: Duration,
 ) -> Result<Forwarder, BridgeError> {
-    let mut service = scope.service::<S::Request, S::Response>(name)?;
+    // The name, the type and a bus server already there are checked now;
+    // the bus server itself comes with a DDS server.
+    drop(scope.service::<S::Request, S::Response>(name)?);
     let client = node.create_client::<S>(name, QosProfile::services_default())?;
     let server = Arc::new(DdsServer::new(client));
     let env = Arc::new(Env { counters, log });
+    let (scope, name) = (scope.clone(), name.to_string());
+    // A server's writer: clients write `rq<name>Request` and read this.
+    let replies = format!("rr{name}Reply");
     Ok(Box::pin(async move {
+        let mut service: Option<Service<S::Request, S::Response>> = None;
         let mut calls = FuturesUnordered::new();
+        let mut look = tokio::time::interval(PRESENCE_PERIOD);
+        look.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                request = service.next() => match request {
+                _ = look.tick() => {
+                    let replies = replies.clone();
+                    let shown = handle.call(move |node| node.get_publishers_info_by_topic(&replies, true)).await;
+                    env.counters.resynced();
+                    match shown {
+                        // The bridge is stopping.
+                        None => return,
+                        Some(Ok(servers)) if servers.is_empty() => {
+                            // Dropping it ends the calls it holds.
+                            if service.take().is_some() {
+                                env.counters.set_bus_server(false);
+                            }
+                        }
+                        Some(Ok(_)) if service.is_some() => {}
+                        Some(Ok(_)) => match scope.service::<S::Request, S::Response>(&name) {
+                            Ok(serving) => {
+                                service = Some(serving);
+                                env.counters.set_bus_server(true);
+                            }
+                            // The bridge's scope closed.
+                            Err(BusError::Closed { .. }) => return,
+                            Err(e) => env.log.error(Failure::BusOther, || format!("serving on the bus failed: {e}")),
+                        },
+                        Some(Err(e)) => env.log.error(Failure::Dds, || format!("looking at the graph failed: {e}")),
+                    }
+                }
+                request = next_request(&mut service) => match request {
                     Some(request) => calls.push(call(server.clone(), request, env.clone(), deadline)),
                     // The bridge's scope closed.
                     None => return,
@@ -143,6 +191,16 @@ pub(crate) fn service_from_ros<S: BridgeService>(
             }
         }
     }))
+}
+
+/// The next request of `service`; while there is no service, nothing.
+async fn next_request<Req: Message, Resp: Message>(
+    service: &mut Option<Service<Req, Resp>>,
+) -> Option<Request<Req, Resp>> {
+    match service {
+        Some(service) => service.next().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// One bus request: call the DDS server, if there is one, and answer with
