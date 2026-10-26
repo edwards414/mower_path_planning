@@ -170,8 +170,10 @@ say so.
 2. Call `assert_in_manifest` in its tests. If an endpoint is new or changed, change the manifest with it.
 3. Switch its `main.rs` to `mower_bridge::module_main`.
 4. Flip its flag in `src/on_bus.rs`.
-5. Update what looks at its DDS endpoints by node: they now belong to `mower_bus_bridge` (`nav_core_check.py`'s
-   backend check) or exist all along (`autotune_telemetry_check.py`'s subscriber count, BUS_TOPICS.md 5.5 f).
+5. Update what looks at its DDS endpoints by node. In mower_rsd they now belong to `mower_bus_bridge`; a binary's
+   belong to `/mower_bus_bridge/<node>`, which a tool that compares node names only (`nav_core_check.py`) takes for
+   the module's. A bridge endpoint that exists all along changes a count (`autotune_telemetry_check.py`'s subscriber
+   count while idle, BUS_TOPICS.md 5.5 f).
 
 ## Tests
 
@@ -180,8 +182,9 @@ say so.
   every module standalone; the check. No DDS.
 - `tests/dds.rs` (ROS domain 78, rmw_cyclonedds_cpp): synthetic converted `robot_status` and `flutter_adapter` modules
   and their planned bridge. A latched bus topic reaches a DDS late joiner from a transient-local writer, a volatile
-  one reaches a DDS reader, a DDS topic reaches a bus reader, a DDS client gets a bus server's answer and a bus client
-  a DDS server's. Then the standalone runner with a battery module.
+  one reaches a DDS reader, a DDS topic reaches a bus reader, a DDS client gets a bus server's answer, and a bus client
+  is refused while there is no DDS server, then gets its answer once there is one. Then the standalone runner with a
+  battery module.
 - `tests/standalone.rs` (domain 78, its own `main`): a battery module's binary as the roll-back launches it, with
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
