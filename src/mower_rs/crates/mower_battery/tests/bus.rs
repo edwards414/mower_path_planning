@@ -150,6 +150,8 @@ async fn the_base_telemetry_becomes_both_battery_states_once_a_second() {
     assert_eq!(topic("/mower_base/telemetry").ros_type.as_deref(), Some("std_msgs/msg/String"));
     assert!(bus.services().is_empty());
 
+    // Every endpoint is one mower_bridge's manifest has, so that the bridge carries it (its README, "Moving a module").
+    mower_bridge::coverage::assert_in_manifest(&ModuleCtx::new("battery_state", Shutdown::new()).with_bus(battery.scope.clone()));
     battery.stop().await;
     // The closed scope ends the module's endpoints and its publish loop.
     let topics = bus.topics();

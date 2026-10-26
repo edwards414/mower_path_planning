@@ -282,6 +282,15 @@ fn restored_geometry_is_latched_and_served_to_the_map_and_coverage() {
         assert!(none.channel_path.poses.is_empty());
 
         assert_eq!(rec.trigger("/get_record_zone_info").await, (true, "返回test".to_string()));
+        // Every endpoint is one mower_bridge's manifest has, so that the bridge carries it (its README, "Moving a
+        // module"), but the pose source: the manifest has the parameter file's `robot_pose_source_topic`,
+        // /odometry/global_slow, and the test runs on the code's default.
+        let m = ModuleCtx::new("path_record_node", Shutdown::new()).with_bus(rec.scope.clone());
+        assert_eq!(
+            mower_bridge::coverage::gaps_of(&m),
+            ["path_record_node subscribes to /odometry/global (nav_msgs/msg/Odometry, R V 10) on the bus, but the \
+              manifest has no such endpoint for path_record_node, so nothing bridges it"]
+        );
         rec.stop().await;
     });
 }

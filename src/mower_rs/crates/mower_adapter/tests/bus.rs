@@ -599,6 +599,20 @@ fn with_map_manage_and_the_recorder_the_mission_data_flows_in_process() {
         let layer: Value = serde_json::from_str(&next(&mut adapter.latched::<StringMsg>("/adapter/map_layers/risk_map_inflated")).await.data).unwrap();
         assert_eq!(layer["width"], 120);
 
+        // Every endpoint of the three is one mower_bridge's manifest has, so that the bridge carries it (its README,
+        // "Moving a module"), but the pose source of the adapter and the recorder: the manifest has the parameter
+        // file's `robot_pose_source_topic`, /odometry/global_slow, and the test runs on the code's default.
+        mower_bridge::coverage::assert_in_manifest(&ModuleCtx::new("map_manage", Shutdown::new()).with_bus(map.scope.clone()));
+        for (node, scope) in [("flutter_adapter", &adapter.adapter.scope), ("path_record_node", &record.scope)] {
+            let m = ModuleCtx::new(node, Shutdown::new()).with_bus(scope.clone());
+            assert_eq!(
+                mower_bridge::coverage::gaps_of(&m),
+                [format!(
+                    "{node} subscribes to /odometry/global (nav_msgs/msg/Odometry, R V 10) on the bus, but the manifest \
+                     has no such endpoint for {node}, so nothing bridges it"
+                )]
+            );
+        }
         adapter.stop().await;
         map.stop().await;
         record.stop().await;
