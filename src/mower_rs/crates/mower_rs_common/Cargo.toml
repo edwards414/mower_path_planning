@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared helpers for the mower_rs nodes (parameters, JSON, host state dir)"
 
 [dependencies]
+mower_bus = { path = "../mower_bus" }
 r2r.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 serde_json.workspace = true

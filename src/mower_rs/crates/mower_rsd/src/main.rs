@@ -47,14 +47,21 @@
 //! stuck in a restart loop no longer floods discovery. A failure during a
 //! shutdown, or a module that does not stop within `--stop-timeout`, makes
 //! the process exit non-zero so the launch `respawn` restarts the set.
+//!
+//! **Bus.** The process also has one `mower_bus::Bus` and one clock. Every
+//! start of an instance runs on a fresh scope of the bus named after its
+//! node, and the supervisor closes that scope as soon as the start ends (see
+//! `supervise`). No module uses the bus yet; step E2 moves their IO onto it.
 
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::FutureExt;
+use mower_bus::{Bus, Clock, Scope};
 use mower_rs_common::{ModuleCtx, ModuleResult, Shutdown};
 
 type BoxFut = Pin<Box<dyn Future<Output = ModuleResult> + Send>>;
@@ -247,10 +254,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 }
             }
             "--stop-timeout" => {
-                let s: f64 = value("--stop-timeout")?
-                    .parse()
-                    .map_err(|_| "--stop-timeout takes seconds".to_string())?;
-                a.stop_timeout = Duration::from_secs_f64(s.max(0.1));
+                let v = value("--stop-timeout")?;
+                let s: f64 = v.parse().map_err(|_| format!("--stop-timeout takes seconds, not {v:?}"))?;
+                // `try_from_secs_f64` refuses what `from_secs_f64` panics on:
+                // a negative, NaN, infinite or too large number of seconds.
+                let d = Duration::try_from_secs_f64(s).map_err(|_| {
+                    format!("--stop-timeout takes a non-negative, finite number of seconds, not {v:?}")
+                })?;
+                a.stop_timeout = d.max(Duration::from_millis(100));
             }
             "--list-modules" => {
                 for m in MODULES {
@@ -308,15 +319,166 @@ async fn supervised(
         Ok(Ok(())) if stopping.is_triggered() => Outcome::Stopped(label),
         Ok(Ok(())) => Outcome::Failed(format!("{label}: returned before shutdown")),
         Ok(Err(e)) => Outcome::Failed(format!("{label}: {e}")),
-        Err(p) => {
-            let what = p
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| p.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "panic".to_string());
-            Outcome::Failed(format!("{label}: panicked: {what}"))
+        Err(p) => Outcome::Failed(format!("{label}: panicked: {}", panic_message(&*p))),
+    }
+}
+
+/// What a caught panic says, for the log.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic".to_string())
+}
+
+/// Close an instance's scope, logging a panic instead of passing it on. A
+/// close runs user code (drop glue of the messages it frees, wakers of the
+/// tasks it wakes); if that panics, the close still ends everything else in
+/// the scope and then re-raises (mower_bus README, "Model"), and the
+/// supervisor must carry on.
+fn close_scope(label: &str, scope: &Scope) {
+    if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scope.close())) {
+        eprintln!("[mower_rsd] {label}: closing its bus scope panicked: {}", panic_message(&*p));
+    }
+}
+
+/// One instance's module body, bound to the process's r2r context. The
+/// supervisor calls it once per start.
+type Start = Arc<dyn Fn(ModuleCtx) -> BoxFut + Send + Sync>;
+
+/// One node instance under supervision. A slot reports every time its
+/// instance ends; [`supervise`] starts it again (after RESTART_DELAY, the
+/// launch files' respawn_delay) unless the process is shutting down.
+struct Slot {
+    label: String,
+    node: &'static str,
+    /// Its module's `--module-args`.
+    extra: Vec<String>,
+    start: Start,
+}
+
+/// Run the slots until the process stops, and return the failures that must
+/// make it exit non-zero.
+///
+/// Every start of an instance runs on a fresh scope of `bus` named after its
+/// node. The scope is closed as soon as that start ends, and the scopes still
+/// open when the supervisor stops waiting are closed on the way out.
+async fn supervise(
+    slots: Vec<Slot>, bus: Bus, clock: Clock, shutdown: Shutdown, stop_timeout: Duration,
+) -> Vec<String> {
+    let (report, mut reports) = tokio::sync::mpsc::unbounded_channel::<(usize, Outcome)>();
+    // Start a slot (after `delay` for a restart); returns the scope it runs on.
+    let launch = |slot_idx: usize, delay: Duration| -> Scope {
+        let slot = &slots[slot_idx];
+        let scope = bus.scope(slot.node);
+        let m = ModuleCtx::new(slot.node, shutdown.clone())
+            .with_args(slot.extra.clone())
+            .with_bus(scope.clone())
+            .with_clock(clock.clone());
+        let start = slot.start.clone();
+        let label = slot.label.clone();
+        let stopping = shutdown.clone();
+        let report = report.clone();
+        let ended = scope.clone();
+        tokio::spawn(async move {
+            if !delay.is_zero() {
+                // A shutdown cuts the delay short: the slot reports at once
+                // instead of spending the stop window on a restart that is
+                // not coming (with `--stop-timeout` under RESTART_DELAY, it
+                // counted as a module that did not stop).
+                tokio::select! {
+                    () = tokio::time::sleep(delay) => {}
+                    () = stopping.wait() => {}
+                }
+                if stopping.is_triggered() {
+                    // Never started: its scope is closed with the rest on the
+                    // way out.
+                    let _ = report.send((slot_idx, Outcome::Stopped(label)));
+                    return;
+                }
+                println!("[mower_rsd] restarting {label}");
+            } else {
+                println!("[mower_rsd] starting {label}");
+            }
+            let outcome = supervised(label.clone(), stopping, start(m)).await;
+            // However the instance ended, close its scope now, before any
+            // restart delay. Nothing aborts the tasks it spawned: with r2r its
+            // dropped node made their publishes fail, and a closed scope does
+            // the same on the bus (their streams end, publishes fail, the
+            // services vanish, timer loops end), so they cannot carry on next
+            // to the restart. A close that panics must not cost the report:
+            // without it the slot would never be restarted.
+            close_scope(&label, &ended);
+            let _ = report.send((slot_idx, outcome));
+        });
+        scope
+    };
+    let mut scopes: Vec<Scope> = (0..slots.len()).map(|i| launch(i, Duration::ZERO)).collect();
+    let mut alive = slots.len();
+
+    // Supervise. A module that fails while the process is running is
+    // restarted on its own, like launch respawns one crashing binary; the
+    // others keep running. Once the shutdown is tripped (signal, or a
+    // failure during the stop) everyone gets `stop_timeout` to unwind. A
+    // module that wedges must not keep the process from restarting.
+    let mut failures: Vec<String> = Vec::new();
+    let mut restarts = 0usize;
+    while alive > 0 {
+        let next = if shutdown.is_triggered() {
+            match tokio::time::timeout(stop_timeout, reports.recv()).await {
+                Ok(v) => v,
+                Err(_) => {
+                    let why = format!(
+                        "{} module(s) did not stop within {:.1} s",
+                        alive,
+                        stop_timeout.as_secs_f64()
+                    );
+                    eprintln!("[mower_rsd] {why}");
+                    failures.push(why);
+                    break;
+                }
+            }
+        } else {
+            // A shutdown that trips while nothing reports must still start
+            // the stop window above, or one module that ignores it keeps the
+            // process up forever. `recv` is cancel-safe: a report that races
+            // the shutdown is read on the next turn.
+            tokio::select! {
+                next = reports.recv() => next,
+                () = shutdown.wait() => continue,
+            }
+        };
+        let Some((slot_idx, outcome)) = next else { break };
+        match outcome {
+            Outcome::Stopped(label) => {
+                alive -= 1;
+                println!("[mower_rsd] {label} stopped");
+            }
+            Outcome::Failed(why) if shutdown.is_triggered() => {
+                alive -= 1;
+                eprintln!("[mower_rsd] {why}");
+                failures.push(why);
+            }
+            Outcome::Failed(why) => {
+                restarts += 1;
+                eprintln!(
+                    "[mower_rsd] {why}; restarting in {:.1} s (restart #{restarts})",
+                    RESTART_DELAY.as_secs_f64()
+                );
+                scopes[slot_idx] = launch(slot_idx, RESTART_DELAY);
+            }
         }
     }
+    drop(report);
+    // Every instance has returned or had its `stop_timeout`. Close the scopes
+    // of those that did not return, for the reason above: what they still
+    // run must not go on using the bus while the process goes down. One that
+    // panics does not keep the others open.
+    for (slot, scope) in slots.iter().zip(&scopes) {
+        close_scope(&slot.label, scope);
+    }
+    failures
 }
 
 fn main() -> ExitCode {
@@ -357,17 +519,11 @@ fn main() -> ExitCode {
             eprintln!("[mower_rsd] signal handler: {e}");
             return ExitCode::FAILURE;
         }
+        // One bus and one clock for the process as well. No module uses them
+        // yet: step E2 moves their IO from r2r onto them.
+        let bus = Bus::new();
+        let clock = Clock::system();
 
-        // One slot per node instance. A slot reports every time its module
-        // ends; the supervisor restarts it (after RESTART_DELAY, the launch
-        // files' respawn_delay) unless the process is shutting down.
-        struct Slot {
-            label: String,
-            node: &'static str,
-            run: Runner,
-            extra: Vec<String>,
-        }
-        let (report, mut reports) = tokio::sync::mpsc::unbounded_channel::<(usize, Outcome)>();
         let mut slots: Vec<Slot> = Vec::new();
         for id in &args.modules {
             let module = MODULES.iter().find(|m| m.id == *id).expect("checked in parse_args");
@@ -378,88 +534,16 @@ fn main() -> ExitCode {
                 .flat_map(|(_, v)| v.clone())
                 .collect();
             for inst in module.instances {
+                let (ctx, run) = (ctx.clone(), inst.run);
                 slots.push(Slot {
                     label: format!("{}/{}", module.id, inst.node),
                     node: inst.node,
-                    run: inst.run,
                     extra: extra.clone(),
+                    start: Arc::new(move |m: ModuleCtx| run(ctx.clone(), m)),
                 });
             }
         }
-        let launch = |slot_idx: usize, delay: Duration| {
-            let slot = &slots[slot_idx];
-            let m = ModuleCtx::new(slot.node, shutdown.clone()).with_args(slot.extra.clone());
-            let ctx = ctx.clone();
-            let run = slot.run;
-            let label = slot.label.clone();
-            let stopping = shutdown.clone();
-            let report = report.clone();
-            tokio::spawn(async move {
-                if !delay.is_zero() {
-                    tokio::time::sleep(delay).await;
-                    if stopping.is_triggered() {
-                        let _ = report.send((slot_idx, Outcome::Stopped(label)));
-                        return;
-                    }
-                    println!("[mower_rsd] restarting {label}");
-                } else {
-                    println!("[mower_rsd] starting {label}");
-                }
-                let _ = report.send((slot_idx, supervised(label, stopping, run(ctx, m)).await));
-            });
-        };
-        for i in 0..slots.len() {
-            launch(i, Duration::ZERO);
-        }
-        let mut alive = slots.len();
-
-        // Supervise. A module that fails while the process is running is
-        // restarted on its own, like launch respawns one crashing binary; the
-        // others keep running. Once the shutdown is tripped (signal, or a
-        // failure during the stop) everyone gets `stop_timeout` to unwind. A
-        // module that wedges must not keep the process from restarting.
-        let mut failures: Vec<String> = Vec::new();
-        let mut restarts = 0usize;
-        while alive > 0 {
-            let next = if shutdown.is_triggered() {
-                match tokio::time::timeout(args.stop_timeout, reports.recv()).await {
-                    Ok(v) => v,
-                    Err(_) => {
-                        let why = format!(
-                            "{} module(s) did not stop within {:.1} s",
-                            alive,
-                            args.stop_timeout.as_secs_f64()
-                        );
-                        eprintln!("[mower_rsd] {why}");
-                        failures.push(why);
-                        break;
-                    }
-                }
-            } else {
-                reports.recv().await
-            };
-            let Some((slot_idx, outcome)) = next else { break };
-            match outcome {
-                Outcome::Stopped(label) => {
-                    alive -= 1;
-                    println!("[mower_rsd] {label} stopped");
-                }
-                Outcome::Failed(why) if shutdown.is_triggered() => {
-                    alive -= 1;
-                    eprintln!("[mower_rsd] {why}");
-                    failures.push(why);
-                }
-                Outcome::Failed(why) => {
-                    restarts += 1;
-                    eprintln!(
-                        "[mower_rsd] {why}; restarting in {:.1} s (restart #{restarts})",
-                        RESTART_DELAY.as_secs_f64()
-                    );
-                    launch(slot_idx, RESTART_DELAY);
-                }
-            }
-        }
-        drop(report);
+        let failures = supervise(slots, bus, clock, shutdown, args.stop_timeout).await;
 
         if failures.is_empty() {
             println!("[mower_rsd] stopped");
@@ -473,6 +557,12 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::task::{Context, Wake, Waker};
+
+    use futures::Stream;
+    use mower_bus::{Qos, Subscriber};
+
     use super::*;
 
     fn argv(s: &[&str]) -> Vec<String> {
@@ -552,6 +642,252 @@ mod tests {
         // returned because the shutdown was tripped
         let clean = outcome("status/robot_status", true, async { Ok(()) });
         assert!(matches!(clean, Outcome::Stopped(ref l) if l == "status/robot_status"));
+    }
+
+    /// What one start of a test instance does.
+    #[derive(Clone, Copy, Debug)]
+    enum Run {
+        /// Returns `Err` at once.
+        Fail,
+        /// Panics at once.
+        Panic,
+        /// Returns `Ok` at once, without being asked to stop.
+        Quit,
+        /// Returns `Ok` once asked to stop.
+        Serve,
+        /// Never returns, not even when asked to stop.
+        Wedge,
+    }
+
+    /// A slot for `node` whose n-th start does `runs[n]` (the last entry for
+    /// every later start) and leaves the scope it was given in `scopes`.
+    fn test_slot(node: &'static str, runs: &[Run], scopes: &Arc<Mutex<Vec<Scope>>>) -> Slot {
+        let (runs, scopes) = (runs.to_vec(), scopes.clone());
+        Slot {
+            label: format!("test/{node}"),
+            node,
+            extra: Vec::new(),
+            start: Arc::new(move |m: ModuleCtx| -> BoxFut {
+                let mut seen = scopes.lock().unwrap();
+                let run = runs[seen.len().min(runs.len() - 1)];
+                seen.push(m.bus.clone());
+                Box::pin(async move {
+                    match run {
+                        Run::Fail => Err("port went away".into()),
+                        Run::Panic => panic!("serial exploded"),
+                        Run::Quit => Ok(()),
+                        Run::Serve => {
+                            m.shutdown.wait().await;
+                            Ok(())
+                        }
+                        Run::Wedge => std::future::pending().await,
+                    }
+                })
+            }),
+        }
+    }
+
+    /// tokio's paused clock: once every task is idle, time jumps to the next
+    /// timer, so RESTART_DELAY and the stop timeout pass at once and in order.
+    fn paused() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap()
+    }
+
+    /// Tasks a failed instance spawned are not aborted, so the closed scope
+    /// is what ends their publishes; it must be closed before the restart.
+    #[test]
+    fn however_an_instance_ends_its_scope_is_closed_and_the_restart_gets_a_fresh_one() {
+        for first in [Run::Fail, Run::Panic, Run::Quit] {
+            paused().block_on(async {
+                let scopes = Arc::new(Mutex::new(Vec::new()));
+                let shutdown = Shutdown::new();
+                let slots = vec![test_slot("imu", &[first, Run::Serve], &scopes)];
+                let stop_timeout = Duration::from_secs(10);
+                let supervisor =
+                    tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+
+                // The first start ended at once; the restart is RESTART_DELAY away.
+                tokio::time::sleep(RESTART_DELAY / 2).await;
+                {
+                    let s = scopes.lock().unwrap();
+                    assert_eq!(s.len(), 1, "{first:?}: restarted before RESTART_DELAY");
+                    assert!(s[0].is_closed(), "{first:?}: scope still open during the restart delay");
+                }
+                tokio::time::sleep(RESTART_DELAY).await;
+                {
+                    let s = scopes.lock().unwrap();
+                    assert_eq!(s.len(), 2, "{first:?}: not restarted");
+                    assert_eq!(s[1].name(), "imu");
+                    assert!(!s[1].is_closed(), "{first:?}: the restart runs on a closed scope");
+                }
+
+                // asked to stop and stopped: closed as well
+                shutdown.trigger();
+                let failures = supervisor.await.unwrap();
+                assert!(failures.is_empty(), "{first:?}: {failures:?}");
+                assert!(scopes.lock().unwrap()[1].is_closed(), "{first:?}: stopped, scope still open");
+            });
+        }
+    }
+
+    /// The stop window is the instances' to unwind in, so a scope stays open
+    /// until its instance returns or the window is over.
+    #[test]
+    fn an_instance_that_does_not_stop_in_time_has_its_scope_closed_when_the_window_ends() {
+        paused().block_on(async {
+            let status = Arc::new(Mutex::new(Vec::new()));
+            let imu = Arc::new(Mutex::new(Vec::new()));
+            let shutdown = Shutdown::new();
+            let slots = vec![
+                test_slot("robot_status", &[Run::Serve], &status),
+                test_slot("imu", &[Run::Wedge], &imu),
+            ];
+            let stop_timeout = Duration::from_secs(10);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            {
+                let (s, i) = (status.lock().unwrap(), imu.lock().unwrap());
+                assert_eq!((s[0].name(), i[0].name()), ("robot_status", "imu"));
+                assert!(!s[0].is_closed() && !i[0].is_closed());
+            }
+
+            shutdown.trigger();
+            tokio::time::sleep(stop_timeout / 2).await;
+            assert!(status.lock().unwrap()[0].is_closed(), "robot_status stopped, scope still open");
+            assert!(!imu.lock().unwrap()[0].is_closed(), "imu's scope closed inside its stop window");
+
+            let failures = supervisor.await.unwrap();
+            assert!(matches!(&failures[..], [why] if why.contains("did not stop")), "{failures:?}");
+            assert!(imu.lock().unwrap()[0].is_closed(), "the window is over, imu's scope still open");
+        });
+    }
+
+    /// The supervisor used to wait for a report without a timeout when the
+    /// shutdown tripped during that wait, so an instance that ignored the
+    /// shutdown, with no other instance left to report, kept the process up.
+    #[test]
+    fn a_shutdown_with_no_instance_reporting_still_ends_after_the_stop_window() {
+        paused().block_on(async {
+            let imu = Arc::new(Mutex::new(Vec::new()));
+            let shutdown = Shutdown::new();
+            let slots = vec![test_slot("imu", &[Run::Wedge], &imu)];
+            let stop_timeout = Duration::from_secs(10);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            shutdown.trigger();
+            let failures = tokio::time::timeout(stop_timeout * 2, supervisor)
+                .await
+                .expect("the stop window never started")
+                .unwrap();
+            assert!(matches!(&failures[..], [why] if why.contains("did not stop")), "{failures:?}");
+            assert!(imu.lock().unwrap()[0].is_closed(), "the window is over, imu's scope still open");
+        });
+    }
+
+    /// With `--stop-timeout` under RESTART_DELAY, a slot waiting out its
+    /// restart delay when the shutdown came used to count as a module that
+    /// did not stop: it reported only once the delay was over.
+    #[test]
+    fn a_shutdown_during_a_restart_delay_stops_the_slot_at_once() {
+        paused().block_on(async {
+            let scopes = Arc::new(Mutex::new(Vec::new()));
+            let shutdown = Shutdown::new();
+            let slots = vec![test_slot("imu", &[Run::Fail, Run::Serve], &scopes)];
+            let stop_timeout = RESTART_DELAY / 2;
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            // The first start failed at once; the slot is in its restart delay.
+            tokio::time::sleep(RESTART_DELAY / 4).await;
+
+            shutdown.trigger();
+            let tripped = tokio::time::Instant::now();
+            let failures = supervisor.await.unwrap();
+            assert!(failures.is_empty(), "{failures:?}");
+            assert!(tripped.elapsed() < stop_timeout, "stopped after {:?}", tripped.elapsed());
+            let s = scopes.lock().unwrap();
+            assert_eq!(s.len(), 1, "restarted after the shutdown");
+            assert!(s[0].is_closed());
+        });
+    }
+
+    /// A waker that panics when woken: user code that blows up inside a
+    /// scope's close, which wakes every task waiting on the scope's readers.
+    struct Exploding;
+
+    impl Wake for Exploding {
+        fn wake(self: Arc<Self>) {
+            panic!("waker exploded");
+        }
+    }
+
+    /// The instance task used to unwind out of the scope's close before it
+    /// sent its report, so the slot was never restarted and, at shutdown,
+    /// counted as a module that did not stop.
+    #[test]
+    fn a_close_that_panics_is_logged_and_the_instance_still_reports_and_restarts() {
+        paused().block_on(async {
+            let scopes = Arc::new(Mutex::new(Vec::new()));
+            let parked: Arc<Mutex<Vec<Subscriber<String>>>> = Arc::default();
+            let shutdown = Shutdown::new();
+            let slot = {
+                let (scopes, parked) = (scopes.clone(), parked.clone());
+                Slot {
+                    label: "test/imu".into(),
+                    node: "imu",
+                    extra: Vec::new(),
+                    start: Arc::new(move |m: ModuleCtx| -> BoxFut {
+                        let mut seen = scopes.lock().unwrap();
+                        seen.push(m.bus.clone());
+                        if seen.len() > 1 {
+                            return Box::pin(async move {
+                                m.shutdown.wait().await;
+                                Ok(())
+                            });
+                        }
+                        // the first start leaves a reader whose task's waker
+                        // panics when the close wakes it, then fails
+                        let mut sub = m.bus.subscribe::<String>("/imu/data_raw", Qos::default()).unwrap();
+                        let waker = Waker::from(Arc::new(Exploding));
+                        assert!(Pin::new(&mut sub).poll_next(&mut Context::from_waker(&waker)).is_pending());
+                        parked.lock().unwrap().push(sub);
+                        Box::pin(async { Err("port went away".into()) })
+                    }),
+                }
+            };
+            let stop_timeout = Duration::from_secs(10);
+            let supervisor =
+                tokio::spawn(supervise(vec![slot], Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+
+            tokio::time::sleep(RESTART_DELAY * 2).await;
+            {
+                let s = scopes.lock().unwrap();
+                assert_eq!(s.len(), 2, "not restarted after its close panicked");
+                assert!(s[0].is_closed(), "the panic left the scope open");
+                assert!(!s[1].is_closed());
+            }
+            shutdown.trigger();
+            let failures = supervisor.await.unwrap();
+            assert!(failures.is_empty(), "{failures:?}");
+        });
+    }
+
+    #[test]
+    fn stop_timeout_takes_a_non_negative_finite_number_of_seconds() {
+        let stop = |v: &str| parse_args(&argv(&["--modules", "status", "--stop-timeout", v])).map(|a| a.stop_timeout);
+        assert_eq!(stop("2.5"), Ok(Duration::from_millis(2500)));
+        assert_eq!(stop("0"), Ok(Duration::from_millis(100)), "at least 0.1 s, as before");
+        assert_eq!(
+            parse_args(&argv(&["--modules=status", "--stop-timeout=3"])).map(|a| a.stop_timeout),
+            Ok(Duration::from_secs(3))
+        );
+        // `inf` used to panic in Duration::from_secs_f64; negative and NaN
+        // values were quietly taken as 0.1 s
+        for bad in ["inf", "-inf", "infinity", "NaN", "nan", "-1", "-0.5", "1e300", "soon", ""] {
+            assert!(stop(bad).is_err(), "{bad:?} was taken");
+        }
     }
 
     #[test]

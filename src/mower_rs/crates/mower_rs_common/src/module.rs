@@ -14,6 +14,11 @@
 //! node name, `/**`, or `-p <node>:<name>:=<value>`). Remapping works the same
 //! way: rcl applies `-r <node>:<from>:=<to>` rules per node, so the daemon
 //! reproduces launch remappings without any code in the modules.
+//!
+//! Step E1 of docs/ROS_FREE_PLAN.md adds the in-process bus: `m.bus` is the
+//! instance's `mower_bus::Scope`, the bus's counterpart of its `r2r::Node`,
+//! and `m.clock` the clock to read time from. No module uses either yet; E2
+//! moves their IO from r2r onto them.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -103,20 +108,51 @@ pub struct ModuleCtx {
     /// `--module-args <module>=...` list.
     pub args: Vec<String>,
     pub shutdown: Shutdown,
+    /// This instance's view of the in-process bus (mower_bus README,
+    /// "Model"). Standalone it is a bus of its own; under `mower_rsd` it is
+    /// the instance's scope of the process's one bus, which the supervisor
+    /// closes when the instance ends.
+    ///
+    /// No module uses it yet: their topics and services stay on r2r until
+    /// step E2 moves them here.
+    pub bus: mower_bus::Scope,
+    /// Where modules are to read time from, so that tests and replay can
+    /// drive it by hand. Unused until E2, like `bus`: modules still call
+    /// `tokio::time`, `Instant::now()` and `SystemTime::now()`.
+    pub clock: mower_bus::Clock,
 }
 
 impl ModuleCtx {
+    /// A context on a private bus and the system clock: what a standalone
+    /// binary gets from [`module_main`], where the module is alone on its
+    /// bus. `mower_rsd` hands each instance its scope with
+    /// [`ModuleCtx::with_bus`].
     pub fn new(node_name: &str, shutdown: Shutdown) -> Self {
         ModuleCtx {
             node_name: node_name.to_string(),
             namespace: String::new(),
             args: Vec::new(),
             shutdown,
+            bus: mower_bus::Bus::new().scope(node_name),
+            clock: mower_bus::Clock::system(),
         }
     }
 
     pub fn with_args(mut self, args: Vec<String>) -> Self {
         self.args = args;
+        self
+    }
+
+    /// Run on `scope` instead of the private bus (`mower_rsd`: a fresh scope
+    /// of the process's bus for every start of an instance).
+    pub fn with_bus(mut self, scope: mower_bus::Scope) -> Self {
+        self.bus = scope;
+        self
+    }
+
+    /// Read time from `clock` instead of the system clock (tests, replay).
+    pub fn with_clock(mut self, clock: mower_bus::Clock) -> Self {
+        self.clock = clock;
         self
     }
 }
@@ -193,5 +229,18 @@ mod tests {
             // already-triggered: wait() must return at once
             tokio::time::timeout(std::time::Duration::from_secs(1), s.wait()).await.unwrap();
         });
+    }
+
+    #[test]
+    fn a_context_is_alone_on_a_bus_of_its_own_until_it_is_given_a_scope() {
+        let m = ModuleCtx::new("imu", Shutdown::new());
+        assert_eq!(m.bus.name(), "imu");
+        assert!(!m.bus.is_closed());
+        assert!(!m.clock.is_manual());
+        // what mower_rsd does: the context holds the very scope it is given
+        let given = mower_bus::Bus::new().scope("imu");
+        let m = m.with_bus(given.clone());
+        given.close();
+        assert!(m.bus.is_closed());
     }
 }

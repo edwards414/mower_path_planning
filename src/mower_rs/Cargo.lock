@@ -709,6 +709,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_bus"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "mower_bus_ros"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_bus",
+ "r2r",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mower_coverage"
 version = "0.1.0"
 dependencies = [
@@ -833,6 +855,7 @@ dependencies = [
 name = "mower_rs_common"
 version = "0.1.0"
 dependencies = [
+ "mower_bus",
  "r2r",
  "serde_json",
  "tokio",
@@ -847,6 +870,7 @@ dependencies = [
  "mower_agent",
  "mower_base",
  "mower_battery",
+ "mower_bus",
  "mower_coverage",
  "mower_gps",
  "mower_imu",

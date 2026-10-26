@@ -127,11 +127,14 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+        # rmw_cyclonedds_cpp: the image ships only Fast DDS, and mower_bus_ros's
+        # DDS tests run on the robot's RMW (they select it themselves; every
+        # other test and step keeps the image's default).
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
-            ros-jazzy-nav2-simple-commander
+            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

@@ -1,0 +1,22 @@
+[package]
+name = "mower_bus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-process typed publish/subscribe, services, type-erased JSON access and a drivable clock for the modules of one process (docs/ROS_FREE_PLAN.md step E1, see README.md)"
+
+# No r2r, no ROS: builds and tests with a plain `cargo test` on any host. The
+# DDS side of the process lives in mower_bus_ros.
+[dependencies]
+futures.workspace = true
+# Structural pinning for Clock::timeout without `unsafe`; already in the lock
+# through tokio and futures.
+pin-project-lite = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+# time, for Clock::system's async sleeps (wake-ups are the crate's own)
+tokio.workspace = true
+
+[dev-dependencies]
+# test-util: tokio's paused time is the oracle for Interval's missed-tick rules.
+tokio = { workspace = true, features = ["test-util"] }

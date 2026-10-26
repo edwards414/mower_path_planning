@@ -38,6 +38,9 @@ mod paramsrv;
 pub mod tfbus;
 pub mod tfgraph;
 
+use std::panic::AssertUnwindSafe;
+
+use futures::FutureExt;
 use mower_rs_common::{ModuleCtx, ModuleResult};
 
 pub const NODE_EKF_ODOM: &str = "ekf_filter_node_odom";
@@ -69,12 +72,30 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 /// the launch `respawn` / `mower_rsd` supervisor to restart the set. Under
 /// `mower_rsd` this function is not used at all — there the three roles are
 /// three supervised instances that restart one at a time.
+///
+/// Each role runs on a child scope of `m.bus`, closed as soon as the role
+/// ends; closing `m.bus` closes all three.
 pub async fn run_all(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut tasks = Vec::with_capacity(NODES.len());
     for name in NODES {
         let ctx = ctx.clone();
-        let mc = ModuleCtx::new(name, m.shutdown.clone());
-        tasks.push(tokio::spawn(async move { (name, run(ctx, mc).await) }));
+        // Three nodes, so three scopes, and one clock. The scopes are
+        // children of this module's own, so whoever closes that one ends all
+        // three roles' endpoints with it.
+        let scope = m.bus.child(name);
+        let mc = ModuleCtx::new(name, m.shutdown.clone())
+            .with_bus(scope.clone())
+            .with_clock(m.clock.clone());
+        tasks.push(tokio::spawn(async move {
+            let ended = AssertUnwindSafe(run(ctx, mc)).catch_unwind().await;
+            // However the role ended, its scope closes now: what its tasks
+            // still run must not go on using the bus next to the other two.
+            scope.close();
+            match ended {
+                Ok(result) => (name, result),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }));
     }
     let mut failure: Option<String> = None;
     let mut note = |why: String, shutdown: &mower_rs_common::Shutdown| {
