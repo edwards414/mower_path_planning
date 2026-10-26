@@ -21,19 +21,23 @@
 //!
 //! rclpy spent ~10 % of a core on the 16.7 Hz JSON callbacks; this needs
 //! well under 1 %.
+//!
+//! The three topics are on the in-process bus (`ModuleCtx::bus`, step E2 of
+//! docs/ROS_FREE_PLAN.md); the bus/DDS bridge carries what crosses the
+//! process boundary. The r2r node stays for the parameters, the /rosout logs
+//! and the ROS graph.
 
 mod estimator;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
+use mower_bus::Qos;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::sensor_msgs::msg::BatteryState;
 use r2r::std_msgs::msg::String as StringMsg;
-use r2r::QosProfile;
 use serde_json::Value;
 
 use crate::estimator::{BatteryEstimator, Config, Status};
@@ -230,7 +234,7 @@ fn message(s: &Settings, est: &BatteryEstimator, last_time: Option<f64>, now: f6
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
 
     let base_telemetry_topic = params::string(&node, "base_telemetry_topic", "/mower_base/telemetry");
@@ -285,9 +289,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let settings = Arc::new(settings);
     let state = Arc::new(Mutex::new(State { main, aon, last_main_time: None, last_aon_time: None, low_warned: false }));
 
-    let battery_pub = node.create_publisher::<BatteryState>(&battery_topic, QosProfile::default())?;
-    let aon_pub = node.create_publisher::<BatteryState>(&aon_battery_topic, QosProfile::default())?;
-    let mut telemetry = node.subscribe::<StringMsg>(&base_telemetry_topic, QosProfile::default().keep_last(1).best_effort())?;
+    // Bus names are what rcl made of these on the node (ModuleCtx::resolve_topic).
+    let battery_pub = m.bus.publisher::<BatteryState>(&m.resolve_topic(&battery_topic)?, Qos::default())?;
+    let aon_pub = m.bus.publisher::<BatteryState>(&m.resolve_topic(&aon_battery_topic)?, Qos::default())?;
+    let telemetry_qos = Qos::default().keep_last(1).best_effort();
+    let mut telemetry = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&base_telemetry_topic)?, telemetry_qos)?;
 
     {
         let state = state.clone();
@@ -326,20 +332,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mode = if settings.meter_current_wired && settings.capacity_ah > 0.0 { "coulomb counting" } else { "OCV estimate" };
     r2r::log_info!(&logger, "battery_state: {}S {} from {} -> {}", main_cell_count, mode, base_telemetry_topic, battery_topic);
 
-    // ---- spin until SIGINT / SIGTERM (the subscription keeps the wait set
-    // non-empty, so spin_once blocks up to its timeout) ---------------------
-    let running = Arc::new(AtomicBool::new(true));
-    let spin = {
-        let running = running.clone();
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::Relaxed) {
-                node.spin_once(Duration::from_millis(100));
-            }
-            drop(node);
-        })
-    };
+    // ---- run until SIGINT / SIGTERM (the bus needs no spinning, and the node
+    // has nothing to serve: it only has to live as long as the module does) -
     m.shutdown.wait().await;
-    running.store(false, Ordering::Relaxed);
-    let _ = spin.await;
+    drop(node);
     Ok(())
 }

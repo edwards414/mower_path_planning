@@ -702,6 +702,7 @@ name = "mower_battery"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -1302,6 +1303,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "libc",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
