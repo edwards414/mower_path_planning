@@ -272,7 +272,14 @@ impl Ctx {
         r2r::log_error!(&self.logger, "{}", m);
     }
 
-    fn publish_nav_operation_active(&self, active: bool) {
+    /// `/nav_operation_active` as `st` has it: a goal is reserved, or a Nav2
+    /// task's end is uncertain. Called with the state's lock held, as the
+    /// coordinator lock is published, so that the publishes come out in the
+    /// order of the changes they report and the latched value is always the
+    /// state's last: a value taken before a change can no longer be published
+    /// after it.
+    fn publish_nav_operation_active(&self, st: &NavState) {
+        let active = st.goal_reserved || st.nav2_task_uncertain;
         let _ = self.nav_operation_active_pub.lock().unwrap().publish(&Bool { data: active });
     }
 
@@ -300,13 +307,13 @@ impl Ctx {
     }
 
     fn set_nav_state(&self, state: &str, message: &str) {
-        let (uncertain, reserved) = {
+        let uncertain = {
             let mut st = self.state.lock().unwrap();
             st.nav_state = state.to_string();
             st.last_status_message = message.to_string();
-            (st.nav2_task_uncertain, st.goal_reserved)
+            self.publish_nav_operation_active(&st);
+            st.nav2_task_uncertain
         };
-        self.publish_nav_operation_active(reserved || uncertain);
         if state == "canceling" || state == "uncertain" || uncertain {
             self.publish_safety_zero();
         }
@@ -348,11 +355,14 @@ impl Ctx {
         }
     }
 
-    /// Atomically match a goal, request cancel, and revoke its velocity.
+    /// Atomically match a goal, request cancel, and revoke its velocity. A
+    /// goal whose end is decided (`Execution::terminate`) is not matched: the
+    /// cancel can no longer change the end, and must not leave a "canceling"
+    /// behind it, whichever path it comes from.
     fn request_navigation_cancel(&self, message: &str, expected_dispatch_id: Option<&str>) -> bool {
         {
             let mut st = self.state.lock().unwrap();
-            if !st.goal_reserved {
+            if !st.goal_reserved || st.goal_end_decided {
                 return false;
             }
             if let Some(expected) = expected_dispatch_id {
@@ -363,13 +373,13 @@ impl Ctx {
             st.external_cancel_requested = true;
             st.nav_state = "canceling".into();
             st.last_status_message = message.to_string();
+            self.publish_nav_operation_active(&st);
         }
         self.update_progress(true, |p| {
             p.canceling(message);
             true
         });
         self.confirm.notify_waiters();
-        self.publish_nav_operation_active(true);
         self.publish_safety_zero();
         self.publish_safety_stop_if_needed();
         true
@@ -387,8 +397,8 @@ impl Ctx {
             st.nav2_task_uncertain = true;
             st.nav_state = "uncertain".into();
             st.last_status_message = format!("{message}; Nav2 task termination remains unconfirmed");
+            self.publish_nav_operation_active(&st);
         }
-        self.publish_nav_operation_active(true);
         self.publish_safety_zero();
         self.publish_safety_stop_if_needed();
         true
@@ -411,7 +421,7 @@ impl Ctx {
 
     /// Atomically resolve only the matching late rejected dispatch.
     fn resolve_definitive_nav2_rejection(&self, generation: u64) {
-        let (was_uncertain, reserved) = {
+        let was_uncertain = {
             let mut st = self.state.lock().unwrap();
             if st.nav2_active_generation != Some(generation) {
                 return;
@@ -428,12 +438,12 @@ impl Ctx {
                 }
                 st.nav_state = "idle".into();
                 st.last_status_message = "Late Nav2 goal response definitively rejected; ready".into();
+                self.publish_nav_operation_active(&st);
             }
-            (was_uncertain, st.goal_reserved)
+            was_uncertain
         };
         self.nav2.lock().unwrap().clear();
         if was_uncertain {
-            self.publish_nav_operation_active(reserved);
             self.publish_safety_stop_if_needed();
         }
     }
@@ -540,9 +550,10 @@ impl Ctx {
         };
         if should_cancel {
             let message = format!("Navigation safety stop: {}", reason.unwrap_or_default());
-            self.request_navigation_cancel(&message, dispatch_id.as_deref());
-            let status = self.state.lock().unwrap().last_status_message.clone();
-            self.error(&status);
+            if self.request_navigation_cancel(&message, dispatch_id.as_deref()) {
+                let status = self.state.lock().unwrap().last_status_message.clone();
+                self.error(&status);
+            }
         }
     }
 
@@ -895,11 +906,15 @@ struct Execution {
     /// CANCELED transition only there.
     action_cancel_accepted: Arc<AtomicBool>,
     /// The end `terminate` decided, the status and the result's `success`,
-    /// until `end_goal` sends it.
-    end: Mutex<Option<(GoalStatus, bool)>>,
+    /// which `end_goal` sends. Shared with the goal's cancel task: deciding
+    /// the end and accepting a cancel are one critical section under it.
+    end: Decision,
     #[allow(dead_code)]
     dispatch_id: String,
 }
+
+/// An execution's end, once decided (`Execution::terminate`).
+type Decision = Arc<Mutex<Option<(GoalStatus, bool)>>>;
 
 enum Outcome {
     Succeeded,
@@ -942,23 +957,40 @@ impl Execution {
     /// released the goal. The bus hands a result to the caller at once,
     /// where r2r took a DDS round trip, and the caller acts on it at once:
     /// coverage's next leg would otherwise find this goal still reserved.
+    ///
+    /// The decision takes `end`, which the goal's cancel task holds while it
+    /// handles a cancel request, so an action cancel is either accepted
+    /// before it (the goal ends CANCELED) or comes after it and changes
+    /// nothing. The state learns it too (`goal_end_decided`), so that no
+    /// other path's cancel changes it either. Lock order: `end`, then the
+    /// state.
     fn terminate(&self, outcome: &Outcome) {
+        let mut end = self.end.lock().unwrap();
+        if end.is_some() {
+            return;
+        }
         let status = match outcome {
             _ if self.action_cancel_requested() => GoalStatus::Canceled,
             Outcome::Succeeded => GoalStatus::Succeeded,
             Outcome::Aborted | Outcome::Canceled => GoalStatus::Aborted,
         };
-        self.end.lock().unwrap().get_or_insert((status, matches!(outcome, Outcome::Succeeded)));
+        *end = Some((status, matches!(outcome, Outcome::Succeeded)));
+        self.ctx.state.lock().unwrap().goal_end_decided = true;
     }
 
-    /// The terminal transition `terminate` decided.
+    /// The terminal transition `terminate` decided. The decision stays, for
+    /// the cancel task to tell a cancel that comes after it.
     fn end_goal(&self) {
-        let decided = self.end.lock().unwrap().take();
-        let (status, success) = decided.unwrap_or_else(|| {
+        let (decided, undecided) = {
+            let mut end = self.end.lock().unwrap();
+            let undecided = end.is_none();
+            (*end.get_or_insert((GoalStatus::Aborted, false)), undecided)
+        };
+        if undecided {
             // Every way out of `run` decides; never leave the caller waiting.
             self.ctx.error("navigation goal ended without a terminal state; aborting it");
-            (GoalStatus::Aborted, false)
-        });
+        }
+        let (status, success) = decided;
         let mut goal = self.goal.lock().unwrap();
         let result = Waypoint::Result { success };
         let ended = match status {
@@ -1099,7 +1131,7 @@ impl Execution {
     async fn wait_for_nav_task(&mut self, task_name: &str) -> bool {
         let started_at = self.ctx.clock.mono();
         let mut last_feedback: Option<String> = None;
-        let (canceled_before_running, reserved, uncertain) = {
+        let canceled_before_running = {
             let mut st = self.ctx.state.lock().unwrap();
             st.active_task_name = Some(task_name.to_string());
             st.last_task_name = Some(task_name.to_string());
@@ -1108,9 +1140,9 @@ impl Execution {
                 st.nav_state = "running".into();
                 st.last_status_message = format!("Navigation running: {task_name}");
             }
-            (canceled, st.goal_reserved, st.nav2_task_uncertain)
+            self.ctx.publish_nav_operation_active(&st);
+            canceled
         };
-        self.ctx.publish_nav_operation_active(reserved || uncertain);
         if canceled_before_running {
             self.ctx.publish_safety_zero();
         }
@@ -1499,10 +1531,11 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<Waypoin
         st.pending_dispatch_id = Some(dispatch_id.clone());
         st.last_task_name = Some("Navigation goal".into());
         st.last_feedback_message = "last_feedback=None".into();
+        st.goal_end_decided = false;
         st.nav_state = "pending_confirmation".into();
         st.last_status_message = "Navigation goal accepted; waiting for dispatch confirmation".into();
+        ctx.publish_nav_operation_active(&st);
     }
-    ctx.publish_nav_operation_active(true);
     let zone_id = req.goal.zone_id;
     let (goal_handle, mut cancel_requests) = match req.accept() {
         Ok(v) => v,
@@ -1514,19 +1547,35 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<Waypoin
     };
     // `_cancel_callback`: accept a cancel only for the reserved dispatch.
     let action_cancel_accepted = Arc::new(AtomicBool::new(false));
+    let end = Decision::default();
     {
         let ctx = ctx.clone();
         let dispatch_id = dispatch_id.clone();
         let accepted = action_cancel_accepted.clone();
+        let end = end.clone();
         tokio::spawn(async move {
+            // A cancel is handled under `end`, which `Execution::terminate`
+            // takes to decide the end: one accepted before the decision ends
+            // the goal CANCELED, and one that comes after it changes nothing.
+            // Those are kept until the goal has ended and then accepted, which
+            // answers them `GoalTerminated`, as rcl answered a cancel for a
+            // goal that had ended when nav ended it in `terminate`.
+            let mut late = Vec::new();
             while let Some(request) = cancel_requests.next().await {
-                if ctx.request_navigation_cancel("Navigation action cancel requested", Some(&dispatch_id)) {
-                    ctx.warn("Navigation action cancel requested");
+                let decided = end.lock().unwrap();
+                if decided.is_some() {
+                    late.push(request);
+                } else if ctx.request_navigation_cancel("Navigation action cancel requested", Some(&dispatch_id)) {
                     accepted.store(true, Ordering::SeqCst);
                     request.accept();
+                    drop(decided);
+                    ctx.warn("Navigation action cancel requested");
                 } else {
                     request.reject();
                 }
+            }
+            for request in late {
+                request.accept();
             }
         });
     }
@@ -1534,8 +1583,7 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<Waypoin
         p.begin(&dispatch_id, zone_id);
         true
     });
-    let mut execution =
-        Execution { ctx: ctx.clone(), goal: Mutex::new(goal_handle), action_cancel_accepted, end: Mutex::new(None), dispatch_id };
+    let mut execution = Execution { ctx: ctx.clone(), goal: Mutex::new(goal_handle), action_cancel_accepted, end, dispatch_id };
     let outcome = execution.run().await;
     finish_progress(&ctx, &outcome);
     finish_reserved_goal(&ctx);
@@ -1563,24 +1611,21 @@ fn finish_progress(ctx: &Ctx, outcome: &Outcome) {
 }
 
 fn finish_reserved_goal(ctx: &Ctx) {
-    let uncertain = {
-        let mut st = ctx.state.lock().unwrap();
-        let finished = st.pending_dispatch_id.take();
-        st.goal_reserved = false;
-        st.active_task_name = None;
-        st.external_cancel_requested = false;
-        st.dispatch_confirmed = false;
-        let uncertain = st.nav2_task_uncertain;
-        if let Some(id) = finished {
-            if uncertain {
-                st.uncertain_dispatch_id = Some(id);
-            } else {
-                st.terminal_dispatch_ids.insert(id);
-            }
+    let mut st = ctx.state.lock().unwrap();
+    let finished = st.pending_dispatch_id.take();
+    st.goal_reserved = false;
+    st.goal_end_decided = false;
+    st.active_task_name = None;
+    st.external_cancel_requested = false;
+    st.dispatch_confirmed = false;
+    if let Some(id) = finished {
+        if st.nav2_task_uncertain {
+            st.uncertain_dispatch_id = Some(id);
+        } else {
+            st.terminal_dispatch_ids.insert(id);
         }
-        uncertain
-    };
-    ctx.publish_nav_operation_active(uncertain);
+    }
+    ctx.publish_nav_operation_active(&st);
 }
 
 fn latched() -> Qos {
@@ -1717,7 +1762,7 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         },
         exiting: AtomicBool::new(false),
     });
-    ctx.publish_nav_operation_active(false);
+    ctx.publish_nav_operation_active(&ctx.state.lock().unwrap());
     ctx.update_progress(true, |_| true);
 
     // ---- manual sources: manual motion and autonomy are mutually exclusive
@@ -1747,9 +1792,10 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                     ctx.error(&format!("Non-finite manual velocity received on {topic}; forcing safety stop"));
                 }
                 if let Some(id) = cancel_dispatch {
-                    ctx.request_navigation_cancel(&format!("Manual velocity on {topic} requested navigation stop"), Some(&id));
-                    let status = ctx.state.lock().unwrap().last_status_message.clone();
-                    ctx.warn(&status);
+                    if ctx.request_navigation_cancel(&format!("Manual velocity on {topic} requested navigation stop"), Some(&id)) {
+                        let status = ctx.state.lock().unwrap().last_status_message.clone();
+                        ctx.warn(&status);
+                    }
                 }
             }
         });
