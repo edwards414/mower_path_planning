@@ -464,10 +464,14 @@ fn at_idle_the_lock_and_the_safety_stop_beat_at_20_hz() {
         let nav = Nav::start(&bus, clock.clone(), &dir, &[]).await;
         let mut active = nav.test.subscribe::<Bool>("/nav_operation_active", Qos::latched()).unwrap();
         assert!(!next(&mut active).await.data, "latched false for a late joiner");
-        // the first beat is at once, as tokio's interval had it
+        // The first beat is at once, as tokio's interval had it. A beat
+        // publishes its lock, then its zero, stamped as it is published; so
+        // the clock moves on only once a beat's zero is in, or the zero would
+        // carry the next beat's time (draining the queues as soon as the
+        // first lock came, as this once did, left the first beat's zero to
+        // come later and every zero after it one beat behind).
         eventually("the first beat", || lock.try_recv().is_ok()).await;
-        while lock.try_recv().is_ok() {}
-        while stop.try_recv().is_ok() {}
+        eventually("the first beat's zero", || stop.try_recv().is_ok()).await;
         let (mut locks, mut zeros) = (0, 0);
         for _ in 0..20 {
             let due = manual.clock().mono() + Duration::from_millis(50);
