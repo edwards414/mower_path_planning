@@ -49,7 +49,9 @@ pub(crate) type BusAction<A> = (
 );
 
 /// How long the cancel requests of a goal that has ended may still take to
-/// be answered by the other side before they are given up.
+/// be answered by the other side before the goal is ended on this one; and,
+/// in `action_to_ros`, how long after that DDS cancel requests of the goal
+/// are still refused by the bridge rather than left to r2r.
 const CANCEL_DRAIN: Duration = Duration::from_secs(1);
 
 /// What the goals of one forwarder share.
@@ -177,7 +179,7 @@ async fn carry_to_ros<A: BridgeAction>(
             },
             end = &mut result => break end,
             request = dds_cancels.next(), if cancels_open => match request {
-                Some(request) => cancels.push(cancel_on_bus::<A>(bus_goal.clone(), request, env)),
+                Some(request) => cancels.push(cancel_on_bus::<A>(bus_goal.clone(), DdsCancel::new(request), env)),
                 None => cancels_open = false,
             },
         }
@@ -187,18 +189,28 @@ async fn carry_to_ros<A: BridgeAction>(
     while let Some(msg) = feedback.next().await {
         publish_on_dds::<A>(&dds_goal, msg, env);
     }
-    // The cancel requests in flight have their answers by now, or soon. One
-    // that came after the end is refused: r2r answers none it handed out
-    // that is dropped unanswered.
+    // The cancel requests in flight have the bus server's answers by now, or
+    // soon: refusals, since an acceptance after the end is GoalTerminated on
+    // the bus (one that came before it was taken above). Those that come
+    // meanwhile are refused at once, and those still unanswered after the
+    // drain are rejected as they go (`DdsCancel`).
     let _ = tokio::time::timeout(CANCEL_DRAIN, async {
-        while let Some(accepted) = cancels.next().await {
-            cancel_accepted |= accepted;
+        loop {
+            tokio::select! {
+                biased;
+                accepted = cancels.next() => match accepted {
+                    Some(accepted) => cancel_accepted |= accepted,
+                    None => return,
+                },
+                request = dds_cancels.next(), if cancels_open => match request {
+                    Some(request) => DdsCancel::new(request).reject(),
+                    None => cancels_open = false,
+                },
+            }
         }
     })
     .await;
-    while let Some(Some(request)) = dds_cancels.next().now_or_never() {
-        request.reject();
-    }
+    drop(cancels);
     match end {
         Ok((status, msg)) => {
             // r2r forgets a goal once it has applied an accepted cancel
@@ -225,6 +237,17 @@ async fn carry_to_ros<A: BridgeAction>(
             env.log.warn(Failure::of(&e), || format!("the bus goal was lost ({e}), so the ROS client gets no result"));
         }
     }
+    // r2r hands out no cancel request for a goal it has ended with `succeed`
+    // or `abort`, and answers those itself. One ended with `cancel` is still
+    // cancelable in rcl until r2r applies the acceptance, at its next spin,
+    // and a lost goal stays cancelable: what comes meanwhile is refused, as
+    // the bus server would refuse it.
+    let _ = tokio::time::timeout(CANCEL_DRAIN, async {
+        while let Some(request) = dds_cancels.next().await {
+            DdsCancel::new(request).reject();
+        }
+    })
+    .await;
 }
 
 fn publish_on_dds<A: BridgeAction>(dds_goal: &r2r::ActionServerGoal<A>, msg: A::Feedback, env: &Env) {
@@ -233,11 +256,47 @@ fn publish_on_dds<A: BridgeAction>(dds_goal: &r2r::ActionServerGoal<A>, msg: A::
     }
 }
 
+/// A DDS cancel request in the bridge's hands, rejected unless answered. r2r
+/// sends no CancelGoal response at all once a request it handed out for one
+/// is dropped unanswered (`send_completed_cancel_requests` skips it), so its
+/// client would wait forever: a request the bridge gives up, at the end of
+/// the drain or when `run` aborts the forwarder, is rejected instead, as
+/// every other refusal is.
+struct DdsCancel(Option<r2r::ActionServerCancelRequest>);
+
+impl DdsCancel {
+    fn new(request: r2r::ActionServerCancelRequest) -> Self {
+        DdsCancel(Some(request))
+    }
+
+    fn accept(mut self) {
+        self.answer(true);
+    }
+
+    fn reject(mut self) {
+        self.answer(false);
+    }
+
+    fn answer(&mut self, accepted: bool) {
+        match self.0.take() {
+            Some(request) if accepted => request.accept(),
+            Some(request) => request.reject(),
+            None => {}
+        }
+    }
+}
+
+impl Drop for DdsCancel {
+    fn drop(&mut self) {
+        self.answer(false);
+    }
+}
+
 /// One DDS cancel request: ask the bus server, and answer with what it says;
 /// `true` if it was accepted. Every refusal is a reject on DDS, which has no
 /// other word for it.
 async fn cancel_on_bus<A: BridgeAction>(
-    bus_goal: ActionClientGoal<BusAction<A>>, request: r2r::ActionServerCancelRequest, env: &Env,
+    bus_goal: ActionClientGoal<BusAction<A>>, request: DdsCancel, env: &Env,
 ) -> bool {
     let answer = match bus_goal.cancel() {
         Ok(answer) => answer.await,

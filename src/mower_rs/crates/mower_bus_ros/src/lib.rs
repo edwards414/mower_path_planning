@@ -338,8 +338,9 @@ impl RosBridge {
 
     /// Spin the node and forward until `shutdown` completes or the bridge's
     /// scope closes. Before returning it ends every forwarder (their bus
-    /// endpoints go with them), stops the spin thread, which drops the node
-    /// and with it the DDS endpoints, and then gives the names back.
+    /// endpoints go with them), spins the node once more for the answers they
+    /// gave as they ended, stops the spin thread, which drops the node and
+    /// with it the DDS endpoints, and then gives the names back.
     ///
     /// Await it to the end: dropped half-way, it still stops the spin
     /// thread, but without waiting for it.
@@ -384,6 +385,11 @@ impl RosBridge {
         // Forwarders first: they hold the r2r handles, and their bus
         // endpoints must not outlive the bridge.
         tasks.shutdown().await;
+        // r2r sends the answers to cancel requests only at its next spin, and
+        // the forwarders' last ones (the refusals of what they held, action.rs)
+        // were given just now: one more spin, so that they go out before the
+        // node does.
+        let _ = handle.call(|node| node.spin_once(Duration::ZERO)).await;
         drop(handle);
         drop(stop);
         let spun = match spun {

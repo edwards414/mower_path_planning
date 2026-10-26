@@ -271,14 +271,23 @@ up none of the others. The bus side is described in the mower_bus README, "Actio
   - every refusal (`CancelRejected`, `GoalTerminated`, a lost goal): rejected. DDS has no other word for it.
   - rcl splits "cancel all goals" and "cancel goals accepted before a stamp" into one request per goal, so those work
     as well.
+- **Every cancel request the bridge takes gets an answer.** r2r sends none at all for a request that the bridge drops
+  unanswered, and its client waits forever, so what the bridge gives up it rejects:
+  - once the goal has ended, the answers in flight can only be refusals (an acceptance after the end is
+    `GoalTerminated` on the bus). The bridge waits up to 1 s for them, then rejects those still pending;
+  - a request that comes in that second, or in the second after the result, is rejected at once. Later ones r2r answers
+    itself (`GoalCancelAlreadyTerminated`), except for a goal that got no result (below);
+  - when `run` ends, the requests in flight are rejected, and `run` spins the node once more after the forwarders end,
+    since r2r sends cancel answers only at a spin.
 - **The result** reaches DDS with the bus server's status and message, with one exception: once the bridge has accepted a
   cancel request of the goal, the goal ends CANCELED on DDS, whatever the bus server ended it with. r2r forgets a goal
   when it applies an accepted cancel, and from then on delivers a result only through `cancel`. mower_nav's own r2r
   server falls back to `cancel` there too (`terminate`), so the CI tools see what they saw before.
 - **A goal the bus lost** (its server's scope closed, or it dropped the goal before ending it) gets no result on DDS,
   as a goal of a crashed server gets none. It is counted in `unanswered`.
-  - r2r keeps listing the goal as executing in its status, and reports a later cancel of it accepted without asking
-    anyone: the same r2r bug as for any goal it ended through `cancel`.
+  - r2r keeps listing the goal as executing in its status. A cancel of it within the second after the loss is rejected;
+    a later one r2r reports accepted without asking anyone, the same r2r bug as for any goal it ended through `cancel`
+    without an accepted cancel request.
   - This happens only when the bridge outlives the bus server. A standalone module's bridge does not: a failed module
     ends its process, so the CI tools see the DDS server go, as before.
 
@@ -333,9 +342,11 @@ they are until E9 (or until *nav_core* is the default). `action_from_ros` would 
 - **`run(shutdown)` returns when `shutdown` completes or the bridge's scope closes** (`Scope::closed()`).
 - **Before returning, in this order:**
   1. it aborts and awaits the forwarder tasks, and their bus endpoints go with them;
-  2. it stops the spin thread, which drops the node after its last `spin_once`, so no thread is left in `rcl_wait`
+  2. it spins the node once more: r2r sends the answers to DDS cancel requests only at a spin, and the forwarders
+     rejected the ones they held as they ended ("Actions");
+  3. it stops the spin thread, which drops the node after its last `spin_once`, so no thread is left in `rcl_wait`
      (`mower_rs_common/src/module.rs`);
-  3. it gives the names back.
+  4. it gives the names back.
 - **The spin thread:**
   - the node lives on its own thread, as in every module (`spawn_blocking`, `spin_once(20 ms)`);
   - creating and destroying the `to_ros` DDS writers runs there, between two spins, as commands from the forwarders;

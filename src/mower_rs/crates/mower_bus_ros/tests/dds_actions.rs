@@ -294,6 +294,109 @@ fn a_dds_cancel_reaches_the_bus_server_and_its_answer_comes_back() {
     });
 }
 
+/// A bus server that takes the first cancel request of each goal, ends the
+/// goal SUCCEEDED, and answers the cancel request (a rejection, all that is
+/// left after the end) `answer_after` later, or never: a server slow with a
+/// cancel.
+fn slow_cancel_server(scope: &Scope, name: &str, answer_after: Option<Duration>) -> tokio::task::JoinHandle<()> {
+    let mut requests: ActionServer<WaypointAction> = scope.action_server(name).unwrap();
+    tokio::spawn(async move {
+        while let Some(request) = requests.next().await {
+            let (mut goal, mut cancels) = request.accept().unwrap();
+            tokio::spawn(async move {
+                let cancel = cancels.next().await.unwrap();
+                goal.succeed(result(true)).unwrap();
+                match answer_after {
+                    Some(after) => {
+                        tokio::time::sleep(after).await;
+                        cancel.reject();
+                    }
+                    // Held until the test's runtime goes.
+                    None => std::future::pending::<()>().await,
+                }
+            });
+        }
+    })
+}
+
+/// r2r sends no answer at all to a DDS cancel request that the bridge drops
+/// unanswered, and the ROS client would wait for one forever. So every
+/// request the bridge takes gets one, however late the bus server's own
+/// comes: after the end it can only be a refusal, and the bridge waits 1 s
+/// for it, then rejects. A request that comes after the result r2r answers
+/// itself.
+#[test]
+fn a_dds_cancel_the_bus_server_answers_late_or_never_is_still_rejected() {
+    within(async {
+        let bus = Bus::new();
+        let mut bridge = new_bridge("slow_cancel_bridge", &bus.scope("bridge"));
+        let servers = [
+            ("/bridge_action_test/cancel_answered_in_the_drain", Some(Duration::from_millis(300))),
+            ("/bridge_action_test/cancel_answered_after_the_drain", Some(Duration::from_secs(3))),
+            ("/bridge_action_test/cancel_never_answered", None),
+        ];
+        for (name, _) in servers {
+            bridge.action_to_ros::<Waypoint::Action>(name).unwrap();
+        }
+        let running = start(bridge);
+        let nav = bus.scope("nav_action_server");
+        let _nav: Vec<_> = servers.iter().map(|(name, after)| slow_cancel_server(&nav, name, *after)).collect();
+        let tool = Peer::new("slow_cancel_tool");
+
+        for (name, _) in servers {
+            let client = tool.action_client(name).await;
+            let (dds_goal, result_future, _f) = wait("the goal", client.send_goal_request(goal("a")).unwrap()).await.unwrap();
+            let cancel = dds_goal.cancel().unwrap();
+            assert_eq!(wait("the result", result_future).await.unwrap(), (r2r::GoalStatus::Succeeded, result(true)));
+            let answer = wait("the cancel's answer", cancel).await;
+            assert!(matches!(answer, Err(r2r::Error::GoalCancelRejected)), "{name}: {answer:?}");
+            // The goal has ended on DDS: r2r answers by itself.
+            let again = wait("the next cancel's answer", dds_goal.cancel().unwrap()).await;
+            assert!(matches!(again, Err(r2r::Error::GoalCancelAlreadyTerminated)), "{name}: {again:?}");
+            assert_eq!((running.action(name).forwarded, running.action(name).unanswered), (1, 0));
+        }
+        running.stop().await.unwrap();
+    });
+}
+
+/// A cancel request that the bus server still holds when the bridge stops is
+/// rejected too: the forwarder rejects it as `run` aborts it, and `run`
+/// spins the node once more so that r2r sends the answer before the node
+/// goes.
+#[test]
+fn a_dds_cancel_in_flight_when_the_bridge_stops_is_rejected() {
+    within(async {
+        let name = "/bridge_action_test/cancel_at_stop";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("cancel_at_stop_bridge", &bus.scope("bridge"));
+        bridge.action_to_ros::<Waypoint::Action>(name).unwrap();
+        let running = start(bridge);
+        // Takes each goal and its first cancel request, and holds both: the
+        // goal runs, the request waits for an answer.
+        let (hold, mut held) = tokio::sync::mpsc::unbounded_channel();
+        let mut requests: ActionServer<WaypointAction> = bus.scope("nav_action_server").action_server(name).unwrap();
+        let _nav = tokio::spawn(async move {
+            while let Some(request) = requests.next().await {
+                let (goal, mut cancels) = request.accept().unwrap();
+                let hold = hold.clone();
+                tokio::spawn(async move {
+                    let cancel = cancels.next().await.unwrap();
+                    let _ = hold.send((goal, cancel));
+                });
+            }
+        });
+        let tool = Peer::new("cancel_at_stop_tool");
+        let client = tool.action_client(name).await;
+        let (dds_goal, _result, _f) = wait("the goal", client.send_goal_request(goal("a")).unwrap()).await.unwrap();
+        let cancel = dds_goal.cancel().unwrap();
+        let _in_hand = wait("the bus server to hold the cancel request", held.recv()).await.unwrap();
+
+        running.stop().await.unwrap();
+        let answer = wait("the cancel's answer", cancel).await;
+        assert!(matches!(answer, Err(r2r::Error::GoalCancelRejected)), "{answer:?}");
+    });
+}
+
 /// A DDS goal sent while the bus server's module restarts waits for the
 /// restarted server, as a service call does, and one sent while none comes
 /// in time is left unanswered.
