@@ -193,16 +193,21 @@ endpoints lived and died with its node. Nobody outside sees a server or a latche
       look) to find the server matched, as an r2r caller's `is_available` did.
     - It goes: within 200 ms the bus server goes too, and the calls it still holds end with `ServiceUnavailable`.
     - The name, the type and a bus server already there are still checked at the declaration.
-- **And for actions:** an `action_to_ros` DDS action server is advertised all along (r2r cannot destroy one either). An
-  `action_from_ros` bus action server follows the DDS server's presence as `service_from_ros`'s does, looking at the
-  server's `rr<name>/_action/send_goalReply` writer every 200 ms:
-  - no DDS server, no bus server: `send_goal_request` fails at once with `ServiceUnavailable`, `wait_for_server` waits
-    and `is_available` is false, as r2r's `is_available` never completes. mower_coverage then says "Navigation action
-    server unavailable" after its 2 s wait, as it did against a missing server, instead of sending a goal that would
-    end in `NoResponse` and its correlated-cancel tracking;
-  - a DDS server comes: within 200 ms the bus server does, and `wait_for_server` returns;
-  - it goes: within 200 ms the bus server goes too. The goal requests it queued fail with `ServiceUnavailable`; the goals
-    it handed on end with their DDS server, which is watched (a lost goal, `NoResponse`).
+- **And for actions,** as for services:
+  - an `action_to_ros` DDS action server exists only while the bus has a server for the name ("`action_to_ros`").
+    While nav is down a DDS client's `wait_for_server` waits and nothing of the server is on the graph, as for nav's
+    own r2r server; a goal sent then is lost, as it was;
+  - an `action_from_ros` bus action server exists only while the graph shows a DDS server that the bridge's client is
+    matched with, looking at the server's `rr<name>/_action/send_goalReply` writer every 200 ms:
+    - no DDS server, no bus server: `send_goal_request` fails at once with `ServiceUnavailable`, `wait_for_server`
+      waits and `is_available` is false, as r2r's `is_available` never completes. mower_coverage then says "Navigation
+      action server unavailable" after its 2 s wait, as it did against a missing server, instead of sending a goal that
+      would end in `NoResponse` and its correlated-cancel tracking;
+    - a DDS server comes: once a probe finds the bridge's client matched with all of it (`rcl_action_server_is_available`:
+      its three services and two topics, up to 500 ms per look), the bus server does, and `wait_for_server` returns.
+      The graph shows the goal reply writer before that, and a goal sent then would come back `NoResponse`;
+    - it goes: within 200 ms the bus server goes too. The goal requests it queued fail with `ServiceUnavailable`; the
+      goals it handed on end with their DDS server, which is watched (a lost goal, `NoResponse`).
 - **Readers too:** a `to_ros` bus reader counts in `Publisher::subscription_count()` all along. No module skips work on
   that count today.
 
@@ -315,9 +320,23 @@ up none of the others. The bus side is described in the mower_bus README, "Actio
 
 ### `action_to_ros`
 
+- **The DDS action server follows the bus server** ("Graph presence"), as `service_to_ros`'s DDS server does. The
+  forwarder waits on the bus for a server (`ActionClient::wait_for_server`) and for none (`wait_for_no_server`), with no
+  polling, and makes or destroys the DDS server on the spin thread (vendor/r2r's `Node::destroy_action_server`).
+  - Its three services and two topics leave the graph within one spin of the bus server going, as nav's own server
+    left with its node, and at most one change per 200 ms, as for services.
+  - **The goals the bridge carries keep it.** A bus server that drops its `ActionServer` while its scope stays open
+    leaves its goals running (mower_bus README, "Actions"), as an r2r server stayed while its node lived: the DDS server
+    goes only once those goals have ended and their results are out. A server whose scope closes (a module that ends:
+    mower_rsd closes its scope, and starts it again 2 s later) loses its goals at once, so its DDS server goes at once.
+  - **Withdrawn,** it takes along what it held, as a server that dies: goal requests in hand and those r2r had queued
+    are lost (counted in `unanswered`), and so are the cancel requests of goals still within their last refusals
+    (below). Its goals' DDS clients get no result and no answer to a cancel; once the module is back, its new DDS
+    server does not know them (`GoalCancelUnknownGoalID`), as nav's restarted r2r server did not.
 - **Goal requests** follow the rule of `service_to_ros`:
-  - No bus server when the request comes: the bus refuses it at once and nothing has run for it, so it waits up to
-    `bus_server` (4 s) for a server, then is sent once more. A request a bus server has taken is never sent again.
+  - No bus server when a request in hand is sent (it came as the server went, before the DDS server did): the bus
+    refuses it at once and nothing has run for it, so it waits up to `bus_server` (4 s) for a server, then is sent once
+    more, but only while its DDS server still exists. A request a bus server has taken is never sent again.
   - Accepted or rejected on the bus: accepted or rejected on DDS (the CI tools check both).
   - Any other end (the bus server ended or dropped the request, no server came in time, the bridge's scope closed): the
     DDS request is left unanswered, as a crashed server leaves it, and counted in `unanswered`.
@@ -341,24 +360,31 @@ up none of the others. The bus side is described in the mower_bus README, "Actio
   server falls back to `cancel` there too (`terminate`), so the CI tools see what they saw before.
 - **A goal the bus lost** (its server's scope closed, or it dropped the goal before ending it) gets no result on DDS,
   as a goal of a crashed server gets none. It is counted in `unanswered`.
-  - r2r keeps listing the goal as executing in its status. A cancel of it within the second after the loss is rejected;
-    a later one r2r reports accepted without asking anyone, the same r2r bug as for any goal it ended through `cancel`
-    without an accepted cancel request.
-  - This happens only when the bridge outlives the bus server. A standalone module's bridge does not: a failed module
-    ends its process, so the CI tools see the DDS server go, as before.
+  - Lost with its server's scope, it goes with the DDS server (above).
+  - Dropped by a server that lives on, it stays: r2r keeps listing it as executing in its status. A cancel of it within
+    the second after the loss is rejected; a later one r2r reports accepted without asking anyone, the same r2r bug as
+    for any goal it ended through `cancel` without an accepted cancel request. No module drops a goal so.
 
 ### `action_from_ros`
 
-- **The bus server** exists only while the graph shows a DDS server ("Graph presence").
+- **The bus server** exists only while the graph shows a DDS server that the bridge's client is matched with ("Graph
+  presence"). Each lives in a child scope of the bridge's, as `service_from_ros`'s does, so that a server that comes and
+  goes leaves no close hook in the bridge's scope (mower_bus README, "Hooks of dropped endpoints"). The goals a bus
+  server handed on run on after it goes, and end with their DDS server, so its scope closes only once the server and
+  every goal of it are gone; closing it with the server would lose them at once.
+- **The look and the probe** run next to the goals, not in front of them: a probe of up to 500 ms holds no goal's
+  feedback or cancel up.
 - **Goal requests** follow the rules of `service_from_ros`:
   - No DDS server matched within the probe window (500 ms): the bus request is dropped, and the bus client gets
-    `NoResponse`. The graph can show a server that the bridge's client has not matched yet.
+    `NoResponse`. Since the bus server comes only once a probe has found the server matched, a goal meets this only when
+    the server has just gone, before the next look takes the bus server away, or was replaced.
   - Accepted or rejected on DDS: accepted or rejected on the bus.
   - The DDS server goes away while the request is pending (checked every second), or its answer does not come by
     `dds_call` (30 s): `NoResponse`. A goal the server accepts after that, within one more `dds_call`, is canceled on DDS,
     since no bus client can see it. That is what mower_coverage does with a goal accepted after its own 3 s, and
-    `coverage_cancel_check.py`'s scenario B (accepted after 3.5 s) relies on: within `dds_call` the bridge waits, so the
+    `coverage_cancel_check.py`'s scenario B (accepted after 4 s) relies on: within `dds_call` the bridge waits, so the
     late acceptance reaches coverage, which cancels the goal itself.
+  - A goal r2r cannot convert is dropped ("Values r2r cannot convert"): `NoResponse`.
 - **Feedback** from DDS goes to the bus goal. DDS orders feedback and the result on separate entities, so feedback that
   comes after the result is lost.
 - **Cancel requests** from the bus go to DDS:
@@ -415,15 +441,19 @@ panics inside r2r.
     other writers retain, and not the value the dropped one superseded on the bus.
   - `service_to_ros`: the bus server's answer does not reach DDS, and the DDS call is unanswered.
   - `service_from_ros`: the bus request does not reach DDS, and the bus caller gets `NoResponse`.
-- **Converted first:** r2r converts a service response and a client request while it holds that service's or client's
-  lock, so a panic there would poison the lock, and the spin thread would panic at its next `spin_once`. Those two are
-  converted once on their own before r2r gets them. A publish converts with no lock held, and is guarded as it is.
+  - `action_to_ros`: a feedback message does not reach DDS, and the goal goes on; a result does not, and the DDS goal
+    gets none, as a lost goal (`unanswered` too).
+  - `action_from_ros`: the bus goal request does not reach DDS, and the bus client gets `NoResponse`.
+- **Converted first:** r2r converts a service response, a client request, an action result and an action goal request
+  while it holds that service's, client's or action server's lock, so a panic there would poison the lock, and the spin
+  thread would panic at its next `spin_once`. Those are converted once on their own before r2r gets them. A publish,
+  an action's feedback too, converts with no lock held, and is guarded as it is.
 - **The panic hook** is not called for a guarded conversion: a module that publishes a bad value at 50 Hz would write 50
   lines a second to stderr. The first guard wraps the process's hook, which still gets every other panic.
 - **Limit:** transient local with a depth above 1 (no `to_ros` name has one in production), the DDS writer can hold one
   value more than the bus retains: the dropped message takes a place in the bus history, but not in the DDS writer's.
-- **Actions** are not guarded yet (`action.rs`): feedback, results and `action_from_ros`'s goal requests are converted by
-  r2r the same way, results and goal requests under a lock.
+- **Actions:** Waypoint has no fixed-size array or bounded sequence, so only a string with a NUL can fail there; the
+  guards are a defence.
 
 ## Lifecycle
 
@@ -437,13 +467,11 @@ panics inside r2r.
   4. it gives the names back.
 - **The spin thread:**
   - the node lives on its own thread, as in every module (`spawn_blocking`, `spin_once(20 ms)`);
-  - creating and destroying the `to_ros` DDS writers, the `from_ros` DDS readers and the `service_to_ros` DDS
-    servers, and the looks at the graph, run there, between two spins, as commands from the forwarders;
+  - creating and destroying the `to_ros` DDS writers, the `from_ros` DDS readers, the `service_to_ros` DDS servers and
+    the `action_to_ros` DDS action servers, and the looks at the graph, run there, between two spins, as commands from
+    the forwarders;
   - publishing, requests, responses and probes run in the forwarders. r2r allows that from any thread.
-- **Forwarders:** `run` aborts them all before it returns, which is what ends some of them.
-  - A `to_ros`, a `from_ros`, a `service_to_ros`, a `service_from_ros` and an `action_from_ros` forwarder end on their
-    own when the scope closes.
-  - An `action_to_ros` forwarder never would, since its DDS requests keep coming.
+- **Forwarders:** `run` aborts them all before it returns, and every one also ends on its own when the scope closes.
 - **A panic** in the spin thread (r2r's `spin_once` unwraps its own locks) or in a forwarder (a bug: a value r2r cannot
   convert is caught, "Values r2r cannot convert") makes `run` stop everything and return `BridgeError::Panicked` at
   once, so that the module fails and is restarted. Without the spin thread nothing would cross any more. Await `run` to
@@ -456,7 +484,8 @@ panics inside r2r.
 - `forwarded` (for services, calls answered; for actions, goal requests answered, accepted or rejected);
 - `skipped` (volatile, no DDS reader);
 - `stale` (no live bus writer);
-- `resyncs` (`to_ros`: writer changes; `service_from_ros`, `action_from_ros`: looks at the graph);
+- `resyncs` (`to_ros`: writer changes; `service_to_ros`, `action_to_ros`: DDS server changes; `service_from_ros`,
+  `action_from_ros`: looks at the graph);
 - `unanswered` (service calls left without an answer; for actions, goal requests left without an answer and accepted
   goals whose result never reached the other side);
 - `dropped` (`to_ros` bus messages lost to the bridge's full reader queue: a forwarder stalled for more than 64);
@@ -464,8 +493,8 @@ panics inside r2r.
 - `bus_writer` (whether the `from_ros` bus writer exists; transient local, it follows the DDS writers, and its looks at
   the graph count in `resyncs`);
 - `dds_reader` (whether the `from_ros` DDS reader exists; it follows the bus readers);
-- `dds_server` (whether the `service_to_ros` DDS server exists; it follows the bus server, and its changes count in
-  `resyncs`);
+- `dds_server` (whether the `service_to_ros` or `action_to_ros` DDS server exists; it follows the bus server, and its
+  changes count in `resyncs`);
 - `dds_writer` (whether the `to_ros` DDS writer exists);
 - `bus_server` (whether the `service_from_ros` or `action_from_ros` bus server exists).
 
