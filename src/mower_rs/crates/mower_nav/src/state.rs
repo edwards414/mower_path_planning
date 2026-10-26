@@ -50,6 +50,10 @@ impl std::fmt::Display for TaskResult {
 #[derive(Default)]
 pub struct NavState {
     pub goal_reserved: bool,
+    /// The reserved goal's end is decided (`Execution::terminate`): a cancel
+    /// from any path is too late to change it from now on, and is refused,
+    /// until the next goal is reserved.
+    pub goal_end_decided: bool,
     pub active_task_name: Option<String>,
     pub last_task_name: Option<String>,
     pub external_cancel_requested: bool,
