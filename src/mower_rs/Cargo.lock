@@ -653,6 +653,9 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bus",
+ "mower_map",
+ "mower_record",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -802,6 +805,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -849,6 +853,7 @@ name = "mower_record"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",

@@ -4,8 +4,8 @@
 //! Messages to the app are kept verbatim (the UI shows them).
 
 use std::path::Path;
-use std::time::{Duration, Instant};
 
+use mower_bus::{Clock, Mono};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, PoseStamped};
 use r2r::nav_msgs::msg::Path as PathMsg;
@@ -24,7 +24,7 @@ pub const ZONE_STYLE: ((f64, f64, f64, f64), f64) = ((0.6, 0.0, 1.0, 0.5), 0.02)
 pub const RISK_STYLE: ((f64, f64, f64, f64), f64) = ((1.0, 0.0, 0.0, 0.8), 0.03);
 pub const CHANNEL_EDIT_STYLE: ((f64, f64, f64, f64), f64) = ((0.0, 0.7, 1.0, 0.8), 0.03);
 
-/// Where the recorder publishes; the node implements it with r2r publishers.
+/// Where the recorder publishes; the node implements it with bus publishers.
 pub trait Outputs {
     fn recorded_path(&self, path: &PathMsg);
     fn zone_marker(&self, m: &Marker);
@@ -1365,14 +1365,15 @@ impl Recorder {
     }
 }
 
-/// Wall-clock stamp helper for the node.
-pub fn wall_stamp() -> Time {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or(Duration::ZERO);
-    Time { sec: d.as_secs() as i32, nanosec: d.subsec_nanos() }
+/// Header stamp of `clock`'s wall time, for the node.
+pub fn stamp(clock: &Clock) -> Time {
+    let (sec, nanosec) = clock.now().to_parts();
+    Time { sec, nanosec }
 }
 
-pub fn since(t: Instant) -> f64 {
-    t.elapsed().as_secs_f64()
+/// Seconds on `clock` since `t`.
+pub fn since(clock: &Clock, t: Mono) -> f64 {
+    clock.mono().saturating_duration_since(t).as_secs_f64()
 }
 
 /// Rear-light effect to publish on this tick, if any (same rule as
@@ -1436,12 +1437,12 @@ mod tests {
             max_site_datum_distance_m: 100.0,
             robot_pose_max_age_s: 1.0,
         };
-        Recorder::new(cfg, Box::new(wall_stamp))
+        Recorder::new(cfg, Box::new(|| stamp(&Clock::system())))
     }
 
     fn pose(x: f64, y: f64) -> PoseStamped {
         let mut p = PoseStamped::default();
-        p.header.stamp = wall_stamp();
+        p.header.stamp = stamp(&Clock::system());
         p.header.frame_id = "map".into();
         p.pose.position.x = x;
         p.pose.position.y = y;
