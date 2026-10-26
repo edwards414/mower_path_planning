@@ -525,14 +525,17 @@ async fn closing_the_clients_scope_abandons_its_goals() {
 #[tokio::test]
 async fn a_client_that_gives_up_before_the_answer_leaves_the_goal_to_run_without_feedback() {
     let bus = Bus::new();
-    let mut srv = bus.scope("nav").action_server::<WaypointAction>(NAME).unwrap();
-    let client = bus.scope("coverage").action_client::<WaypointAction>(NAME).unwrap();
+    let mut srv = bus.scope("nav").action_server::<CountedAction>(NAME).unwrap();
+    let client = bus.scope("coverage").action_client::<CountedAction>(NAME).unwrap();
+    let drops = Arc::new(AtomicU64::new(0));
+    let counted = || Counted { drops: drops.clone() };
     drop(client.send_goal_request(goal("given up")).unwrap());
     let request = within(srv.next()).await.unwrap();
     let (mut server_goal, _cancels) = request.accept().unwrap();
     for _ in 0..20 {
-        server_goal.publish_feedback(feedback("dropped at once")).unwrap();
+        server_goal.publish_feedback(counted()).unwrap();
     }
+    assert_eq!(drops.load(Ordering::SeqCst), 20, "each message is dropped as it comes");
     assert_eq!(bus.actions()[0].active, 1);
     server_goal.succeed(result(true)).unwrap();
     assert_eq!(bus.actions()[0].active, 0);
@@ -541,8 +544,37 @@ async fn a_client_that_gives_up_before_the_answer_leaves_the_goal_to_run_without
     let response = client.send_goal_request(goal("unread")).unwrap();
     let (server_goal, _cancels) = within(srv.next()).await.unwrap().accept().unwrap();
     drop(response);
-    server_goal.publish_feedback(feedback("dropped at once")).unwrap();
+    server_goal.publish_feedback(counted()).unwrap();
+    assert_eq!(drops.load(Ordering::SeqCst), 21);
+
+    // Unlike the feedback of a goal whose client reads it: the queue keeps
+    // the newest 10, and they go with the stream.
+    let response = client.send_goal_request(goal("read")).unwrap();
+    let (server_goal, _cancels) = within(srv.next()).await.unwrap().accept().unwrap();
+    let (_handle, _result, feedbacks) = within(response).await.unwrap();
+    for _ in 0..20 {
+        server_goal.publish_feedback(counted()).unwrap();
+    }
+    assert_eq!((drops.load(Ordering::SeqCst), feedbacks.dropped()), (31, 10));
+    drop(feedbacks);
+    assert_eq!(drops.load(Ordering::SeqCst), 41);
 }
+
+/// Feedback that counts how many of its values have been dropped: what the
+/// bus still holds of it shows.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct Counted {
+    #[serde(skip)]
+    drops: Arc<AtomicU64>,
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+type CountedAction = (Waypoint::Goal, Waypoint::Result, Counted);
 
 // ---------------------------------------------------------------------------
 // Several goals
@@ -1033,13 +1065,24 @@ async fn a_client_written_like_mower_coverage_drives_a_server_written_like_mower
 // ---------------------------------------------------------------------------
 
 /// Goals race server restarts, cancels and closes of the client scopes:
-/// every future resolves, with an outcome the README allows.
-///
-/// Ignored by default because it soaks for 3 s by design. Run it with
-/// `cargo test -p mower_bus --test actions -- --ignored`.
+/// every future resolves, with an outcome the README allows. For 1 s here,
+/// so that CI runs it: thousands of goals on a laptop, and the floor of 100
+/// leaves room for a slow runner.
+#[test]
+fn goals_racing_server_restarts_cancels_and_client_closes_always_resolve_with_an_allowed_outcome() {
+    race_goals_against_server_restarts_cancels_and_client_closes(Duration::from_secs(1));
+}
+
+/// The same race for 3 s. Ignored by default because it soaks by design.
+/// Run it with `cargo test -p mower_bus --test actions -- --ignored`.
 #[test]
 #[ignore = "soaks for 3 s; run with --ignored"]
-fn goals_racing_server_restarts_cancels_and_client_closes_always_resolve_with_an_allowed_outcome() {
+fn goals_racing_server_restarts_cancels_and_client_closes_soak() {
+    race_goals_against_server_restarts_cancels_and_client_closes(Duration::from_secs(3));
+}
+
+/// Race goals for `soak`; at least 100 must reach a terminal status.
+fn race_goals_against_server_restarts_cancels_and_client_closes(soak: Duration) {
     const HANG: Duration = Duration::from_secs(10);
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_time().build().unwrap();
     let bus = Bus::new();
@@ -1169,7 +1212,7 @@ fn goals_racing_server_restarts_cancels_and_client_closes_always_resolve_with_an
         })
         .collect();
 
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(soak);
     stop.store(true, Ordering::SeqCst);
     rt.block_on(async {
         tokio::time::timeout(HANG, server).await.expect("server loop hung").unwrap();
