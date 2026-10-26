@@ -52,7 +52,15 @@
 //! **Bus.** The process also has one `mower_bus::Bus` and one clock. Every
 //! start of an instance runs on a fresh scope of the bus named after its
 //! node, and the supervisor closes that scope as soon as the start ends (see
-//! `supervise`). No module uses the bus yet; step E2 moves their IO onto it.
+//! `supervise`). Step E2 moves the modules' IO onto it, one module at a time:
+//! mower_bridge's `on_bus.rs` says which have moved. When a module of the set
+//! has, a bridge module (`bus_bridge`, node `mower_bus_bridge`) is started
+//! first and forwards between the bus and DDS what mower_bridge's policy
+//! derives for the set; with none, there is no bridge and the process is what
+//! it was before E2. A set that would need a name bridged both ways does not
+//! start. Whatever the flags, every endpoint an instance makes on the bus is
+//! checked against mower_bridge's manifest, and one that is not in it (and so
+//! not bridged) is reported on stderr.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -64,6 +72,9 @@ use std::time::Duration;
 use futures::future::FutureExt;
 use mower_bus::{Bus, Clock, Scope};
 use mower_rs_common::{ModuleCtx, ModuleResult, Remaps, Shutdown};
+
+/// The bus bridge's module id: not for `--modules`, started when needed.
+const BUS_BRIDGE: &str = "bus_bridge";
 
 type BoxFut = Pin<Box<dyn Future<Output = ModuleResult> + Send>>;
 type Runner = fn(r2r::Context, ModuleCtx) -> BoxFut;
@@ -93,6 +104,10 @@ struct Module {
 /// `Module::switch` of a module that has no launch switch: it always runs
 /// (coverage: the Python planner it replaced is gone).
 const ALWAYS: &str = "(always)";
+
+/// `Module::switch` of the bus bridge, which runs when a module of the set is
+/// on the bus.
+const AUTO: &str = "(auto)";
 
 /// Every module `mower_rsd` can run. The order is the start order.
 const MODULES: &[Module] = &[
@@ -193,6 +208,14 @@ const MODULES: &[Module] = &[
         // loopback WebSocket. The name is only used in logs.
         instances: &[Instance { node: "mower_agent", run: |_c, m| Box::pin(mower_agent::run(m)) }],
     },
+    Module {
+        // The bus/DDS bridge of step E2, never in --modules: main starts it
+        // first when a module of the set is on the bus, with the set's ids as
+        // its arguments (`bus_bridge`).
+        id: BUS_BRIDGE,
+        switch: AUTO,
+        instances: &[Instance { node: mower_bridge::NODE, run: |c, m| Box::pin(mower_bridge::run(c, m)) }],
+    },
 ];
 
 struct Args {
@@ -280,8 +303,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     if a.modules.is_empty() {
         return Err(format!("--modules is required\n{USAGE}"));
     }
-    let known: BTreeSet<&str> = MODULES.iter().map(|m| m.id).collect();
+    let known: BTreeSet<&str> = MODULES.iter().map(|m| m.id).filter(|id| *id != BUS_BRIDGE).collect();
     for m in &a.modules {
+        if m == BUS_BRIDGE {
+            return Err(format!("{BUS_BRIDGE} is not for --modules: it starts on its own when a module is on the bus"));
+        }
         if !known.contains(m.as_str()) {
             return Err(format!(
                 "unknown module {m:?}; known: {}",
@@ -295,6 +321,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
     }
     Ok(a)
+}
+
+/// The bus bridge's arguments, the ids of `--modules`, when a module of the
+/// set is on the bus; `None` when none is, and then no bridge runs. An error
+/// for a set mower_bridge's policy cannot bridge (a name both ways).
+fn bus_bridge(modules: &[String], remaps: &Remaps) -> Result<Option<Vec<String>>, String> {
+    let plan = mower_bridge::rsd_plan(modules, remaps).map_err(|e| e.to_string())?;
+    Ok((!plan.is_empty()).then(|| modules.to_vec()))
 }
 
 /// How a module task ended.
@@ -531,20 +565,20 @@ fn main() -> ExitCode {
             eprintln!("[mower_rsd] signal handler: {e}");
             return ExitCode::FAILURE;
         }
-        // One bus and one clock for the process as well. No module uses them
-        // yet: step E2 moves their IO from r2r onto them.
+        // One bus and one clock for the process as well; step E2 moves the
+        // modules' IO from r2r onto them.
         let bus = Bus::new();
         let clock = Clock::system();
+        let bridged = match bus_bridge(&args.modules, &remaps) {
+            Ok(bridged) => bridged,
+            Err(e) => {
+                eprintln!("[mower_rsd] {e}");
+                return ExitCode::FAILURE;
+            }
+        };
 
         let mut slots: Vec<Slot> = Vec::new();
-        for id in &args.modules {
-            let module = MODULES.iter().find(|m| m.id == *id).expect("checked in parse_args");
-            let extra: Vec<String> = args
-                .module_args
-                .iter()
-                .filter(|(mid, _)| mid == id)
-                .flat_map(|(_, v)| v.clone())
-                .collect();
+        let mut add = |module: &Module, extra: Vec<String>| {
             for inst in module.instances {
                 let (ctx, run) = (ctx.clone(), inst.run);
                 slots.push(Slot {
@@ -555,7 +589,29 @@ fn main() -> ExitCode {
                     start: Arc::new(move |m: ModuleCtx| run(ctx.clone(), m)),
                 });
             }
+        };
+        // The bridge first, so that its bus ends are there when the modules
+        // look for them.
+        if let Some(ids) = bridged {
+            add(MODULES.iter().find(|m| m.id == BUS_BRIDGE).expect("in the table"), ids);
         }
+        for id in &args.modules {
+            let module = MODULES.iter().find(|m| m.id == *id).expect("checked in parse_args");
+            let extra: Vec<String> = args
+                .module_args
+                .iter()
+                .filter(|(mid, _)| mid == id)
+                .flat_map(|(_, v)| v.clone())
+                .collect();
+            add(module, extra);
+        }
+        // An endpoint a module makes on the bus that the manifest does not
+        // have is a name nothing bridges: say so, with a bridge or without.
+        let running = mower_bridge::Running::rsd(&args.modules, mower_bridge::on_bus);
+        let bridge_scopes = vec![mower_bridge::NODE.to_string()];
+        tokio::spawn(mower_bridge::coverage::watch(bus.clone(), running, remaps.clone(), bridge_scopes, |gap| {
+            eprintln!("[mower_rsd] bus bridge: {gap}")
+        }));
         let failures = supervise(slots, bus, clock, shutdown, args.stop_timeout).await;
 
         if failures.is_empty() {
@@ -615,6 +671,7 @@ mod tests {
             ("pid_autotune", vec!["pid_autotune"]),
             ("bridge", vec!["mower_ws_bridge"]),
             ("agent", vec!["mower_agent"]),
+            ("bus_bridge", vec!["mower_bus_bridge"]),
         ];
         assert_eq!(expected.len(), MODULES.len());
         for (id, nodes) in expected {
@@ -944,6 +1001,24 @@ mod tests {
         for bad in ["inf", "-inf", "infinity", "NaN", "nan", "-1", "-0.5", "1e300", "soon", ""] {
             assert!(stop(bad).is_err(), "{bad:?} was taken");
         }
+    }
+
+    /// With every flag of mower_bridge's on_bus.rs false, no bridge runs and
+    /// the process is what it was before E2; one runs, with the set's ids, as
+    /// soon as a module of the set is on the bus.
+    #[test]
+    fn the_bus_bridge_runs_only_for_a_set_with_a_module_on_the_bus() {
+        let production: Vec<String> =
+            MODULES.iter().map(|m| m.id.to_string()).filter(|id| id != BUS_BRIDGE).collect();
+        let remaps = mower_bridge::production_remaps();
+        let bridged = bus_bridge(&production, &remaps).unwrap();
+        assert_eq!(bridged.is_some(), production.iter().any(|id| mower_bridge::on_bus(id)));
+        if let Some(ids) = bridged {
+            assert_eq!(ids, production);
+        }
+        // ws_bridge and the agent are outside in E2
+        assert_eq!(bus_bridge(&argv(&["bridge", "agent"]), &remaps), Ok(None));
+        assert!(parse_args(&argv(&["--modules", "status,bus_bridge"])).is_err(), "not for --modules");
     }
 
     #[test]

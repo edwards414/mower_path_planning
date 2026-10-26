@@ -883,6 +883,7 @@ dependencies = [
  "mower_agent",
  "mower_base",
  "mower_battery",
+ "mower_bridge",
  "mower_bus",
  "mower_coverage",
  "mower_gps",
