@@ -1,6 +1,7 @@
 //! Shared state between the subscription tasks and the publishing timers.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use mower_rs_common::round_to;
@@ -67,14 +68,15 @@ impl<T> Sample<T> {
 pub struct State {
     /// Heartbeat: when the liveness source topic last delivered a message.
     pub heartbeat_last: Option<Instant>,
-    /// Telemetry inputs.
-    pub fix: Sample<NavSatFix>,
-    pub filtered: Sample<NavSatFix>,
-    pub imu: Sample<Imu>,
-    pub odom: Sample<Odometry>,
+    /// Telemetry inputs. The messages are kept as the bus delivers them,
+    /// shared with their other readers.
+    pub fix: Sample<Arc<NavSatFix>>,
+    pub filtered: Sample<Arc<NavSatFix>>,
+    pub imu: Sample<Arc<Imu>>,
+    pub odom: Sample<Arc<Odometry>>,
     pub base: Sample<Value>,
-    pub battery: Sample<BatteryState>,
-    pub aon_battery: Sample<BatteryState>,
+    pub battery: Sample<Arc<BatteryState>>,
+    pub aon_battery: Sample<Arc<BatteryState>>,
     pub link: Sample<Value>,
     pub link_mtime: Option<SystemTime>,
     /// Latest `host` block from `host::Sampler` (sampled outside the lock).
