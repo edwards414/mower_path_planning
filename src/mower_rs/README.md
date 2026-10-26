@@ -619,10 +619,13 @@ three.
 packages listed there (`IDL_PACKAGE_FILTER`); add a package to that list
 before using a new message type, including its transitive dependencies.
 
-r2r itself is `vendor/r2r`, the crates.io 0.9.7 release with one patch
-through `[patch.crates-io]`: `Node::spin_once` keeps its rcl wait set between
-calls instead of creating and destroying it on every wakeup, which was a
-third of the spin loops' cost in `mower_rsd` (`vendor/r2r/VENDORED.md`).
+r2r itself is `vendor/r2r`, the crates.io 0.9.7 release with two patches
+through `[patch.crates-io]` (`vendor/r2r/VENDORED.md`): `Node::spin_once`
+keeps its rcl wait set between calls instead of creating and destroying it on
+every wakeup, which was a third of the spin loops' cost in `mower_rsd`; and
+`Node::destroy_subscription` / `destroy_service` / `destroy_action_server`
+take a subscription, a service or an action server off the graph before its
+node goes, for mower_bus_ros's bridge.
 
 Fast iteration without colcon, inside any container with the workspace
 sourced:

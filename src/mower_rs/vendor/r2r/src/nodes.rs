@@ -78,7 +78,8 @@ unsafe impl Send for Node {}
 /// rebuilt when the number of entities it holds changes; `rcl_wait_set_clear`
 /// and the adds still run on every call, so a destroyed entity is never
 /// waited on. Keeping the same rmw wait set also lets rmw_cyclonedds skip
-/// re-attaching entities that are unchanged since the last wait.
+/// re-attaching entities that are unchanged since the last wait. One that
+/// held an entity destroyed since is never kept (`keep_wait_set`).
 struct CachedWaitSet {
     ws: rcl_wait_set_t,
     // subscriptions, timers, clients, services
@@ -664,9 +665,12 @@ impl Node {
     /// Subscribe to a ROS topic.
     ///
     /// This function returns a `Stream` of ros messages.
+    ///
+    /// mower_rs patch: the stream is a [`Subscription`], which
+    /// [`Node::destroy_subscription`] takes back.
     pub fn subscribe<T: 'static>(
         &mut self, topic: &str, qos_profile: QosProfile,
-    ) -> Result<impl Stream<Item = T> + Unpin>
+    ) -> Result<Subscription<T>>
     where
         T: WrappedTypesupport,
     {
@@ -674,12 +678,36 @@ impl Node {
             create_subscription_helper(self.node_handle.as_mut(), topic, T::get_ts(), qos_profile)?;
         let (sender, receiver) = mpsc::channel::<T>(10);
 
-        let ws = TypedSubscriber {
+        let ws = Box::new(TypedSubscriber {
             rcl_handle: subscription_handle,
             sender,
-        };
-        self.subscribers.push(Box::new(ws));
-        Ok(receiver)
+        });
+        // Boxed: the handle stays where it is while the subscriber lives.
+        let handle: *const rcl_subscription_t = &ws.rcl_handle;
+        self.subscribers.push(ws);
+        Ok(Subscription {
+            messages: receiver,
+            handle,
+        })
+    }
+
+    /// mower_rs patch (vendor/r2r/VENDORED.md): destroy a subscription now,
+    /// on the thread that spins the node, between two `spin_once`s.
+    ///
+    /// It leaves the graph at once, as with its node, and the messages it has
+    /// queued are dropped. Upstream r2r destroys a subscription only once its
+    /// stream is dropped *and* a message comes in.
+    pub fn destroy_subscription<T: 'static>(&mut self, subscription: Subscription<T>)
+    where
+        T: WrappedTypesupport,
+    {
+        let Subscription { messages, handle } = subscription;
+        drop(messages);
+        if let Some(i) = self.subscribers.iter().position(|s| std::ptr::eq(s.handle(), handle)) {
+            let mut subscriber = self.subscribers.remove(i);
+            subscriber.destroy(&mut self.node_handle);
+        }
+        self.drop_wait_set();
     }
 
     /// Subscribe to a ROS topic.
@@ -773,9 +801,12 @@ impl Node {
     ///
     /// This function returns a `Stream` of `ServiceRequest`:s. Call
     /// `respond` on the Service Request to send the reply.
+    ///
+    /// mower_rs patch: the stream is a [`Service`], which
+    /// [`Node::destroy_service`] takes back.
     pub fn create_service<T: 'static>(
         &mut self, service_name: &str, qos_profile: QosProfile,
-    ) -> Result<impl Stream<Item = ServiceRequest<T>> + Unpin>
+    ) -> Result<Service<T>>
     where
         T: WrappedServiceTypeSupport,
     {
@@ -792,8 +823,40 @@ impl Node {
             sender,
         };
 
-        self.services.push(Arc::new(Mutex::new(ws)));
-        Ok(receiver)
+        let service: Arc<Mutex<dyn Service_>> = Arc::new(Mutex::new(ws));
+        let weak = Arc::downgrade(&service);
+        self.services.push(service);
+        Ok(Service {
+            requests: receiver,
+            service: weak,
+        })
+    }
+
+    /// mower_rs patch (vendor/r2r/VENDORED.md): destroy a ROS service now,
+    /// on the thread that spins the node, between two `spin_once`s.
+    ///
+    /// The service leaves the graph at once, as with its node. Requests it
+    /// has queued are dropped unanswered, and a `ServiceRequest` still held
+    /// answers with an error. Upstream r2r destroys a service only once its
+    /// stream is dropped *and* a request comes in.
+    pub fn destroy_service<T: 'static>(&mut self, service: Service<T>)
+    where
+        T: WrappedServiceTypeSupport,
+    {
+        let Service { requests, service } = service;
+        drop(requests);
+        if let Some(service) = service.upgrade() {
+            if let Some(i) = self.services.iter().position(|s| Arc::ptr_eq(s, &service)) {
+                self.services.swap_remove(i);
+                // Under its lock: a `respond` racing with this waits, and
+                // then finds the rcl service finalized.
+                service
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .destroy(&mut self.node_handle);
+            }
+        }
+        self.drop_wait_set();
     }
 
     /// Create a ROS service client.
@@ -930,9 +993,12 @@ impl Node {
     ///
     /// This function returns a stream of `GoalRequest`s, which needs
     /// to be either accepted or rejected.
+    ///
+    /// mower_rs patch: the stream is an [`ActionServer`], which
+    /// [`Node::destroy_action_server`] takes back.
     pub fn create_action_server<T: 'static>(
         &mut self, action_name: &str,
-    ) -> Result<impl Stream<Item = ActionServerGoalRequest<T>> + Unpin>
+    ) -> Result<ActionServer<T>>
     where
         T: WrappedActionTypeSupport,
     {
@@ -967,9 +1033,41 @@ impl Node {
             result_requests: HashMap::new(),
         };
 
-        let server_arc = Arc::new(Mutex::new(server));
+        let server_arc: Arc<Mutex<dyn ActionServer_>> = Arc::new(Mutex::new(server));
+        let weak = Arc::downgrade(&server_arc);
         self.action_servers.push(server_arc);
-        Ok(goal_request_receiver)
+        Ok(ActionServer {
+            requests: goal_request_receiver,
+            server: weak,
+        })
+    }
+
+    /// mower_rs patch (vendor/r2r/VENDORED.md): destroy a ROS action server
+    /// now, on the thread that spins the node, between two `spin_once`s.
+    ///
+    /// Its three services and two topics leave the graph at once, as with
+    /// its node. Goal requests it has queued are dropped unanswered; one
+    /// still held answers `accept` and `reject` with an error, and so do the
+    /// `ActionServerGoal`s of its goals, whose cancel streams end. A
+    /// client's goals get no result, as from a server that died.
+    pub fn destroy_action_server<T: 'static>(&mut self, server: ActionServer<T>)
+    where
+        T: WrappedActionTypeSupport,
+    {
+        let ActionServer { requests, server } = server;
+        drop(requests);
+        if let Some(server) = server.upgrade() {
+            if let Some(i) = self.action_servers.iter().position(|s| Arc::ptr_eq(s, &server)) {
+                self.action_servers.swap_remove(i);
+                // Under its lock, as for a service: its goals' calls wait
+                // and then find it finalized.
+                server
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .destroy(&mut self.node_handle);
+            }
+        }
+        self.drop_wait_set();
     }
 
     /// Create a ROS publisher.
@@ -1367,15 +1465,43 @@ impl Node {
             }
         }
 
-        self.keep_wait_set(ws, sizes);
+        let destroyed = !subs_to_remove.is_empty()
+            || !timers_to_remove.is_empty()
+            || !services_to_remove.is_empty();
+        if destroyed {
+            self.fini_wait_set(&mut ws);
+        } else {
+            self.keep_wait_set(ws, sizes);
+        }
     }
 
-    /// mower_rs patch: store the wait set for the next `spin_once`. Entities
-    /// destroyed during this call changed the counts, so the next call
-    /// rebuilds it; one whose init failed is not kept (and needs no fini).
+    /// mower_rs patch: store the wait set for the next `spin_once`; one whose
+    /// init failed is not kept (and needs no fini). A wait set that held an
+    /// entity destroyed since is never kept: `spin_once` finalizes it instead
+    /// when it destroys one, and so does `drop_wait_set`. So a kept wait set
+    /// holds only live entities, whatever the RMW caches, and the next call
+    /// builds a new one with the right sizes.
     fn keep_wait_set(&mut self, ws: rcl_wait_set_t, sizes: (usize, usize, usize, usize)) {
         if unsafe { rcl_wait_set_is_valid(&ws) } {
             self.wait_set = Some(CachedWaitSet { ws, sizes });
+        }
+    }
+
+    /// mower_rs patch: finalize the kept wait set, after an entity in it was
+    /// destroyed outside `spin_once`.
+    fn drop_wait_set(&mut self) {
+        if let Some(mut cached) = self.wait_set.take() {
+            self.fini_wait_set(&mut cached.ws);
+        }
+    }
+
+    fn fini_wait_set(&self, ws: &mut rcl_wait_set_t) {
+        if unsafe { rcl_wait_set_is_valid(ws) } {
+            // fini functions are not thread safe (see `Drop`)
+            let _ctx = self.context.context_handle.lock().unwrap();
+            unsafe {
+                rcl_wait_set_fini(ws);
+            }
         }
     }
 
@@ -1461,6 +1587,39 @@ impl Node {
             return Err(Error::from_rcl_error(result));
         }
 
+        Ok(topic_info_list)
+    }
+
+    /// mower_rs patch (vendor/r2r/VENDORED.md): the readers of a topic, as
+    /// `get_publishers_info_by_topic` gives its writers. With `no_mangle`, a
+    /// service's request reader is `rq<service>Request`.
+    pub fn get_subscriptions_info_by_topic(
+        &self, topic_name: &str, no_mangle: bool,
+    ) -> Result<Vec<TopicEndpointInfo>> {
+        let node = self.node_handle.as_ref();
+        let topic_c_string =
+            CString::new(topic_name).map_err(|_| Error::RCL_RET_INVALID_ARGUMENT)?;
+        let mut allocator = unsafe { rcutils_get_default_allocator() };
+        let mut info_array: rcl_topic_endpoint_info_array_t =
+            unsafe { rmw_get_zero_initialized_topic_endpoint_info_array() };
+        let result = unsafe {
+            rcl_get_subscriptions_info_by_topic(
+                node,
+                &mut allocator,
+                topic_c_string.as_ptr(),
+                no_mangle,
+                &mut info_array,
+            )
+        };
+        if result != RCL_RET_OK as i32 {
+            unsafe { rmw_topic_endpoint_info_array_fini(&mut info_array, &mut allocator) };
+            return Err(Error::from_rcl_error(result));
+        }
+        let topic_info_list = convert_info_array_to_vec(&info_array);
+        let result = unsafe { rmw_topic_endpoint_info_array_fini(&mut info_array, &mut allocator) };
+        if result != RCL_RET_OK as i32 {
+            return Err(Error::from_rcl_error(result));
+        }
         Ok(topic_info_list)
     }
 

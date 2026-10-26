@@ -7,7 +7,9 @@ use std::{
     collections::HashMap,
     ffi::CString,
     mem::MaybeUninit,
+    pin::Pin,
     sync::{Arc, Mutex, Weak},
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -37,6 +39,39 @@ pub trait ActionServer_ {
     fn is_cancelling(&self, uuid: &uuid::Uuid) -> Result<bool>;
     fn add_goal_handle(&mut self, uuid: uuid::Uuid, goal_handle: *mut rcl_action_goal_handle_t);
     fn destroy(&mut self, node: &mut rcl_node_t);
+}
+
+/// mower_rs patch (vendor/r2r/VENDORED.md): what `Node::create_action_server`
+/// returns, the stream of the server's goal requests, which
+/// `Node::destroy_action_server` takes back to take the server off the
+/// graph. Upstream r2r cannot destroy an action server before its node.
+pub struct ActionServer<T>
+where
+    T: WrappedActionTypeSupport,
+{
+    pub(crate) requests: mpsc::Receiver<ActionServerGoalRequest<T>>,
+    // Only compared with the node's action servers, on the node's thread.
+    pub(crate) server: Weak<Mutex<dyn ActionServer_>>,
+}
+
+// As for `Service`: the stream returned before was Send + Sync, and the
+// `Weak` is upgraded only by `Node::destroy_action_server`.
+unsafe impl<T> Send for ActionServer<T> where T: WrappedActionTypeSupport {}
+unsafe impl<T> Sync for ActionServer<T> where T: WrappedActionTypeSupport {}
+
+impl<T> Stream for ActionServer<T>
+where
+    T: WrappedActionTypeSupport,
+{
+    type Item = ActionServerGoalRequest<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.requests).poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.requests.size_hint()
+    }
 }
 
 /// Request to cancel an active goal.
@@ -93,7 +128,9 @@ where
         };
         let native_goal_info = WrappedNativeMsg::<action_msgs::msg::GoalInfo>::from(&goal_info);
 
-        let server = self.server.upgrade().unwrap(); // todo fixme
+        // mower_rs patch: an error, not a panic, once the server is gone
+        // (`Node::destroy_action_server`).
+        let server = self.server.upgrade().ok_or(Error::RCL_RET_ACTION_SERVER_INVALID)?;
         let mut server = server.lock().unwrap();
 
         let goal_handle: *mut rcl_action_goal_handle_t =
@@ -137,7 +174,8 @@ where
     /// reject the goal request and be consumed in the process
     pub fn reject(mut self) -> Result<()> {
         let time = builtin_interfaces::msg::Time::default();
-        let server = self.server.upgrade().unwrap(); // todo fixme
+        // mower_rs patch: as in `accept`.
+        let server = self.server.upgrade().ok_or(Error::RCL_RET_ACTION_SERVER_INVALID)?;
         let mut server = server.lock().unwrap();
 
         let response_msg = T::make_goal_response_msg(false, time);
@@ -572,6 +610,16 @@ where
             rcl_action_server_fini(&mut self.rcl_handle, node);
             rcl_ros_clock_fini(self.clock_handle.as_mut());
         }
+        // mower_rs patch: the fini freed the rcl goal handles. The
+        // `ActionServerGoal`s of a server destroyed before its node
+        // (`Node::destroy_action_server`) can still be used, so nothing may
+        // point at those handles any more: their calls then fail as for an
+        // unknown goal. The goals' cancel streams end, and cancel requests
+        // not answered yet are dropped.
+        self.goals.clear();
+        self.cancel_senders.clear();
+        self.active_cancel_requests.clear();
+        self.result_requests.clear();
     }
 }
 
