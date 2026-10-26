@@ -1,0 +1,29 @@
+[package]
+name = "mower_bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What mower_rsd's modules publish, subscribe, serve and call, which of them are on the bus, and the bus/DDS bridge that follows from it (docs/ROS_FREE_PLAN.md step E2, see README.md)"
+
+[dependencies]
+futures.workspace = true
+mower_bus = { path = "../mower_bus" }
+mower_bus_ros = { path = "../mower_bus_ros" }
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# The parameter files the production names come from (docs/BUS_TOPICS.md 5.7).
+serde_yaml = "0.9"
+
+# These two run themselves again with `-r` rules in argv (the production ones;
+# launch's `__node:=`), which rcl reads when the context is created and
+# libtest would refuse.
+[[test]]
+name = "resolver"
+harness = false
+
+[[test]]
+name = "standalone"
+harness = false
