@@ -59,11 +59,13 @@ fn new_bridge(ctx: r2r::Context, node: &str, namespace: &str, plan: &Plan, scope
     let count = |direction| plan.declarations.iter().filter(|d| d.direction == direction).count();
     r2r::log_info!(
         &logger,
-        "mower_bridge: {} to_ros, {} from_ros, {} service_to_ros, {} service_from_ros",
+        "mower_bridge: {} to_ros, {} from_ros, {} service_to_ros, {} service_from_ros, {} action_to_ros, {} action_from_ros",
         count(Direction::ToRos),
         count(Direction::FromRos),
         count(Direction::ServiceToRos),
-        count(Direction::ServiceFromRos)
+        count(Direction::ServiceFromRos),
+        count(Direction::ActionToRos),
+        count(Direction::ActionFromRos)
     );
     for d in &plan.declarations {
         r2r::log_debug!(&logger, "mower_bridge: {d} ({})", d.why);

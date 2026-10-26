@@ -5,7 +5,7 @@
 use std::fmt;
 
 use mower_bus::{Durability, Qos, Reliability};
-use mower_bus_ros::{BridgeError, BridgeMessage, BridgeService, RosBridge};
+use mower_bus_ros::{BridgeAction, BridgeError, BridgeMessage, BridgeService, RosBridge};
 use mower_rs_common::NameKind;
 use r2r::QosProfile;
 
@@ -228,6 +228,79 @@ impl fmt::Debug for SrvType {
     }
 }
 
+/// An r2r action type (`…::action::<Name>::Action`) as a value. On the bus
+/// it is the action `(Goal, Result, Feedback)` (mower_bus README, "Actions").
+#[derive(Clone, Copy)]
+pub struct ActType {
+    goal: fn() -> &'static str,
+    result: fn() -> &'static str,
+    feedback: fn() -> &'static str,
+    to_ros: fn(&mut RosBridge, &str) -> Result<(), BridgeError>,
+    from_ros: fn(&mut RosBridge, &str) -> Result<(), BridgeError>,
+}
+
+impl ActType {
+    pub const fn of<A: BridgeAction>() -> Self {
+        ActType {
+            goal: std::any::type_name::<A::Goal>,
+            result: std::any::type_name::<A::Result>,
+            feedback: std::any::type_name::<A::Feedback>,
+            to_ros: action_to_ros::<A>,
+            from_ros: action_from_ros::<A>,
+        }
+    }
+
+    /// The goal's `std::any::type_name`, which bus introspection reports.
+    pub fn goal_type(&self) -> &'static str {
+        (self.goal)()
+    }
+
+    pub fn result_type(&self) -> &'static str {
+        (self.result)()
+    }
+
+    pub fn feedback_type(&self) -> &'static str {
+        (self.feedback)()
+    }
+
+    /// The ROS name, e.g. `mower_interface/action/Waypoint`.
+    pub fn ros_type(&self) -> String {
+        mower_bus::ros_type_name(self.goal_type()).unwrap_or_else(|| self.goal_type().to_string())
+    }
+
+    /// `bridge.action_to_ros::<A>(name)`.
+    pub(crate) fn declare_to_ros(self, bridge: &mut RosBridge, name: &str) -> Result<(), BridgeError> {
+        (self.to_ros)(bridge, name)
+    }
+
+    /// `bridge.action_from_ros::<A>(name)`.
+    pub(crate) fn declare_from_ros(self, bridge: &mut RosBridge, name: &str) -> Result<(), BridgeError> {
+        (self.from_ros)(bridge, name)
+    }
+}
+
+fn action_to_ros<A: BridgeAction>(bridge: &mut RosBridge, name: &str) -> Result<(), BridgeError> {
+    bridge.action_to_ros::<A>(name)
+}
+
+fn action_from_ros<A: BridgeAction>(bridge: &mut RosBridge, name: &str) -> Result<(), BridgeError> {
+    bridge.action_from_ros::<A>(name)
+}
+
+impl PartialEq for ActType {
+    fn eq(&self, other: &Self) -> bool {
+        self.goal_type() == other.goal_type()
+            && self.result_type() == other.result_type()
+            && self.feedback_type() == other.feedback_type()
+    }
+}
+
+impl fmt::Debug for ActType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.ros_type())
+    }
+}
+
 /// What an endpoint does with its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
@@ -235,6 +308,19 @@ pub enum Kind {
     Subscribe,
     Serve,
     Call,
+    /// An action server.
+    ServeAction,
+    /// An action client.
+    CallAction,
+}
+
+/// The namespaces of names: a topic, a service and an action may share a
+/// name, on DDS (an action is `<name>/_action/...`) as on the bus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Space {
+    Topic,
+    Service,
+    Action,
 }
 
 impl Kind {
@@ -242,12 +328,20 @@ impl Kind {
         matches!(self, Kind::Publish | Kind::Subscribe)
     }
 
-    /// Which namespace of names and `-r` rules it lives in.
+    pub fn space(self) -> Space {
+        match self {
+            Kind::Publish | Kind::Subscribe => Space::Topic,
+            Kind::Serve | Kind::Call => Space::Service,
+            Kind::ServeAction | Kind::CallAction => Space::Action,
+        }
+    }
+
+    /// Which `-r` rules resolve its name: rcl_action resolves an action's
+    /// with the topic rules (mower_bus README, "Actions").
     pub fn name_kind(self) -> NameKind {
-        if self.is_topic() {
-            NameKind::Topic
-        } else {
-            NameKind::Service
+        match self.space() {
+            Space::Service => NameKind::Service,
+            Space::Topic | Space::Action => NameKind::Topic,
         }
     }
 
@@ -257,18 +351,22 @@ impl Kind {
             Kind::Subscribe => "subscribes to",
             Kind::Serve => "serves",
             Kind::Call => "calls",
+            Kind::ServeAction => "serves action",
+            Kind::CallAction => "sends goals to action",
         }
     }
 }
 
-/// A topic's type and QoS, or a service's type.
+/// A topic's type and QoS, a service's type or an action's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Iface {
     Topic(MsgType, Profile),
     Service(SrvType),
+    Action(ActType),
 }
 
-/// One topic or service end of a module instance, or of a node outside.
+/// One topic, service or action end of a module instance, or of a node
+/// outside.
 #[derive(Clone, Copy, Debug)]
 pub struct Endpoint {
     pub kind: Kind,
@@ -284,8 +382,9 @@ pub struct Endpoint {
     pub param: Option<&'static str>,
     pub iface: Iface,
     /// Stays on the module's r2r node when the module moves: navsat's
-    /// `/tf_static` writer until E4, and the adapter's calls to two parameter
-    /// services (README.md, "The manifest").
+    /// `/tf_static` writer until E4, the adapter's calls to two parameter
+    /// services, and nav's clients of nav2 until E9 (README.md, "The
+    /// manifest").
     pub stays_on_r2r: bool,
     /// A writer that is created and never publishes. It needs no forwarding
     /// into the bus.
@@ -327,7 +426,7 @@ impl Endpoint {
     pub fn profile(&self) -> Option<Profile> {
         match self.iface {
             Iface::Topic(_, profile) => Some(profile),
-            Iface::Service(_) => None,
+            Iface::Service(_) | Iface::Action(_) => None,
         }
     }
 
@@ -336,6 +435,7 @@ impl Endpoint {
         match &self.iface {
             Iface::Topic(t, _) => t.ros_type(),
             Iface::Service(s) => s.ros_type(),
+            Iface::Action(a) => a.ros_type(),
         }
     }
 }
@@ -354,6 +454,14 @@ pub const fn serves<S: BridgeService>(code: &'static str) -> Endpoint {
 
 pub const fn calls<S: BridgeService>(code: &'static str) -> Endpoint {
     Endpoint::new(Kind::Call, code, Iface::Service(SrvType::of::<S>()))
+}
+
+pub const fn serves_action<A: BridgeAction>(code: &'static str) -> Endpoint {
+    Endpoint::new(Kind::ServeAction, code, Iface::Action(ActType::of::<A>()))
+}
+
+pub const fn calls_action<A: BridgeAction>(code: &'static str) -> Endpoint {
+    Endpoint::new(Kind::CallAction, code, Iface::Action(ActType::of::<A>()))
 }
 
 /// One node of a module: what mower_rsd's module table calls an instance.

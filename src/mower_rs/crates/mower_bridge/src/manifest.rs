@@ -8,20 +8,26 @@
 //!   rcl makes of it with robot.launch.py's rules ([`PRODUCTION_REMAPS`];
 //!   docs/BUS_TOPICS.md 5.4, 5.7). The tests check both against rcl, the
 //!   parameter files and the launch file.
-//! - **Not listed:** parameter services and actions, which stay on r2r in E2
-//!   (the adapter's calls to two parameter services stay there too, and are
-//!   listed so marked: `stays_on_r2r`). Nor the endpoints a module creates
-//!   only with a non-production setting, except nav's `nav_core` backend
-//!   (marked `only`), which CI runs.
+//! - **Not listed:** parameter services, which stay on r2r in E2 (the
+//!   adapter's calls to two parameter services stay there too, and are
+//!   listed so marked: `stays_on_r2r`, as are nav's clients of nav2's
+//!   actions and of `/bt_navigator/get_state`, until E9). Nor the endpoints a
+//!   module creates only with a non-production setting, except nav's
+//!   `nav_core` backend (marked `only`), which CI runs.
+//! - **Actions** are listed like services: nav serves `/nav_action` and
+//!   `/nav_action_follow_path` on the bus, and coverage sends its goals to the
+//!   second (step 5).
 
 use r2r::geometry_msgs::msg::{PoseStamped, TwistStamped};
 use r2r::lifecycle_msgs::srv::GetState;
+use r2r::mower_interface::action::Waypoint;
 use r2r::mower_interface::msg::CoverageProgress;
 use r2r::mower_interface::srv::{
     CancelNavigationDispatch, ChannelPathList, ChannelRoute, ChennalPathList, ConfirmNavigationDispatch, EditZone,
     GetCoverageProgress, GetZoneList, ImportImageMask, MissionOperationLock, PidAutotune, ResumeCoverage, SiteOp,
     ZoneExecPath, ZoneMapList, ZoneSequence,
 };
+use r2r::nav2_msgs::action::{FollowPath, NavigateToPose};
 use r2r::nav_msgs::msg::{OccupancyGrid, Odometry, Path};
 use r2r::rcl_interfaces::msg::Log;
 use r2r::rcl_interfaces::srv::GetParameters;
@@ -265,6 +271,7 @@ pub static MODULES: &[Module] = &[
                 serves::<ResumeCoverage::Service>("/resume_coverage"),
                 serves::<ZoneSequence::Service>("/run_zone_sequence"),
                 serves::<Trigger::Service>("/stop_zone_sequence"),
+                calls_action::<Waypoint::Action>("nav_action_follow_path").named("/nav_action_follow_path"),
             ],
         }],
     },
@@ -279,8 +286,13 @@ pub static MODULES: &[Module] = &[
                 publishes::<Path>("/split_path", R_V_1),
                 publishes::<Marker>("/coverage_split_points", R_V_1),
                 publishes::<CoverageProgress>("/coverage_progress", R_TL_1),
-                // nav2 backend (production); its two action clients stay on r2r
+                serves_action::<Waypoint::Action>("nav_action").named("/nav_action"),
+                serves_action::<Waypoint::Action>("nav_action_follow_path").named("/nav_action_follow_path"),
+                // nav2 backend (production): its clients of nav2 stay on r2r
+                // until E9
                 calls::<GetState::Service>("bt_navigator/get_state").named("/bt_navigator/get_state").stays_on_r2r(),
+                calls_action::<NavigateToPose::Action>("navigate_to_pose").named("/navigate_to_pose").stays_on_r2r(),
+                calls_action::<FollowPath::Action>("follow_path").named("/follow_path").stays_on_r2r(),
                 publishes::<TwistStamped>("/nav_cmd_vel", R_V_10).param("nav_core.cmd_vel_topic").only(NAV_CORE),
                 publishes::<Path>("/plan", R_V_1).param("nav_core.plan_topic").only(NAV_CORE),
                 subscribes::<Odometry>("/odom", R_V_10).param("nav_core.odom_topic").only(NAV_CORE),
@@ -455,7 +467,12 @@ pub static OUTSIDE: &[Outside] = &[
         // rcl's /rosout writer is on every node; mower_nav reads nav2's
         node: "nav2",
         until: "E9",
-        endpoints: &[publishes::<Log>("/rosout", R_TL_1000), serves::<GetState::Service>("/bt_navigator/get_state")],
+        endpoints: &[
+            publishes::<Log>("/rosout", R_TL_1000),
+            serves::<GetState::Service>("/bt_navigator/get_state"),
+            serves_action::<NavigateToPose::Action>("/navigate_to_pose"),
+            serves_action::<FollowPath::Action>("/follow_path"),
+        ],
     },
     Outside {
         node: "teleop_twist_joy",

@@ -385,19 +385,57 @@ fn every_module_plans_standalone_with_every_endpoint_facing_dds() {
             module.instances.iter().flat_map(|i| Running::standalone(module.id, i.node).unwrap()).collect();
         for r in &running {
             let alone = plan(std::slice::from_ref(r), &Remaps::default()).unwrap_or_else(|e| panic!("{}: {e}", r.node));
-            let declared: BTreeSet<(bool, &str)> =
-                alone.declarations.iter().map(|d| (d.direction.to_string().starts_with("service"), d.name.as_str())).collect();
+            let declared: BTreeSet<(Space, &str)> = alone.declarations.iter().map(|d| (space(d), d.name.as_str())).collect();
             for e in r.instance.endpoints.iter().filter(|e| !e.stays_on_r2r) {
                 // without the production rules, the code's names
                 let name = Remaps::default().resolve(e.kind.name_kind(), &r.node, "", e.code).unwrap();
-                assert!(declared.contains(&(!e.kind.is_topic(), name.as_str())), "{} {} {name}", r.node, e.kind.verb());
+                assert!(declared.contains(&(e.kind.space(), name.as_str())), "{} {} {name}", r.node, e.kind.verb());
             }
         }
     }
     let coverage = plan(&Running::standalone("coverage", "boustrophedon_coverage").unwrap(), &Remaps::default()).unwrap();
-    assert!(coverage.lines().contains(&"from_ros /risk_map_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
-    assert!(coverage.lines().contains(&"to_ros /free_space_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
+    let lines = coverage.lines();
+    assert!(lines.contains(&"from_ros /risk_map_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
+    assert!(lines.contains(&"to_ros /free_space_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
     assert_eq!(coverage.notes, ["/risk_map_inflated: only DDS -> bus: its bus writers (boustrophedon_coverage) never publish"]);
+    // Coverage sends its goals to whoever serves the action on DDS:
+    // coverage_cancel_check.py's server, standalone.
+    assert!(lines.contains(&"action_from_ros /nav_action_follow_path mower_interface/action/Waypoint".to_string()));
+    // nav serves both of its actions to the CI tools' rclpy clients; nav2's
+    // stay r2r clients
+    let nav = plan(&Running::standalone("nav", "nav_action_server").unwrap(), &Remaps::default()).unwrap().lines();
+    let actions: Vec<&String> = nav.iter().filter(|l| l.starts_with("action_")).collect();
+    assert_eq!(
+        actions,
+        ["action_to_ros /nav_action mower_interface/action/Waypoint", "action_to_ros /nav_action_follow_path mower_interface/action/Waypoint"]
+    );
+}
+
+/// The namespace a declaration's name is in.
+fn space(d: &Declaration) -> Space {
+    use mower_bus_ros::Direction::*;
+    match d.direction {
+        ToRos | FromRos => Space::Topic,
+        ServiceToRos | ServiceFromRos => Space::Service,
+        ActionToRos | ActionFromRos => Space::Action,
+    }
+}
+
+/// Step 5 in mower_rsd: nav's two action servers are served on DDS as its
+/// services are, so that the graph keeps them (the tools, nav_action_client.py);
+/// coverage's goals reach nav on the bus, and cross only while nav is on r2r.
+#[test]
+fn coverage_s_goals_cross_only_while_nav_is_on_r2r() {
+    let actions = |on: &[&str]| -> Vec<String> { lines(on).into_iter().filter(|l| l.starts_with("action_")).collect() };
+    let step4 = ["battery", "status", "map", "record", "adapter", "imu", "gps", "localize"];
+    let served = ["action_to_ros /nav_action mower_interface/action/Waypoint", "action_to_ros /nav_action_follow_path mower_interface/action/Waypoint"];
+    assert_eq!(actions(&step4), Vec::<String>::new());
+    assert_eq!(actions(&[&step4[..], &["coverage", "nav"]].concat()), served);
+    assert_eq!(actions(&[&step4[..], &["nav"]].concat()), served);
+    assert_eq!(
+        actions(&[&step4[..], &["coverage"]].concat()),
+        ["action_from_ros /nav_action_follow_path mower_interface/action/Waypoint"]
+    );
 }
 
 #[test]
@@ -469,8 +507,8 @@ fn every_endpoint_resolves_to_its_production_name_with_the_production_rules() {
 
 #[test]
 fn the_manifest_is_consistent() {
-    let mut types: BTreeMap<(bool, &str), Vec<String>> = BTreeMap::new();
-    let mut servers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut types: BTreeMap<(Space, &str), Vec<String>> = BTreeMap::new();
+    let mut servers: BTreeMap<(Space, &str), Vec<&str>> = BTreeMap::new();
     let all = MODULES
         .iter()
         .flat_map(|m| m.instances.iter().map(move |i| (m.id, i.node, i.endpoints)))
@@ -480,11 +518,13 @@ fn the_manifest_is_consistent() {
         for e in endpoints {
             assert!(seen.insert((e.kind, e.name)), "{node} lists {} {} twice", e.kind.verb(), e.name);
             assert_eq!(e.kind.is_topic(), matches!(e.iface, Iface::Topic(..)), "{node} {}", e.name);
+            assert_eq!(e.kind.space() == Space::Action, matches!(e.iface, Iface::Action(_)), "{node} {}", e.name);
             let ros = e.ros_type();
-            assert!(ros.contains("/msg/") || ros.contains("/srv/"), "{node} {}: not an r2r type: {ros}", e.name);
-            types.entry((e.kind.is_topic(), e.name)).or_default().push(ros);
-            if e.kind == Kind::Serve {
-                servers.entry(e.name).or_default().push(node);
+            let r2r_type = ["/msg/", "/srv/", "/action/"].iter().any(|kind| ros.contains(kind));
+            assert!(r2r_type, "{node} {}: not an r2r type: {ros}", e.name);
+            types.entry((e.kind.space(), e.name)).or_default().push(ros);
+            if matches!(e.kind, Kind::Serve | Kind::ServeAction) {
+                servers.entry((e.kind.space(), e.name)).or_default().push(node);
             }
             assert!(e.only.is_none() || id == "nav", "{node}: only nav's nav_core endpoints are not in production");
             assert!(!e.silent || e.kind == Kind::Publish, "{node} {}", e.name);
@@ -494,7 +534,7 @@ fn the_manifest_is_consistent() {
         ros.dedup();
         assert_eq!(ros.len(), 1, "{name} has more than one type: {ros:?}");
     }
-    for (name, nodes) in servers {
+    for ((_, name), nodes) in servers {
         assert_eq!(nodes.len(), 1, "{name} is served by {nodes:?}");
     }
 }
