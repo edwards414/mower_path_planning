@@ -646,6 +646,104 @@ fn action_from_ros_loses_a_goal_whose_dds_server_goes() {
     });
 }
 
+/// The cancel requests of a goal lost with its DDS server are lost with it:
+/// each gets `NoResponse`, never a refusal, since nobody refused it. That
+/// holds for those the bridge sent to DDS, for those that waited in the
+/// goal's queue while the bridge gave the ones at DDS their last second
+/// (the goal goes before its cancel stream), and for those after.
+#[test]
+fn the_cancel_requests_of_a_goal_lost_with_its_dds_server_get_no_response() {
+    within(async {
+        let name = "/bridge_action_test/lost_cancels";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("lost_cancels_bridge", &bus.scope("bridge"));
+        bridge.action_from_ros::<Waypoint::Action>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("boustrophedon_coverage").action_client::<WaypointAction>(name).unwrap();
+        let nav2 = Peer::new("lost_cancels_nav2");
+        let _server = serve_on_dds(&nav2, name, Duration::ZERO);
+        let (handle, result_future, _f) = send_until_matched(&client, "forever").await.unwrap();
+
+        drop(nav2);
+        // A cancel request every 20 ms until the goal is lost, and a few
+        // more after.
+        let mut result_future = Box::pin(result_future);
+        let (mut lost, mut after, mut answers) = (None, 0, Vec::new());
+        let deadline = Instant::now() + WAIT;
+        while after < 5 {
+            assert!(Instant::now() < deadline, "the goal was never lost");
+            answers.push(tokio::spawn(handle.cancel().unwrap()));
+            match lost {
+                None => lost = (&mut result_future).now_or_never(),
+                Some(_) => after += 1,
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(matches!(lost, Some(Err(BusError::NoResponse { .. }))), "{lost:?}");
+        for answer in answers {
+            let answer = wait("a cancel's answer", answer).await.unwrap();
+            assert!(matches!(answer, Err(BusError::NoResponse { .. })), "{answer:?}");
+        }
+        running.stop().await.unwrap();
+    });
+}
+
+/// A DDS server that takes the first cancel request of each goal, ends the
+/// goal SUCCEEDED, and answers the request after the result: an acceptance
+/// or a rejection, after the milliseconds the goal's dispatch id names
+/// ("accept 300").
+fn serve_on_dds_answering_cancels_after_the_result(peer: &Peer, name: &str) -> tokio::task::JoinHandle<()> {
+    let mut requests = peer.with(|n| n.create_action_server::<Waypoint::Action>(name)).unwrap();
+    tokio::spawn(async move {
+        while let Some(request) = requests.next().await {
+            let (answer, after) = request.goal.dispatch_id.split_once(' ').expect("\"accept <ms>\" or \"reject <ms>\"");
+            let (accept, after) = (answer == "accept", Duration::from_millis(after.parse().unwrap()));
+            let (mut goal, mut cancels) = request.accept().unwrap();
+            tokio::spawn(async move {
+                let cancel = cancels.next().await.unwrap();
+                goal.succeed(result(true)).unwrap();
+                tokio::time::sleep(after).await;
+                if accept {
+                    cancel.accept();
+                } else {
+                    cancel.reject();
+                }
+            });
+        }
+    })
+}
+
+/// The DDS server's answer to a cancel request reaches the bus client also
+/// when it comes after the result, up to `dds_call`, as it reached a direct
+/// r2r client. DDS orders the two on separate entities, so the bridge ends
+/// the bus goal only once the answers in flight are in, or 1 s has passed:
+/// an acceptance by then is one on the bus; a later one finds the bus goal
+/// ended and reads `GoalTerminated`.
+#[test]
+fn a_dds_cancel_answer_that_comes_after_the_result_still_reaches_the_bus_client() {
+    within(async {
+        let name = "/bridge_action_test/late_cancel_answer";
+        let nav2 = Peer::new("late_cancel_answer_nav2");
+        let _server = serve_on_dds_answering_cancels_after_the_result(&nav2, name);
+        let bus = Bus::new();
+        let timeouts = ServiceTimeouts { dds_call: Duration::from_secs(8), ..ServiceTimeouts::default() };
+        let mut bridge = new_bridge("late_cancel_answer_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
+        bridge.action_from_ros::<Waypoint::Action>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("boustrophedon_coverage").action_client::<WaypointAction>(name).unwrap();
+        let rejected = || BusError::CancelRejected { name: name.into() };
+        let terminated = || BusError::GoalTerminated { name: name.into() };
+        for (id, expected) in [("accept 300", Ok(())), ("reject 2500", Err(rejected())), ("accept 2500", Err(terminated()))] {
+            let (handle, result_future, _f) = send_until_matched(&client, id).await.unwrap();
+            let cancel = handle.cancel().unwrap();
+            assert_eq!(wait("the result", result_future).await, Ok((GoalStatus::Succeeded, result(true))), "{id}");
+            assert_eq!(wait("the cancel's answer", cancel).await, expected, "{id}");
+        }
+        assert_eq!(running.action(name).unanswered, 0);
+        running.stop().await.unwrap();
+    });
+}
+
 /// mower_coverage keeps a goal request that its server accepts late
 /// (coverage_cancel_check.py's scenario B accepts after 3.5 s). Within
 /// `dds_call` the bridge waits for the answer; past it the bus client gets

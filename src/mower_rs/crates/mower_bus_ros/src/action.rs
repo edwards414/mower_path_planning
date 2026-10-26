@@ -462,12 +462,11 @@ async fn to_dds<A: BridgeAction>(
     };
     let (bus_goal, bus_cancels) = match request.accept() {
         Ok(accepted) => accepted,
-        // The bridge's scope closed: nobody on the bus can see the goal.
+        // The bridge's scope closed, and its close gave the bus client
+        // ServiceUnavailable. The DDS goal runs on, as the goal of a direct
+        // r2r client whose node goes does (README.md, "action_from_ros").
         Err(_) => {
             env.counters.unanswered();
-            if let Ok(cancel) = dds_goal.cancel() {
-                let _ = tokio::time::timeout(deadline, dds.watch(cancel)).await;
-            }
             return;
         }
     };
@@ -516,6 +515,10 @@ async fn carry_from_ros<A: BridgeAction>(
     while let Some(Some(msg)) = dds_feedback.next().now_or_never() {
         publish_on_bus::<A>(&bus_goal, msg, env);
     }
+    // DDS orders a cancel answer and the result on separate entities, so an
+    // acceptance the server sent before the result can come after it. It
+    // reaches the bus client as an acceptance only while the bus goal has
+    // not ended: the answers in flight get a moment first.
     let _ = tokio::time::timeout(CANCEL_DRAIN, async { while cancels.next().await.is_some() {} }).await;
     // Ending the bus goal answers the cancel requests the bridge has not
     // taken with GoalTerminated.
@@ -523,29 +526,36 @@ async fn carry_from_ros<A: BridgeAction>(
         Some(Ok((r2r::GoalStatus::Succeeded, msg))) => bus_goal.succeed(msg),
         Some(Ok((r2r::GoalStatus::Canceled, msg))) => bus_goal.cancel(msg),
         Some(Ok((r2r::GoalStatus::Aborted, msg))) => bus_goal.abort(msg),
-        // UNKNOWN: the server that answered did not know the goal. No
-        // terminal status is proof of anything then.
-        Some(Ok((status, _))) => {
+        lost => {
+            // The goal goes before its cancel stream: the requests that are
+            // still queued get NoResponse, as a lost goal's do, and not the
+            // CancelRejected of a stream dropped under a live goal.
+            drop(bus_goal);
             env.counters.unanswered();
-            return env.log.warn(Failure::DdsLost, || {
-                format!("the DDS result of a goal has status {status}, so the bus goal is lost")
-            });
-        }
-        Some(Err(e)) => {
-            env.counters.unanswered();
-            return env.log.error(Failure::Dds, || format!("the DDS result could not be read ({e}), so the bus goal is lost"));
-        }
-        None => {
-            env.counters.unanswered();
-            return env.log.warn(Failure::DdsLost, || {
-                "the DDS action server went away during a goal, so the bus goal is lost".into()
-            });
+            return match lost {
+                // UNKNOWN: the server that answered did not know the goal.
+                // No terminal status is proof of anything then.
+                Some(Ok((status, _))) => env.log.warn(Failure::DdsLost, || {
+                    format!("the DDS result of a goal has status {status}, so the bus goal is lost")
+                }),
+                Some(Err(e)) => {
+                    env.log.error(Failure::Dds, || format!("the DDS result could not be read ({e}), so the bus goal is lost"))
+                }
+                None => env.log.warn(Failure::DdsLost, || {
+                    "the DDS action server went away during a goal, so the bus goal is lost".into()
+                }),
+            };
         }
     };
     // `Closed` only: the bridge's scope closed and lost the goal already.
     if ended.is_err() {
         env.counters.unanswered();
     }
+    // The cancel requests still in flight get the DDS server's answer when
+    // it comes, by `deadline`, as a direct r2r client got it: a rejection is
+    // CancelRejected, an acceptance GoalTerminated now that the bus goal has
+    // ended.
+    while cancels.next().await.is_some() {}
 }
 
 fn publish_on_bus<A: BridgeAction>(bus_goal: &ActionServerGoal<BusAction<A>>, msg: A::Feedback, env: &Env) {

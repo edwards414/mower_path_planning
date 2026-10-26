@@ -311,17 +311,23 @@ up none of the others. The bus side is described in the mower_bus README, "Actio
     `GoalCancelUnknownGoalID`: rejected;
   - no answer by `dds_call`, or the server gone: dropped, so the bus client gets `NoResponse`. r2r's cancel future
     never completes then.
+  - An answer that comes after the result still reaches the bus client, by `dds_call`, as it reached a direct r2r
+    client. DDS orders the cancel answer and the result on separate entities, so the bridge waits up to 1 s for the
+    answers in flight before it ends the bus goal: an acceptance the server sent before its result still reads `Ok`
+    then. One that comes later reads `GoalTerminated`, since the bus goal has ended.
 - **The result:** SUCCEEDED, ABORTED and CANCELED end the bus goal the same way, with the server's message.
 - **A goal is lost on the bus** (dropped, so its client gets `NoResponse`, never a terminal status) when:
   - the DDS server goes away during the goal: r2r's result future never completes then, so it is watched like a pending
     service call;
   - the result comes with status UNKNOWN: the server that answered did not know the goal.
+  - Its cancel requests get `NoResponse` too, those in flight at DDS and those still queued alike: nobody refused them.
 - **Limit: a DDS server replaced while it holds a goal** (a crash and a respawn within a second, or a second instance)
   stays matched, and r2r's result future never completes. The bus goal then runs until its client gives up on it
   (coverage's leg timeout), as with a direct r2r client. Doing better needs the result asked for again, or the goal
   looked up in the new server's status array; r2r exposes neither.
 - The bridge never cancels a DDS goal because the bus side went away (the bridge's scope closed): a direct r2r client
-  whose node goes does not either.
+  whose node goes does not either, and rcl_action servers do not watch their clients. That includes a goal the DDS
+  server accepts after the scope closed, while the bus client already got `ServiceUnavailable`: it runs on.
 
 ### nav2's actions
 
