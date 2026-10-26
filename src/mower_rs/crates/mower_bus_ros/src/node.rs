@@ -19,6 +19,19 @@ use futures::channel::oneshot;
 /// stopping takes.
 pub(crate) const SPIN_TIMEOUT: Duration = Duration::from_millis(20);
 
+/// How often a forwarder looks at the graph for what DDS has, which its bus
+/// side follows (README.md, "Graph presence"): `service_from_ros`'s and
+/// `action_from_ros`'s DDS server, a transient-local `from_ros`'s DDS
+/// writers. r2r has no graph event.
+pub(crate) const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
+
+/// The least time between two changes of a DDS endpoint that follows the bus
+/// (`from_ros`'s reader, `service_to_ros`'s and `action_to_ros`'s server):
+/// one whose bus side comes and goes faster cannot keep the spin thread
+/// making and destroying it. A module that fails is started again after 2 s,
+/// so a crash loop never meets it.
+pub(crate) const DWELL: Duration = PRESENCE_PERIOD;
+
 type Command = Box<dyn FnOnce(&mut r2r::Node) + Send>;
 
 /// The forwarders' way to the node.

@@ -198,9 +198,8 @@ pub struct ServiceTimeouts {
     /// comes. 4 s by default. The DDS server goes with the bus server, so
     /// only a call that came as the server went meets it, and only until the
     /// DDS server is gone. A call a server had taken is never made again.
-    /// `action_to_ros`: the same for a goal request, whose DDS server stays
-    /// advertised while no bus server exists, so that a goal sent while a
-    /// module restarts (mower_rsd waits 2 s) reaches the restarted module.
+    /// `action_to_ros`: the same for a goal request in hand, whose DDS server
+    /// likewise goes with the bus server.
     pub bus_server: Duration,
 }
 
@@ -216,8 +215,9 @@ impl Default for ServiceTimeouts {
 /// differs from the bus's or a QoS without a bus equivalent fails at the
 /// call. The endpoints that follow the other side's presence come once the
 /// bridge runs ([`RosBridge::run`]): `to_ros`'s DDS writer, `from_ros`'s DDS
-/// reader, a transient-local `from_ros`'s bus writer, `service_to_ros`'s DDS
-/// server and `service_from_ros`'s bus server (README.md, "Graph presence").
+/// reader, a transient-local `from_ros`'s bus writer, `service_to_ros`'s and
+/// `action_to_ros`'s DDS servers, and `service_from_ros`'s and
+/// `action_from_ros`'s bus servers (README.md, "Graph presence").
 pub struct RosBridge {
     node: r2r::Node,
     scope: Scope,
@@ -297,17 +297,19 @@ impl RosBridge {
         })
     }
 
-    /// Serve bus action `name` on DDS: DDS action clients send their goals
-    /// to the bus server (README.md, "Actions").
+    /// Serve bus action `name` on DDS, while the bus has a server for it: DDS
+    /// action clients send their goals to the bus server (README.md,
+    /// "Actions").
     pub fn action_to_ros<A: BridgeAction>(&mut self, name: &str) -> Result<(), BridgeError> {
         let wait = self.timeouts.bus_server;
         self.declare(name, Direction::ActionToRos, &QosProfile::services_default(), |bridge, _, env| {
-            action::action_to_ros::<A>(&bridge.scope, &mut bridge.node, name, env.counters, env.log, wait)
+            action::action_to_ros::<A>(&bridge.scope, name, env, wait)
         })
     }
 
-    /// Serve DDS action `name` on the bus: bus action clients send their
-    /// goals to the DDS server (README.md, "Actions").
+    /// Serve DDS action `name` on the bus, while the graph shows a DDS server
+    /// that the bridge's client is matched with: bus action clients send
+    /// their goals to the DDS server (README.md, "Actions").
     pub fn action_from_ros<A: BridgeAction>(&mut self, name: &str) -> Result<(), BridgeError> {
         let deadline = self.timeouts.dds_call;
         self.declare(name, Direction::ActionFromRos, &QosProfile::services_default(), |bridge, _, env| {
@@ -344,8 +346,9 @@ impl RosBridge {
 
     /// Spin the node and forward until `shutdown` completes or the bridge's
     /// scope closes. Before returning it ends every forwarder (their bus
-    /// endpoints go with them), stops the spin thread, which drops the node
-    /// and with it the DDS endpoints, and then gives the names back.
+    /// endpoints go with them), spins the node once more for the answers they
+    /// gave as they ended, stops the spin thread, which drops the node and
+    /// with it the DDS endpoints, and then gives the names back.
     ///
     /// Await it to the end: dropped half-way, it still stops the spin
     /// thread, but without waiting for it.
@@ -390,6 +393,11 @@ impl RosBridge {
         // Forwarders first: they hold the r2r handles, and their bus
         // endpoints must not outlive the bridge.
         tasks.shutdown().await;
+        // r2r sends the answers to cancel requests only at its next spin, and
+        // the forwarders' last ones (the refusals of what they held, action.rs)
+        // were given just now: one more spin, so that they go out before the
+        // node does.
+        let _ = handle.call(|node| node.spin_once(Duration::ZERO)).await;
         drop(handle);
         drop(stop);
         let spun = match spun {
