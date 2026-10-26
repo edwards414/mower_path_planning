@@ -15,8 +15,8 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
     declarations.
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
-- **Today:** battery, status, map, record, adapter, imu, gps and localize are on the bus (E2 steps 1-4); the other
-  flags are false until their modules move.
+- **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
+  1-5); base, pid_autotune and the guards stay on r2r until they move after E3.
 
 ## The manifest
 
