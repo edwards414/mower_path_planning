@@ -22,7 +22,9 @@ opt-level = 2
 debug = false
 strip = true
 
-# r2r 0.9.7 with one patch: spin_once keeps its rcl wait set between calls
-# instead of creating and destroying it every time (vendor/r2r/VENDORED.md).
+# r2r 0.9.7 with two patches: spin_once keeps its rcl wait set between calls
+# instead of creating and destroying it every time, and a subscription, a
+# service or an action server can be destroyed before its node
+# (vendor/r2r/VENDORED.md).
 [patch.crates-io]
 r2r = { path = "vendor/r2r" }

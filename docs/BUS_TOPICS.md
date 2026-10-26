@@ -554,7 +554,8 @@ f. **Graph-presence checks.**
      publisher (mower_base:160-185). A bridge always counts as one, so move the guard and pid_autotune with the base.
    - `/rosapi/topics` (3.3) and graph_snapshot's node list (5.3) read the DDS graph.
    - `autotune_telemetry_check.py` checks pid_autotune's DDS subscriber count while idle
-     (`src/mower_rs/tools/README.md:17`). It must change with that module.
+     (`src/mower_rs/tools/README.md:17`). The bridge's `from_ros` DDS reader exists only while the bus has a reader
+     (mower_bus_ros README, "Graph presence"), so the check holds through the bridge, up to its 200 ms dwell.
 
 ### 5.6 High-rate and large messages
 
@@ -663,7 +664,7 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
 
 - a typed manifest of every module endpoint (sections 2 and 3), checked against the launch file's rules, the parameter
   files and rcl's own resolution of 5.4;
-- one flag per module, all false;
+- one flag per module (`src/on_bus.rs`), all false at step 0 and flipped as each module moved;
 - a policy that derives the bridge's declarations from the modules of a process and their flags;
 - a check that every endpoint a module makes on the bus is in the manifest;
 - `mower_rsd`'s bridge module (`mower_bus_bridge`, started only when a module is on the bus) and a runner for the
