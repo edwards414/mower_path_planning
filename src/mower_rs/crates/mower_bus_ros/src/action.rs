@@ -36,8 +36,8 @@ use mower_bus::{
 };
 
 use crate::log::{Failure, Log};
-use crate::node::NodeHandle;
-use crate::service::{DdsServer, Probed, PRESENCE_PERIOD};
+use crate::node::{NodeHandle, PRESENCE_PERIOD};
+use crate::service::{DdsServer, Probed};
 use crate::stats::Counters;
 use crate::{BridgeAction, BridgeError, Forwarder};
 
