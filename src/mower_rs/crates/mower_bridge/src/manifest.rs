@@ -253,9 +253,9 @@ pub static MODULES: &[Module] = &[
                 publishes::<MarkerArray>("/coverage_path_markers", R_TL_1),
                 publishes::<MarkerArray>("/coverage_invalid_segments", R_TL_1),
                 publishes::<MarkerArray>("/coverage_connectors", R_TL_1),
-                // `#[allow(dead_code)]` writers (docs/BUS_TOPICS.md 5.8 #2)
-                publishes::<OccupancyGrid>("/free_space_inflated", R_TL_1).silent(),
-                publishes::<OccupancyGrid>("/risk_map_inflated", R_TL_1).silent(),
+                // its two writers that never published, /free_space_inflated
+                // and /risk_map_inflated, went with the move to the bus
+                // (docs/BUS_TOPICS.md 5.8 #2)
                 publishes::<Text>("/zone_sequence_status", R_TL_1),
                 calls::<ZoneMapList::Service>("/get_zone_map_list_srv"),
                 calls::<ConfirmNavigationDispatch::Service>("/confirm_navigation_dispatch"),

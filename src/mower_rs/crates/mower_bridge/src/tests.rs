@@ -393,13 +393,14 @@ fn every_module_plans_standalone_with_every_endpoint_facing_dds() {
             }
         }
     }
+    // Coverage's grids: it only reads them (its silent writers went with the
+    // move, docs/BUS_TOPICS.md 5.8 #2), and sends its goals to whoever serves
+    // the action on DDS: coverage_cancel_check.py's server, standalone.
     let coverage = plan(&Running::standalone("coverage", "boustrophedon_coverage").unwrap(), &Remaps::default()).unwrap();
     let lines = coverage.lines();
     assert!(lines.contains(&"from_ros /risk_map_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
-    assert!(lines.contains(&"to_ros /free_space_inflated nav_msgs/msg/OccupancyGrid R TL 1".to_string()));
-    assert_eq!(coverage.notes, ["/risk_map_inflated: only DDS -> bus: its bus writers (boustrophedon_coverage) never publish"]);
-    // Coverage sends its goals to whoever serves the action on DDS:
-    // coverage_cancel_check.py's server, standalone.
+    assert!(!lines.iter().any(|l| l.contains("/free_space_inflated")), "{lines:#?}");
+    assert!(coverage.notes.is_empty(), "{:?}", coverage.notes);
     assert!(lines.contains(&"action_from_ros /nav_action_follow_path mower_interface/action/Waypoint".to_string()));
     // nav serves both of its actions to the CI tools' rclpy clients; nav2's
     // stay r2r clients

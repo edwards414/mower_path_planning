@@ -22,6 +22,14 @@
 //! `/cancel_navigation_dispatch` every two seconds and only forgets the goal
 //! once a terminal state is proven -- exactly the former Python node's
 //! `_track_and_cancel_navigation_goal` / `_request_nav2_cancel_fallback`.
+//!
+//! The action client, the services, the clients and the topics are on the
+//! in-process bus (`ModuleCtx::bus`, step E2 of docs/ROS_FREE_PLAN.md), under
+//! the names rcl gives them on the node, and time is the module's clock; the
+//! bus/DDS bridge carries what crosses the process boundary. The r2r node
+//! stays for the parameters, the six `/boustrophedon_coverage/*` parameter
+//! services (the app's `set_parameters`, the adapter's poll, `ros2 param`),
+//! the log and the graph, so it is still spun.
 
 mod contours;
 
@@ -31,8 +39,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use futures::StreamExt;
+use mower_bus::{BusError, Clock, GoalStatus, Message, Qos};
 use mower_rs_common::guard::{Guard, RELEASE_UNCONFIRMED};
-use mower_rs_common::{params, ModuleCtx, ModuleResult};
+use mower_rs_common::{params, BoxError, ModuleCtx, ModuleResult};
 use ndarray::Array2;
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped};
@@ -47,7 +56,7 @@ use r2r::rcl_interfaces::srv::{DescribeParameters, GetParameterTypes, GetParamet
 use r2r::std_msgs::msg::{Bool, Header};
 use r2r::std_srvs::srv::Trigger;
 use r2r::visualization_msgs::msg::{Marker, MarkerArray};
-use r2r::{GoalStatus, QosProfile};
+use r2r::QosProfile;
 use tokio::sync::Mutex;
 
 use mower_coverage_core::connector_planner::{boundary_distance, plan_connector_with_bdist_rs};
@@ -83,14 +92,12 @@ const VIVID_COLORS: [(f32, f32, f32); 10] = [
     (0.5, 1.0, 0.0),
 ];
 
-fn stamp_now() -> Time {
-    let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0);
-    Time { sec: (ns / 1_000_000_000) as i32, nanosec: (ns % 1_000_000_000) as u32 }
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
-}
+/// `mower_interface/action/Waypoint` as a bus action (r2r's `Waypoint::Action`).
+type WaypointAction = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback);
 
 fn uuid_hex() -> String {
     use std::io::Read;
@@ -344,7 +351,7 @@ impl Params {
 
 // ------------------------------------------------------- goal bookkeeping
 
-type Handle = Arc<StdMutex<r2r::ActionClientGoal<Waypoint::Action>>>;
+type Handle = Arc<StdMutex<mower_bus::ActionClientGoal<WaypointAction>>>;
 
 /// The action result, delivered once and readable by every tracker
 /// (Python re-attaches callbacks to the same future object).
@@ -434,24 +441,27 @@ struct Tracking {
     sequence_active_goal: Option<ActiveGoal>,
 }
 
+/// The writers of the Python node minus its two that never published,
+/// `/free_space_inflated` and `/risk_map_inflated` (docs/BUS_TOPICS.md 5.8 #2):
+/// nothing reads coverage's half of those names, and on the bus a writer that
+/// is there counts for the bridge, which would keep a DDS writer of map_manage's
+/// grids alive after map_manage is gone.
 struct Pubs {
-    path: r2r::Publisher<Path>,
-    path_markers: r2r::Publisher<MarkerArray>,
-    invalid_segments: r2r::Publisher<MarkerArray>,
-    connectors: r2r::Publisher<MarkerArray>,
-    #[allow(dead_code)]
-    free_space_inflated: r2r::Publisher<OccupancyGrid>,
-    #[allow(dead_code)]
-    risk_map_inflated: r2r::Publisher<OccupancyGrid>,
-    sequence_status: r2r::Publisher<r2r::std_msgs::msg::String>,
+    path: mower_bus::Publisher<Path>,
+    path_markers: mower_bus::Publisher<MarkerArray>,
+    invalid_segments: mower_bus::Publisher<MarkerArray>,
+    connectors: mower_bus::Publisher<MarkerArray>,
+    sequence_status: mower_bus::Publisher<r2r::std_msgs::msg::String>,
 }
 
 struct Ctx {
     logger: String,
+    /// The module's clock: marker stamps and every timeout, retry and wait.
+    clock: Clock,
     params: StdMutex<Params>,
     guard: Mutex<Guard>,
-    risk_map: StdMutex<Option<OccupancyGrid>>,
-    risk_map_inflated: StdMutex<Option<OccupancyGrid>>,
+    risk_map: StdMutex<Option<Arc<OccupancyGrid>>>,
+    risk_map_inflated: StdMutex<Option<Arc<OccupancyGrid>>>,
     zone_map_list: Mutex<Vec<ZoneMap>>,
     last_nav_dispatch_error: StdMutex<String>,
     tracking: StdMutex<Tracking>,
@@ -459,13 +469,13 @@ struct Ctx {
     sequence_task: StdMutex<Option<tokio::task::JoinHandle<()>>>,
     next_id: AtomicU64,
     pubs: StdMutex<Pubs>,
-    zone_map_list_client: r2r::Client<ZoneMapList::Service>,
-    confirm_client: r2r::Client<ConfirmNavigationDispatch::Service>,
-    cancel_client: r2r::Client<CancelNavigationDispatch::Service>,
-    nav_status_client: r2r::Client<Trigger::Service>,
-    progress_client: r2r::Client<GetCoverageProgress::Service>,
-    channel_route_client: r2r::Client<ChannelRoute::Service>,
-    follow_client: r2r::ActionClient<Waypoint::Action>,
+    zone_map_list_client: mower_bus::Client<ZoneMapList::Request, ZoneMapList::Response>,
+    confirm_client: mower_bus::Client<ConfirmNavigationDispatch::Request, ConfirmNavigationDispatch::Response>,
+    cancel_client: mower_bus::Client<CancelNavigationDispatch::Request, CancelNavigationDispatch::Response>,
+    nav_status_client: mower_bus::Client<Trigger::Request, Trigger::Response>,
+    progress_client: mower_bus::Client<GetCoverageProgress::Request, GetCoverageProgress::Response>,
+    channel_route_client: mower_bus::Client<ChannelRoute::Request, ChannelRoute::Response>,
+    follow_client: mower_bus::ActionClient<WaypointAction>,
 }
 
 impl Ctx {
@@ -491,15 +501,19 @@ impl Ctx {
         self.sequence_task.lock().unwrap().as_ref().map_or(false, |t| !t.is_finished())
     }
 
+    fn stamp_now(&self) -> Time {
+        let (sec, nanosec) = self.clock.now().to_parts();
+        Time { sec, nanosec }
+    }
+
     // ------------------------------------------------------ service calls
 
     /// `_blocking_service_call`: wait 5 s for the server, then `timeout_s`
-    /// for the answer; `None` on either (logged).
-    async fn blocking_call<T: r2r::WrappedServiceTypeSupport + 'static>(&self, client: &r2r::Client<T>, req: &T::Request, timeout_s: f64) -> Option<T::Response> {
-        let available = match r2r::Node::is_available(client) {
-            Ok(f) => tokio::time::timeout(Duration::from_secs(5), f).await.is_ok(),
-            Err(_) => false,
-        };
+    /// for the answer; `None` on either (logged). A call the bus cannot
+    /// deliver or that the server drops (`ServiceUnavailable`, `NoResponse`)
+    /// fails at once instead of at the timeout, and ends the same way.
+    async fn blocking_call<Req: Message, Resp: Message>(&self, client: &mower_bus::Client<Req, Resp>, req: &Req, timeout_s: f64) -> Option<Resp> {
+        let available = self.clock.timeout(Duration::from_secs(5), client.wait_for_service()).await.is_ok();
         if !available {
             self.error("Service 不可用");
             return None;
@@ -511,7 +525,7 @@ impl Ctx {
                 return None;
             }
         };
-        match tokio::time::timeout(Duration::from_secs_f64(timeout_s), fut).await {
+        match self.clock.timeout(Duration::from_secs_f64(timeout_s), fut).await {
             Ok(Ok(r)) => Some(r),
             Ok(Err(e)) => {
                 self.error(format!("Service call 異常: {e:?}"));
@@ -536,7 +550,7 @@ impl Ctx {
         let _ = pubs.connectors.publish(&arr);
         let mut empty = Path::default();
         empty.header.frame_id = "map".into();
-        empty.header.stamp = stamp_now();
+        empty.header.stamp = self.stamp_now();
         let _ = pubs.path.publish(&empty);
     }
 
@@ -545,7 +559,7 @@ impl Ctx {
         for (k, pts) in viz.iter().enumerate() {
             let mut m = Marker::default();
             m.header.frame_id = frame_id.into();
-            m.header.stamp = stamp_now();
+            m.header.stamp = self.stamp_now();
             m.ns = format!("zone_{zone_idx}_connector");
             m.id = (zone_idx * 10000 + k) as i32;
             m.type_ = MARKER_LINE_STRIP;
@@ -568,7 +582,7 @@ impl Ctx {
         for (k, &(i, j)) in segments.iter().enumerate() {
             let mut m = Marker::default();
             m.header.frame_id = frame_id.into();
-            m.header.stamp = stamp_now();
+            m.header.stamp = self.stamp_now();
             m.ns = format!("zone_{zone_idx}_invalid");
             m.id = (zone_idx * 10000 + k) as i32;
             m.type_ = MARKER_LINE_STRIP;
@@ -861,7 +875,7 @@ impl Ctx {
             if !zone.path.poses.is_empty() {
                 let mut line = Marker::default();
                 line.header.frame_id = zone.path.header.frame_id.clone();
-                line.header.stamp = stamp_now();
+                line.header.stamp = self.stamp_now();
                 line.ns = format!("zone_{}_path", zone.zone_id);
                 line.id = zone_idx as i32;
                 line.type_ = MARKER_LINE_STRIP;
@@ -879,7 +893,7 @@ impl Ctx {
                 for (i, ps) in zone.path.poses.iter().step_by(5).enumerate() {
                     let mut arrow = Marker::default();
                     arrow.header.frame_id = zone.path.header.frame_id.clone();
-                    arrow.header.stamp = stamp_now();
+                    arrow.header.stamp = self.stamp_now();
                     arrow.ns = format!("zone_{}_arrows", zone.zone_id);
                     arrow.id = (zone_idx * 1000 + i) as i32;
                     arrow.type_ = MARKER_ARROW;
@@ -987,10 +1001,7 @@ impl Ctx {
             return Some(make_attempt_cancel(self.clone(), dispatch, existing));
         }
 
-        let available = match r2r::Node::is_available(&self.cancel_client) {
-            Ok(f) => tokio::time::timeout(Duration::from_millis(250), f).await.is_ok(),
-            Err(_) => false,
-        };
+        let available = self.clock.timeout(Duration::from_millis(250), self.cancel_client.wait_for_service()).await.is_ok();
         if !available {
             if claim(&attempt) {
                 self.error(format!("{reason}; correlated cancel service unavailable and navigation outcome remains uncertain"));
@@ -1059,7 +1070,7 @@ impl Ctx {
             let dispatch = dispatch.clone();
             let reason = reason_s.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs_f64(timeout_s)).await;
+                ctx.clock.sleep(Duration::from_secs_f64(timeout_s)).await;
                 if !claim(&attempt) {
                     return;
                 }
@@ -1278,8 +1289,9 @@ impl Ctx {
             let tracker_c = tracker.clone();
             let ack = cancel_acknowledged.clone();
             let request_fallback = request_fallback.clone();
+            let clock = self.clock.clone();
             let task = tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                clock.sleep(Duration::from_secs(2)).await;
                 let terminal = tracker_c.lock().unwrap().terminal;
                 if !terminal && !ack.load(Ordering::SeqCst) {
                     request_fallback("action cancellation acknowledgment timed out".into()).await;
@@ -1294,7 +1306,7 @@ impl Ctx {
             let request_fallback = request_fallback.clone();
             let task = tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    ctx_c.clock.sleep(Duration::from_secs(2)).await;
                     if tracker_c.lock().unwrap().terminal || ctx_c.tracking.lock().unwrap().shutdown {
                         return;
                     }
@@ -1360,10 +1372,7 @@ impl Ctx {
             self.error("Navigation path is empty");
             return false;
         }
-        let available = match r2r::Node::is_available(&self.follow_client) {
-            Ok(f) => tokio::time::timeout(Duration::from_secs(2), f).await.is_ok(),
-            Err(_) => false,
-        };
+        let available = self.clock.timeout(Duration::from_secs(2), self.follow_client.wait_for_server()).await.is_ok();
         if !available {
             self.set_error("Navigation action server unavailable");
             self.error("Navigation action server unavailable");
@@ -1381,7 +1390,7 @@ impl Ctx {
             }
         };
         let mut boxed: futures::future::BoxFuture<'static, _> = Box::pin(fut);
-        let accepted = match tokio::time::timeout(Duration::from_secs_f64(acceptance_timeout_s), &mut boxed).await {
+        let accepted = match self.clock.timeout(Duration::from_secs_f64(acceptance_timeout_s), &mut boxed).await {
             Ok(r) => r,
             Err(_) => {
                 let msg = "Navigation action goal acceptance timed out; dispatch outcome is uncertain and cancellation is being tracked";
@@ -1404,7 +1413,10 @@ impl Ctx {
         };
         let (goal, result, _feedback) = match accepted {
             Ok(v) => v,
-            Err(r2r::Error::RCL_RET_ACTION_GOAL_REJECTED) => {
+            // The only definite answer short of acceptance: anything else
+            // (`NoResponse`, `ServiceUnavailable`) leaves the goal possibly
+            // running.
+            Err(BusError::GoalRejected { .. }) => {
                 let mut reason: Option<String> = None;
                 if let Some(status) = self.blocking_call(&self.nav_status_client, &Trigger::Request::default(), 1.0).await {
                     if status.success {
@@ -1482,7 +1494,7 @@ impl Ctx {
             return true;
         }
 
-        let outcome = tokio::time::timeout(Duration::from_secs_f64(timeout_s), slot.wait()).await;
+        let outcome = self.clock.timeout(Duration::from_secs_f64(timeout_s), slot.wait()).await;
         let result = match outcome {
             Err(_) => {
                 let msg = format!("Navigation action timed out after {timeout_s:.0}s; outcome is uncertain, navigation may be active, and cancellation is being tracked");
@@ -1680,8 +1692,8 @@ impl Handles {
     fn adopt(
         &self,
         ctx: &Arc<Ctx>,
-        goal: r2r::ActionClientGoal<Waypoint::Action>,
-        result: impl std::future::Future<Output = Result<(GoalStatus, Waypoint::Result), r2r::Error>> + Send + 'static,
+        goal: mower_bus::ActionClientGoal<WaypointAction>,
+        result: mower_bus::ResultFuture<WaypointAction>,
     ) -> (u64, Handle, Arc<ResultSlot>) {
         let id = ctx.next_id.fetch_add(1, Ordering::Relaxed);
         let handle: Handle = Arc::new(StdMutex::new(goal));
@@ -1689,11 +1701,12 @@ impl Handles {
         let (slot, _rx) = ResultSlot::new(ctx.next_id.fetch_add(1, Ordering::Relaxed));
         let slot_c = slot.clone();
         let registry = self.0.clone();
+        let clock = ctx.clock.clone();
         tokio::spawn(async move {
             let outcome = result.await.map_err(|e| format!("{e:?}"));
             let _ = slot_c.tx.send(Some(outcome));
             // keep the handle a little longer for late trackers, then drop it
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            clock.sleep(Duration::from_secs(30)).await;
             registry.lock().unwrap().remove(&id);
         });
         (id, handle, slot)
@@ -1734,21 +1747,28 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
     r2r::log_info!(&logger, "coverage backend: RustBackend");
 
-    let lock_client = node.create_client::<MissionOperationLock::Service>("/mission_operation_lock", QosProfile::services_default())?;
+    // Every bus name below is what rcl makes of it on the node, the absolute
+    // ones too (ModuleCtx::resolve_topic / resolve_service).
+    let lock_client = m.bus.client::<MissionOperationLock::Request, MissionOperationLock::Response>(
+        &m.resolve_service("/mission_operation_lock")?,
+    )?;
     let owner = format!("{}:{}", node.fully_qualified_name()?, uuid_hex());
-    let guard = Guard::new(owner, lock_client, logger.clone());
+    let guard = Guard::on_bus(owner, lock_client, m.clock.clone(), logger.clone());
 
-    let pubs = Pubs {
-        path: node.create_publisher::<Path>("/coverage_path", latched())?,
-        path_markers: node.create_publisher::<MarkerArray>("/coverage_path_markers", latched())?,
-        invalid_segments: node.create_publisher::<MarkerArray>("/coverage_invalid_segments", latched())?,
-        connectors: node.create_publisher::<MarkerArray>("/coverage_connectors", latched())?,
-        free_space_inflated: node.create_publisher::<OccupancyGrid>("/free_space_inflated", latched())?,
-        risk_map_inflated: node.create_publisher::<OccupancyGrid>("/risk_map_inflated", latched())?,
-        sequence_status: node.create_publisher::<r2r::std_msgs::msg::String>("/zone_sequence_status", latched())?,
+    let markers = |topic: &str| -> Result<mower_bus::Publisher<MarkerArray>, BoxError> {
+        Ok(m.bus.publisher::<MarkerArray>(&m.resolve_topic(topic)?, latched())?)
     };
+    let pubs = Pubs {
+        path: m.bus.publisher::<Path>(&m.resolve_topic("/coverage_path")?, latched())?,
+        path_markers: markers("/coverage_path_markers")?,
+        invalid_segments: markers("/coverage_invalid_segments")?,
+        connectors: markers("/coverage_connectors")?,
+        sequence_status: m.bus.publisher::<r2r::std_msgs::msg::String>(&m.resolve_topic("/zone_sequence_status")?, latched())?,
+    };
+    let client = |name: &str| m.resolve_service(name);
     let ctx = Arc::new(Ctx {
         logger: logger.clone(),
+        clock: m.clock.clone(),
         params: StdMutex::new(params_v),
         guard: Mutex::new(guard),
         risk_map: StdMutex::new(None),
@@ -1760,13 +1780,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         sequence_task: StdMutex::new(None),
         next_id: AtomicU64::new(1),
         pubs: StdMutex::new(pubs),
-        zone_map_list_client: node.create_client::<ZoneMapList::Service>("/get_zone_map_list_srv", QosProfile::services_default())?,
-        confirm_client: node.create_client::<ConfirmNavigationDispatch::Service>("/confirm_navigation_dispatch", QosProfile::services_default())?,
-        cancel_client: node.create_client::<CancelNavigationDispatch::Service>("/cancel_navigation_dispatch", QosProfile::services_default())?,
-        nav_status_client: node.create_client::<Trigger::Service>("/check_nav_status", QosProfile::services_default())?,
-        progress_client: node.create_client::<GetCoverageProgress::Service>("/coverage_progress_status", QosProfile::services_default())?,
-        channel_route_client: node.create_client::<ChannelRoute::Service>("/get_channel_route", QosProfile::services_default())?,
-        follow_client: node.create_action_client::<Waypoint::Action>("nav_action_follow_path")?,
+        zone_map_list_client: m.bus.client(&client("/get_zone_map_list_srv")?)?,
+        confirm_client: m.bus.client(&client("/confirm_navigation_dispatch")?)?,
+        cancel_client: m.bus.client(&client("/cancel_navigation_dispatch")?)?,
+        nav_status_client: m.bus.client(&client("/check_nav_status")?)?,
+        progress_client: m.bus.client(&client("/coverage_progress_status")?)?,
+        channel_route_client: m.bus.client(&client("/get_channel_route")?)?,
+        // A relative name, which rcl_action resolves with the topic rules.
+        follow_client: m.bus.action_client::<WaypointAction>(&m.resolve_topic("nav_action_follow_path")?)?,
     });
     // `/record_path_status` client of the Python node (never used) is not created.
     ctx.publish_sequence_status(&SequenceStatus { state: "idle", zone_ids: &[], index: 0, leg: "", message: String::new() });
@@ -1774,7 +1795,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- subscriptions ----------------------------------------------------
     {
-        let mut stream = node.subscribe::<Bool>("/nav_operation_active", latched())?;
+        let mut stream = m.bus.subscribe::<Bool>(&m.resolve_topic("/nav_operation_active")?, latched())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -1785,7 +1806,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.subscribe::<OccupancyGrid>("/risk_map", latched())?;
+        let mut stream = m.bus.subscribe::<OccupancyGrid>(&m.resolve_topic("/risk_map")?, latched())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -1795,7 +1816,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.subscribe::<OccupancyGrid>("/risk_map_inflated", latched())?;
+        let mut stream = m.bus.subscribe::<OccupancyGrid>(&m.resolve_topic("/risk_map_inflated")?, latched())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -1807,7 +1828,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
     // ---- services ---------------------------------------------------------
     {
-        let mut stream = node.create_service::<Trigger::Service>("/generate_coverage_path", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/generate_coverage_path")?)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1840,7 +1861,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<ZoneExecPath::Service>("/zone_exec_path", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<ZoneExecPath::Request, ZoneExecPath::Response>(&m.resolve_service("/zone_exec_path")?)?;
         let ctx = ctx.clone();
         let handles = handles.clone();
         tokio::spawn(async move {
@@ -1872,7 +1893,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     {
         // Continue the navigation server's checkpoint from its first unfinished
         // segment; the server itself refuses a path that changed since.
-        let mut stream = node.create_service::<ResumeCoverage::Service>("/resume_coverage", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<ResumeCoverage::Request, ResumeCoverage::Response>(&m.resolve_service("/resume_coverage")?)?;
         let ctx = ctx.clone();
         let handles = handles.clone();
         tokio::spawn(async move {
@@ -1890,7 +1911,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<ZoneSequence::Service>("/run_zone_sequence", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<ZoneSequence::Request, ZoneSequence::Response>(&m.resolve_service("/run_zone_sequence")?)?;
         let ctx = ctx.clone();
         let handles = handles.clone();
         tokio::spawn(async move {
@@ -1931,7 +1952,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<Trigger::Service>("/stop_zone_sequence", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/stop_zone_sequence")?)?;
         let ctx = ctx.clone();
         let handles = handles.clone();
         tokio::spawn(async move {
@@ -1952,7 +1973,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
 
-    // ---- parameter services (/boustrophedon_coverage/*) --------------------
+    // ---- parameter services (/boustrophedon_coverage/*), on r2r ------------
     {
         let mut stream = node.create_service::<GetParameters::Service>("/boustrophedon_coverage/get_parameters", QosProfile::services_default())?;
         let ctx = ctx.clone();
@@ -2021,6 +2042,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
 
     // ---- spin until SIGINT / SIGTERM ----------------------------------------
+    // The bus needs no spinning; the node still does, for the parameter
+    // services.
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();

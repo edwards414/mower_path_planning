@@ -41,8 +41,8 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
       services stay on r2r (E2 decision 2), and so do their callers.
     - nav's clients of nav2, until E9: `/bt_navigator/get_state` and the actions `/navigate_to_pose` and
       `/follow_path`, next to nav2 outside the process.
-  - `silent`: a writer that is made and never publishes: coverage's `/free_space_inflated` and `/risk_map_inflated`
-    (BUS_TOPICS.md 5.8 #2), mower_base's `/tf` (`enable_odom_tf` is false).
+  - `silent`: a writer that is made and never publishes: mower_base's `/tf` (`enable_odom_tf` is false). Coverage's
+    `/free_space_inflated` and `/risk_map_inflated` were (BUS_TOPICS.md 5.8 #2) until step 5 dropped them.
   - `only`: not in production. nav's `nav_core` backend (robot.launch.py `rust_nav_core:=true`, CI's
     `nav_core_check.py`), with `/tf` and `/tf_static` for `nav_core.pose_source: tf`.
 - **Outside** (BUS_TOPICS.md 5.3, "DDS→bus"), each with the step that removes it: ws_bridge's writers (E3), twist_mux's
@@ -203,5 +203,5 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (206 names, the five action
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (205 names, the five action
   ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).

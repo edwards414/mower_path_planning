@@ -1,10 +1,11 @@
 //! The coordinator's shared state and its pure decisions (the `_state_lock`
 //! part of `NavActionServer`). Everything that decides whether the mower
-//! may move lives here so it can be unit tested without ROS.
+//! may move lives here so it can be unit tested without ROS. Times are
+//! readings of the module's monotonic clock (`mower_bus::Clock::mono`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
 
+use mower_bus::Mono;
 use serde_json::json;
 
 use crate::geometry;
@@ -72,17 +73,17 @@ pub struct NavState {
     pub nav2_goal_correlated: bool,
     pub mutation_owner: Option<String>,
     pub mutation_operation: Option<String>,
-    pub manual_command_deadlines: HashMap<String, Instant>,
-    pub invalid_manual_command_deadlines: HashMap<String, Instant>,
-    pub valid_fix_received_at_by_topic: HashMap<String, Instant>,
+    pub manual_command_deadlines: HashMap<String, Mono>,
+    pub invalid_manual_command_deadlines: HashMap<String, Mono>,
+    pub valid_fix_received_at_by_topic: HashMap<String, Mono>,
     pub fix_rejections_by_topic: HashMap<String, String>,
-    pub last_gps_odometry_received_at: Option<Instant>,
+    pub last_gps_odometry_received_at: Option<Mono>,
     pub gps_odometry_rejection_reason: Option<String>,
-    pub last_robot_pose_received_at: Option<Instant>,
+    pub last_robot_pose_received_at: Option<Mono>,
     pub robot_pose_rejection_reason: Option<String>,
-    pub last_imu_received_at: Option<Instant>,
+    pub last_imu_received_at: Option<Mono>,
     pub imu_rejection_reason: Option<String>,
-    pub recent_nav2_logs: VecDeque<(Instant, String, String)>,
+    pub recent_nav2_logs: VecDeque<(Mono, String, String)>,
 }
 
 impl NavState {
@@ -95,11 +96,11 @@ impl NavState {
         }
     }
 
-    fn stale(t: Option<Instant>, now: Instant, timeout_s: f64) -> bool {
-        t.map(|t| now.duration_since(t).as_secs_f64() > timeout_s).unwrap_or(true)
+    fn stale(t: Option<Mono>, now: Mono, timeout_s: f64) -> bool {
+        t.map(|t| now.saturating_duration_since(t).as_secs_f64() > timeout_s).unwrap_or(true)
     }
 
-    pub fn navigation_health_block_reason(&self, params: &SafetyParams, now: Instant) -> Option<String> {
+    pub fn navigation_health_block_reason(&self, params: &SafetyParams, now: Mono) -> Option<String> {
         if !params.require_navigation_health {
             return None;
         }
@@ -131,7 +132,7 @@ impl NavState {
 
     /// Whether any muxed manual source is still within its timeout (expired
     /// entries are dropped).
-    pub fn manual_motion_active(&mut self, now: Instant) -> bool {
+    pub fn manual_motion_active(&mut self, now: Mono) -> bool {
         let expired: Vec<String> = self.manual_command_deadlines.iter().filter(|(_, d)| **d <= now).map(|(k, _)| k.clone()).collect();
         for k in expired {
             self.manual_command_deadlines.remove(&k);
@@ -141,7 +142,7 @@ impl NavState {
     }
 
     /// The exact reason a new autonomous goal is currently unsafe.
-    pub fn navigation_admission_block_reason(&mut self, params: &SafetyParams, now: Instant) -> Option<String> {
+    pub fn navigation_admission_block_reason(&mut self, params: &SafetyParams, now: Mono) -> Option<String> {
         if self.nav2_task_uncertain {
             return Some("previous Nav2 task termination is unconfirmed".into());
         }
@@ -159,7 +160,7 @@ impl NavState {
 
     /// Whether autonomy is authorised right now (the coordinator lock is the
     /// inverse). twist_mux treats true OR timeout as locked.
-    pub fn autonomy_authorized(&mut self, params: &SafetyParams, now: Instant) -> bool {
+    pub fn autonomy_authorized(&mut self, params: &SafetyParams, now: Mono) -> bool {
         self.manual_motion_active(now);
         self.goal_reserved
             && self.nav_state == "running"
@@ -171,7 +172,7 @@ impl NavState {
     }
 
     /// The stable machine-readable /check_nav_status payload.
-    pub fn status_json(&mut self, params: &SafetyParams, now: Instant, message: Option<&str>) -> String {
+    pub fn status_json(&mut self, params: &SafetyParams, now: Mono, message: Option<&str>) -> String {
         let block_reason = self.navigation_admission_block_reason(params, now);
         let payload = json!({
             "state": self.nav_state,
@@ -183,12 +184,12 @@ impl NavState {
         serde_json::to_string(&payload).expect("json")
     }
 
-    pub fn recent_nav2_log_summary(&self, since: Instant) -> String {
+    pub fn recent_nav2_log_summary(&self, since: Mono) -> String {
         let lines: Vec<String> = self.recent_nav2_logs.iter().filter(|(t, _, _)| *t >= since).map(|(_, name, msg)| format!("[{name}] {msg}")).collect();
         nav2_log_summary(&lines)
     }
 
-    pub fn record_nav2_log(&mut self, level: u8, name: &str, msg: &str, now: Instant) {
+    pub fn record_nav2_log(&mut self, level: u8, name: &str, msg: &str, now: Mono) {
         // rcl_interfaces/Log WARN = 30
         if level < 30 {
             return;
@@ -340,6 +341,9 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// A minute into the clock, so that the tests can look back.
+    const NOW: Mono = Mono::from_ns(60_000_000_000);
+
     fn params(health: bool) -> SafetyParams {
         SafetyParams {
             manual_command_hold_s: 0.75,
@@ -357,7 +361,7 @@ mod tests {
     fn admission_and_lock_follow_the_python_order() {
         let p = params(false);
         let mut s = NavState::new();
-        let now = Instant::now();
+        let now = NOW;
         assert_eq!(s.navigation_admission_block_reason(&p, now), None);
         assert!(!s.autonomy_authorized(&p, now));
         s.goal_reserved = true;
@@ -388,7 +392,7 @@ mod tests {
     fn health_gate_reports_the_first_missing_source() {
         let p = params(true);
         let mut s = NavState::new();
-        let now = Instant::now();
+        let now = NOW;
         assert_eq!(s.navigation_health_block_reason(&p, now).as_deref(), Some("robot pose/TF is unavailable or stale"));
         s.last_robot_pose_received_at = Some(now);
         assert_eq!(s.navigation_health_block_reason(&p, now).as_deref(), Some("GPS fix is unavailable"));
@@ -438,7 +442,7 @@ mod tests {
     #[test]
     fn nav2_log_summary_keeps_the_last_five_warnings_of_the_task() {
         let mut s = NavState::new();
-        let before = Instant::now();
+        let before = NOW;
         let start = before + Duration::from_secs(1);
         assert_eq!(s.recent_nav2_log_summary(before), "recent_nav2_logs=None");
         s.record_nav2_log(30, "controller_server", "before the task", before);

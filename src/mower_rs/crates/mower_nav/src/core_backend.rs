@@ -34,6 +34,9 @@
 //! big zone map (up to ~0.4 s on the RK3568) never holds up a controller pass
 //! or a smoother output. This file is their IO:
 //!
+//! * the topics are on the module's bus (step E2 of docs/ROS_FREE_PLAN.md),
+//!   under the names rcl gives the `nav_core.*` parameters on the node; the
+//!   bus/DDS bridge carries what crosses the process boundary;
 //! * the subscriptions are drained by tokio tasks: `/odom` and `/map_grid`
 //!   into nav-core's shared inputs, `/map_grid_global` onto the planner's
 //!   channel, `/tf` into a transform graph. The transforms are read where
@@ -43,8 +46,7 @@
 //!   tick at `SystemTime::now()`, publish, send the planner its requests and
 //!   clears and the goals their outcomes and feedback, then sleep until it is
 //!   next due (at most 10 ms), or block on its channel while nothing runs.
-//!   The publishers live on it (an `r2r::Publisher` is `Send`, and
-//!   `rcl_publish` is thread-safe);
+//!   The publishers live on it (a bus publisher publishes from any thread);
 //! * nav-planner loops the same way on its own channel: maps, clears and
 //!   requests in, a pass when due with the robot pose of that moment, results
 //!   and plans back onto nav-core's channel.
@@ -63,6 +65,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::{Stream, StreamExt};
+use mower_bus::{BusError, Qos};
 use mower_localize::tfbus;
 use mower_localize::tfgraph::TfGraph;
 use mower_localize_core::tf::{Quaternion, Transform, Vector3};
@@ -71,12 +74,12 @@ use mower_nav_core::costmap::OccupancyGrid;
 use mower_nav_core::geometry::{quaternion_from_yaw, yaw_from_quaternion, Pose2D, Transform2D, Twist2D};
 use mower_nav_core::nav_stack::StackLog;
 use mower_nav_core::smoother::TwistStamped as StampedTwist;
+use mower_rs_common::{BoxError, ModuleCtx};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped, Quaternion as RQuaternion, Transform as RTransform, Twist, TwistStamped, Vector3 as RVector3};
 use r2r::nav_msgs::msg::{OccupancyGrid as ROccupancyGrid, Odometry, Path};
 use r2r::std_msgs::msg::Header;
 use r2r::tf2_msgs::msg::TFMessage;
-use r2r::QosProfile;
 
 pub mod core_loop;
 pub mod planner_loop;
@@ -215,26 +218,27 @@ const _: () = {
 };
 
 impl NavRuntime {
-    /// Creates the subscriptions and publishers on `node` and starts the
+    /// Creates the subscriptions and publishers on the module's bus scope
+    /// `m.bus`, under the names rcl gives them on the node, and starts the
     /// threads. `logger` is the node's logger name. Call it inside a tokio
-    /// runtime (the subscriptions are drained by tokio tasks); the caller
-    /// spins `node`.
-    pub fn start(node: &mut r2r::Node, params: CoreParams, logger: &str) -> Result<Arc<Self>, r2r::Error> {
+    /// runtime (the subscriptions are drained by tokio tasks).
+    pub fn start(m: &ModuleCtx, params: CoreParams, logger: &str) -> Result<Arc<Self>, BoxError> {
+        let topic = |name: &str| m.resolve_topic(name);
         // reliable, depth 10: twist_mux subscribes reliable
-        let cmd_pub = node.create_publisher::<TwistStamped>(&params.cmd_vel_topic, QosProfile::default())?;
-        let plan_pub = node.create_publisher::<Path>(&params.plan_topic, QosProfile::default().keep_last(1))?;
-        let odom = node.subscribe::<Odometry>(&params.odom_topic, QosProfile::default())?;
-        let local_map = node.subscribe::<ROccupancyGrid>(&params.map_topic, latched())?;
-        let global_map = node.subscribe::<ROccupancyGrid>(&params.global_map_topic, latched())?;
+        let cmd_pub = m.bus.publisher::<TwistStamped>(&topic(&params.cmd_vel_topic)?, Qos::default())?;
+        let plan_pub = m.bus.publisher::<Path>(&topic(&params.plan_topic)?, Qos::default().keep_last(1))?;
+        let odom = m.bus.subscribe::<Odometry>(&topic(&params.odom_topic)?, Qos::default())?;
+        let local_map = m.bus.subscribe::<ROccupancyGrid>(&topic(&params.map_topic)?, latched())?;
+        let global_map = m.bus.subscribe::<ROccupancyGrid>(&topic(&params.global_map_topic)?, latched())?;
         let tf = match params.pose_source {
             PoseSource::TfBus => None,
             PoseSource::TfTopic => Some((
-                node.subscribe::<TFMessage>("/tf", QosProfile::default().keep_last(100))?,
-                node.subscribe::<TFMessage>("/tf_static", QosProfile::default().keep_last(100).reliable().transient_local())?,
+                m.bus.subscribe::<TFMessage>(&topic("/tf")?, Qos::default().keep_last(100))?,
+                m.bus.subscribe::<TFMessage>(&topic("/tf_static")?, Qos::default().keep_last(100).reliable().transient_local())?,
             )),
         };
 
-        let outputs = RosOutputs { cmd_pub, plan_pub, params: params.clone(), logger: logger.to_string(), failed: HashSet::new() };
+        let outputs = BusOutputs { cmd_pub, plan_pub, params: params.clone(), logger: logger.to_string(), failed: HashSet::new() };
         let mut rt = Self::spawn(params.clone(), logger, Box::new(outputs))?;
         let shared = rt.shared.clone();
         rt.tasks.push({
@@ -252,7 +256,7 @@ impl NavRuntime {
             let mut local_map = local_map;
             tokio::spawn(async move {
                 while let Some(msg) = local_map.next().await {
-                    lock(&shared.inputs).set_local_map(grid_in(msg));
+                    lock(&shared.inputs).set_local_map(grid_in(Arc::unwrap_or_clone(msg)));
                 }
             })
         });
@@ -261,7 +265,7 @@ impl NavRuntime {
             let mut global_map = global_map;
             tokio::spawn(async move {
                 while let Some(msg) = global_map.next().await {
-                    if planner.send(PlannerMsg::Map(grid_in(msg))).is_err() {
+                    if planner.send(PlannerMsg::Map(grid_in(Arc::unwrap_or_clone(msg)))).is_err() {
                         return;
                     }
                 }
@@ -547,8 +551,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
 fn wall_ns() -> i64 {
@@ -585,7 +589,7 @@ fn grid_in(msg: ROccupancyGrid) -> OccupancyGrid {
 }
 
 fn spawn_tf(
-    shared: Arc<Shared>, mut stream: impl Stream<Item = TFMessage> + Unpin + Send + 'static, statics: bool,
+    shared: Arc<Shared>, mut stream: impl Stream<Item = Arc<TFMessage>> + Unpin + Send + 'static, statics: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(msg) = stream.next().await {
@@ -608,17 +612,17 @@ trait Outputs: Send {
     fn plan(&mut self, plan: &[Pose2D], stamp_ns: i64);
 }
 
-struct RosOutputs {
-    cmd_pub: r2r::Publisher<TwistStamped>,
-    plan_pub: r2r::Publisher<Path>,
+struct BusOutputs {
+    cmd_pub: mower_bus::Publisher<TwistStamped>,
+    plan_pub: mower_bus::Publisher<Path>,
     params: CoreParams,
     logger: String,
     /// Topics whose publish failed (logged once each).
     failed: HashSet<String>,
 }
 
-impl RosOutputs {
-    fn warn_once(&mut self, topic: &str, r: Result<(), r2r::Error>) {
+impl BusOutputs {
+    fn warn_once(&mut self, topic: &str, r: Result<(), BusError>) {
         if let Err(e) = r {
             if self.failed.insert(topic.to_string()) {
                 r2r::log_warn!(&self.logger, "nav_core: publishing on {topic} failed: {e}");
@@ -627,7 +631,7 @@ impl RosOutputs {
     }
 }
 
-impl Outputs for RosOutputs {
+impl Outputs for BusOutputs {
     fn cmd_vel(&mut self, c: &StampedTwist) {
         let msg = TwistStamped {
             header: Header { stamp: stamp(c.stamp_ns), frame_id: c.frame_id.clone() },
@@ -1030,26 +1034,22 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_follow_path_round_trip_over_ros_with_the_pose_from_the_tfbus() {
+    async fn a_follow_path_round_trip_on_the_bus_with_the_pose_from_the_tfbus() {
         round_trip(PoseSource::TfBus, "tfbus").await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_follow_path_round_trip_over_ros_with_the_pose_from_tf() {
+    async fn a_follow_path_round_trip_on_the_bus_with_the_pose_from_tf() {
         round_trip(PoseSource::TfTopic, "tf").await;
     }
 
-    /// The whole round trip on DDS: maps and `/odom` in, the pose on the
-    /// tfbus or on `/tf` (dynamic only, no `/tf_static`), a kinematic robot
-    /// driven by `/nav_cmd_vel`. Needs a ROS environment; returns early
-    /// without one, like the navsat test.
+    /// The whole round trip on the bus, from another scope as the other
+    /// modules of mower_rsd would: maps and `/odom` in, the pose on the tfbus
+    /// or on `/tf` (dynamic only, no `/tf_static`), a kinematic robot driven
+    /// by `/nav_cmd_vel`.
     async fn round_trip(source: PoseSource, name: &str) {
-        let ctx = match r2r::Context::create() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        // topics and frames of its own: the tfbus is process-global, and
-        // the graph (with its /tf) may be shared
+        // Topics of its own, as the nav_core.* parameters name them, and
+        // frames of its own: the tfbus is process-global.
         let ns = format!("/nav_core_runtime_test_{name}");
         let params = CoreParams {
             pose_source: source,
@@ -1063,30 +1063,22 @@ mod tests {
             base_frame: format!("rt_test_{name}_base"),
             odom_timeout_s: 0.5,
         };
-        let mut node = r2r::Node::create(ctx.clone(), &format!("nav_core_runtime_test_{name}"), "").unwrap();
-        let logger = node.logger().to_string();
-        let rt = NavRuntime::start(&mut node, params.clone(), &logger).unwrap();
+        let bus = mower_bus::Bus::new();
+        let node = format!("nav_core_runtime_test_{name}");
+        let m = ModuleCtx::new(&node, mower_rs_common::Shutdown::new()).with_bus(bus.scope(&node));
+        let rt = NavRuntime::start(&m, params.clone(), &node).unwrap();
         assert!(!rt.readiness().ready());
 
-        let mut feeder = r2r::Node::create(ctx, &format!("nav_core_runtime_feeder_{name}"), "").unwrap();
-        let map_pub = feeder.create_publisher::<ROccupancyGrid>(&params.map_topic, latched()).unwrap();
-        let global_pub = feeder.create_publisher::<ROccupancyGrid>(&params.global_map_topic, latched()).unwrap();
-        let odom_pub = feeder.create_publisher::<Odometry>(&params.odom_topic, QosProfile::default()).unwrap();
-        let tf_pub = feeder.create_publisher::<TFMessage>("/tf", QosProfile::default().keep_last(100)).unwrap();
-        let mut cmd = feeder.subscribe::<TwistStamped>(&params.cmd_vel_topic, QosProfile::default()).unwrap();
+        let feeder = bus.scope("feeder");
+        let map_pub = feeder.publisher::<ROccupancyGrid>(&params.map_topic, latched()).unwrap();
+        let global_pub = feeder.publisher::<ROccupancyGrid>(&params.global_map_topic, latched()).unwrap();
+        let odom_pub = feeder.publisher::<Odometry>(&params.odom_topic, Qos::default()).unwrap();
+        let tf_pub = feeder.publisher::<TFMessage>("/tf", Qos::default().keep_last(100)).unwrap();
+        let mut cmd = feeder.subscribe::<TwistStamped>(&params.cmd_vel_topic, Qos::default()).unwrap();
         map_pub.publish(&grid_msg(&params.map_frame)).unwrap();
         global_pub.publish(&grid_msg(&params.map_frame)).unwrap();
 
         let running = Arc::new(AtomicBool::new(true));
-        let spin = {
-            let running = running.clone();
-            tokio::task::spawn_blocking(move || {
-                while running.load(Ordering::Relaxed) {
-                    node.spin_once(Duration::from_millis(5));
-                    feeder.spin_once(Duration::from_millis(5));
-                }
-            })
-        };
         let robot = Arc::new(Mutex::new(Robot { pose: Pose2D::new(1.0, 1.0, 0.0), twist: Twist2D::default(), stamps: Vec::new(), frames: HashSet::new() }));
         let listener = {
             let robot = robot.clone();
@@ -1188,10 +1180,13 @@ mod tests {
         assert!(long.feedback.recv().await.is_some(), "the feedback it had");
         while long.feedback.recv().await.is_some() {}
 
+        // its writers went with it
+        let writers = |topic: &str| bus.topics().into_iter().find(|t| t.name == topic).map_or(0, |t| t.publishers.len());
+        assert_eq!((writers(&params.cmd_vel_topic), writers(&params.plan_topic)), (0, 0));
+
         running.store(false, Ordering::Relaxed);
         listener.abort();
         let _ = mover.await;
-        let _ = spin.await;
     }
 
     /// What nav-core published, with when.

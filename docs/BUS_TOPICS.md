@@ -199,9 +199,9 @@ Each citation is `alias:line`.
 | `/map_grid` | `nav_msgs/OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:978, 1155) | `flutter_adapter`, `R TL 1` (mower_adapter:35-36, 183-185). *nav_core*: `R TL 1` (mower_nav/core_backend:119, 227) | nav2 local costmap StaticLayer, `map_subscribe_transient_local` (nav2_params:126-129; upstream `R TL 1`, unconfirmed) | on change. The start-up map is 400 × 400 cells, i.e. 160 kB of data (mower_map:139-142); zone maps vary | no | bus→DDS until E9; the bridge writer must be TL (5.5 a) |
 | `/map_grid_global` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:979) | *nav_core*: `R TL 1` (mower_nav/core_backend:120, 228) | nav2 global costmap StaticLayer (nav2_params:143-146) | as above | no | bus→DDS until E9, TL |
 | `/free_space` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:972) | — | rviz only | on change | no | bus only |
-| `/free_space_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:973); `boustrophedon_coverage`, an `R TL 1` writer that never publishes (mower_coverage:442-445, 1746) | `flutter_adapter`, `R TL 1` (mower_adapter:37) | recorder, override `R TL 1` (qos_overrides.yaml:46-50; record_topics.yaml:39) | on change | no | in-process; bus→DDS while recording |
+| `/free_space_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:973); `boustrophedon_coverage` had an `R TL 1` writer that never published (mower_coverage:442-445, 1746), dropped in step 5 (5.8 #2) | `flutter_adapter`, `R TL 1` (mower_adapter:37) | recorder, override `R TL 1` (qos_overrides.yaml:46-50; record_topics.yaml:39) | on change | no | in-process; bus→DDS while recording |
 | `/risk_map` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:974) | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1788) | rviz | on change | no | in-process only |
-| `/risk_map_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:975); coverage's unused writer (mower_coverage:1747) | `flutter_adapter`, `R TL 1` (mower_adapter:38); `boustrophedon_coverage`, `R TL 1` (mower_coverage:1798) | recorder, override (qos_overrides.yaml:41-45; record_topics.yaml:38) | on change | no | in-process; bus→DDS while recording |
+| `/risk_map_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:975); coverage's unused writer (mower_coverage:1747), dropped in step 5 | `flutter_adapter`, `R TL 1` (mower_adapter:38); `boustrophedon_coverage`, `R TL 1` (mower_coverage:1798) | recorder, override (qos_overrides.yaml:41-45; record_topics.yaml:38) | on change | no | in-process; bus→DDS while recording |
 | `/chennal_map` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:976) | — | rviz | on change | no | bus only |
 | `/chennal_map_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:977) | `flutter_adapter`, `R TL 1` (mower_adapter:39) | — | on change | no | in-process only |
 | `/coverage_path` | `nav_msgs/Path` | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1742) | — | rviz | per plan | no | bus only |
@@ -329,8 +329,8 @@ therefore finds nothing.
 
 | Action | Type | Server | Clients in mower_rsd | Outside | E2 |
 |---|---|---|---|---|---|
-| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | the bus's actions (bus/README, "Actions", added in E2). Move nav and coverage together. Standalone, the tools reach nav through `action_to_ros` and coverage through `action_from_ros` (bus_ros/README, "Actions") |
-| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | the same, or drop it |
+| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | Done (step 5): the bus's actions (bus/README, "Actions"), nav and coverage together. nav's server also goes out with `action_to_ros`, in mower_rsd as standalone, so the tools and the graph keep it; standalone coverage reaches the tool's server through `action_from_ros`, whose bus server exists only while DDS has one (bus_ros/README, "Actions") |
+| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | the same (step 5): on the bus, out through `action_to_ros` |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | nav2 bt_navigator | `nav_action_server`, by a relative name (mower_nav:1642) | the recorder records its `_action/feedback` and `_action/status` (record_topics.yaml:40-41) | stays an r2r client until E9 (*nav_core* replaces it) |
 | `/follow_path` | `nav2_msgs/action/FollowPath` | nav2 controller_server | `nav_action_server`, by a relative name (mower_nav:1643) | — | stays an r2r client until E9 |
 
@@ -479,7 +479,8 @@ coverage rely on relative names too.
 Every rule above is passed to `mower_rsd` as a node-scoped `-r <node>:<from>:=<to>` (robot.launch.py:77-99, 230-243).
 
 - mower_bridge's resolver oracle (`crates/mower_bridge/tests/resolver.rs`) has rcl itself resolve this table, and every
-  other name of the modules, with these rules: all 203 come out as the manifest and `Remaps::resolve` say.
+  other name of the modules, with these rules: all 205 come out as the manifest and `Remaps::resolve` say (the
+  five action ends of step 5 among them).
 - Trap for the standalone `mower_localize`: `run_all` gives its three roles a `ModuleCtx` without the process's rules
   (`src/mower_rs/crates/mower_localize/src/lib.rs:86-88`), so their `resolve_topic` would not apply them. The localize
   conversion hands them `m.remaps`.
@@ -620,6 +621,10 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
    - They also looked like a two-way name in step 3: map on the bus writes both, the adapter on the bus reads both,
      and coverage, still on r2r, writes them on DDS. A writer that never publishes has nothing to forward, so
      mower_bridge's manifest marks them `silent`, and its policy bridges both names bus→DDS only.
+   - **Dropped in step 5.** Nothing depends on them: no reader of either name asks for its writers
+     (`publisher_count`, `publisher_changes`), neither name is in ws_bridge's `topics_sub` (so `/rosapi/topics` does
+     not see them), and the recorder records data, not writers. The one thing that counts bus writers is the bridge's
+     `to_ros` writer lifetime (5.5 b), which a silent writer would have kept alive after map_manage went.
 3. **`mower_base` holds a `/tf` writer that never publishes** (mower_base:619-621). It shows up in the graph as a
    publisher, and on the bus it would show up in introspection.
 4. **The plan is wrong about `/map_manage/get_parameters`.** PLAN:356 says E3 must emulate it for the app. The app never
@@ -714,10 +719,26 @@ What it was asked to provide:
      every r2r call nav and coverage make), plus the five dispatch and lock services. nav's IO is the largest
      (`mower_nav/src/lib.rs`, 2094 lines).
    - Action names resolve with the topic rules (rcl_action), so `resolve_topic` names them.
-   - nav keeps r2r for nav2's two actions, `/bt_navigator/get_state` and `/rosout` until E9, or until *nav_core* is the
-     default. Moving nav2's actions onto `action_from_ros` is not mechanical (bus_ros/README, "nav2's actions").
+   - nav keeps r2r for nav2's two actions and `/bt_navigator/get_state` until E9, or until *nav_core* is the default.
+     Moving nav2's actions onto `action_from_ros` is not mechanical (bus_ros/README, "nav2's actions"). nav2's
+     `/rosout` warnings come in through the bridge (`from_ros`, 2.6).
    - Check with nav_progress_check.py, coverage_cancel_check.py and nav_core_check.py. Standalone, nav serves its two
      actions to the tools through `action_to_ros`, and coverage reaches the tool's server through `action_from_ros`.
+   - **Done** (2026-10-27, `feat/e2-nav`). Both modules' topics, services, clients and the action pair are on the bus,
+     on the module's clock; the r2r nodes stay for the parameters, coverage's six parameter services, the log, the
+     graph and nav2. mower_bridge plans actions (`action_to_ros` for a bus server, `action_from_ros` for a bus client
+     whose server is elsewhere), and `action_from_ros` serves on the bus only while DDS has a server, as
+     `service_from_ros` does. What the conversion keeps of r2r's actions, and where the bus differs:
+     - after an accepted action cancel nav ends the goal CANCELED whatever the outcome, as r2r let it (only `cancel()`
+       could deliver a result there); and it sends the end only once it has released the goal, since the bus hands the
+       result over at once and coverage sends its next leg at once;
+     - `GoalRejected` is coverage's one definite refusal; `NoResponse`, `ServiceUnavailable` and `Closed` leave the
+       goal possibly running, and enter the tracker, as r2r's other errors did;
+     - when nav's module ends mid-goal, coverage learns it at once (the result fails with `ServiceUnavailable`, the
+       status is `Unknown`), where r2r told it nothing until the leg's timeout (at least 10 min) or, for
+       `/zone_exec_path`, never. The sequence fails at once, and the goal goes to the tracker, which retries the
+       correlated cancel every 2 s; a restarted nav cannot confirm a dispatch it never had, so the tracker, and the
+       refusal of a new sequence, stay until coverage restarts, as after the timeout before.
 6. **base, pid_autotune and the final `velocity_command_guard`, together.**
    - Base and guard are pure core plus thin IO (`mower_base_core`, `core.rs`; PLAN:355).
    - Moving the three together makes the drivetrain edge and the wheel-override edge in-process, so the arm latch's
