@@ -756,6 +756,7 @@ dependencies = [
 name = "mower_gps"
 version = "0.1.0"
 dependencies = [
+ "mower_bus",
  "mower_rs_common",
  "mower_ubx",
  "r2r",
@@ -768,6 +769,7 @@ dependencies = [
 name = "mower_imu"
 version = "0.1.0"
 dependencies = [
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serialport",
@@ -779,6 +781,7 @@ name = "mower_localize"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bus",
  "mower_localize_core",
  "mower_rs_common",
  "r2r",
