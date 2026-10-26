@@ -9,6 +9,11 @@
 //! serial failure ends the process so launch supervision and the navigation
 //! freshness gate both fail closed. rclpy spent ~6 % of a core on the 10 Hz
 //! publish path plus pyserial polling; this driver needs well under 1 %.
+//!
+//! The topic is on the in-process bus (step E2 of docs/ROS_FREE_PLAN.md),
+//! under the name rcl gives `imu/data_raw` on the node (`/imu/data` with
+//! mower_rsd's `-r imu:imu/data_raw:=imu/data`). The r2r node stays for the
+//! parameters, the log and the node's place in the graph.
 
 mod wit;
 
@@ -17,10 +22,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mower_bus::Qos;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::sensor_msgs::msg::Imu;
-use r2r::QosProfile;
 
 use crate::wit::{Frame, Parser};
 
@@ -60,7 +65,7 @@ fn stddev_param(node: &r2r::Node, name: &str, default: f64) -> Result<f64, Strin
 }
 
 struct Driver {
-    publisher: r2r::Publisher<Imu>,
+    publisher: mower_bus::Publisher<Imu>,
     template: Imu,
     logger: String,
     stop: Arc<AtomicBool>,
@@ -179,7 +184,13 @@ impl Driver {
 /// returned here becomes an orderly shutdown and exit 1) so launch respawns
 /// it and the navigation health gate closes in between.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    run_node(node, m).await
+}
+
+/// Everything after `Node::create`, so a test can hand in a node whose
+/// parameters it has set itself.
+async fn run_node(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
     let port_name = params::string(&node, "port", "/dev/imu_usb");
     let mut template = Imu::default();
@@ -187,7 +198,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     template.orientation_covariance = covariance(stddev_param(&node, "orientation_stddev_rad", 0.35)?);
     template.angular_velocity_covariance = covariance(stddev_param(&node, "angular_velocity_stddev_rad_s", 0.10)?);
     template.linear_acceleration_covariance = covariance(stddev_param(&node, "linear_acceleration_stddev_m_s2", 0.50)?);
-    let publisher = node.create_publisher::<Imu>("imu/data_raw", QosProfile::default())?;
+    let publisher = m.bus.publisher::<Imu>(&m.resolve_topic("imu/data_raw")?, Qos::default())?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let driver = Driver { publisher, template, logger: logger.clone(), stop: stop.clone() };
@@ -198,14 +209,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             .spawn(move || driver.run(&port_name))?
     };
 
-    // No subscriptions, services or timers: publishing needs no spinning, and
-    // r2r's spin_once returns at once on an empty wait set (a busy loop), so
-    // the node is simply kept alive until shutdown.
+    // No subscriptions, services or timers on the node: it is kept alive
+    // until shutdown for its parameters, the log and the graph, and never
+    // spun (r2r's spin_once returns at once on an empty wait set, a busy
+    // loop). The bus needs no spinning.
     let mut failure: Option<String> = None;
     loop {
         tokio::select! {
             _ = m.shutdown.wait() => break,
-            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+            // Closed under the node (its instance ended): nothing published
+            // arrives any more, so stop the serial thread as for a shutdown.
+            _ = m.bus.closed() => break,
+            _ = m.clock.sleep(Duration::from_millis(200)) => {
                 if serial_thread.is_finished() {
                     // Exiting only the worker thread would leave a healthy-looking
                     // ROS process publishing no IMU: stop the whole process.
@@ -234,5 +249,140 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     match failure {
         Some(message) => Err(message.into()),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::OnceLock;
+
+    use mower_rs_common::{Remaps, Shutdown};
+    use serialport::SerialPort;
+
+    use super::*;
+
+    /// The process's r2r context, on ROS domain 88: the module still creates
+    /// its node (parameters, log), and other containers on a dev host speak
+    /// DDS. Set before the process's one context exists.
+    fn context() -> Option<r2r::Context> {
+        static CONTEXT: OnceLock<Option<r2r::Context>> = OnceLock::new();
+        CONTEXT
+            .get_or_init(|| {
+                std::env::set_var("ROS_DOMAIN_ID", "88");
+                r2r::Context::create().ok()
+            })
+            .clone()
+    }
+
+    /// The module as mower_rsd runs it: its scope of `bus`, and the
+    /// production `-r` rules (robot.launch.py's, with another node's `imu`
+    /// rule that must not apply here).
+    fn module(bus: &mower_bus::Bus, shutdown: &Shutdown) -> ModuleCtx {
+        let argv: Vec<String> = "--modules imu,localize --ros-args -r imu:imu/data_raw:=imu/data \
+             -r navsat_transform:imu:=imu/data"
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        ModuleCtx::new("imu", shutdown.clone())
+            .with_bus(bus.scope("imu"))
+            .with_remaps(Arc::new(Remaps::from_args(&argv).unwrap()))
+    }
+
+    fn node(ctx: r2r::Context, port: &str) -> r2r::Node {
+        // A namespace of the test's own: nothing on the graph meets it.
+        let node = r2r::Node::create(ctx, "imu", "/mower_imu_test").unwrap();
+        let port = r2r::ParameterValue::String(port.to_string());
+        node.params.lock().unwrap().insert("port".to_string(), r2r::Parameter::new(port));
+        node
+    }
+
+    fn frame(kind: u8, regs: [i16; 4]) -> Vec<u8> {
+        let mut f = vec![0x55, kind];
+        for r in regs {
+            f.extend_from_slice(&r.to_le_bytes());
+        }
+        let sum = f.iter().map(|b| *b as u32).sum::<u32>() & 0xff;
+        f.push(sum as u8);
+        f
+    }
+
+    /// The sensor's frames on a pseudo terminal come out on the bus as
+    /// `/imu/data`, from the `imu` scope, with the frame id and covariances
+    /// the driver always set.
+    #[test]
+    fn serial_frames_go_out_on_the_bus_as_imu_data() {
+        let Some(ctx) = context() else { return };
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (mut sensor, port) = serialport::TTYPort::pair().expect("a pseudo terminal");
+            let port_name = port.name().expect("the terminal's name");
+            // The driver opens the port by name, as it opens /dev/imu_usb.
+            drop(port);
+            let bus = mower_bus::Bus::new();
+            let shutdown = Shutdown::new();
+            let reader = bus.scope("reader");
+            let mut imu = reader.subscribe::<Imu>("/imu/data", Qos::sensor_data()).unwrap();
+            let driver = tokio::spawn(run_node(node(ctx, &port_name), module(&bus, &shutdown)));
+
+            // One cycle at a time, every 100 ms like the sensor, until the
+            // driver has opened the port and one comes out. Until it has, the
+            // terminal has no other end and refuses the write.
+            let cycle =
+                [frame(0x51, [2048, 0, 0, 0]), frame(0x52, [0, 0, 16384, 0]), frame(0x53, [0, 0, 16384, 0])].concat();
+            let mut got = None;
+            for _ in 0..200 {
+                let _ = sensor.write_all(&cycle);
+                if let Ok(msg) = tokio::time::timeout(Duration::from_millis(100), imu.recv()).await {
+                    got = msg;
+                    break;
+                }
+            }
+            let msg = got.expect("no /imu/data within 20 s");
+            assert_eq!(msg.header.frame_id, "imu_link");
+            assert!((msg.linear_acceleration.x - 9.8).abs() < 1e-9, "{:?}", msg.linear_acceleration);
+            assert!((msg.angular_velocity.z - 1000f64.to_radians()).abs() < 1e-9, "{:?}", msg.angular_velocity);
+            // yaw 90 degrees
+            assert!((msg.orientation.z - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12, "{:?}", msg.orientation);
+            assert!((msg.orientation.w - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12, "{:?}", msg.orientation);
+            assert_eq!(msg.orientation_covariance, covariance(0.35));
+            assert_eq!(msg.angular_velocity_covariance, covariance(0.10));
+            assert_eq!(msg.linear_acceleration_covariance, covariance(0.50));
+            let age = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .saturating_sub(Duration::new(msg.header.stamp.sec as u64, msg.header.stamp.nanosec));
+            assert!(age < Duration::from_secs(5), "stamped {age:?} ago");
+            let topic = bus.topics().into_iter().find(|t| t.name == "/imu/data").unwrap();
+            assert_eq!(topic.publishers, ["imu"]);
+            assert_eq!(topic.ros_type.as_deref(), Some("sensor_msgs/msg/Imu"));
+            // Nothing under the name before the rule.
+            assert!(bus.topics().iter().all(|t| t.name != "/imu/data_raw"));
+
+            shutdown.trigger();
+            tokio::time::timeout(Duration::from_secs(5), driver)
+                .await
+                .expect("the driver did not stop")
+                .unwrap()
+                .expect("a clean stop");
+        });
+    }
+
+    /// A port that cannot be opened still ends the module with an error, so
+    /// that it is restarted and the navigation gate closes meanwhile.
+    #[test]
+    fn a_port_that_does_not_open_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let bus = mower_bus::Bus::new();
+            let shutdown = Shutdown::new();
+            let driver = run_node(node(ctx, "/dev/mower_imu_test_no_such_port"), module(&bus, &shutdown));
+            let err = tokio::time::timeout(Duration::from_secs(5), driver)
+                .await
+                .expect("still running with no port")
+                .expect_err("must fail");
+            assert!(err.to_string().contains("IMU serial open failed"), "{err}");
+        });
     }
 }
