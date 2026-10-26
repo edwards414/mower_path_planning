@@ -8,17 +8,17 @@
 /// One flag per module of the manifest, in its order.
 pub const ON_BUS: &[(&str, bool)] = &[
     ("base", false),
-    ("status", false),
+    ("status", true),
     ("guards", false),
-    ("imu", false),
-    ("gps", false),
-    ("localize", false),
-    ("map", false),
+    ("imu", true),
+    ("gps", true),
+    ("localize", true),
+    ("map", true),
     ("coverage", false),
     ("nav", false),
-    ("record", false),
-    ("adapter", false),
-    ("battery", false),
+    ("record", true),
+    ("adapter", true),
+    ("battery", true),
     ("pid_autotune", false),
 ];
 

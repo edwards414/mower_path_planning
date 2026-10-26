@@ -280,7 +280,7 @@ pub static MODULES: &[Module] = &[
                 publishes::<Marker>("/coverage_split_points", R_V_1),
                 publishes::<CoverageProgress>("/coverage_progress", R_TL_1),
                 // nav2 backend (production); its two action clients stay on r2r
-                calls::<GetState::Service>("bt_navigator/get_state").named("/bt_navigator/get_state"),
+                calls::<GetState::Service>("bt_navigator/get_state").named("/bt_navigator/get_state").stays_on_r2r(),
                 publishes::<TwistStamped>("/nav_cmd_vel", R_V_10).param("nav_core.cmd_vel_topic").only(NAV_CORE),
                 publishes::<Path>("/plan", R_V_1).param("nav_core.plan_topic").only(NAV_CORE),
                 subscribes::<Odometry>("/odom", R_V_10).param("nav_core.odom_topic").only(NAV_CORE),

@@ -275,13 +275,14 @@ fn the_rest_of_the_order_plans_too() {
         "from_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 10",
         "from_ros /rosout rcl_interfaces/msg/Log R V 100",
         "from_ros /physical_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
-        "service_from_ros /bt_navigator/get_state lifecycle_msgs/srv/GetState",
         "to_ros /nav_operation_active std_msgs/msg/Bool R TL 1",
         "to_ros /navigation_safety_stop geometry_msgs/msg/TwistStamped R V 10",
     ] {
         assert!(step5.iter().any(|l| l == line), "{line} in {step5:#?}");
     }
     assert!(!step5.iter().any(|l| l.contains(" /nav_operation_active ") && l.starts_with("from_ros")));
+    // nav keeps its bt_navigator client on r2r with nav2's two actions until E9.
+    assert!(!step5.iter().any(|l| l.contains(" /bt_navigator/get_state ")), "{step5:#?}");
 
     on.extend(["base", "pid_autotune", "guards"]);
     let all = lines(&on);

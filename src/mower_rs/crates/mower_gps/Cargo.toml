@@ -13,6 +13,7 @@ name = "mower_gps"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_rs_common = { path = "../mower_rs_common" }
 mower_bus = { path = "../mower_bus" }
 mower_ubx = { path = "../mower_ubx" }

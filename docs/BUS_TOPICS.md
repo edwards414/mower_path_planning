@@ -314,7 +314,7 @@ therefore finds nothing.
 
 | Service | Type | Server | Client | E2 |
 |---|---|---|---|---|
-| `/bt_navigator/get_state` | `lifecycle_msgs/GetState` | nav2 bt_navigator | `nav_action_server`, by the relative name `bt_navigator/get_state` (mower_nav:1644); polled every 0.2 s while it waits for nav2 (mower_nav:973, 1584) | nav2 backend only. A service, so it moves with nav (E2 decision 1) and goes bus→DDS through the bridge (`service_from_ros`) until E9. Keeping it on r2r next to nav2's two actions instead is one mark in mower_bridge's manifest (`stays_on_r2r`) |
+| `/bt_navigator/get_state` | `lifecycle_msgs/GetState` | nav2 bt_navigator | `nav_action_server`, by the relative name `bt_navigator/get_state` (mower_nav:1644); polled every 0.2 s while it waits for nav2 (mower_nav:973, 1584) | nav2 backend only. Stays an r2r client next to nav2's two actions until E9: nav polls it while it waits for nav2, so it belongs with them (marked `stays_on_r2r` in mower_bridge's manifest) |
 
 ### 3.3 Only through ws_bridge
 

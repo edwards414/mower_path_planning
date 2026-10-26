@@ -653,6 +653,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bridge",
  "mower_bus",
  "mower_map",
  "mower_record",
@@ -705,6 +706,7 @@ name = "mower_battery"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",
@@ -772,6 +774,7 @@ dependencies = [
 name = "mower_gps"
 version = "0.1.0"
 dependencies = [
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "mower_ubx",
@@ -785,6 +788,7 @@ dependencies = [
 name = "mower_imu"
 version = "0.1.0"
 dependencies = [
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",
@@ -797,6 +801,7 @@ name = "mower_localize"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
  "mower_bus",
  "mower_localize_core",
  "mower_rs_common",
@@ -818,6 +823,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",
@@ -866,6 +872,7 @@ name = "mower_record"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",
@@ -1325,6 +1332,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "libc",
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",

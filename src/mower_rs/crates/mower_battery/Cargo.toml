@@ -13,6 +13,7 @@ name = "mower_battery"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_bus = { path = "../mower_bus" }
 mower_rs_common = { path = "../mower_rs_common" }
 r2r.workspace = true

@@ -17,9 +17,11 @@
 //!
 //! Step E1 of docs/ROS_FREE_PLAN.md adds the in-process bus: `m.bus` is the
 //! instance's `mower_bus::Scope`, the bus's counterpart of its `r2r::Node`,
-//! and `m.clock` the clock to read time from. No module uses either yet; E2
-//! moves their IO from r2r onto them. The bus takes absolute names only, so
-//! E2 names endpoints through [`ModuleCtx::resolve_topic`] and
+//! and `m.clock` the clock to read time from. Step E2 moves the modules' IO
+//! from r2r onto them, one module at a time (`mower_bridge`'s `on_bus.rs`
+//! says which have moved; the bridge carries their names to DDS). The bus
+//! takes absolute names only, so a moved module names its endpoints through
+//! [`ModuleCtx::resolve_topic`] and
 //! [`ModuleCtx::resolve_service`], which apply the process's remap rules the
 //! way rcl applies them to the module's node ([`crate::names`]).
 
@@ -119,11 +121,12 @@ pub struct ModuleCtx {
     /// the instance's scope of the process's one bus, which the supervisor
     /// closes when the instance ends.
     ///
-    /// No module uses it yet: their topics and services stay on r2r until
-    /// step E2 moves them here.
+    /// A module that has moved in step E2 does its topics, services and
+    /// timers here; the others still do theirs on r2r.
     pub bus: mower_bus::Scope,
     /// Where modules are to read time from, so that tests and replay can
-    /// drive it by hand. Unused until E2, like `bus`: modules still call
+    /// drive it by hand. The modules moved in E2 read their timers (and
+    /// some their stamps and ages) from it; the rest still call
     /// `tokio::time`, `Instant::now()` and `SystemTime::now()`.
     pub clock: mower_bus::Clock,
     /// The `-r` rules of the process's `--ros-args`, for
