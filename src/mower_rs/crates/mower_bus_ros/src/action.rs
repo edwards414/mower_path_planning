@@ -20,7 +20,9 @@
 //!   watched while it holds the goal; its answers to a goal request and to a
 //!   cancel request are given up at `dds_call`. The bus client then gets
 //!   `NoResponse`, and for a goal held by a server that went away, the goal
-//!   is lost on the bus (also `NoResponse`).
+//!   is lost on the bus (also `NoResponse`). Its bus server exists only while
+//!   the graph shows a DDS server, as `service_from_ros`'s does ("Graph
+//!   presence").
 
 use std::future::Future;
 use std::sync::Arc;
@@ -29,12 +31,13 @@ use std::time::Duration;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{FuturesUnordered, Stream, StreamExt};
 use mower_bus::{
-    ActionClient, ActionClientGoal, ActionServerCancelRequest, ActionServerGoal, ActionServerGoalRequest, BusError,
-    CancelRequests, FeedbackStream, GoalStatus, ResultFuture, Scope,
+    Action, ActionClient, ActionClientGoal, ActionServer, ActionServerCancelRequest, ActionServerGoal,
+    ActionServerGoalRequest, BusError, CancelRequests, FeedbackStream, GoalStatus, ResultFuture, Scope,
 };
 
 use crate::log::{Failure, Log};
-use crate::service::{DdsServer, Probed};
+use crate::node::NodeHandle;
+use crate::service::{DdsServer, Probed, PRESENCE_PERIOD};
 use crate::stats::Counters;
 use crate::{BridgeAction, BridgeError, Forwarder};
 
@@ -261,17 +264,63 @@ async fn cancel_on_bus<A: BridgeAction>(
 /// `action_from_ros`: a bus action server whose goals become goals of the
 /// DDS server. Its answers to a goal request or a cancel request are given
 /// up at `deadline` (`ServiceTimeouts`).
+///
+/// The bus server exists only while the graph shows a DDS server, looked at
+/// every `PRESENCE_PERIOD` on the spin thread (`handle`), as for
+/// `service_from_ros`: a bus client finds what an r2r client found, no server
+/// while there is none (`ServiceUnavailable` at `send_goal_request`,
+/// `wait_for_server` waits, mower_coverage says "Navigation action server
+/// unavailable"), one as soon as there is. What the graph shows is never the
+/// bridge's own: one direction per name. A server that goes takes the bus
+/// server with it; the goal requests it queued fail with
+/// `ServiceUnavailable`, and the goals it handed on end with their DDS
+/// server, which is watched.
 pub(crate) fn action_from_ros<A: BridgeAction>(
-    scope: &Scope, node: &mut r2r::Node, name: &str, counters: Arc<Counters>, log: Log, deadline: Duration,
+    scope: &Scope, node: &mut r2r::Node, handle: NodeHandle, name: &str, counters: Arc<Counters>, log: Log,
+    deadline: Duration,
 ) -> Result<Forwarder, BridgeError> {
-    let mut server = scope.action_server::<BusAction<A>>(name)?;
+    // The name, the types and a bus server already there are checked now;
+    // the bus server itself comes with a DDS server.
+    drop(scope.action_server::<BusAction<A>>(name)?);
     let dds = Arc::new(DdsServer::new(node.create_action_client::<A>(name)?));
     let env = Arc::new(Env { counters, log });
+    let (scope, name) = (scope.clone(), name.to_string());
+    // A server's writer: clients write `rq<name>/_action/send_goalRequest`
+    // and read this.
+    let replies = format!("rr{name}/_action/send_goalReply");
     Ok(Box::pin(async move {
+        let mut server: Option<ActionServer<BusAction<A>>> = None;
         let mut goals = FuturesUnordered::new();
+        let mut look = tokio::time::interval(PRESENCE_PERIOD);
+        look.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                request = server.next() => match request {
+                _ = look.tick() => {
+                    let replies = replies.clone();
+                    let shown = handle.call(move |node| node.get_publishers_info_by_topic(&replies, true)).await;
+                    env.counters.resynced();
+                    match shown {
+                        // The bridge is stopping.
+                        None => return,
+                        Some(Ok(servers)) if servers.is_empty() => {
+                            if server.take().is_some() {
+                                env.counters.set_bus_server(false);
+                            }
+                        }
+                        Some(Ok(_)) if server.is_some() => {}
+                        Some(Ok(_)) => match scope.action_server::<BusAction<A>>(&name) {
+                            Ok(serving) => {
+                                server = Some(serving);
+                                env.counters.set_bus_server(true);
+                            }
+                            // The bridge's scope closed.
+                            Err(BusError::Closed { .. }) => return,
+                            Err(e) => env.log.error(Failure::BusOther, || format!("serving on the bus failed: {e}")),
+                        },
+                        Some(Err(e)) => env.log.error(Failure::Dds, || format!("looking at the graph failed: {e}")),
+                    }
+                }
+                request = next_goal(&mut server) => match request {
                     Some(request) => goals.push(to_dds::<A>(dds.clone(), request, env.clone(), deadline)),
                     // The bridge's scope closed.
                     None => return,
@@ -280,6 +329,14 @@ pub(crate) fn action_from_ros<A: BridgeAction>(
             }
         }
     }))
+}
+
+/// The next goal request of `server`; while there is no server, nothing.
+async fn next_goal<A: Action>(server: &mut Option<ActionServer<A>>) -> Option<ActionServerGoalRequest<A>> {
+    match server {
+        Some(server) => server.next().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// One bus goal request: send it to the DDS server, if there is one, answer

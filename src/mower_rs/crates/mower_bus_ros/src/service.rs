@@ -33,9 +33,9 @@ const FRESH: Duration = Duration::from_secs(1);
 /// How often a pending DDS call checks that its server is still there.
 const WATCH_PERIOD: Duration = Duration::from_secs(1);
 
-/// How often `service_from_ros` looks at the graph for a DDS server, which
-/// its bus server follows.
-const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
+/// How often `service_from_ros` and `action_from_ros` look at the graph for
+/// a DDS server, which their bus server follows.
+pub(crate) const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
 
 /// What the calls of one forwarder share.
 struct Env {

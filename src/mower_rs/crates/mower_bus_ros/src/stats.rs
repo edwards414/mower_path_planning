@@ -69,7 +69,8 @@ pub struct EntryStats {
     /// any more when they came up (README.md, "Writer lifetime").
     pub stale: u64,
     /// `to_ros`: writer changes handled (`publisher_changes` items).
-    /// `service_from_ros`: looks at the graph for a DDS server.
+    /// `service_from_ros`, `action_from_ros`: looks at the graph for a DDS
+    /// server.
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
     /// Actions: goal requests left unanswered, and accepted goals whose
@@ -81,8 +82,8 @@ pub struct EntryStats {
     pub dropped: u64,
     /// `to_ros`: whether the bridge's DDS writer exists now.
     pub dds_writer: bool,
-    /// `service_from_ros`: whether the bridge's bus server exists now, which
-    /// it does while the graph shows a DDS server.
+    /// `service_from_ros`, `action_from_ros`: whether the bridge's bus server
+    /// exists now, which it does while the graph shows a DDS server.
     pub bus_server: bool,
 }
 

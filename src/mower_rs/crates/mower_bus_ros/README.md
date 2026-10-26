@@ -173,8 +173,15 @@ number of writers on the bridge's side, or let one writer own all static frames.
     - It goes: within 200 ms the bus server goes too, and the calls it still holds end with `ServiceUnavailable`.
     - The name, the type and a bus server already there are still checked at the declaration.
 - **And for actions:** an `action_to_ros` DDS action server is advertised all along (r2r cannot destroy one either). An
-  `action_from_ros` bus action server still makes `wait_for_server` succeed at once: it does not follow the DDS
-  server's presence the way `service_from_ros` does yet (step 5, before coverage's client relies on it).
+  `action_from_ros` bus action server follows the DDS server's presence as `service_from_ros`'s does, looking at the
+  server's `rr<name>/_action/send_goalReply` writer every 200 ms:
+  - no DDS server, no bus server: `send_goal_request` fails at once with `ServiceUnavailable`, `wait_for_server` waits
+    and `is_available` is false, as r2r's `is_available` never completes. mower_coverage then says "Navigation action
+    server unavailable" after its 2 s wait, as it did against a missing server, instead of sending a goal that would
+    end in `NoResponse` and its correlated-cancel tracking;
+  - a DDS server comes: within 200 ms the bus server does, and `wait_for_server` returns;
+  - it goes: within 200 ms the bus server goes too. The goal requests it queued fail with `ServiceUnavailable`; the goals
+    it handed on end with their DDS server, which is watched (a lost goal, `NoResponse`).
 - **Readers too:** a `to_ros` bus reader counts in `Publisher::subscription_count()` all along. No module skips work on
   that count today.
 
@@ -277,9 +284,10 @@ up none of the others. The bus side is described in the mower_bus README, "Actio
 
 ### `action_from_ros`
 
+- **The bus server** exists only while the graph shows a DDS server ("Graph presence").
 - **Goal requests** follow the rules of `service_from_ros`:
   - No DDS server matched within the probe window (500 ms): the bus request is dropped, and the bus client gets
-    `NoResponse`.
+    `NoResponse`. The graph can show a server that the bridge's client has not matched yet.
   - Accepted or rejected on DDS: accepted or rejected on the bus.
   - The DDS server goes away while the request is pending (checked every second), or its answer does not come by
     `dds_call` (30 s): `NoResponse`. A goal the server accepts after that, within one more `dds_call`, is canceled on DDS,
@@ -348,12 +356,12 @@ they are until E9 (or until *nav_core* is the default). `action_from_ros` would 
 - `forwarded` (for services, calls answered; for actions, goal requests answered, accepted or rejected);
 - `skipped` (volatile, no DDS reader);
 - `stale` (no live bus writer);
-- `resyncs` (`to_ros`: writer changes; `service_from_ros`: looks at the graph);
+- `resyncs` (`to_ros`: writer changes; `service_from_ros`, `action_from_ros`: looks at the graph);
 - `unanswered` (service calls left without an answer; for actions, goal requests left without an answer and accepted
   goals whose result never reached the other side);
 - `dropped` (`to_ros` bus messages lost to the bridge's full reader queue: a forwarder stalled for more than 64);
 - `dds_writer` (whether the `to_ros` DDS writer exists);
-- `bus_server` (whether the `service_from_ros` bus server exists).
+- `bus_server` (whether the `service_from_ros` or `action_from_ros` bus server exists).
 
 It is for diagnostics (E8's `mowerctl`) and for the tests, which cannot see a skipped publish from DDS.
 
