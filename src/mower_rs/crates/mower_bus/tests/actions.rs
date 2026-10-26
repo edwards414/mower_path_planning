@@ -663,9 +663,15 @@ async fn a_goal_with_no_live_server_fails_at_once_and_wait_for_server_waits_for_
     let mut wait = Box::pin(client.wait_for_server());
     let woken = Woken::new();
     assert!(poll_with(&mut wait, &woken).is_pending());
+    // The wait holds its client, as r2r's `is_available` future does: it can
+    // be spawned, and outlive the handle it came from.
+    let spawned = tokio::spawn(coverage.action_client::<WaypointAction>(NAME).unwrap().wait_for_server());
+    tokio::task::yield_now().await;
+    assert!(!spawned.is_finished());
     let _srv = bus.scope("nav").action_server::<WaypointAction>(NAME).unwrap();
     assert!(woken.take(), "the server's registration wakes the waiter");
     assert_eq!(poll_with(&mut wait, &woken), Poll::Ready(Ok(())));
+    assert_eq!(within(spawned).await.unwrap(), Ok(()));
     assert!(client.is_available());
     assert_eq!(client.wait_for_server().now_or_never(), Some(Ok(())));
 }
@@ -789,7 +795,7 @@ fn handles_are_send_and_unpin_and_the_futures_and_streams_can_be_spawned() {
     fn spawnable<T: Send + Unpin + 'static>() {}
     fn cloneable<T: Clone>() {}
     fn shared<T: Send + Sync>() {}
-    fn send<T: Send>(_: &T) {}
+    fn spawnable_future<F: Future + Send + Unpin + 'static>(_: F) {}
 
     send_unpin::<ActionServer<WaypointAction>>();
     spawnable::<ActionServerGoalRequest<WaypointAction>>();
@@ -810,7 +816,7 @@ fn handles_are_send_and_unpin_and_the_futures_and_streams_can_be_spawned() {
     shared::<Mutex<ActionServerGoal<WaypointAction>>>();
     let bus = Bus::new();
     let client = bus.scope("m").action_client::<WaypointAction>(NAME).unwrap();
-    send(&client.wait_for_server());
+    spawnable_future(client.wait_for_server());
 }
 
 // ---------------------------------------------------------------------------

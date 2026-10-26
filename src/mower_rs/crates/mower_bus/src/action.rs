@@ -1195,9 +1195,10 @@ impl<A: Action> ActionClient<A> {
 
     /// Resolve once a server is live (at once if one is): r2r's
     /// `Node::is_available(&client)`. `Closed` if the client's scope closes
-    /// first.
-    pub async fn wait_for_server(&self) -> Result<(), BusError> {
-        WaitForServer { client: &self.inner, closing: None, waiting: None }.await
+    /// first. The future holds the client, as r2r's does, so it is
+    /// `'static` and can outlive this handle.
+    pub fn wait_for_server(&self) -> impl Future<Output = Result<(), BusError>> + Send + Unpin + 'static {
+        WaitForServer { client: self.inner.clone(), closing: None, waiting: None }
     }
 }
 
@@ -1210,18 +1211,18 @@ impl<A: Action> fmt::Debug for ActionClient<A> {
 
 /// `ActionClient::wait_for_server`: `WaitForService` of services, for the
 /// same reason (a wait given up takes its wakers back out).
-struct WaitForServer<'a> {
-    client: &'a ClientInner,
+struct WaitForServer {
+    client: Arc<ClientInner>,
     closing: Option<u64>,
     waiting: Option<u64>,
 }
 
-impl Future for WaitForServer<'_> {
+impl Future for WaitForServer {
     type Output = Result<(), BusError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
-        let client = this.client;
+        let client = &*this.client;
         if !client.caller.watch(&mut this.closing, cx.waker()) {
             return Poll::Ready(Err(client.caller.closed()));
         }
@@ -1236,7 +1237,7 @@ impl Future for WaitForServer<'_> {
     }
 }
 
-impl Drop for WaitForServer<'_> {
+impl Drop for WaitForServer {
     fn drop(&mut self) {
         self.client.caller.unwatch(&mut self.closing);
         if let Some(key) = self.waiting.take() {
