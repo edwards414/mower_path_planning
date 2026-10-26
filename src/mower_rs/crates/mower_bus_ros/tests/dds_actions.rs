@@ -397,9 +397,10 @@ fn a_dds_cancel_in_flight_when_the_bridge_stops_is_rejected() {
     });
 }
 
-/// A DDS goal sent while the bus server's module restarts waits for the
-/// restarted server, as a service call does, and one sent while none comes
-/// in time is left unanswered.
+/// A DDS goal sent while the bus server's module restarts (its scope closes,
+/// and mower_rsd starts it again 2 s later) waits for the restarted server,
+/// as a service call does, and the ROS client sees it served as any other
+/// goal. One sent while none comes in time is left unanswered.
 #[test]
 fn a_dds_goal_sent_while_the_bus_server_restarts_is_served_once_it_is_back() {
     within(async {
@@ -409,16 +410,27 @@ fn a_dds_goal_sent_while_the_bus_server_restarts_is_served_once_it_is_back() {
         let mut bridge = new_bridge("restarting_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
         bridge.action_to_ros::<Waypoint::Action>(name).unwrap();
         let running = start(bridge);
+        let nav = bus.scope("nav_action_server");
+        let _first = serve_on_bus(&nav, name);
         let tool = Peer::new("restarting_tool");
-        // The DDS server is advertised from the declaration on, bus server or not.
         let client = tool.action_client(name).await;
+        let (_goal, result_future, _f) = wait("a goal", client.send_goal_request(goal("a")).unwrap()).await.unwrap();
+        assert_eq!(wait("its result", result_future).await.unwrap().0, r2r::GoalStatus::Succeeded);
 
-        let sent = client.send_goal_request(goal("a")).unwrap();
+        // The module fails: its scope closes, and its bus server with it.
+        nav.close();
+        assert!(bus.actions().iter().any(|a| a.name == name && a.server.is_none()), "no bus server now");
+        let mut sent = Box::pin(client.send_goal_request(goal("b")).unwrap());
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let _nav = serve_on_bus(&bus.scope("nav_action_server"), name);
-        let (_goal, result_future, _f) = wait("the goal", sent).await.unwrap();
-        assert_eq!(wait("the result", result_future).await.unwrap().0, r2r::GoalStatus::Succeeded);
-        assert_eq!(running.action(name).unanswered, 0);
+        assert!((&mut sent).now_or_never().is_none(), "the goal request waits for a server");
+        assert_eq!(running.action(name).forwarded, 1);
+        // The restarted module serves the name again.
+        let _second = serve_on_bus(&bus.scope("nav_action_server"), name);
+        let (_goal, result_future, feedbacks) = wait("the goal", sent).await.unwrap();
+        let texts: Vec<String> = wait("the feedback", feedbacks.take(3).map(|f| f.feedback).collect()).await;
+        assert_eq!(texts, ["b one", "b two", "b three"]);
+        assert_eq!(wait("the result", result_future).await.unwrap(), (r2r::GoalStatus::Succeeded, result(true)));
+        assert_eq!((running.action(name).forwarded, running.action(name).unanswered), (2, 0));
         running.stop().await.unwrap();
 
         // No server, and none within the wait: no answer on DDS.
