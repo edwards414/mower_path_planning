@@ -33,7 +33,8 @@
 //! **Remapping.** Also rcl's: a rule prefixed with a node name,
 //! `-r imu:imu/data_raw:=imu/data`, applies to that node only. That is how
 //! the launch `remappings=` of the IMU driver and of the two velocity guards
-//! are reproduced here. A bare `-r __node:=x` must never be passed: it would
+//! are reproduced here. The bus gets the same rules: every `ModuleCtx` holds
+//! them, and its `resolve_topic` / `resolve_service` give the name rcl gives. A bare `-r __node:=x` must never be passed: it would
 //! rename every node in the process, which is also why the module table below
 //! carries the production node names instead of relying on launch's `name=`.
 //!
@@ -62,7 +63,7 @@ use std::time::Duration;
 
 use futures::future::FutureExt;
 use mower_bus::{Bus, Clock, Scope};
-use mower_rs_common::{ModuleCtx, ModuleResult, Shutdown};
+use mower_rs_common::{ModuleCtx, ModuleResult, Remaps, Shutdown};
 
 type BoxFut = Pin<Box<dyn Future<Output = ModuleResult> + Send>>;
 type Runner = fn(r2r::Context, ModuleCtx) -> BoxFut;
@@ -355,6 +356,8 @@ struct Slot {
     node: &'static str,
     /// Its module's `--module-args`.
     extra: Vec<String>,
+    /// The process's `-r` rules, for the bus names (`ModuleCtx::remaps`).
+    remaps: Arc<Remaps>,
     start: Start,
 }
 
@@ -375,7 +378,8 @@ async fn supervise(
         let m = ModuleCtx::new(slot.node, shutdown.clone())
             .with_args(slot.extra.clone())
             .with_bus(scope.clone())
-            .with_clock(clock.clone());
+            .with_clock(clock.clone())
+            .with_remaps(slot.remaps.clone());
         let start = slot.start.clone();
         let label = slot.label.clone();
         let stopping = shutdown.clone();
@@ -490,6 +494,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The `-r` rules rcl applies to every module's node, for their bus names.
+    let remaps = match Remaps::from_args(&argv) {
+        Ok(r) => Arc::new(r),
+        Err(e) => {
+            eprintln!("[mower_rsd] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(args.worker_threads)
@@ -539,6 +551,7 @@ fn main() -> ExitCode {
                     label: format!("{}/{}", module.id, inst.node),
                     node: inst.node,
                     extra: extra.clone(),
+                    remaps: remaps.clone(),
                     start: Arc::new(move |m: ModuleCtx| run(ctx.clone(), m)),
                 });
             }
@@ -667,6 +680,7 @@ mod tests {
             label: format!("test/{node}"),
             node,
             extra: Vec::new(),
+            remaps: Arc::default(),
             start: Arc::new(move |m: ModuleCtx| -> BoxFut {
                 let mut seen = scopes.lock().unwrap();
                 let run = runs[seen.len().min(runs.len() - 1)];
@@ -691,6 +705,47 @@ mod tests {
     /// timer, so RESTART_DELAY and the stop timeout pass at once and in order.
     fn paused() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap()
+    }
+
+    /// Every start resolves its bus names with the process's `-r` rules,
+    /// under its own node name (docs/BUS_TOPICS.md 5.4).
+    #[test]
+    fn every_start_resolves_bus_names_with_the_process_remap_rules() {
+        let argv: Vec<String> = "--modules imu,guards --ros-args -r imu:imu/data_raw:=imu/data \
+                                 -r velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input"
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let remaps = Arc::new(Remaps::from_args(&argv).unwrap());
+        paused().block_on(async {
+            let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+            let shutdown = Shutdown::new();
+            let slots = ["imu", "velocity_command_guard"]
+                .into_iter()
+                .map(|node| {
+                    let (seen, remaps) = (seen.clone(), remaps.clone());
+                    Slot {
+                        label: format!("test/{node}"),
+                        node,
+                        extra: Vec::new(),
+                        remaps,
+                        start: Arc::new(move |m: ModuleCtx| -> BoxFut {
+                            let names = [m.resolve_topic("imu/data_raw"), m.resolve_topic("cmd_vel_in")];
+                            seen.lock().unwrap().extend(names.map(Result::unwrap));
+                            Box::pin(async move {
+                                m.shutdown.wait().await;
+                                Ok(())
+                            })
+                        }),
+                    }
+                })
+                .collect();
+            let run = tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), Duration::from_secs(1)));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            shutdown.trigger();
+            assert!(run.await.unwrap().is_empty());
+            assert_eq!(*seen.lock().unwrap(), ["/imu/data", "/cmd_vel_in", "/imu/data_raw", "/cmd_vel_guard_input"]);
+        });
     }
 
     /// Tasks a failed instance spawned are not aborted, so the closed scope
@@ -838,6 +893,7 @@ mod tests {
                     label: "test/imu".into(),
                     node: "imu",
                     extra: Vec::new(),
+                    remaps: Arc::default(),
                     start: Arc::new(move |m: ModuleCtx| -> BoxFut {
                         let mut seen = scopes.lock().unwrap();
                         seen.push(m.bus.clone());
