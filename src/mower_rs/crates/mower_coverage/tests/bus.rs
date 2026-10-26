@@ -7,7 +7,12 @@
 //! - **Time** is a manual clock, so that coverage's bounds (the 2 s
 //!   watchdog and retry, the 3 s acceptance, the 5 s cancel request, the leg
 //!   timeout) pass at once; the scripted nav keeps its own delays on it too.
-//!   `pass` moves it 20 ms at a time and lets the tasks run in between.
+//!   `pass` moves it from deadline to deadline, and only once every task has
+//!   done what the clock and the messages so far let it do (`idle`): what a
+//!   test sees then does not depend on how fast the host runs it. Moving it
+//!   on while coverage still worked through a step (20 ms every 2 ms, as it
+//!   once did) let a 2 s timer fire before coverage had read a result that
+//!   came at once.
 //! - **The scenarios** are coverage_cancel_check.py's, run against nav on the
 //!   bus instead of an rclpy server, and what the bus adds: a definite
 //!   rejection, no server at all, and nav's module ending mid-leg.
@@ -17,8 +22,9 @@
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant, SystemTime};
 
 use futures::{FutureExt, StreamExt};
@@ -62,9 +68,15 @@ fn serial() -> MutexGuard<'static, ()> {
 
 /// Run one test on a runtime of its own, within a bound only a hang reaches
 /// (see mower_map's tests/bus.rs for why a failure waits a moment).
+///
+/// The runtime has one thread, which parks only when no task can run: that
+/// is how `idle` knows coverage and its peers are done for now. Coverage's
+/// other threads do nothing a moving clock depends on: its planner runs only
+/// in `/generate_coverage_path`, which `Coverage::start` waits for before any
+/// clock moves, and its r2r node's spin serves only the parameter services.
 fn within(test: impl Future<Output = ()>) {
     let _serial = serial();
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().on_thread_park(|| IDLE.parked()).build().unwrap();
     let outcome = runtime.block_on(async {
         let outcome = AssertUnwindSafe(tokio::time::timeout(Duration::from_secs(120), test)).catch_unwind().await;
         if !matches!(outcome, Ok(Ok(()))) {
@@ -96,15 +108,61 @@ async fn call<Req: Message, Resp: Message>(scope: &Scope, name: &str, request: R
     wait("an answer", client.request(&request).unwrap()).await.unwrap()
 }
 
-/// Let `d` pass on the manual clock, 20 ms at a time, and let the tasks run
-/// after each step.
+/// The test runtime's parks (`within`): each one says that no task could run
+/// any more.
+struct Idle {
+    parks: AtomicU64,
+    waiter: Mutex<Option<Waker>>,
+}
+
+static IDLE: Idle = Idle { parks: AtomicU64::new(0), waiter: Mutex::new(None) };
+
+impl Idle {
+    /// The runtime's `on_thread_park`: wake the test waiting in `idle`.
+    fn parked(&self) {
+        self.parks.fetch_add(1, Ordering::SeqCst);
+        let waiter = self.waiter.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(waker) = waiter {
+            waker.wake();
+        }
+    }
+}
+
+/// Once every task has done what it can: the runtime has parked since the
+/// call. Only what other threads or real time bring can wake a task after
+/// that, and nothing the tests check comes that way.
+async fn idle() {
+    let since = IDLE.parks.load(Ordering::SeqCst);
+    std::future::poll_fn(|cx| {
+        if IDLE.parks.load(Ordering::SeqCst) != since {
+            return Poll::Ready(());
+        }
+        *IDLE.waiter.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
+        // A park between the first look and the waker.
+        if IDLE.parks.load(Ordering::SeqCst) != since {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+/// Let `d` pass on the manual clock, from one pending deadline to the next,
+/// each time once every task is idle: timers fire in the clock's order, and
+/// each step's consequences (a result read, a timer aborted) are in before
+/// the next timer fires, however slow the host.
 async fn pass(manual: &ManualClock, d: Duration) {
     let end = manual.clock().mono() + d;
-    while manual.clock().mono() < end {
-        let step = end.saturating_duration_since(manual.clock().mono()).min(Duration::from_millis(20));
-        manual.advance(step);
-        tokio::time::sleep(Duration::from_millis(2)).await;
+    loop {
+        idle().await;
+        match manual.next_deadline() {
+            Some(next) if next <= end => manual.advance_to(next),
+            _ => break,
+        }
     }
+    manual.advance_to(end);
+    idle().await;
 }
 
 /// Seconds from `t0` on the manual clock.
@@ -628,9 +686,13 @@ fn a_late_acceptance_is_adopted_canceled_and_tracked_with_one_request_at_a_time(
         let answer = coverage.exec_zone_now().await;
         assert!(!answer.success && answer.message.contains("acceptance timed out"), "{}", answer.message);
         pass(&manual, Duration::from_secs(12)).await;
+        // The first request times out at 8 s, the very instant of a 2 s retry
+        // (4 s + 2 x 2 s): the second goes then, or at 10 s if the retry looks
+        // first. The retry goes on after each 5 s timeout, at 14 or 16 s, so
+        // the second is counted up to 12 s, as coverage_cancel_check.py does.
         let requests = nav.dispatch_cancels_since(t0);
         let first: Vec<f64> = requests.iter().copied().filter(|t| *t < 7.8).collect();
-        let second: Vec<f64> = requests.iter().copied().filter(|t| *t >= 7.8).collect();
+        let second: Vec<f64> = requests.iter().copied().filter(|t| (7.8..12.0).contains(t)).collect();
         assert!(first.len() == 1 && (2.9..=3.3).contains(&first[0]), "one request at the 3 s timeout, shared by the late goal: {requests:?}");
         assert_eq!(second.len(), 1, "one retry after the 5 s request timeout: {requests:?}");
         let ids: std::collections::BTreeSet<String> = nav.seen(|s| s.dispatch_cancels.iter().map(|(_, id)| id.clone()).collect());
