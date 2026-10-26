@@ -128,7 +128,7 @@ pub(crate) fn service_from_ros<S: BridgeService>(
 ) -> Result<Forwarder, BridgeError> {
     let mut service = scope.service::<S::Request, S::Response>(name)?;
     let client = node.create_client::<S>(name, QosProfile::services_default())?;
-    let server = Arc::new(DdsServer { client, probe: Mutex::new(Probe::default()) });
+    let server = Arc::new(DdsServer::new(client));
     let env = Arc::new(Env { counters, log });
     Ok(Box::pin(async move {
         let mut calls = FuturesUnordered::new();
@@ -155,7 +155,7 @@ pub(crate) fn service_from_ros<S: BridgeService>(
 /// server is matched at every check then, only not the one that has the
 /// call, and r2r's response future never completes.
 async fn call<S: BridgeService>(
-    server: Arc<DdsServer<S>>, request: Request<S::Request, S::Response>, env: Arc<Env>, deadline: Duration,
+    server: Arc<DdsServer<r2r::Client<S>>>, request: Request<S::Request, S::Response>, env: Arc<Env>, deadline: Duration,
 ) {
     if !server.available().await {
         env.counters.unanswered();
@@ -194,11 +194,27 @@ async fn call<S: BridgeService>(
     }
 }
 
-/// The DDS side of `service_from_ros`: the client, and what is known about
-/// its server.
-struct DdsServer<S: BridgeService> {
-    client: r2r::Client<S>,
+/// The DDS side of `service_from_ros` and `action_from_ros`: the client, and
+/// what is known about its server.
+pub(crate) struct DdsServer<C> {
+    pub(crate) client: C,
     probe: Mutex<Probe>,
+}
+
+/// A DDS client whose server r2r can probe for: a service client, or an
+/// action client (action.rs).
+pub(crate) trait Probed {
+    /// r2r's `Node::is_available` for the client: true once the node's
+    /// next spin finds the server matched; `None` once the client is gone
+    /// with the node.
+    fn probe(&self) -> Option<BoxFuture<'static, bool>>;
+}
+
+impl<S: BridgeService> Probed for r2r::Client<S> {
+    fn probe(&self) -> Option<BoxFuture<'static, bool>> {
+        let registered = r2r::Node::is_available(self).ok()?;
+        Some(async move { registered.await.is_ok() }.boxed())
+    }
 }
 
 /// r2r tells whether a server is matched only through `Node::is_available`:
@@ -214,10 +230,14 @@ struct Probe {
     pending: Option<Shared<BoxFuture<'static, bool>>>,
 }
 
-impl<S: BridgeService> DdsServer<S> {
+impl<C: Probed> DdsServer<C> {
+    pub(crate) fn new(client: C) -> Self {
+        DdsServer { client, probe: Mutex::new(Probe::default()) }
+    }
+
     /// Whether the server is matched now, as far as a probe can tell within
     /// `PROBE_WINDOW`.
-    async fn available(&self) -> bool {
+    pub(crate) async fn available(&self) -> bool {
         let probe = {
             let mut probe = lock(&self.probe);
             if probe.seen.is_some_and(|seen| seen.elapsed() < FRESH) {
@@ -240,7 +260,7 @@ impl<S: BridgeService> DdsServer<S> {
     /// r2r's response future never completes when the server dies during
     /// the call; the bus caller would wait forever, and the call would stay
     /// in this forwarder for good.
-    async fn watch<F: Future>(&self, response: F) -> Option<F::Output> {
+    pub(crate) async fn watch<F: Future>(&self, response: F) -> Option<F::Output> {
         let mut response = std::pin::pin!(response);
         loop {
             match tokio::time::timeout(WATCH_PERIOD, response.as_mut()).await {
@@ -255,14 +275,13 @@ impl<S: BridgeService> DdsServer<S> {
 impl Probe {
     /// The pending probe, or a new one when the last has completed: its
     /// answer is from some earlier spin, and r2r has let go of it.
-    fn current<S: BridgeService>(&mut self, client: &r2r::Client<S>) -> Option<Shared<BoxFuture<'static, bool>>> {
+    fn current(&mut self, client: &impl Probed) -> Option<Shared<BoxFuture<'static, bool>>> {
         if let Some(pending) = &self.pending {
             if pending.clone().now_or_never().is_none() {
                 return Some(pending.clone());
             }
         }
-        let registered = r2r::Node::is_available(client).ok()?;
-        let probe = async move { registered.await.is_ok() }.boxed().shared();
+        let probe = client.probe()?.shared();
         self.pending = Some(probe.clone());
         Some(probe)
     }
