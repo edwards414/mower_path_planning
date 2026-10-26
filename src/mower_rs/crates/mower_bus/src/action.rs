@@ -1293,7 +1293,10 @@ impl<A: Action> Future for GoalResponseFuture<A> {
 impl<A: Action> Drop for GoalResponseFuture<A> {
     fn drop(&mut self) {
         self.caller.unwatch(&mut self.watch);
-        // An accepted goal whose answer nobody read: its feedback goes.
+        // An accepted goal whose answer nobody read: its feedback goes. Closed
+        // first, so that an acceptance racing this drop either comes in now
+        // or finds the channel closed, and drops the feedback itself.
+        self.answer.close();
         if let Ok(Some(Ok(goal))) = self.answer.try_recv() {
             goal.unwant_feedback();
         }
