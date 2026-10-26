@@ -15,7 +15,8 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
     declarations.
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
-- **Today:** every flag is false. `mower_rsd` starts no bridge, and the process is what it was before E2.
+- **Today:** battery, status, map, record, adapter, imu, gps and localize are on the bus (E2 steps 1-4); the other
+  flags are false until their modules move.
 
 ## The manifest
 
@@ -105,6 +106,11 @@ each with its flag; every other instance is elsewhere, on DDS.
     behind one reader and one bus writer), comes in `R TL 100`, tf2's static depth, so the bus keeps both writers'
     frames for a late joiner.
   - Writers that differ in durability while a reader wants history are an error.
+- **Names:** the policy resolves each name as the module's node does. rcl then applies the process's `-r` rules to
+  the bridge's node too, so a rule that would rename a resolved name again (a chain `/a:=/b` `/b:=/c`, a swap, a rule
+  for the module's node name on a standalone bridge) would put the bridge's DDS endpoint on another name than the
+  module's. `Plan::check_names` refuses such a name: `rsd_plan`, so mower_rsd does not start, and the bridge before it
+  declares anything. robot.launch.py's rules rename none.
 - **Deterministic:** topics first, then services, each sorted by name; the order of `--modules` does not matter.
 - **What it derives for the steps** (`src/tests.rs` has every line):
 
@@ -137,8 +143,8 @@ each with its flag; every other instance is elsewhere, on DDS.
     patch for node options. Its log name is `mower_bus_bridge.<node>`, and tools that look at an endpoint's node name
     (`nav_core_check.py`) see the module's. The bridge warns if a rule renames it anyway (`__ns:=`).
   - A bridge that fails stops the module, and the process exits non-zero, for launch's `respawn`.
-  - No `main.rs` uses it yet: `tests/dds.rs` runs a battery module with `run_standalone`, and `tests/standalone.rs` runs
-    `module_main` itself, under launch's `-r __node:=battery_state`.
+  - The `main.rs` of every module on the bus uses it. `tests/dds.rs` runs a battery module with `run_standalone`, and
+    `tests/standalone.rs` runs `module_main` itself, under launch's `-r __node:=battery_state`.
 
 ## The check
 
@@ -189,4 +195,4 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (203 names).
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (201 names).

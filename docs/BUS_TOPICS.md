@@ -479,7 +479,7 @@ coverage rely on relative names too.
 Every rule above is passed to `mower_rsd` as a node-scoped `-r <node>:<from>:=<to>` (robot.launch.py:77-99, 230-243).
 
 - mower_bridge's resolver oracle (`crates/mower_bridge/tests/resolver.rs`) has rcl itself resolve this table, and every
-  other name of the modules, with these rules: all 203 come out as the manifest and `Remaps::resolve` say.
+  other name of the modules, with these rules: all 201 come out as the manifest and `Remaps::resolve` say.
 - Trap for the standalone `mower_localize`: `run_all` gives its three roles a `ModuleCtx` without the process's rules
   (`src/mower_rs/crates/mower_localize/src/lib.rs:86-88`), so their `resolve_topic` would not apply them. The localize
   conversion hands them `m.remaps`.
@@ -658,7 +658,7 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
 
 - a typed manifest of every module endpoint (sections 2 and 3), checked against the launch file's rules, the parameter
   files and rcl's own resolution of 5.4;
-- one flag per module, all false;
+- one flag per module (`src/on_bus.rs`), all false at step 0 and flipped as each module moved;
 - a policy that derives the bridge's declarations from the modules of a process and their flags;
 - a check that every endpoint a module makes on the bus is in the manifest;
 - `mower_rsd`'s bridge module (`mower_bus_bridge`, started only when a module is on the bus) and a runner for the

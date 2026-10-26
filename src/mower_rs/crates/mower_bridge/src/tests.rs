@@ -400,6 +400,34 @@ fn every_module_plans_standalone_with_every_endpoint_facing_dds() {
     assert_eq!(coverage.notes, ["/risk_map_inflated: only DDS -> bus: its bus writers (boustrophedon_coverage) never publish"]);
 }
 
+/// rcl applies the process's rules to the bridge's names too, which the
+/// policy resolved already: a rule that would rename one of them again puts
+/// the bridge's DDS endpoint on another name than the module's, and the plan
+/// refuses it. robot.launch.py's rules rename none, for mower_rsd's bridge
+/// and for every standalone one.
+#[test]
+fn a_rule_that_renames_a_bridged_name_again_is_an_error() {
+    // the module's /battery_state is /battery_b; the bridge's /battery_b
+    // would be /battery_state
+    let swap = ["--ros-args", "-r", "/battery_state:=/battery_b", "-r", "/battery_b:=/battery_state"];
+    let swap = Remaps::from_args(&swap.map(str::to_string)).unwrap();
+    let e = rsd_plan(&["battery"], &swap).unwrap_err();
+    assert!(e.problems.iter().any(|p| p.starts_with("to_ros /battery_b ")), "{e}");
+    let alone = Running::standalone("battery", "battery_state").unwrap();
+    let e = plan(&alone, &swap).unwrap().check_names(&swap, "battery_state", STANDALONE_NAMESPACE).unwrap_err();
+    assert!(e.problems.iter().any(|p| p.starts_with("to_ros /battery_b ")), "{e}");
+
+    let production = production_remaps();
+    rsd_plan(&PRODUCTION_MODULES, &production).unwrap();
+    for module in MODULES {
+        for i in module.instances {
+            let alone = Running::standalone(module.id, i.node).unwrap();
+            let p = plan(&alone, &production).unwrap_or_else(|e| panic!("{}: {e}", i.node));
+            p.check_names(&production, i.node, STANDALONE_NAMESPACE).unwrap_or_else(|e| panic!("{}: {e}", i.node));
+        }
+    }
+}
+
 #[test]
 fn a_binary_finds_its_instances_by_node_name() {
     let nodes = |id: &str, node: &str| -> Result<Vec<(String, String)>, String> {
