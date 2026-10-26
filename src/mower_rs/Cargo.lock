@@ -780,6 +780,7 @@ name = "mower_localize"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bus",
  "mower_localize_core",
  "mower_rs_common",
  "r2r",
