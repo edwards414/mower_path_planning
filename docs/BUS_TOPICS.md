@@ -553,7 +553,8 @@ f. **Graph-presence checks.**
      publisher (mower_base:160-185). A bridge always counts as one, so move the guard and pid_autotune with the base.
    - `/rosapi/topics` (3.3) and graph_snapshot's node list (5.3) read the DDS graph.
    - `autotune_telemetry_check.py` checks pid_autotune's DDS subscriber count while idle
-     (`src/mower_rs/tools/README.md:17`). It must change with that module.
+     (`src/mower_rs/tools/README.md:17`). The bridge's `from_ros` DDS reader exists only while the bus has a reader
+     (mower_bus_ros README, "Graph presence"), so the check holds through the bridge, up to its 200 ms dwell.
 
 ### 5.6 High-rate and large messages
 

@@ -232,17 +232,12 @@ fn a_planned_bridge_carries_a_bus_module_s_topics_and_services_to_and_from_dds()
                 let _ = request.respond(ToLL::Response { ll_point });
             }
         });
+        // The bus server comes once the bridge's client is matched with the
+        // DDS server as well: the first call is answered.
         tokio::time::timeout(WAIT, to_ll.wait_for_service()).await.expect("the bus server").unwrap();
-        let deadline = Instant::now() + WAIT;
-        let answer = loop {
-            let point = r2r::geometry_msgs::msg::Point { x: 23.5, y: 0.0, z: 0.0 };
-            match to_ll.request(&ToLL::Request { map_point: point }).unwrap().await {
-                Ok(answer) => break answer,
-                // no DDS server matched yet
-                Err(BusError::NoResponse { .. }) => assert!(Instant::now() < deadline, "the DDS server never matched"),
-                Err(e) => panic!("{e}"),
-            }
-        };
+        let point = r2r::geometry_msgs::msg::Point { x: 23.5, y: 0.0, z: 0.0 };
+        let call = to_ll.request(&ToLL::Request { map_point: point }).unwrap();
+        let answer = tokio::time::timeout(WAIT, call).await.expect("the answer").unwrap();
         assert_eq!((answer.ll_point.latitude, answer.ll_point.longitude), (23.5, 120.5));
 
         // What the synthetic modules made is what the manifest has.

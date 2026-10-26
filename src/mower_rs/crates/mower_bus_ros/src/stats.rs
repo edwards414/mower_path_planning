@@ -19,6 +19,10 @@ pub(crate) struct Counters {
     dropped: AtomicU64,
     dds_writer: AtomicBool,
     bus_server: AtomicBool,
+    invalid: AtomicU64,
+    bus_writer: AtomicBool,
+    dds_reader: AtomicBool,
+    dds_server: AtomicBool,
 }
 
 impl Counters {
@@ -53,6 +57,22 @@ impl Counters {
     pub(crate) fn set_bus_server(&self, exists: bool) {
         self.bus_server.store(exists, Ordering::Relaxed);
     }
+
+    pub(crate) fn invalid(&self) {
+        self.invalid.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_bus_writer(&self, exists: bool) {
+        self.bus_writer.store(exists, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_dds_reader(&self, exists: bool) {
+        self.dds_reader.store(exists, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_dds_server(&self, exists: bool) {
+        self.dds_server.store(exists, Ordering::Relaxed);
+    }
 }
 
 /// A snapshot of one bridged name.
@@ -84,6 +104,21 @@ pub struct EntryStats {
     /// `service_from_ros`: whether the bridge's bus server exists now, which
     /// it does while the graph shows a DDS server.
     pub bus_server: bool,
+    /// Messages and calls dropped because r2r cannot convert a value to its
+    /// C message, e.g. a fixed-size array of another length (README.md,
+    /// "Values r2r cannot convert"). Such a call is `unanswered` too.
+    pub invalid: u64,
+    /// `from_ros`: whether the bridge's bus writer exists now. Transient
+    /// local: while the DDS reader exists and the graph shows a DDS writer,
+    /// or a sample shows one the graph does not yet; its looks at the graph
+    /// count in `resyncs`. Volatile: from the declaration on.
+    pub bus_writer: bool,
+    /// `from_ros`: whether the bridge's DDS reader exists now, which it does
+    /// while the bus has a reader of the name.
+    pub dds_reader: bool,
+    /// `service_to_ros`: whether the bridge's DDS server exists now, which
+    /// it does while the bus has a server. Its changes count in `resyncs`.
+    pub dds_server: bool,
 }
 
 /// Every forwarder's counters, by kind and name.
@@ -136,6 +171,10 @@ impl BridgeStats {
             dropped: load(&c.dropped),
             dds_writer: c.dds_writer.load(Ordering::Relaxed),
             bus_server: c.bus_server.load(Ordering::Relaxed),
+            invalid: load(&c.invalid),
+            bus_writer: c.bus_writer.load(Ordering::Relaxed),
+            dds_reader: c.dds_reader.load(Ordering::Relaxed),
+            dds_server: c.dds_server.load(Ordering::Relaxed),
         })
     }
 
