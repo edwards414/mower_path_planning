@@ -22,7 +22,7 @@
 //! - The registry keeps one `Entry` per name for the bus's lifetime: the
 //!   codecs of the three types the first endpoint fixed, the live `Server`,
 //!   the live clients (for introspection) and the tasks in
-//!   `wait_for_server`.
+//!   `wait_for_server` and `wait_for_no_server`.
 //! - A `Server` is what one `ActionServer` serves: the goal requests it has
 //!   not handed out, those it handed out that nobody answered yet, and the
 //!   goals it accepted that have not ended. Dropping the `ActionServer`
@@ -267,6 +267,8 @@ struct EntryState {
     clients: BTreeMap<u64, Arc<CloseSignal>>,
     /// Tasks in `wait_for_server`, woken when a server registers.
     waiting: WakerSet,
+    /// Tasks in `wait_for_no_server`, woken when the server goes.
+    leaving: WakerSet,
 }
 
 impl Entry {
@@ -418,17 +420,20 @@ impl Server {
         lock(&self.state).goals.remove(&id);
     }
 
-    /// Free the name, unless a newer server holds it already.
-    fn unregister(&self, entry: &Entry) {
-        let unregistered = {
+    /// Free the name, unless a newer server holds it already. Returns the
+    /// tasks in `wait_for_no_server` to wake, with no lock held, when it was
+    /// this server that held the name.
+    fn unregister(&self, entry: &Entry) -> Vec<Waker> {
+        let (unregistered, leaving) = {
             let mut state = lock(&entry.state);
             if state.server.as_ref().is_some_and(|live| std::ptr::eq(Arc::as_ptr(live), self)) {
-                state.server.take()
+                (state.server.take(), state.leaving.take())
             } else {
-                None
+                (None, Vec::new())
             }
         };
         drop(unregistered);
+        leaving
     }
 
     /// Its `ActionServer` was dropped, the scope still open: free the name,
@@ -437,18 +442,25 @@ impl Server {
     /// answer still, and the goals it accepted run on (README.md,
     /// "Actions").
     fn stop(&self, entry: &Entry) {
-        self.unregister(entry);
-        let (queue, waker) = {
+        let leaving = self.unregister(entry);
+        let ended = {
             let mut state = lock(&self.state);
             if state.ended {
-                return;
+                None
+            } else {
+                state.ended = true;
+                Some((std::mem::take(&mut state.queue), state.waker.take()))
             }
-            state.ended = true;
-            (std::mem::take(&mut state.queue), state.waker.take())
         };
         let mut user = UserCode::default();
-        fail(&mut user, entry, queue, HashMap::new());
-        if let Some(waker) = waker {
+        if let Some((queue, waker)) = ended {
+            fail(&mut user, entry, queue, HashMap::new());
+            if let Some(waker) = waker {
+                user.wake(waker);
+            }
+        }
+        // Woken by the end that unregistered it, even when it had ended.
+        for waker in leaving {
             user.wake(waker);
         }
         finish_in_drop(user);
@@ -459,7 +471,7 @@ impl Server {
     /// do the goals it accepted that have not ended (they are lost).
     /// Idempotent.
     fn close(&self, entry: &Entry) {
-        self.unregister(entry);
+        let leaving = self.unregister(entry);
         let (queue, in_flight, goals, waker) = {
             let mut state = lock(&self.state);
             state.scope_closed = true;
@@ -473,6 +485,9 @@ impl Server {
             goal.lose(entry.unavailable()).run(&mut user);
         }
         if let Some(waker) = waker {
+            user.wake(waker);
+        }
+        for waker in leaving {
             user.wake(waker);
         }
         user.finish();
@@ -1198,7 +1213,16 @@ impl<A: Action> ActionClient<A> {
     /// first. The future holds the client, as r2r's does, so it is
     /// `'static` and can outlive this handle.
     pub fn wait_for_server(&self) -> impl Future<Output = Result<(), BusError>> + Send + Unpin + 'static {
-        WaitForServer { client: self.inner.clone(), closing: None, waiting: None }
+        WaitForServer { client: self.inner.clone(), served: true, closing: None, waiting: None }
+    }
+
+    /// Resolve once no server is live (at once if none is): `is_available`
+    /// turning false, for one who follows the server's presence (the
+    /// bridge's DDS action server). A server replaced before the waiting
+    /// task runs again is not seen to go. `Closed` if the client's scope
+    /// closes first.
+    pub fn wait_for_no_server(&self) -> impl Future<Output = Result<(), BusError>> + Send + Unpin + 'static {
+        WaitForServer { client: self.inner.clone(), served: false, closing: None, waiting: None }
     }
 }
 
@@ -1209,12 +1233,26 @@ impl<A: Action> fmt::Debug for ActionClient<A> {
     }
 }
 
-/// `ActionClient::wait_for_server`: `WaitForService` of services, for the
-/// same reason (a wait given up takes its wakers back out).
+/// `ActionClient::wait_for_server` and `ActionClient::wait_for_no_server`:
+/// `WaitForService` of services, for the same reason (a wait given up takes
+/// its wakers back out).
 struct WaitForServer {
     client: Arc<ClientInner>,
+    /// What it waits for: a live server (`wait_for_server`), or none.
+    served: bool,
     closing: Option<u64>,
     waiting: Option<u64>,
+}
+
+impl WaitForServer {
+    /// The tasks waiting for what this one waits for.
+    fn set<'s>(&self, state: &'s mut EntryState) -> &'s mut WakerSet {
+        if self.served {
+            &mut state.waiting
+        } else {
+            &mut state.leaving
+        }
+    }
 }
 
 impl Future for WaitForServer {
@@ -1227,10 +1265,12 @@ impl Future for WaitForServer {
             return Poll::Ready(Err(client.caller.closed()));
         }
         let mut state = lock(&client.entry.state);
-        if state.server.is_some() {
+        if state.server.is_some() == this.served {
             return Poll::Ready(Ok(()));
         }
-        let replaced = state.waiting.register(&mut this.waiting, cx.waker());
+        let mut key = this.waiting;
+        let replaced = this.set(&mut state).register(&mut key, cx.waker());
+        this.waiting = key;
         drop(state);
         drop(replaced);
         Poll::Pending
@@ -1241,7 +1281,9 @@ impl Drop for WaitForServer {
     fn drop(&mut self) {
         self.client.caller.unwatch(&mut self.closing);
         if let Some(key) = self.waiting.take() {
-            let removed = lock(&self.client.entry.state).waiting.remove(key);
+            let mut state = lock(&self.client.entry.state);
+            let removed = self.set(&mut state).remove(key);
+            drop(state);
             drop(removed);
         }
     }
@@ -1677,9 +1719,16 @@ mod tests {
         let mut wait = Box::pin(lonely.wait_for_server());
         let locks_b = Locks { entry: lonely.inner.entry.clone(), ..locks.clone() };
         assert!(wait.as_mut().poll(&mut Context::from_waker(&probe(&locks_b, &seen))).is_pending());
-        let _b = serving.action_server::<Act>("/b").unwrap();
+        let b = serving.action_server::<Act>("/b").unwrap();
         all_free(&seen, "wake", "wait_for_server");
         drop(wait);
+
+        // a wait for no server, woken by the server's going
+        let mut gone = Box::pin(lonely.wait_for_no_server());
+        assert!(gone.as_mut().poll(&mut Context::from_waker(&probe(&locks_b, &seen))).is_pending());
+        drop(b);
+        all_free(&seen, "wake", "wait_for_no_server");
+        drop(gone);
 
         // a goal of a closing client scope: its result future, woken through
         // the scope's close signal
@@ -1732,6 +1781,11 @@ mod tests {
 
         let mut srv = serving.action_server::<Act>("/a").unwrap();
         let client = calling.action_client::<Act>("/a").unwrap();
+        for _ in 0..3 {
+            let mut wait = Box::pin(client.wait_for_no_server());
+            assert!(wait.as_mut().poll(&mut cx).is_pending());
+        }
+        assert!(lock(&client.inner.entry.state).leaving.is_empty());
         for i in 0..3 {
             let mut response = client.send_goal_request(i).unwrap();
             assert!(Pin::new(&mut response).poll(&mut cx).is_pending());

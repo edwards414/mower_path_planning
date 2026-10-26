@@ -708,6 +708,48 @@ async fn a_goal_with_no_live_server_fails_at_once_and_wait_for_server_waits_for_
     assert_eq!(client.wait_for_server().now_or_never(), Some(Ok(())));
 }
 
+/// `wait_for_no_server` is `is_available` turning false, for the bridge's
+/// DDS action server, which follows the bus server: at once with none, then
+/// when the server is dropped or its scope closes. A server replaced before
+/// the wait looks again is not seen to go, and the client's scope closing
+/// ends the wait with `Closed`.
+#[test]
+fn wait_for_no_server_resolves_once_no_server_is_live() {
+    let bus = Bus::new();
+    let bridge = bus.scope("bridge");
+    let client = bridge.action_client::<WaypointAction>(NAME).unwrap();
+    assert_eq!(client.wait_for_no_server().now_or_never(), Some(Ok(())), "none: at once");
+    let woken = Woken::new();
+
+    let nav = bus.scope("nav");
+    let srv = nav.action_server::<WaypointAction>(NAME).unwrap();
+    let mut wait = Box::pin(client.wait_for_no_server());
+    assert!(poll_with(&mut wait, &woken).is_pending());
+    drop(srv);
+    assert!(woken.take(), "the dropped server wakes the wait");
+    assert_eq!(poll_with(&mut wait, &woken), Poll::Ready(Ok(())));
+
+    let _srv = nav.action_server::<WaypointAction>(NAME).unwrap();
+    let mut wait = Box::pin(client.wait_for_no_server());
+    assert!(poll_with(&mut wait, &woken).is_pending());
+    nav.close();
+    assert!(woken.take(), "so does its scope's close");
+    assert_eq!(poll_with(&mut wait, &woken), Poll::Ready(Ok(())));
+
+    let restarted = bus.scope("nav");
+    let first = restarted.action_server::<WaypointAction>(NAME).unwrap();
+    let mut wait = Box::pin(client.wait_for_no_server());
+    assert!(poll_with(&mut wait, &woken).is_pending());
+    drop(first);
+    let _second = restarted.action_server::<WaypointAction>(NAME).unwrap();
+    assert!(woken.take());
+    assert!(poll_with(&mut wait, &woken).is_pending(), "a server again when it looks");
+
+    bridge.close();
+    assert!(woken.take());
+    assert_eq!(poll_with(&mut wait, &woken), Poll::Ready(Err(closed("bridge"))));
+}
+
 #[test]
 fn introspection_lists_each_actions_types_server_clients_and_goals() {
     let bus = Bus::new();
@@ -849,6 +891,7 @@ fn handles_are_send_and_unpin_and_the_futures_and_streams_can_be_spawned() {
     let bus = Bus::new();
     let client = bus.scope("m").action_client::<WaypointAction>(NAME).unwrap();
     spawnable_future(client.wait_for_server());
+    spawnable_future(client.wait_for_no_server());
 }
 
 // ---------------------------------------------------------------------------

@@ -281,6 +281,11 @@ let (status, result) = result.await?;                   // a terminal GoalStatus
   runs goals concurrently spawns a task per request, as mower_nav does.
 - With no live server at send time, `send_goal_request` fails at once with `ServiceUnavailable`.
   (rcl_action sends it anyway, and the client waits forever.)
+- **Presence:** `is_available()` says whether a server is live now. `wait_for_server()` waits for
+  one and `wait_for_no_server()` for none, both ending with `Closed` if the client's scope closes
+  first, and both `'static`, as r2r's `is_available` future is. A server replaced before the
+  waiting task runs again is not seen to go. mower_bus_ros's `action_to_ros` follows the server
+  with the two: its DDS action server exists only while a bus server does.
 - The server's answer:
   - `accept()`: the goal is `Executing` at once, as r2r has it (`Accepted` never shows), and the
     client gets the goal's handle, its result future and its feedback stream;
