@@ -18,6 +18,8 @@ pub mod auth;
 mod client;
 mod config;
 mod entry;
+#[cfg(test)]
+mod golden;
 mod hub;
 mod r2r_hub;
 

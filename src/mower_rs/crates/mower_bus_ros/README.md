@@ -526,6 +526,29 @@ Findings:
     `the_app_s_bytes_are_those_of_a_json_value...`).
 - **NaN becomes `null` on both paths,** so the app cannot tell an unknown altitude from a missing one.
 
+**The golden corpus** (step E3.0): `the_golden_corpus_is_what_r2r_s_untyped_path_and_the_bus_give` extends the check to
+every type the app and the Studio use, in both directions, from the cases of
+[`mower_ws_bridge/tests/golden/fixtures.rs`](../mower_ws_bridge/tests/golden/fixtures.rs):
+
+- **Messages the app receives** (`std_msgs` `String`, `Bool`, `Header`; `PoseStamped`; `BatteryState`, `NavSatFix`;
+  `CoverageProgress`): bus -> bridge -> r2r's untyped reader, against the bus's erased reader. One of them is a real
+  map layer, the frame ws_bridge sent on main for map_manage's start-up grid (213 599 bytes).
+- **The services' answers** (`Trigger`, `ImportImageMask`, `EditZone`, `SiteOp`, `ZoneExecPath`, `ZoneSequence`,
+  `GetCoverageProgress`, `ResumeCoverage`, `PidAutotune`, `SetParameters`): r2r's untyped client through
+  `service_to_ros`, against `call_json`.
+- **The app's requests:** its exact frames (a `ParameterValue` with only its type and one value, `points: []`, a
+  `ResumeCoverage` without `zone_id`, integers for doubles), decoded by r2r and by the bus codec. The server must get
+  the same value from both.
+- **What the app and the Studio publish** (`TwistStamped`, `String`): r2r's untyped writer through `from_ros`, against
+  the bus's JSON writer.
+- **The values** are those that make byte identity hard: `f32` values with no exact form, `f64` extremes and `-0.0`,
+  NaN and ±Inf, empty and full arrays, non-ASCII text, control characters, quotes, `i8` -1 and the integer limits.
+- **The texts** are checked against `mower_ws_bridge/tests/golden/*.txt`, which `MOWER_GOLDEN=write` rewrites (review
+  the diff). mower_ws_bridge's own test builds the same frames through the bus, with no DDS, and must get the same
+  bytes.
+- **Findings:** none differs. A request decodes alike on both paths, missing fields included (`#[serde(default)]`
+  takes r2r's IDL defaults: a `ResumeCoverage` with no `zone_id` asks for zone -1).
+
 ## Tests
 
 `tests/dds.rs` runs everything against real DDS in one process. The bridge's node and a peer node stand in for nav2, the

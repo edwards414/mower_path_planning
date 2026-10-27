@@ -1,0 +1,4 @@
+joystick	{"header":{"frame_id":"manual-7f3a9c","stamp":{"nanosec":950000000,"sec":1793000000}},"twist":{"angular":{"x":0.0,"y":0.0,"z":-0.6},"linear":{"x":0.35,"y":0.0,"z":0.0}}}
+joystick_zero_ints	{"header":{"frame_id":"manual-session-unavailable","stamp":{"nanosec":0,"sec":0}},"twist":{"angular":{"x":0.0,"y":0.0,"z":0.0},"linear":{"x":0.0,"y":0.0,"z":0.0}}}
+blade	{"data":"{\"permille\":600,\"ttl_ms\":500}"}
+recorder_command	{"data":"{\"cmd\":\"delete\",\"run\":\"錄製 1\"}"}
