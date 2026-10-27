@@ -772,11 +772,15 @@ fn from_ros_reads_dds_only_while_the_bus_has_a_reader() {
                 }
                 assert!(Instant::now() < deadline, "round {round}: nothing reached the bus reader");
             }
-            // It goes: so does the DDS reader.
+            // It goes: so does the DDS reader. Its absence from the graph
+            // means something only once the graph has shown it, and the
+            // writer learns of it on a path of its own, which can come after
+            // the graph's.
+            eventually("the DDS reader on the graph", || nav2.readers(topic) == 1).await;
             drop(reader);
             eventually("the DDS reader to leave the graph", || nav2.readers(topic) == 0).await;
             assert!(!running.topic(topic).dds_reader);
-            assert_eq!(writer.get_inter_process_subscription_count().unwrap(), 0);
+            eventually("the writer to lose its match", || writer.get_inter_process_subscription_count().unwrap() == 0).await;
         }
         running.stop().await.unwrap();
     });
@@ -801,6 +805,9 @@ fn a_latched_value_heard_before_the_last_bus_reader_went_does_not_reach_the_next
         let status = bus.scope("robot_status");
         let mut first = status.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, first.recv()).await.unwrap().unwrap().data, "t0");
+        // The graph learns of the reader on its own schedule, after t0 may
+        // have come: before it shows the reader, its absence says nothing.
+        eventually("the graph to show the DDS reader", || base.readers(topic) == 1).await;
 
         drop(first);
         eventually("the DDS reader to go with the last bus reader", || base.readers(topic) == 0).await;
