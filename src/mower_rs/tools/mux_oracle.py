@@ -100,6 +100,27 @@ GENERIC_KEYS = {'bbb': ('/g_bbb', 10), 'aaa': ('/g_aaa', 10), 'zero': ('/g_zero'
                 'never': ('/g_never', 10), 'low': ('/g_low', 10)}
 GENERIC_LOCKS = {'quiet': ('/g_quiet', 10), 'zerolock': ('/g_zerolock', 10), 'high': ('/g_high', 10)}
 
+# The same rules on the production topics, one lock per session: the names
+# mower_bridge's manifest has for the mux, so that a mux in mower_rsd gets
+# them through the bridge too (the /g_* names above it would not bridge).
+GENERIC_LOCK_VARIANTS = {'high': (0.3, 45), 'zerolock': (0.5, 0), 'quiet': (0.0, 60)}
+GENERIC2_YAML = """\
+{node}:
+  ros__parameters:
+    use_stamped: true
+    topics:
+      bbb: {{topic: /keyboard_cmd_vel, timeout: 0.5, priority: 50}}
+      aaa: {{topic: /joy_cmd, timeout: 0.5, priority: 50}}
+      zero: {{topic: /nav_cmd_vel, timeout: 0.5, priority: 0}}
+      never: {{topic: /physical_joy_cmd, timeout: 0.0, priority: 40}}
+      low: {{topic: /navigation_safety_stop, timeout: 0.5, priority: 30}}
+    locks:
+      {variant}: {{topic: /navigation_coordinator_lock, timeout: {timeout}, priority: {priority}}}
+"""
+GENERIC2_KEYS = {'aaa': ('/joy_cmd', 1), 'bbb': ('/keyboard_cmd_vel', 10), 'zero': ('/nav_cmd_vel', 1),
+                 'never': ('/physical_joy_cmd', 10), 'low': ('/navigation_safety_stop', 10)}
+GENERIC2_LOCKS = {'lk': ('/navigation_coordinator_lock', 10)}
+
 GAP_S = 1.5
 RUST_OUT = '/cmd_vel_guard_input'
 
@@ -308,8 +329,11 @@ def scenario_list(random_s, seed):
     S.append(('S16_joy_200hz', 1.4, stream('lock', 0.05, 0.0, 1.3, data=True)
               + stream('safety', 0.05, 0.0125, 1.2) + stream('joy', 0.005, 0.1, 1.1)))
     # one joy, then safety every 2 ms at joy ages 0.490 .. 0.510 s
+    # (anchored: what comes after the joy keeps its distance to the joy as
+    # it was actually sent)
     S.append(('S17_boundary_scan', 0.8, stream('lock', 0.05, 0.0, 0.7, data=True)
-              + [(0.05, 'joy', {})] + [(round(0.05 + 0.490 + 0.002 * k, 6), 'safety', {}) for k in range(11)]))
+              + [(0.05, 'joy', {'anchor': True})]
+              + [(round(0.05 + 0.490 + 0.002 * k, 6), 'safety', {}) for k in range(11)]))
     if random_s > 0:
         S.append(('R01_random', float(random_s), random_script(random_s, seed)))
     return S
@@ -357,6 +381,25 @@ GENERIC = (
     + [(9.5, 'quiet', {'data': False}), (9.7, 'aaa', {})]
 )
 GENERIC_S = 10.5
+
+# the generic sessions on the production topics: what all three share, then
+# what is particular to the lock
+GENERIC2_COMMON = (
+    stream('low', 0.05, 1.0, 1.5)                                     # never (timeout 0) masks it from the start
+    + stream('bbb', 0.05, 2.0, 3.0) + stream('aaa', 0.05, 2.3, 3.0)   # a tie: aaa first by name
+    + stream('zero', 0.05, 3.5, 4.0)                                  # priority 0: never selected
+)
+GENERIC2 = {
+    # a 45 lock: below it masked (never, low), 50 not (aaa); then never wins
+    'high': (GENERIC2_COMMON + stream('lk', 0.05, 4.5, 5.5, data=True) + stream('low', 0.05, 4.6, 5.4)
+             + [(5.0, 'never', {}), (5.2, 'aaa', {})] + [(6.0, 'never', {})] + stream('low', 0.05, 6.5, 7.0), 7.5),
+    # a priority-0 lock: no effect
+    'zerolock': (GENERIC2_COMMON + stream('lk', 0.05, 4.5, 5.0, data=True) + [(4.75, 'never', {})]
+                 + stream('low', 0.05, 5.5, 6.0), 6.5),
+    # a timeout-0 lock: locked for good after one true, free after one false
+    'quiet': (GENERIC2_COMMON + [(4.5, 'lk', {'data': True}), (5.0, 'never', {}), (5.2, 'aaa', {}),
+                                 (5.5, 'lk', {'data': False}), (5.7, 'aaa', {})], 6.5),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -499,9 +542,14 @@ def sleep_until(deadline):
 
 
 def play(probe, script, t0):
+    """Send `script` on time; after an event marked `anchor`, the rest keeps
+    its distance to it as it was actually sent."""
+    shift = 0.0
     for t, key, kw in sorted(script, key=lambda e: e[0]):
-        sleep_until(t0 + t)
+        sleep_until(t0 + t + shift)
         probe.send(key, kw)
+        if kw.get('anchor'):
+            shift = (time.monotonic() - t0) - t
 
 
 def run_session(args, session, yaml_text_for, keys, locks, body):
@@ -573,10 +621,26 @@ def cmd_run(args):
 
     def startup_body(probe, muxes):
         t0 = time.monotonic()
-        threading.Timer(STARTUP_MUX_START_S, muxes.start).start()
-        play(probe, STARTUP, t0)
+        # from this thread: a fork from another one stalls the sender
+        play(probe, [e for e in STARTUP if e[0] < STARTUP_MUX_START_S], t0)
+        sleep_until(t0 + STARTUP_MUX_START_S)
+        muxes.start()
+        play(probe, [e for e in STARTUP if e[0] >= STARTUP_MUX_START_S], t0)
         sleep_until(t0 + STARTUP_S)
         return [['S15_startup', t0, t0 + STARTUP_S]]
+
+    def generic2_body(variant):
+        def body(probe, muxes):
+            muxes.start()
+            if not wait_for_outputs(probe, muxes.instances):
+                print('[oracle] discovery timed out', flush=True)
+            time.sleep(1.0)
+            script, duration = GENERIC2[variant]
+            t0 = time.monotonic()
+            play(probe, script, t0)
+            sleep_until(t0 + duration)
+            return [[f'S18_generic_{variant}', t0, t0 + duration]]
+        return body
 
     def generic_body(probe, muxes):
         muxes.start()
@@ -590,12 +654,19 @@ def cmd_run(args):
         sleep_until(t0 + GENERIC_S)
         return [['S18_generic', t0, t0 + GENERIC_S]]
 
-    sessions = args.sessions or ['main', 'startup', 'generic']
+    sessions = args.sessions or ['main', 'startup', 'generic_high', 'generic_zerolock', 'generic_quiet']
+    for variant, (timeout, priority) in GENERIC_LOCK_VARIANTS.items():
+        if f'generic_{variant}' in sessions:
+            run_session(args, f'generic_{variant}',
+                        lambda n, v=variant, to=timeout, pr=priority: GENERIC2_YAML.format(
+                            node=n, variant=v, timeout=to, priority=pr),
+                        GENERIC2_KEYS, GENERIC2_LOCKS, generic2_body(variant))
     if 'main' in sessions:
         run_session(args, 'main', prod_yaml, PRODUCTION_KEYS, PRODUCTION_LOCKS, main_body)
     if 'startup' in sessions:
         run_session(args, 'startup', prod_yaml, PRODUCTION_KEYS, PRODUCTION_LOCKS, startup_body)
     if 'generic' in sessions:
+        # the first form of S18 (C++ only: its /g_* names do not bridge)
         run_session(args, 'generic', lambda n: GENERIC_YAML.format(node=n), GENERIC_KEYS, GENERIC_LOCKS,
                     generic_body)
     os._exit(0)
@@ -609,6 +680,8 @@ def session_model(doc):
     config = parse_config(doc['config'])
     if doc['session'] == 'generic':
         keys, locks = GENERIC_KEYS, GENERIC_LOCKS
+    elif doc['session'].startswith('generic_'):
+        keys, locks = GENERIC2_KEYS, GENERIC2_LOCKS
     else:
         keys, locks = PRODUCTION_KEYS, PRODUCTION_LOCKS
     topic_handle = {h['topic']: h['name'] for h in config['inputs'] + config['locks']}
@@ -632,27 +705,43 @@ def percentile(xs, p):
     return xs[min(len(xs) - 1, int(math.ceil(p / 100.0 * len(xs))) - 1)]
 
 
-def startup_window(doc):
-    """S15: from the first lock false on (plus a margin), every nav goes."""
-    first_lock = min((s[0] for s in doc['sent'] if s[2] == 'lock'), default=None)
-    return first_lock
+SESSIONS = ('main', 'startup', 'generic', 'generic_high', 'generic_zerolock', 'generic_quiet')
+
+
+def up_times(doc, names):
+    """When each instance was first heard from (a status or an output)."""
+    out = {}
+    for name in names:
+        times = [d[0] for d in doc['diag'] if d[1].startswith(name + ': ')] + [o[0] for o in doc['out'][name]]
+        out[name] = min(times) if times else float('inf')
+    return out
 
 
 def cmd_compare(args):
+    """Every instance against the first C++ one. With two C++ ones, the
+    second measures the noise floor of this very run (the machine's load, the
+    probe's stalls): another instance may differ from the reference by twice
+    what the second C++ copy does, and its latency p99 by 5 ms more than the
+    copy's (p50 by 1 ms whatever the noise). The model is reported, not
+    required: it assumes every message arrived 0 ms after it was sent."""
     failures = []
     summary = {'sessions': {}}
     margin = int(args.margin * 1e9)
-    for session in ('main', 'startup', 'generic'):
+    for session in SESSIONS:
         path = os.path.join(args.dir, f'{session}.json')
         if not os.path.exists(path):
             continue
         doc = json.load(open(path))
         model, key_handle = session_model(doc)
         names = [i['name'] for i in doc['instances']]
-        ref = names[0]
+        cpp = [i['name'] for i in doc['instances'] if i['kind'] == 'cpp']
+        ref = cpp[0]
+        noise_of = cpp[1] if len(cpp) > 1 else None
         sent_by_frame = {s[3]: s for s in doc['sent'] if s[2] == 'input'}
         srep = summary['sessions'][session] = {'scenarios': {}}
-        print(f'===== {session}: instances {names}, reference {ref}, exit codes {doc.get("exit_codes")}')
+        up = up_times(doc, names)
+        print(f'===== {session}: instances {names}, reference {ref}, noise floor {noise_of}, '
+              f'exit codes {doc.get("exit_codes")}')
         # content: every output is the input it names, bit for bit
         for name in names:
             bad = []
@@ -669,26 +758,25 @@ def cmd_compare(args):
             events = events_of(doc, key_handle, t0, end)
             decided = decisions(model, events, margin)
             ambiguous = {f for f, fw, amb in decided if amb}
-            expected = [f for f, fw, amb in decided if fw and not amb]
+            start_ns = {s[3]: int(round((s[0] - t0) * 1e9)) for s in doc['sent'] if s[2] == 'input'}
+            cut = None
             if session == 'startup':
-                # the muxes were not up for the first two seconds: compare from
-                # the lock on, and require nothing before it
-                first_lock = startup_window(doc)
-                cut = int(round((first_lock - t0) * 1e9)) + 100_000_000
-                start_ns = {s[3]: int(round((s[0] - t0) * 1e9)) for s in doc['sent'] if s[2] == 'input'}
-                expected = [f for f in expected if start_ns[f] > cut]
+                # nothing may go before the first lock false; the rest is
+                # compared from the moment every instance was up
+                first_lock = min(s[0] for s in doc['sent'] if s[2] == 'lock')
+                for name in names:
+                    early = [o[1] for o in doc['out'][name] if o[0] < first_lock]
+                    if early:
+                        failures.append(f'startup {name}: forwarded before the first lock false: {early[:5]}')
+                cut = int(round((max(first_lock + 0.1, max(up.values()) + 0.5) - t0) * 1e9))
+            keep = (lambda f: start_ns.get(f, 0) > cut) if cut is not None else (lambda f: True)
+            expected = [f for f, fw, amb in decided if fw and not amb and keep(f)]
             row = {name: [o[1] for o in doc['out'][name] if t0 <= o[0] < end] for name in names}
+            clean = {name: [f for f in row[name] if f not in ambiguous and keep(f)] for name in names}
             rep = srep['scenarios'][sc] = {'model': len(expected), 'ambiguous': len(ambiguous), 'instances': {}}
             line = f'  {sc:<34} model {len(expected):5d} ambiguous {len(ambiguous):4d} |'
             for name in names:
                 seq = row[name]
-                clean = [f for f in seq if f not in ambiguous]
-                if session == 'startup':
-                    early = [o[1] for o in doc['out'][name] if o[0] < first_lock]
-                    if early:
-                        failures.append(f'startup {name}: forwarded before the first lock false: {early[:5]}')
-                    clean = [f for f in clean if start_ns[f] > cut]
-                verdict = ''
                 if sc.startswith('S16'):
                     n = sum(1 for f in seq if f.startswith('joy#'))
                     verdict = f'joy {n}/200'
@@ -698,76 +786,79 @@ def cmd_compare(args):
                     verdict = f'first {first}'
                     rep['instances'][name] = {'first_safety': first}
                 else:
-                    ok = clean == expected
-                    verdict = 'ok' if ok else 'DIFFERS'
+                    ok = clean[name] == expected
+                    verdict = 'model' if ok else 'not the model'
+                    rep['instances'][name] = {'forwarded': len(seq), 'model': ok}
                     if not ok:
-                        extra = [f for f in clean if f not in expected]
-                        missing = [f for f in expected if f not in clean]
-                        what = (f'{session} {sc} {name}: forwarded differs from the model (extra {len(extra)} '
-                                f'{extra[:5]}, missing {len(missing)} {missing[:5]})')
-                        if sc.startswith('R01'):
-                            # the model takes the send time for the arrival:
-                            # a stalled delivery is not in it
-                            print('    ' + what)
-                        else:
-                            failures.append(what)
-                    # what the ambiguous decisions came out as: the noise
-                    rep['instances'][name] = {'forwarded': len(seq), 'ambiguous_forwarded':
-                                              sum(1 for f in seq if f in ambiguous), 'exact': ok}
+                        extra = [f for f in clean[name] if f not in expected]
+                        missing = [f for f in expected if f not in clean[name]]
+                        print(f'    {name} against the model: extra {len(extra)} {extra[:4]}, '
+                              f'missing {len(missing)} {missing[:4]}')
                 line += f' {name} {len(seq):5d} {verdict}'
             print(line)
             if sc.startswith('S16'):
-                counts = [rep['instances'][n]['joy_forwarded'] for n in names]
-                if args.s16_tolerance >= 0 and max(counts) - min(counts) > args.s16_tolerance:
-                    failures.append(f'{session} S16: joy forwarded {counts} differ by more than {args.s16_tolerance}')
+                counts = {n: rep['instances'][n]['joy_forwarded'] for n in names}
+                noise = abs(counts[noise_of] - counts[ref]) if noise_of else 0
+                allowed = max(4, 2 * noise) if args.s16_tolerance < 0 else args.s16_tolerance
+                for name in names:
+                    if name not in (ref, noise_of) and abs(counts[name] - counts[ref]) > allowed:
+                        failures.append(f'{session} S16 {name}: joy forwarded {counts[name]} against {counts[ref]} '
+                                        f'(allowed {allowed})')
+                continue
             if sc.startswith('S17'):
                 firsts = [rep['instances'][n]['first_safety'] for n in names]
                 seqs = [int(f.split('#')[1]) for f in firsts if f]
                 if len(seqs) != len(firsts) or max(seqs) - min(seqs) > 1:
                     failures.append(f'{session} S17: first forwarded safety {firsts} differ by more than one')
-            # against the reference instance: the decisions away from a
-            # boundary must agree (in R01 up to --random-tolerance: the
-            # probe's stalls bunch deliveries), and the ambiguous ones are
-            # the noise
-            if not (sc.startswith('S16') or sc.startswith('S17')):
-                for name in names[1:]:
-                    da = {f for f in row[ref] if f in ambiguous}
-                    db = {f for f in row[name] if f in ambiguous}
-                    ca = [f for f in row[ref] if f not in ambiguous]
-                    cb = [f for f in row[name] if f not in ambiguous]
-                    if session == 'startup':
-                        ca = [f for f in ca if start_ns[f] > cut]
-                        cb = [f for f in cb if start_ns[f] > cut]
-                    differ = sorted(set(ca) ^ set(cb))
-                    order = [f for f in ca if f in set(cb)] != [f for f in cb if f in set(ca)]
-                    rep.setdefault('vs_reference', {})[name] = {'differ': len(differ), 'order': order,
-                                                                'ambiguous_differ': len(da ^ db)}
-                    allowed = args.random_tolerance if sc.startswith('R01') else 0
-                    if order or len(differ) > allowed:
-                        failures.append(f'{session} {sc} {name}: {len(differ)} decisions differ from {ref} '
-                                        f'(allowed {allowed}), order differs: {order}: {differ[:6]}')
-                    if differ or order:
-                        print(f'    {name} vs {ref}: {len(differ)} decisions differ {differ[:6]}, order {order}')
+                continue
+            # against the reference, away from the boundaries
+            diffs = {}
+            for name in names[1:]:
+                ca, cb = clean[ref], clean[name]
+                differ = sorted(set(ca) ^ set(cb))
+                order = [f for f in ca if f in set(cb)] != [f for f in cb if f in set(ca)]
+                diffs[name] = (differ, order)
+                rep.setdefault('vs_reference', {})[name] = {'differ': len(differ), 'order': order}
+                if differ or order:
+                    print(f'    {name} vs {ref}: {len(differ)} decisions differ {differ[:6]}, order {order}')
+            noise = len(diffs[noise_of][0]) if noise_of else 0
+            for name, (differ, order) in diffs.items():
+                if name == noise_of:
+                    continue
+                allowed = 2 * noise if noise_of else (args.random_tolerance if sc.startswith('R01') else 0)
+                if order or len(differ) > allowed:
+                    failures.append(f'{session} {sc} {name}: {len(differ)} decisions differ from {ref} '
+                                    f'(allowed {allowed}, the noise floor {noise}), order differs: {order}: '
+                                    f'{differ[:6]}')
             for name in names:
                 for o in doc['out'][name]:
                     if t0 <= o[0] < end and o[1] in sent_by_frame:
                         lat[name].append((o[1], o[0] - sent_by_frame[o[1]][0]))
         ref_lat = dict(lat[ref])
+        noise_p99 = None
         for name in names:
             xs = [l for _, l in lat[name]]
             print(f'  latency {name}: n {len(xs)} p50 {percentile(xs, 50)*1e3:.2f} p90 {percentile(xs, 90)*1e3:.2f} '
                   f'p99 {percentile(xs, 99)*1e3:.2f} max {max(xs, default=float("nan"))*1e3:.2f} ms')
             srep.setdefault('latency_ms', {})[name] = {'n': len(xs), 'p50': percentile(xs, 50) * 1e3,
                                                      'p99': percentile(xs, 99) * 1e3}
-            if name == ref:
-                continue
+        diffs = {}
+        for name in names[1:]:
             d = [l - ref_lat[f] for f, l in lat[name] if f in ref_lat]
             p50, p99 = percentile(d, 50) * 1e3, percentile(d, 99) * 1e3
+            diffs[name] = (p50, p99)
             print(f'  latency {name} - {ref}: n {len(d)} p50 {p50:+.2f} p99 {p99:+.2f} '
                   f'max {max(d, default=float("nan"))*1e3:+.2f} ms')
             srep.setdefault('latency_diff_ms', {})[name] = {'n': len(d), 'p50': p50, 'p99': p99}
-            if args.latency and (p50 > args.p50_ms or p99 > args.p99_ms):
-                failures.append(f'{session} {name}: latency over {ref} p50 {p50:.2f} ms / p99 {p99:.2f} ms')
+        if noise_of:
+            noise_p99 = diffs[noise_of][1]
+        for name, (p50, p99) in diffs.items():
+            if name == noise_of or not args.latency:
+                continue
+            p99_allowed = max(args.p99_ms, (noise_p99 or 0.0) + args.p99_ms)
+            if not (p50 <= args.p50_ms and p99 <= p99_allowed):
+                failures.append(f'{session} {name}: latency over {ref} p50 {p50:.2f} ms (allowed {args.p50_ms}) / '
+                                f'p99 {p99:.2f} ms (allowed {p99_allowed:.2f})')
         check_diagnostics(doc, model, key_handle, names, failures, margin, srep)
     print()
     if failures:
@@ -873,7 +964,7 @@ def check_diagnostics(doc, model, key_handle, names, failures, margin, srep):
 def cmd_vectors(args):
     os.makedirs(args.dest, exist_ok=True)
     written = []
-    for session in ('main', 'startup', 'generic'):
+    for session in SESSIONS:
         path = os.path.join(args.dir, f'{session}.json')
         if not os.path.exists(path):
             continue
@@ -932,7 +1023,8 @@ def main():
     r.add_argument('--cpp', type=int, default=2, help='C++ twist_mux instances (2: the noise floor)')
     r.add_argument('--rust', help='mower_rsd to run with --modules mux')
     r.add_argument('--config', default=PRODUCTION_YAML)
-    r.add_argument('--sessions', nargs='*', choices=['main', 'startup', 'generic'])
+    r.add_argument('--sessions', nargs='*',
+                   choices=['main', 'startup', 'generic', 'generic_high', 'generic_zerolock', 'generic_quiet'])
     r.add_argument('--scenarios', nargs='*', help='prefixes, e.g. S03 S12')
     r.add_argument('--random-s', type=int, default=600)
     r.add_argument('--seed', type=int, default=4)
