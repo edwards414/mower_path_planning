@@ -14,6 +14,8 @@ on:
       - 'src/**'
       - 'utils/**'
       - 'firmware/**'
+      # image inputs outside src/ (the runtime apt pins)
+      - 'deploy/image/**'
       - 'docker-compose.yaml'
   # A PR runs whenever it touches a file a job reads: besides the image inputs
   # above, the Python tests read deploy/ (compose, .env.example, host scripts,

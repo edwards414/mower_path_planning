@@ -161,11 +161,6 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
 ##############################################
 FROM --platform=$BUILDPLATFORM ${FIRMWARE_BUILD_IMAGE} AS firmware
 
-ARG MOWER_VERSION
-ARG MOWER_GIT_SHA
-ARG MOWER_BUILD_UNIX
-ARG MOWER_BUILD_DIRTY
-
 ENV DEBIAN_FRONTEND=noninteractive
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -177,6 +172,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libstdc++-arm-none-eabi-newlib \
         make \
         python3
+
+# The identity changes every commit; declared after the toolchain layer so
+# that layer is reused (an ARG is part of the key of every RUN after it).
+ARG MOWER_VERSION
+ARG MOWER_GIT_SHA
+ARG MOWER_BUILD_UNIX
+ARG MOWER_BUILD_DIRTY
 
 WORKDIR /fw
 COPY ./firmware /fw
@@ -203,34 +205,42 @@ ARG USER_ID=1000
 ARG GROUP_NAME=mower
 ARG GROUP_ID=1000
 
-# Build identity, reported on /robot/info (mower_mission/version.py).
-ARG MOWER_VERSION=dev
-ARG MOWER_GIT_SHA=
-ARG MOWER_BUILD_UNIX=
-ARG MOWER_IMAGE=
-
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=${ROS_DISTRO}
 ENV WORKSPACE=${WORKSPACE}
 ENV HOME=/home/${USER_NAME}
-ENV MOWER_VERSION=${MOWER_VERSION} \
-    MOWER_GIT_SHA=${MOWER_GIT_SHA} \
-    MOWER_BUILD_UNIX=${MOWER_BUILD_UNIX} \
-    MOWER_IMAGE=${MOWER_IMAGE} \
-    MOWER_FIRMWARE_MANIFEST=/opt/mower/firmware/mower_robot_firmware.json
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR ${WORKSPACE}
 
-# apt first, keyed only on the dependency list, so the (~10 min under QEMU)
-# layer is reused until a package.xml changes; the install tree, which
-# changes every commit, is copied in afterwards.
-COPY --from=builder /tmp/runtime-apt-packages.txt /tmp/runtime-apt-packages.txt
+# apt first, keyed only on the dependency list and deploy/image/apt/, so the
+# layer (245 MB compressed) is reused, blob for blob, until a package.xml or
+# the lock changes; the install tree, which changes every commit, is copied
+# in afterwards.
+#
+# Every version is pinned to deploy/image/apt/runtime-apt.lock, the packages of
+# the image the robot runs: a cache miss must not quietly ship another nav2,
+# rclcpp or libc. While it installs, apt reads a private config (APT_CONFIG,
+# under /tmp, removed at the end; /etc/apt is untouched):
+#   - every locked version at Pin-Priority 1001;
+#   - the image's own Ubuntu sources;
+#   - instead of packages.ros.org, which keeps only its latest sync, the
+#     snapshot of the sync these ROS packages come from. On 2026-10-27 its
+#     3955 jazzy packages had the same versions as packages.ros.org. It is
+#     signed by the ROS snapshot key, 4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA
+#     (deploy/image/apt/ros-snapshots.asc).
+# Then dpkg's whole package list must equal the lock, or the build fails
+# with the diff. An Ubuntu update that has left the archive (only the
+# -updates and -security pockets drop old versions) fails it too: refresh
+# the lock in a PR of its own.
 # Runtime-only image: dpkg skips docs/man/locales at unpack time (~170 MB),
 # and the headers / static libs the ROS and -dev debs ship are deleted
 # afterwards (~250 MB); nothing compiles inside this image.
+ARG ROS_APT_SNAPSHOT=http://snapshots.ros.org/jazzy/2026-10-05/ubuntu
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=bind,from=builder,source=/tmp/runtime-apt-packages.txt,target=/tmp/runtime-apt-packages.txt \
+    --mount=type=bind,source=deploy/image/apt,target=/tmp/apt-lock \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && printf '%s\n' \
         'path-exclude /usr/share/doc/*' \
@@ -241,6 +251,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         'path-include /usr/share/locale/locale.alias' \
         > /etc/dpkg/dpkg.cfg.d/01_runtime_nodoc \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
+    && pin=/tmp/apt-pin && mkdir -p "$pin/sources.list.d" "$pin/preferences.d" \
+    && cp /etc/apt/sources.list.d/ubuntu.sources "$pin/sources.list.d/" \
+    && printf '%s\n' 'Types: deb' "URIs: ${ROS_APT_SNAPSHOT}" 'Suites: noble' 'Components: main' \
+        'Signed-By: /tmp/apt-lock/ros-snapshots.asc' > "$pin/sources.list.d/ros2-snapshot.sources" \
+    && sed '/^#/d' /tmp/apt-lock/runtime-apt.lock \
+        | awk '{ sub(/:arm64$/, "", $1); printf "Package: %s\nPin: version %s\nPin-Priority: 1001\n\n", $1, $2 }' \
+        > "$pin/preferences.d/runtime-apt-lock.pref" \
+    && printf '%s\n' 'Dir::Etc::SourceList "/dev/null";' "Dir::Etc::SourceParts \"$pin/sources.list.d\";" \
+        'Dir::Etc::Preferences "/dev/null";' "Dir::Etc::PreferencesParts \"$pin/preferences.d\";" \
+        > "$pin/apt.conf" \
+    && export APT_CONFIG="$pin/apt.conf" \
     && apt-get update \
     && { \
         printf '%s\n' libcurl4 libusb-1.0-0 python3-serial python3-zstandard ros-${ROS_DISTRO}-rmw-cyclonedds-cpp; \
@@ -248,7 +269,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     } \
         | sort -u \
         | xargs -r apt-get install -y --no-install-recommends \
-    && rm -rf /tmp/runtime-apt-packages.txt \
+    && unset APT_CONFIG && rm -rf "$pin" \
     # Debs pulled in by dependency metadata but never used on a headless
     # robot. Verified (see docs/IMAGE_SIZE.md): every launched binary, nav2
     # plugin and Python module still resolves. --force-depends because ROS
@@ -266,7 +287,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         /usr/lib/aarch64-linux-gnu/cmake /usr/lib/cmake /usr/share/cmake* \
     && find /usr/lib /opt/ros/${ROS_DISTRO}/lib -name '*.a' -delete \
     && find /opt/ros/${ROS_DISTRO}/share -path '*/cmake/*' -delete \
-    && du -xsh /usr /opt /var 2>/dev/null || true
+    && dpkg-query -W -f '${binary:Package} ${Version}\n' | LC_ALL=C sort > /tmp/installed.txt \
+    && if ! sed '/^#/d' /tmp/apt-lock/runtime-apt.lock | diff -u - /tmp/installed.txt; then \
+        echo "dpkg's packages differ from deploy/image/apt/runtime-apt.lock (diff above). The complete new list:"; \
+        cat /tmp/installed.txt; exit 1; \
+    fi \
+    && rm /tmp/installed.txt \
+    && { du -xsh /usr /opt /var 2>/dev/null || true; }
 
 # The user exists before the install tree comes in, and the tree is copied
 # with its owner (COPY --chown). A `chown -R ${WORKSPACE}` afterwards stored
@@ -333,6 +360,21 @@ RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash /usr/local/bin/
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc \
     && echo "source ${WORKSPACE}/install/setup.bash" >> /home/${USER_NAME}/.bashrc \
     && chown ${USER_ID}:${GROUP_ID} /home/${USER_NAME}/.bashrc
+
+# Build identity, reported on /robot/info (robot_status, info.rs). It changes
+# every commit, and an ARG or ENV is part of the cache key of every
+# instruction after it: declared before the apt layer it made each build
+# reinstall all 711 packages, at whatever versions apt resolved that day.
+# Nothing in this stage reads it, so it comes last.
+ARG MOWER_VERSION=dev
+ARG MOWER_GIT_SHA=
+ARG MOWER_BUILD_UNIX=
+ARG MOWER_IMAGE=
+ENV MOWER_VERSION=${MOWER_VERSION} \
+    MOWER_GIT_SHA=${MOWER_GIT_SHA} \
+    MOWER_BUILD_UNIX=${MOWER_BUILD_UNIX} \
+    MOWER_IMAGE=${MOWER_IMAGE} \
+    MOWER_FIRMWARE_MANIFEST=/opt/mower/firmware/mower_robot_firmware.json
 
 USER ${USER_NAME}
 

@@ -1357,6 +1357,50 @@ def test_image_bases_are_pinned_and_the_install_tree_is_stored_once():
     assert runtime.index('useradd') < runtime.index(install[0])
 
 
+def test_runtime_apt_layer_is_pinned_and_reused_across_commits():
+    """The build identity changes every commit and is part of the cache key
+    of everything after it: above the apt layer it made every build
+    reinstall all 711 packages at whatever versions apt resolved that day.
+    The layer installs the locked versions (the robot's) and fails on any
+    other."""
+    source = DOCKERFILE.read_text(encoding='utf-8')
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
+    runtime = re.sub(r'^\s*#.*\n', '', runtime, flags=re.M).replace('\\\n', ' ')
+    instructions = re.findall(r'^(\w+) (.*)$', runtime, re.M)
+    identity = [i for i, (op, rest) in enumerate(instructions)
+                if op in ('ARG', 'ENV') and 'MOWER_GIT_SHA' in rest]
+    assert len(identity) == 2, identity
+    # nothing that builds a layer comes after it
+    assert all(op in ('ARG', 'ENV', 'USER', 'ENTRYPOINT', 'CMD')
+               for op, _ in instructions[identity[0]:]), instructions[identity[0]:]
+
+    [apt] = [rest for op, rest in instructions
+             if op == 'RUN' and 'apt-get install' in rest]
+    assert '--mount=type=bind,source=deploy/image/apt,target=/tmp/apt-lock' in apt
+    assert 'Pin-Priority: 1001' in apt
+    assert 'export APT_CONFIG=' in apt
+    assert "dpkg-query -W -f '${binary:Package} ${Version}\\n' | LC_ALL=C sort" in apt
+    assert "sed '/^#/d' /tmp/apt-lock/runtime-apt.lock | diff -u - /tmp/installed.txt" in apt
+    # an unbraced `|| true` at the end would swallow every failure before it
+    assert not re.search(r'\|\| true\s*$', apt.strip())
+    # the firmware toolchain layer is not invalidated by the identity either
+    firmware = source.split('AS firmware', 1)[1].split('\nFROM ', 1)[0]
+    assert firmware.index('apt-get install') < firmware.index('ARG MOWER_GIT_SHA')
+
+    lock = (SRC_DIR.parent / 'deploy/image/apt/runtime-apt.lock').read_text(
+        encoding='utf-8')
+    entries = [line.split(' ') for line in lock.splitlines()
+               if line and not line.startswith('#')]
+    assert all(len(entry) == 2 for entry in entries)
+    names = [name for name, _ in entries]
+    assert names == sorted(names) and len(set(names)) == len(names)
+    versions = dict(entries)
+    # the versions nav2_no_map_params.yaml and the oracles were tuned on
+    assert versions['ros-jazzy-nav2-controller'].startswith('1.3.13-')
+    assert versions['ros-jazzy-robot-localization'].startswith('3.8.3-')
+    assert versions['ros-jazzy-rmw-cyclonedds-cpp'].startswith('2.2.4-')
+
+
 def test_gps_driver_runs_inside_the_runtime_container():
     """The receiver driver is a node of mower.launch.py in the one robot
     image, not a second compose service with its own image: same DDS graph
