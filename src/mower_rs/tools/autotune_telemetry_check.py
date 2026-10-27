@@ -21,7 +21,10 @@ telemetry frame every 50 ms, counting the frame's subscribers:
 
 Needs a sourced ROS 2 Jazzy environment with mower_interface built:
 
+  python3 src/mower_rs/tools/autotune_telemetry_check.py -- target/debug/mower_rsd --modules pid_autotune
   python3 src/mower_rs/tools/autotune_telemetry_check.py --binary <path to mower_pid_autotune>
+
+CI runs the first: mower_rsd, the binary the robot runs, with the module alone.
 
 Prints AUTOTUNE_TELEMETRY_OK and exits 0, or exits 1 if any check failed.
 """
@@ -99,10 +102,15 @@ class Check:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--binary', required=True, help='path to the mower_pid_autotune binary')
+    ap.add_argument('--binary', help='path to the mower_pid_autotune binary')
+    ap.add_argument('command', nargs='*', help='instead of --binary: the command line, after -- '
+                    '(CI: target/debug/mower_rsd --modules pid_autotune)')
     args = ap.parse_args()
+    if bool(args.binary) == bool(args.command):
+        ap.error('give either --binary or a command after --')
 
-    proc = subprocess.Popen([args.binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen([args.binary] if args.binary else args.command,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     rclpy.init()
     c = Check()
     try:

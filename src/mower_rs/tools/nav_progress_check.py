@@ -29,6 +29,7 @@ Scenarios (a straight 6 m path with split points at 2 m and 4 m, i.e. three
 The checkpoint goes to a temporary directory (progress_checkpoint_path).
 Needs a sourced ROS 2 Jazzy environment with mower_interface and nav2_msgs:
 
+  python3 src/mower_rs/tools/nav_progress_check.py -- target/debug/mower_rsd --modules nav
   python3 src/mower_rs/tools/nav_progress_check.py -- <path to mower_nav>
   python3 src/mower_rs/tools/nav_progress_check.py -- \\
       python3 -m mower_mission.navigation.nav_action_server

@@ -29,7 +29,11 @@ Scenarios (times from the dispatch):
 
 Needs a sourced ROS 2 Jazzy environment with mower_interface built:
 
+  python3 src/mower_rs/tools/coverage_cancel_check.py -- target/debug/mower_rsd --modules coverage
   python3 src/mower_rs/tools/coverage_cancel_check.py --binary <path to mower_coverage>
+
+The command after `--` is what CI runs: mower_rsd, the binary the robot
+runs, with the coverage module alone (it starts its bus bridge itself).
 
 Exits 1 on the first failed expectation.
 """
@@ -215,8 +219,8 @@ class FakeNavigation(Node):
 
 
 class Check:
-    def __init__(self, binary, fake, caller):
-        self.binary, self.fake, self.caller = binary, fake, caller
+    def __init__(self, command, fake, caller):
+        self.command, self.fake, self.caller = command, fake, caller
         self.failures = []
 
     def expect(self, ok, what):
@@ -225,7 +229,7 @@ class Check:
             self.failures.append(what)
 
     def start_node(self):
-        proc = subprocess.Popen([self.binary], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(self.command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         gen = self.caller.create_client(Trigger, '/generate_coverage_path')
         if not gen.wait_for_service(timeout_sec=15.0):
             proc.kill()
@@ -382,9 +386,13 @@ class Check:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--binary', required=True, help='path to the mower_coverage binary')
+    ap.add_argument('--binary', help='path to the mower_coverage binary')
     ap.add_argument('--only', default='abcde', help='scenarios to run, e.g. "ab"')
+    ap.add_argument('command', nargs='*', help='instead of --binary: the command line, after --')
     args = ap.parse_args()
+    if bool(args.binary) == bool(args.command):
+        ap.error('give either --binary or a command after --')
+    command = [os.path.abspath(args.binary)] if args.binary else args.command
 
     rclpy.init()
     fake = FakeNavigation()
@@ -395,7 +403,7 @@ def main():
     spin = threading.Thread(target=executor.spin, daemon=True)
     spin.start()
 
-    check = Check(os.path.abspath(args.binary), fake, caller)
+    check = Check(command, fake, caller)
     try:
         for s in args.only:
             getattr(check, f'scenario_{s}')()
