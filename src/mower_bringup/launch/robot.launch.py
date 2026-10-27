@@ -187,12 +187,18 @@ def _rust_daemon_node(context):
     # The two modules that are configured on the command line rather than with
     # ROS parameters; the values are the same ones rosbridge.launch.py passes.
     if 'bridge' in modules:
-        arguments += ['--module-args', ' '.join([
+        bridge_args = [
             'bridge=--address', LaunchConfiguration('rosbridge_address').perform(context),
             '--port', '9090',
             '--loopback-port', '9091',
             '--policy', os.path.join(bringup, 'config', 'ws_bridge.yaml'),
-        ])]
+        ]
+        # ws_bridge_bus:=true -- ws_bridge on mower_bus instead of on an r2r
+        # node of its own (step E3); mower_rsd then plans the bus bridge for
+        # it. Off by default: nothing is added, and the door is today's.
+        if _truthy(LaunchConfiguration('ws_bridge_bus').perform(context)):
+            bridge_args += ['--backend', 'bus']
+        arguments += ['--module-args', ' '.join(bridge_args)]
     if 'agent' in modules:
         arguments += ['--module-args',
                       'agent=--gate ws://127.0.0.1:9090 '
@@ -297,6 +303,7 @@ def generate_launch_description():
     rust_imu = LaunchConfiguration('rust_imu')
     rust_localize = LaunchConfiguration('rust_localize')
     rust_bridge = LaunchConfiguration('rust_bridge')
+    ws_bridge_bus = LaunchConfiguration('ws_bridge_bus')
     rust_base = LaunchConfiguration('rust_base')
     rust_daemon = LaunchConfiguration('rust_daemon')
     rust_nav_core = LaunchConfiguration('rust_nav_core')
@@ -355,6 +362,7 @@ def generate_launch_description():
             'rust_map': rust_map,
             'rust_agent': rust_agent,
             'rust_bridge': rust_bridge,
+            'ws_bridge_bus': ws_bridge_bus,
             # mower_base / mower_localize publish /odom_slow and
             # /odometry/global_slow themselves, so mission.launch.py holds
             # the matching topic_tools throttle down.
@@ -541,6 +549,15 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs mower_ws_bridge instead of rosbridge_auth_proxy '
                         '+ rosbridge_websocket + rosapi',
+        ),
+        DeclareLaunchArgument(
+            'ws_bridge_bus',
+            default_value='false',
+            description='mower_ws_bridge on mower_bus (--backend bus) instead '
+                        'of on an r2r node of its own: the same door, frames '
+                        'and texts, with the names only DDS has carried by the '
+                        'bus bridge. Needs rust_bridge; false is the roll-back, '
+                        'no new image needed.',
         ),
         DeclareLaunchArgument(
             'rust_base',

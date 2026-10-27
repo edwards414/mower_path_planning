@@ -48,6 +48,14 @@ def generate_launch_description():
                     'rosbridge_auth_proxy + rosbridge_websocket + rosapi',
     )
     rust_bridge = LaunchConfiguration('rust_bridge')
+    ws_bridge_bus_arg = DeclareLaunchArgument(
+        'ws_bridge_bus',
+        default_value='false',
+        description='The mower_rs WebSocket bridge on mower_bus (--backend '
+                    'bus): its binary then runs next to a bus bridge of its '
+                    'own, which carries its names to DDS',
+    )
+    ws_bridge_bus = LaunchConfiguration('ws_bridge_bus')
     rust_agent_arg = DeclareLaunchArgument(
         'rust_agent',
         default_value='false',
@@ -167,6 +175,11 @@ def generate_launch_description():
             '--port', LaunchConfiguration('port'),
             '--loopback-port', '9091',
             '--policy', ws_bridge_policy,
+            # r2r, the default, unless ws_bridge_bus:=true
+            '--backend', PythonExpression([
+                "'bus' if '", ws_bridge_bus, "'.lower() in ", _TRUE,
+                " else 'r2r'",
+            ]),
         ],
     )
 
@@ -174,6 +187,7 @@ def generate_launch_description():
         port_arg,
         address_arg,
         rust_bridge_arg,
+        ws_bridge_bus_arg,
         rust_agent_arg,
         rust_daemon_arg,
         auth_proxy,
