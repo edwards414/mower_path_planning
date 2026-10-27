@@ -13,7 +13,9 @@ name = "mower_coverage"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_rs_common = { path = "../mower_rs_common" }
+mower_bus = { path = "../mower_bus" }
 mower_coverage_core = { path = "../../../mower_coverage_core" }
 ndarray = "0.15"
 r2r.workspace = true

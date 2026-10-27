@@ -33,10 +33,13 @@ struct Seen<'a> {
     scope: &'a str,
     kind: Kind,
     name: &'a str,
-    /// The message's or the request's Rust type; `None` on a name no typed
-    /// endpoint has fixed yet.
+    /// The message's, the request's or the goal's Rust type; `None` on a name
+    /// no typed endpoint has fixed yet.
     rust_type: Option<&'static str>,
+    /// The response's or the result's.
     response_type: Option<&'static str>,
+    /// An action's feedback.
+    feedback_type: Option<&'static str>,
     qos: Option<Qos>,
 }
 
@@ -116,7 +119,15 @@ fn check_bus<'a>(bus: &Bus, remaps: &Remaps, owner: &dyn Fn(&str) -> Owner<'a>) 
         let writers = topic.publishers.iter().zip(&topic.publisher_qos).map(|(s, q)| (Kind::Publish, s, *q));
         let readers = topic.subscribers.iter().zip(&topic.subscriber_qos).map(|(s, q)| (Kind::Subscribe, s, *q));
         for (kind, scope, qos) in writers.chain(readers) {
-            let seen = Seen { scope, kind, name: &topic.name, rust_type: topic.type_name, response_type: None, qos: Some(qos) };
+            let seen = Seen {
+                scope,
+                kind,
+                name: &topic.name,
+                rust_type: topic.type_name,
+                response_type: None,
+                feedback_type: None,
+                qos: Some(qos),
+            };
             gaps.extend(check(&seen, remaps, owner));
         }
     }
@@ -130,6 +141,23 @@ fn check_bus<'a>(bus: &Bus, remaps: &Remaps, owner: &dyn Fn(&str) -> Owner<'a>) 
                 name: &service.name,
                 rust_type: Some(service.request_type),
                 response_type: Some(service.response_type),
+                feedback_type: None,
+                qos: None,
+            };
+            gaps.extend(check(&seen, remaps, owner));
+        }
+    }
+    for action in bus.actions() {
+        let server = action.server.iter().map(|s| (Kind::ServeAction, s));
+        let clients = action.clients.iter().map(|s| (Kind::CallAction, s));
+        for (kind, scope) in server.chain(clients) {
+            let seen = Seen {
+                scope,
+                kind,
+                name: &action.name,
+                rust_type: Some(action.goal_type),
+                response_type: Some(action.result_type),
+                feedback_type: Some(action.feedback_type),
                 qos: None,
             };
             gaps.extend(check(&seen, remaps, owner));
@@ -178,6 +206,12 @@ fn check<'a>(seen: &Seen<'_>, remaps: &Remaps, owner: &dyn Fn(&str) -> Owner<'a>
         Iface::Service(s) => {
             if seen.rust_type != Some(s.request_type()) || seen.response_type != Some(s.response_type()) {
                 return Some(seen.gap(&format!("the manifest has it as {}", s.ros_type())));
+            }
+        }
+        Iface::Action(a) => {
+            let types = (seen.rust_type, seen.response_type, seen.feedback_type);
+            if types != (Some(a.goal_type()), Some(a.result_type()), Some(a.feedback_type())) {
+                return Some(seen.gap(&format!("the manifest has it as {}", a.ros_type())));
             }
         }
     }

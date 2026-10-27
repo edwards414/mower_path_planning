@@ -21,7 +21,7 @@ use r2r::{QosProfile, ServiceRequest};
 
 use crate::convert::convertible;
 use crate::log::{Failure, Log};
-use crate::node::NodeHandle;
+use crate::node::{NodeHandle, DWELL, PRESENCE_PERIOD};
 use crate::stats::Counters;
 use crate::{topic, BridgeError, BridgeService, Forwarder};
 
@@ -37,17 +37,6 @@ const FRESH: Duration = Duration::from_secs(1);
 
 /// How often a pending DDS call checks that its server is still there.
 const WATCH_PERIOD: Duration = Duration::from_secs(1);
-
-/// How often `service_from_ros` looks at the graph for a DDS server, which
-/// its bus server follows.
-const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
-
-/// The least time between two changes of a `service_to_ros` DDS server. A
-/// bus server that comes and goes faster than that (a module that keeps
-/// dropping its `Service` and serving again) cannot keep the spin thread
-/// making and destroying DDS servers. A module that fails is started again
-/// after 2 s, so a crash loop never meets it.
-const DWELL: Duration = PRESENCE_PERIOD;
 
 /// What the calls of one forwarder share.
 struct Env {

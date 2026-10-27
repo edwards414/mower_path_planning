@@ -89,7 +89,9 @@ pub struct EntryStats {
     /// any more when they came up (README.md, "Writer lifetime").
     pub stale: u64,
     /// `to_ros`: writer changes handled (`publisher_changes` items).
-    /// `service_from_ros`: looks at the graph for a DDS server.
+    /// `service_to_ros`, `action_to_ros`: changes of the DDS server.
+    /// `service_from_ros`, `action_from_ros`: looks at the graph for a DDS
+    /// server.
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
     /// Actions: goal requests left unanswered, and accepted goals whose
@@ -101,8 +103,9 @@ pub struct EntryStats {
     pub dropped: u64,
     /// `to_ros`: whether the bridge's DDS writer exists now.
     pub dds_writer: bool,
-    /// `service_from_ros`: whether the bridge's bus server exists now, which
-    /// it does while the graph shows a DDS server.
+    /// `service_from_ros`, `action_from_ros`: whether the bridge's bus server
+    /// exists now, which it does while the graph shows a DDS server that the
+    /// bridge's client is matched with.
     pub bus_server: bool,
     /// Messages and calls dropped because r2r cannot convert a value to its
     /// C message, e.g. a fixed-size array of another length (README.md,
@@ -116,8 +119,10 @@ pub struct EntryStats {
     /// `from_ros`: whether the bridge's DDS reader exists now, which it does
     /// while the bus has a reader of the name.
     pub dds_reader: bool,
-    /// `service_to_ros`: whether the bridge's DDS server exists now, which
-    /// it does while the bus has a server. Its changes count in `resyncs`.
+    /// `service_to_ros`, `action_to_ros`: whether the bridge's DDS server
+    /// exists now, which it does while the bus has a server (an action's also
+    /// while goals of one that went still run). Its changes count in
+    /// `resyncs`.
     pub dds_server: bool,
 }
 

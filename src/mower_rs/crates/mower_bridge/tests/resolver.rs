@@ -11,6 +11,9 @@
 //! - **Services:** an untyped client. A client's request writer shows on the
 //!   graph as `rq<name>Request` (rmw_cyclonedds's mangling), which a probe
 //!   checks first.
+//! - **Actions:** an untyped action client, whose goal requests are the
+//!   requests of `<name>/_action/send_goal`: `rq<name>/_action/send_goalRequest`
+//!   on the graph. rcl_action resolves the name with the topic rules.
 //!
 //! rcl reads the rules from argv when the context is made, and libtest
 //! refuses arguments it does not know, so this test has a `main` of its own:
@@ -21,7 +24,7 @@ use std::collections::BTreeSet;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use mower_bridge::types::Iface;
+use mower_bridge::types::{Iface, Space};
 use mower_bridge::{production_remaps, MODULES, PRODUCTION_REMAPS};
 use mower_rs_common::Remaps;
 use r2r::QosProfile;
@@ -76,7 +79,7 @@ fn rmw_installed(rmw: &str) -> bool {
 /// One endpoint to find on the graph.
 struct Probe {
     node: &'static str,
-    topic: bool,
+    space: Space,
     code: &'static str,
     /// What rcl must make of `code`.
     expected: String,
@@ -85,10 +88,10 @@ struct Probe {
 /// The name a writer of `probe` has on the graph, and whether it is a DDS
 /// (mangled) name.
 fn graph_name(probe: &Probe) -> (String, bool) {
-    if probe.topic {
-        (probe.expected.clone(), false)
-    } else {
-        (format!("rq{}Request", probe.expected), true)
+    match probe.space {
+        Space::Topic => (probe.expected.clone(), false),
+        Space::Service => (format!("rq{}Request", probe.expected), true),
+        Space::Action => (format!("rq{}/_action/send_goalRequest", probe.expected), true),
     }
 }
 
@@ -108,6 +111,7 @@ fn oracle() -> ExitCode {
     let mut nodes = Vec::new();
     let mut publishers = Vec::new();
     let mut clients = Vec::new();
+    let mut action_clients = Vec::new();
     for module in MODULES {
         for instance in module.instances {
             let mut node = r2r::Node::create(ctx.clone(), instance.node, "").expect("a node");
@@ -116,7 +120,7 @@ fn oracle() -> ExitCode {
             for e in instance.endpoints {
                 // one probe per name in each namespace: a reader and a writer
                 // of one name resolve alike
-                if !made.insert((e.kind.is_topic(), e.code)) {
+                if !made.insert((e.kind.space(), e.code)) {
                     continue;
                 }
                 let expected = remaps.resolve(e.kind.name_kind(), instance.node, "", e.code).expect("a valid name");
@@ -138,8 +142,15 @@ fn oracle() -> ExitCode {
                             Err(err) => failures.push(format!("{} {} ({ros_type}): {err}", instance.node, e.code)),
                         }
                     }
+                    Iface::Action(a) => {
+                        let ros_type = a.ros_type();
+                        match node.create_action_client_untyped(e.code, &ros_type) {
+                            Ok(c) => action_clients.push(c),
+                            Err(err) => failures.push(format!("{} {} ({ros_type}): {err}", instance.node, e.code)),
+                        }
+                    }
                 }
-                probes.push(Probe { node: instance.node, topic: e.kind.is_topic(), code: e.code, expected });
+                probes.push(Probe { node: instance.node, space: e.kind.space(), code: e.code, expected });
             }
             nodes.push(node);
         }
@@ -166,10 +177,14 @@ fn oracle() -> ExitCode {
         std::thread::sleep(Duration::from_millis(50));
     }
     for p in &probes {
-        let kind = if p.topic { "topic" } else { "service" };
+        let kind = match p.space {
+            Space::Topic => "topic",
+            Space::Service => "service",
+            Space::Action => "action",
+        };
         failures.push(format!("{} {kind} {}: rcl did not resolve it to {}", p.node, p.code, p.expected));
     }
-    drop((publishers, clients, nodes));
+    drop((publishers, clients, action_clients, nodes));
     if failures.is_empty() {
         println!("{total} names: rcl resolves every one as the manifest and Remaps::resolve do");
         ExitCode::SUCCESS

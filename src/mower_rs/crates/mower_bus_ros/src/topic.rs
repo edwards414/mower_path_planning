@@ -41,7 +41,6 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use futures::{FutureExt, StreamExt};
 use mower_bus::{BusError, Publisher, PublisherChanges, Qos, Scope, Subscriber, SubscriptionChanges};
@@ -49,7 +48,7 @@ use r2r::QosProfile;
 
 use crate::convert::{convertible, guarded};
 use crate::log::{Failure, Log};
-use crate::node::NodeHandle;
+use crate::node::{NodeHandle, DWELL, PRESENCE_PERIOD};
 use crate::stats::Counters;
 use crate::{BridgeError, BridgeMessage, Forwarder};
 
@@ -57,15 +56,6 @@ use crate::{BridgeError, BridgeMessage, Forwarder};
 /// the spin thread (one spin, 20 ms) must hold without dropping, with room
 /// for bursts.
 const READER_DEPTH: usize = 64;
-
-/// How often a transient-local `from_ros` forwarder looks at the graph for a
-/// DDS writer, which its bus writer follows: `service_from_ros`'s period.
-const PRESENCE_PERIOD: Duration = Duration::from_millis(200);
-
-/// The least time between two changes of a `from_ros` DDS reader, as for
-/// `service_to_ros`'s DDS server: a bus reader that comes and goes faster
-/// cannot keep the spin thread making and destroying DDS readers.
-const DWELL: Duration = PRESENCE_PERIOD;
 
 /// What a forwarder needs besides its endpoints.
 pub(crate) struct Env {
@@ -655,7 +645,7 @@ impl<T: BridgeMessage> Drop for Writer<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use futures::Stream;
     use r2r::std_msgs::msg::String as Text;

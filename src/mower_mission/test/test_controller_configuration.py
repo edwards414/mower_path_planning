@@ -885,7 +885,7 @@ def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
     assert 'node: "boustrophedon_coverage"' in coverage_module
     assert 'rust_coverage' not in daemon_main
     # the sim graphs start the same binary under its own default node name
-    assert 'module_main("boustrophedon_coverage"' in (
+    assert 'module_main("coverage", "boustrophedon_coverage"' in (
         COVERAGE_RS_MAIN.parent / 'main.rs').read_text(encoding='utf-8')
     for launch in (SYSTEM_TEST_LAUNCH, SMALL_TEST_LAUNCH):
         text = launch.read_text(encoding='utf-8')

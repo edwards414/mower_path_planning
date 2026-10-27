@@ -31,12 +31,21 @@ WAYPOINT_ACTION = PACKAGE_DIR.parent / 'mower_interface/action/Waypoint.action'
 
 
 def _publisher_qos_for(topic: str) -> str:
-    """The QoS expression the Rust coverage node creates `topic` with."""
+    """The QoS expression the Rust coverage module creates `topic` with on
+    the bus (the marker layers through their shared `markers` helper)."""
+    source = COVERAGE_RS.read_text(encoding='utf-8')
     match = re.search(
-        r'create_publisher::<[\w:]+>\(\s*"' + re.escape(topic)
-        + r'",\s*([^?]*?)\)\?',
-        COVERAGE_RS.read_text(encoding='utf-8'),
+        r'\.publisher::<[\w:]+>\(&m\.resolve_topic\("' + re.escape(topic)
+        + r'"\)\?,\s*([^?]*?)\)\?',
+        source,
     )
+    if match is None and f'markers("{topic}")?' in source:
+        match = re.search(
+            r'let markers = \|topic: &str\|.*?\.publisher::<MarkerArray>'
+            r'\(&m\.resolve_topic\(topic\)\?,\s*([^?]*?)\)\?',
+            source,
+            flags=re.S,
+        )
     assert match is not None, f'publisher for {topic} not found'
     return match.group(1).strip()
 
@@ -60,16 +69,18 @@ def test_coverage_snapshot_publishers_offer_transient_local_qos():
     """Every current-plan/map snapshot must match late-joining consumers."""
     source = COVERAGE_RS.read_text(encoding='utf-8')
     assert (
-        'fn latched() -> QosProfile {\n'
-        '    QosProfile::default().keep_last(1).reliable().transient_local()'
+        'fn latched() -> Qos {\n'
+        '    Qos::default().keep_last(1).reliable().transient_local()'
     ) in source
+    # /free_space_inflated and /risk_map_inflated are map_manage's: coverage's
+    # writers of them never published, and went with E2 step 5
+    # (docs/BUS_TOPICS.md 5.8 #2)
     for topic in (
         '/coverage_path',
         '/coverage_path_markers',
         '/coverage_invalid_segments',
         '/coverage_connectors',
-        '/free_space_inflated',
-        '/risk_map_inflated',
+        '/zone_sequence_status',
     ):
         assert _publisher_qos_for(topic) == 'latched()', topic
 
@@ -358,7 +369,7 @@ def test_cancel_tracking_shares_attempts_and_stops_before_teardown():
 def test_zone_sequence_stop_tracks_the_exact_goal_outside_the_lock():
     source = COVERAGE_RS.read_text(encoding='utf-8')
     stop = source.split(
-        '"/stop_zone_sequence", QosProfile::services_default())', 1
+        'm.resolve_service("/stop_zone_sequence")?)?;', 1
     )[1].split('\n    }\n', 1)[0]
     cancel = _rust_fn(source, 'cancel_sequence_active_goal')
     clear = _rust_fn(source, 'clear_active_goal')

@@ -17,6 +17,15 @@
 //! `nav_backend` picks what runs the goals: nav2's `navigate_to_pose` /
 //! `follow_path` actions (`nav2`, the default) or mower_nav_core's stack in
 //! this process (`nav_core`, see [`core_backend`]), behind the same protocol.
+//!
+//! The two action servers, the services, the topics and the timers are on
+//! the in-process bus (`ModuleCtx::bus`, step E2 of docs/ROS_FREE_PLAN.md),
+//! under the names rcl gives them on the node, and time is the module's
+//! clock; the bus/DDS bridge carries what crosses the process boundary. The
+//! r2r node stays for the parameters, the log and the graph, and for nav2
+//! until E9: the `navigate_to_pose` / `follow_path` action clients, the
+//! `bt_navigator/get_state` client and nav2's `/rosout` warnings, so it is
+//! still spun.
 
 pub mod core_backend;
 mod geometry;
@@ -29,6 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use mower_bus::{ActionServerGoal, ActionServerGoalRequest, Clock, GoalStatus, MissedTick, Mono, Qos};
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{Point, Pose, PoseStamped, TwistStamped};
@@ -43,13 +53,16 @@ use r2r::sensor_msgs::msg::{Imu, NavSatFix};
 use r2r::std_msgs::msg::{Bool, ColorRGBA};
 use r2r::std_srvs::srv::Trigger;
 use r2r::visualization_msgs::msg::Marker;
-use r2r::{ActionServerGoal, QosProfile};
+use r2r::QosProfile;
 use tokio::sync::Notify;
 
 use crate::core_backend::{CoreFeedback, CoreParams, GoalHandle, GoalKey, GoalOutcome, NavRuntime, PoseSource, Readiness};
 use crate::nav2::{terminal_from_core, terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
 use crate::progress::{Checkpoint, Progress, Status as ProgressStatus};
 use crate::state::{NavState, SafetyParams, TaskResult};
+
+/// `mower_interface/action/Waypoint` as a bus action (r2r's `Waypoint::Action`).
+type WaypointAction = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback);
 
 const CONTROLLER_ID: &str = "FollowPath";
 /// Pose spacing of every FollowPath goal (see geometry::densify_path).
@@ -105,19 +118,22 @@ fn write_checkpoint(path: &std::path::Path, json: &str) -> std::io::Result<()> {
 
 struct Ctx {
     logger: String,
+    /// The module's clock: header stamps, the health ages, every deadline,
+    /// timeout and period.
+    clock: Clock,
     safety: SafetyParams,
     exec: ExecParams,
     state: Mutex<NavState>,
     nav2: Mutex<Nav2Tracker>,
     /// Wakes the execute task on dispatch confirmation or a cancel.
     confirm: Notify,
-    nav_operation_active_pub: Mutex<r2r::Publisher<Bool>>,
-    safety_stop_pub: Mutex<r2r::Publisher<TwistStamped>>,
-    coordinator_lock_pub: Mutex<r2r::Publisher<Bool>>,
-    split_path_pub: Mutex<r2r::Publisher<Path>>,
-    split_points_pub: Mutex<r2r::Publisher<Marker>>,
+    nav_operation_active_pub: Mutex<mower_bus::Publisher<Bool>>,
+    safety_stop_pub: Mutex<mower_bus::Publisher<TwistStamped>>,
+    coordinator_lock_pub: Mutex<mower_bus::Publisher<Bool>>,
+    split_path_pub: Mutex<mower_bus::Publisher<Path>>,
+    split_points_pub: Mutex<mower_bus::Publisher<Marker>>,
     progress: Mutex<ProgressState>,
-    progress_pub: Mutex<r2r::Publisher<CoverageProgress>>,
+    progress_pub: Mutex<mower_bus::Publisher<CoverageProgress>>,
     backend: Backend,
     /// `run()` has returned: the periodic tasks end, so this context (and a
     /// nav_core runtime with it) is dropped before a restarted module builds
@@ -127,7 +143,8 @@ struct Ctx {
 
 /// What runs the goals (`nav_backend`).
 enum Backend {
-    /// nav2's actions; `bt_navigator/get_state` is the readiness check.
+    /// nav2's actions; `bt_navigator/get_state` is the readiness check. r2r
+    /// clients until E9 (nav2 is outside the process).
     Nav2 {
         navigate_client: r2r::ActionClient<NavigateToPose::Action>,
         follow_client: r2r::ActionClient<FollowPath::Action>,
@@ -166,15 +183,15 @@ struct ProgressState {
     progress: Progress<PoseStamped>,
     /// Latest `/adapter/robot_pose`, reported as `current_pose`.
     robot_pose: PoseStamped,
-    last_published: Option<Instant>,
+    last_published: Option<Mono>,
     /// The checkpoint on disk (loaded at start, then the last one written).
     checkpoint: Option<Checkpoint>,
-    last_checkpoint_write: Option<Instant>,
+    last_checkpoint_write: Option<Mono>,
 }
 
 impl ProgressState {
     /// The checkpoint as a message, for `/coverage_progress_status`.
-    fn checkpoint_msg(&self) -> CoverageProgress {
+    fn checkpoint_msg(&self, stamp: Time) -> CoverageProgress {
         match &self.checkpoint {
             None => {
                 let mut msg = CoverageProgress::default();
@@ -184,7 +201,7 @@ impl ProgressState {
             }
             Some(c) => {
                 let restored = ProgressState { progress: c.restored_progress(), checkpoint: Some(c.clone()), ..Default::default() };
-                let mut msg = restored.to_msg();
+                let mut msg = restored.to_msg(stamp);
                 msg.status_text = c.status.clone();
                 msg.message = if c.resumable() {
                     format!("Resumable at segment {}/{}", c.resume_segment_index(), c.total_segments)
@@ -196,10 +213,10 @@ impl ProgressState {
         }
     }
 
-    fn to_msg(&self) -> CoverageProgress {
+    fn to_msg(&self, stamp: Time) -> CoverageProgress {
         let p = &self.progress;
         let mut msg = CoverageProgress::default();
-        msg.header.stamp = stamp_now();
+        msg.header.stamp = stamp;
         msg.header.frame_id = "map".into();
         msg.status = p.status as u8;
         msg.status_text = p.status.text().into();
@@ -224,26 +241,27 @@ impl ProgressState {
     }
 }
 
-fn wall_ns() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
-}
-
-fn stamp_now() -> Time {
-    let ns = wall_ns();
-    Time { sec: (ns / 1_000_000_000) as i32, nanosec: (ns % 1_000_000_000) as u32 }
-}
-
-/// `_source_stamp_age_s`: None for a zero stamp.
-fn stamp_age_s(stamp: &Time) -> Option<f64> {
-    let ns = stamp.sec as i64 * 1_000_000_000 + stamp.nanosec as i64;
-    if ns <= 0 {
-        None
-    } else {
-        Some((wall_ns() - ns) as f64 / 1e9)
-    }
+/// `t` as a header stamp.
+fn stamp_of(t: mower_bus::Time) -> Time {
+    let (sec, nanosec) = t.to_parts();
+    Time { sec, nanosec }
 }
 
 impl Ctx {
+    fn stamp_now(&self) -> Time {
+        stamp_of(self.clock.now())
+    }
+
+    /// `_source_stamp_age_s`: None for a zero stamp.
+    fn stamp_age_s(&self, stamp: &Time) -> Option<f64> {
+        let ns = stamp.sec as i64 * 1_000_000_000 + stamp.nanosec as i64;
+        if ns <= 0 {
+            None
+        } else {
+            Some((self.clock.now().ns() - ns) as f64 / 1e9)
+        }
+    }
+
     fn info(&self, m: &str) {
         r2r::log_info!(&self.logger, "{}", m);
     }
@@ -254,14 +272,21 @@ impl Ctx {
         r2r::log_error!(&self.logger, "{}", m);
     }
 
-    fn publish_nav_operation_active(&self, active: bool) {
+    /// `/nav_operation_active` as `st` has it: a goal is reserved, or a Nav2
+    /// task's end is uncertain. Called with the state's lock held, as the
+    /// coordinator lock is published, so that the publishes come out in the
+    /// order of the changes they report and the latched value is always the
+    /// state's last: a value taken before a change can no longer be published
+    /// after it.
+    fn publish_nav_operation_active(&self, st: &NavState) {
+        let active = st.goal_reserved || st.nav2_task_uncertain;
         let _ = self.nav_operation_active_pub.lock().unwrap().publish(&Bool { data: active });
     }
 
     fn publish_safety_zero(&self) {
         let mut stop = TwistStamped::default();
         // A forced zero is also an ordering barrier for the final guard.
-        stop.header.stamp = stamp_now();
+        stop.header.stamp = self.stamp_now();
         stop.header.frame_id = "base_footprint".into();
         let _ = self.safety_stop_pub.lock().unwrap().publish(&stop);
     }
@@ -271,7 +296,7 @@ impl Ctx {
     fn publish_safety_stop_if_needed(&self) {
         let lock_active = {
             let mut st = self.state.lock().unwrap();
-            let authorized = st.autonomy_authorized(&self.safety, Instant::now());
+            let authorized = st.autonomy_authorized(&self.safety, self.clock.mono());
             let lock_active = !authorized;
             let _ = self.coordinator_lock_pub.lock().unwrap().publish(&Bool { data: lock_active });
             lock_active
@@ -282,13 +307,13 @@ impl Ctx {
     }
 
     fn set_nav_state(&self, state: &str, message: &str) {
-        let (uncertain, reserved) = {
+        let uncertain = {
             let mut st = self.state.lock().unwrap();
             st.nav_state = state.to_string();
             st.last_status_message = message.to_string();
-            (st.nav2_task_uncertain, st.goal_reserved)
+            self.publish_nav_operation_active(&st);
+            st.nav2_task_uncertain
         };
-        self.publish_nav_operation_active(reserved || uncertain);
         if state == "canceling" || state == "uncertain" || uncertain {
             self.publish_safety_zero();
         }
@@ -305,23 +330,22 @@ impl Ctx {
             if !f(&mut ps.progress) {
                 return;
             }
-            let now = Instant::now();
-            if !force && ps.last_published.is_some_and(|t| now.duration_since(t) < PROGRESS_FEEDBACK_PERIOD) {
+            let now = self.clock.mono();
+            if !force && ps.last_published.is_some_and(|t| now.saturating_duration_since(t) < PROGRESS_FEEDBACK_PERIOD) {
                 return;
             }
             ps.last_published = Some(now);
             let interval = Duration::from_secs_f64(self.exec.checkpoint_interval_s.max(0.0));
-            let due = force || ps.last_checkpoint_write.is_none_or(|t| now.duration_since(t) >= interval);
+            let due = force || ps.last_checkpoint_write.is_none_or(|t| now.saturating_duration_since(t) >= interval);
             let checkpoint = if self.exec.checkpoint_path.is_some() && !ps.progress.path_hash.is_empty() && due {
-                let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-                let c = ps.progress.checkpoint(unix);
+                let c = ps.progress.checkpoint(self.clock.now().as_secs_f64());
                 ps.checkpoint = Some(c.clone());
                 ps.last_checkpoint_write = Some(now);
                 Some(c)
             } else {
                 None
             };
-            (ps.to_msg(), checkpoint)
+            (ps.to_msg(self.stamp_now()), checkpoint)
         };
         let _ = self.progress_pub.lock().unwrap().publish(&msg);
         if let (Some(c), Some(path)) = (checkpoint, &self.exec.checkpoint_path) {
@@ -331,11 +355,14 @@ impl Ctx {
         }
     }
 
-    /// Atomically match a goal, request cancel, and revoke its velocity.
+    /// Atomically match a goal, request cancel, and revoke its velocity. A
+    /// goal whose end is decided (`Execution::terminate`) is not matched: the
+    /// cancel can no longer change the end, and must not leave a "canceling"
+    /// behind it, whichever path it comes from.
     fn request_navigation_cancel(&self, message: &str, expected_dispatch_id: Option<&str>) -> bool {
         {
             let mut st = self.state.lock().unwrap();
-            if !st.goal_reserved {
+            if !st.goal_reserved || st.goal_end_decided {
                 return false;
             }
             if let Some(expected) = expected_dispatch_id {
@@ -346,13 +373,13 @@ impl Ctx {
             st.external_cancel_requested = true;
             st.nav_state = "canceling".into();
             st.last_status_message = message.to_string();
+            self.publish_nav_operation_active(&st);
         }
         self.update_progress(true, |p| {
             p.canceling(message);
             true
         });
         self.confirm.notify_waiters();
-        self.publish_nav_operation_active(true);
         self.publish_safety_zero();
         self.publish_safety_stop_if_needed();
         true
@@ -370,8 +397,8 @@ impl Ctx {
             st.nav2_task_uncertain = true;
             st.nav_state = "uncertain".into();
             st.last_status_message = format!("{message}; Nav2 task termination remains unconfirmed");
+            self.publish_nav_operation_active(&st);
         }
-        self.publish_nav_operation_active(true);
         self.publish_safety_zero();
         self.publish_safety_stop_if_needed();
         true
@@ -394,7 +421,7 @@ impl Ctx {
 
     /// Atomically resolve only the matching late rejected dispatch.
     fn resolve_definitive_nav2_rejection(&self, generation: u64) {
-        let (was_uncertain, reserved) = {
+        let was_uncertain = {
             let mut st = self.state.lock().unwrap();
             if st.nav2_active_generation != Some(generation) {
                 return;
@@ -411,12 +438,12 @@ impl Ctx {
                 }
                 st.nav_state = "idle".into();
                 st.last_status_message = "Late Nav2 goal response definitively rejected; ready".into();
+                self.publish_nav_operation_active(&st);
             }
-            (was_uncertain, st.goal_reserved)
+            was_uncertain
         };
         self.nav2.lock().unwrap().clear();
         if was_uncertain {
-            self.publish_nav_operation_active(reserved);
             self.publish_safety_stop_if_needed();
         }
     }
@@ -465,7 +492,7 @@ impl Ctx {
     async fn cancel_nav_task_and_wait(&self) -> (bool, Option<TaskResult>) {
         let timeout_s = self.exec.nav2_cancel_timeout_s.max(0.1);
         let poll = Duration::from_secs_f64(self.exec.nav2_cancel_poll_s.max(0.01));
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s);
+        let deadline = self.clock.mono() + Duration::from_secs_f64(timeout_s);
         let (generation, unconfirmed, correlated) = {
             let st = self.state.lock().unwrap();
             (st.nav2_active_generation, st.nav2_dispatch_in_flight_or_active, st.nav2_goal_correlated)
@@ -489,8 +516,8 @@ impl Ctx {
         }
         let Some(goal) = goal else { return (false, None) };
         let cancel = goal.cancel();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(remaining, cancel).await {
+        let remaining = deadline.saturating_duration_since(self.clock.mono());
+        match self.clock.timeout(remaining, cancel).await {
             Err(_) => return (false, None),
             Ok(Err(e)) => {
                 // Rejected / already terminated: only a proven terminal result counts.
@@ -501,13 +528,13 @@ impl Ctx {
             }
             Ok(Ok(())) => {}
         }
-        while Instant::now() < deadline {
+        while self.clock.mono() < deadline {
             match check(&slot) {
                 Some(Err(())) => return (false, None),
                 Some(Ok(t)) => {
                     return if self.mark_nav2_dispatch_terminal(generation) { (true, Some(t.result)) } else { (false, None) };
                 }
-                None => tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await,
+                None => self.clock.sleep(poll.min(deadline.saturating_duration_since(self.clock.mono()))).await,
             }
         }
         (false, None)
@@ -517,15 +544,16 @@ impl Ctx {
     fn monitor_navigation_health(&self) {
         let (should_cancel, reason, dispatch_id) = {
             let st = self.state.lock().unwrap();
-            let reason = st.navigation_health_block_reason(&self.safety, Instant::now());
+            let reason = st.navigation_health_block_reason(&self.safety, self.clock.mono());
             let should_cancel = st.goal_reserved && reason.is_some();
             (should_cancel, reason, st.pending_dispatch_id.clone())
         };
         if should_cancel {
             let message = format!("Navigation safety stop: {}", reason.unwrap_or_default());
-            self.request_navigation_cancel(&message, dispatch_id.as_deref());
-            let status = self.state.lock().unwrap().last_status_message.clone();
-            self.error(&status);
+            if self.request_navigation_cancel(&message, dispatch_id.as_deref()) {
+                let status = self.state.lock().unwrap().last_status_message.clone();
+                self.error(&status);
+            }
         }
     }
 
@@ -569,7 +597,7 @@ impl Ctx {
     /// module with a new runtime: nothing else brings a dead thread back.
     async fn core_stopped(&self) -> &'static str {
         let Backend::Core(runtime) = &self.backend else { return std::future::pending().await };
-        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        let mut tick = self.clock.interval(Duration::from_millis(500));
         loop {
             tick.tick().await;
             if let Some(cause) = runtime.stopped() {
@@ -580,10 +608,15 @@ impl Ctx {
 
     /// The "recent Nav2 log" part of a task failure message: nav2's `/rosout`
     /// warnings, or the in-process runtime's own.
-    fn recent_nav2_log_summary(&self, since: Instant) -> String {
+    fn recent_nav2_log_summary(&self, since: Mono) -> String {
         match &self.backend {
             Backend::Nav2 { .. } => self.state.lock().unwrap().recent_nav2_log_summary(since),
-            Backend::Core(runtime) => state::nav2_log_summary(&runtime.recent_events(since)),
+            Backend::Core(runtime) => {
+                // The runtime's threads keep their events on the system clock.
+                let age = self.clock.mono().saturating_duration_since(since);
+                let since = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+                state::nav2_log_summary(&runtime.recent_events(since))
+            }
         }
     }
 
@@ -605,7 +638,7 @@ impl Ctx {
         let generation = self.begin_dispatch();
         let available = r2r::Node::is_available(&client).map_err(|e| format!("{e:?}"))?;
         let server_timeout = Duration::from_secs_f64(self.exec.nav2_action_server_timeout_s.max(0.1));
-        if tokio::time::timeout(server_timeout, available).await.is_err() {
+        if self.clock.timeout(server_timeout, available).await.is_err() {
             self.resolve_definitive_nav2_rejection(generation);
             return Ok(false);
         }
@@ -628,7 +661,7 @@ impl Ctx {
         let generation = self.begin_dispatch();
         let available = r2r::Node::is_available(&client).map_err(|e| format!("{e:?}"))?;
         let server_timeout = Duration::from_secs_f64(self.exec.nav2_action_server_timeout_s.max(0.1));
-        if tokio::time::timeout(server_timeout, available).await.is_err() {
+        if self.clock.timeout(server_timeout, available).await.is_err() {
             self.resolve_definitive_nav2_rejection(generation);
             return Ok(false);
         }
@@ -674,7 +707,7 @@ impl Ctx {
         let label = label.to_string();
         let boxed: nav2::BoxFuture<_> = Box::pin(fut);
         let mut boxed = boxed;
-        match tokio::time::timeout(response_timeout, &mut boxed).await {
+        match self.clock.timeout(response_timeout, &mut boxed).await {
             Ok(Ok((goal, result, feedback))) => {
                 // Retain the accepted handle first, then correlate.
                 let matches = {
@@ -865,16 +898,23 @@ fn core_feedback(mut feedback: tokio::sync::mpsc::UnboundedReceiver<CoreFeedback
 
 struct Execution {
     ctx: Arc<Ctx>,
-    /// r2r's goal handle is Send but not Sync; the mutex makes the executor
-    /// task's borrows Send across awaits.
-    goal: Mutex<ActionServerGoal<Waypoint::Action>>,
+    /// The bus's goal handle; the mutex lets `&self` end the goal (`succeed`
+    /// and co. take `&mut`).
+    goal: Mutex<ActionServerGoal<WaypointAction>>,
     /// Set once an action-level cancel request for this goal was accepted:
-    /// r2r then drops its handle bookkeeping and only `cancel()` can still
-    /// deliver a result, and rcl allows the CANCELED transition only there.
+    /// the goal then ends CANCELED (`terminate`), and rcl allows the
+    /// CANCELED transition only there.
     action_cancel_accepted: Arc<AtomicBool>,
+    /// The end `terminate` decided, the status and the result's `success`,
+    /// which `end_goal` sends. Shared with the goal's cancel task: deciding
+    /// the end and accepting a cancel are one critical section under it.
+    end: Decision,
     #[allow(dead_code)]
     dispatch_id: String,
 }
+
+/// An execution's end, once decided (`Execution::terminate`).
+type Decision = Arc<Mutex<Option<(GoalStatus, bool)>>>;
 
 enum Outcome {
     Succeeded,
@@ -884,9 +924,10 @@ enum Outcome {
 
 impl Execution {
     /// nav_core only: the runtime thread's stall, see [`CORE_STALL_TIMEOUT`].
-    fn core_stall(&self, task_started_at: Instant) -> Option<Duration> {
+    fn core_stall(&self, task_started_at: Mono) -> Option<Duration> {
         let Backend::Core(runtime) = &self.ctx.backend else { return None };
-        core_stall_age(task_started_at.elapsed(), runtime.last_tick_age(), CORE_STALL_TIMEOUT)
+        let task_age = self.ctx.clock.mono().saturating_duration_since(task_started_at);
+        core_stall_age(task_age, runtime.last_tick_age(), CORE_STALL_TIMEOUT)
     }
 
     fn action_cancel_requested(&self) -> bool {
@@ -902,21 +943,65 @@ impl Execution {
     /// after an accepted action cancel; a cancel that came through
     /// `/cancel_nav2` or a manual command can only end the goal ABORTED (the
     /// Python server does the same), while the navigation state still says
-    /// `canceled`. After an accepted action cancel r2r can only deliver the
-    /// result through `cancel()`, so that is the fallback for the other two.
+    /// `canceled`.
+    ///
+    /// After an accepted action cancel the goal ends CANCELED whatever the
+    /// outcome, with the outcome's `success`. That is what the r2r server
+    /// delivered: it forgot the goal once it applied the cancel, refused
+    /// `succeed` and `abort` from then on and let only `cancel()` through.
+    /// The bus takes all three there, as rcl_action does, so the caller would
+    /// otherwise see SUCCEEDED or ABORTED where it saw CANCELED.
+    ///
+    /// The end is only decided here (the first decision counts, as the first
+    /// transition did); `end_goal` sends it once `handle_goal_request` has
+    /// released the goal. The bus hands a result to the caller at once,
+    /// where r2r took a DDS round trip, and the caller acts on it at once:
+    /// coverage's next leg would otherwise find this goal still reserved.
+    ///
+    /// The decision takes `end`, which the goal's cancel task holds while it
+    /// handles a cancel request, so an action cancel is either accepted
+    /// before it (the goal ends CANCELED) or comes after it and changes
+    /// nothing. The state learns it too (`goal_end_decided`), so that no
+    /// other path's cancel changes it either. Lock order: `end`, then the
+    /// state.
     fn terminate(&self, outcome: &Outcome) {
-        let mut goal = self.goal.lock().unwrap();
-        let result = || Waypoint::Result { success: matches!(outcome, Outcome::Succeeded) };
-        let first = match outcome {
-            Outcome::Succeeded => goal.succeed(result()),
-            Outcome::Aborted => goal.abort(result()),
-            Outcome::Canceled if self.action_cancel_requested() => goal.cancel(result()),
-            Outcome::Canceled => goal.abort(result()),
+        let mut end = self.end.lock().unwrap();
+        if end.is_some() {
+            return;
+        }
+        let status = match outcome {
+            _ if self.action_cancel_requested() => GoalStatus::Canceled,
+            Outcome::Succeeded => GoalStatus::Succeeded,
+            Outcome::Aborted | Outcome::Canceled => GoalStatus::Aborted,
         };
-        if let Err(e) = first {
-            if let Err(e2) = goal.cancel(result()) {
-                self.ctx.error(&format!("navigation goal could not be terminated: {e:?} / {e2:?}"));
-            }
+        *end = Some((status, matches!(outcome, Outcome::Succeeded)));
+        self.ctx.state.lock().unwrap().goal_end_decided = true;
+    }
+
+    /// The terminal transition `terminate` decided. The decision stays, for
+    /// the cancel task to tell a cancel that comes after it.
+    fn end_goal(&self) {
+        let (decided, undecided) = {
+            let mut end = self.end.lock().unwrap();
+            let undecided = end.is_none();
+            (*end.get_or_insert((GoalStatus::Aborted, false)), undecided)
+        };
+        if undecided {
+            // Every way out of `run` decides; never leave the caller waiting.
+            self.ctx.error("navigation goal ended without a terminal state; aborting it");
+        }
+        let (status, success) = decided;
+        let mut goal = self.goal.lock().unwrap();
+        let result = Waypoint::Result { success };
+        let ended = match status {
+            GoalStatus::Succeeded => goal.succeed(result),
+            GoalStatus::Canceled => goal.cancel(result),
+            _ => goal.abort(result),
+        };
+        // A goal lost with the module's scope (`Closed`): its caller was told
+        // when the scope closed.
+        if let Err(e) = ended {
+            self.ctx.error(&format!("navigation goal could not be terminated: {e}"));
         }
     }
 
@@ -936,10 +1021,10 @@ impl Execution {
     /// Keep Nav2 locked until the action caller confirms goal receipt.
     async fn wait_for_dispatch_confirmation(&mut self) -> Option<Outcome> {
         let timeout = Duration::from_secs_f64(self.ctx.exec.dispatch_confirmation_timeout_s.max(0.1));
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let _ = tokio::time::timeout(remaining.min(Duration::from_millis(50)), self.ctx.confirm.notified()).await;
+        let deadline = self.ctx.clock.mono() + timeout;
+        while self.ctx.clock.mono() < deadline {
+            let remaining = deadline.saturating_duration_since(self.ctx.clock.mono());
+            let _ = self.ctx.clock.timeout(remaining.min(Duration::from_millis(50)), self.ctx.confirm.notified()).await;
             let (confirmed, canceled) = {
                 let st = self.ctx.state.lock().unwrap();
                 (st.dispatch_confirmed, st.external_cancel_requested)
@@ -959,19 +1044,19 @@ impl Execution {
     async fn wait_for_nav2_ready(&self) -> (bool, String) {
         let timeout_s = self.ctx.exec.nav2_ready_timeout_s.max(0.1);
         let poll = Duration::from_secs_f64(self.ctx.exec.nav2_ready_poll_s.max(0.05));
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout_s);
+        let deadline = self.ctx.clock.mono() + Duration::from_secs_f64(timeout_s);
         let state_client = match &self.ctx.backend {
             Backend::Nav2 { state_client, .. } => state_client,
             Backend::Core(runtime) => return self.wait_for_core_ready(runtime, timeout_s, poll, deadline).await,
         };
         let mut last_state = "unavailable".to_string();
-        while Instant::now() < deadline {
+        while self.ctx.clock.mono() < deadline {
             if self.cancel_requested() {
                 return (false, "canceled".into());
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(self.ctx.clock.mono());
             let available = match r2r::Node::is_available(state_client) {
-                Ok(f) => tokio::time::timeout(remaining.min(poll), f).await.is_ok(),
+                Ok(f) => self.ctx.clock.timeout(remaining.min(poll), f).await.is_ok(),
                 Err(_) => false,
             };
             if !available {
@@ -980,12 +1065,12 @@ impl Execution {
             let Ok(fut) = state_client.request(&GetState::Request::default()) else { continue };
             let mut fut = Box::pin(fut);
             let mut answered = None;
-            while Instant::now() < deadline {
+            while self.ctx.clock.mono() < deadline {
                 if self.cancel_requested() {
                     return (false, "canceled".into());
                 }
-                let step = poll.min(deadline.saturating_duration_since(Instant::now()));
-                match tokio::time::timeout(step, &mut fut).await {
+                let step = poll.min(deadline.saturating_duration_since(self.ctx.clock.mono()));
+                match self.ctx.clock.timeout(step, &mut fut).await {
                     Ok(r) => {
                         answered = Some(r);
                         break;
@@ -1007,16 +1092,16 @@ impl Execution {
             if last_state.eq_ignore_ascii_case("active") {
                 return (true, "Nav2 is active".into());
             }
-            tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await;
+            self.ctx.clock.sleep(poll.min(deadline.saturating_duration_since(self.ctx.clock.mono()))).await;
         }
         (false, format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: {last_state})"))
     }
 
     /// nav_core: the same bounded wait for the runtime's inputs (both
     /// costmaps, a pose and odometry) in place of bt_navigator's state.
-    async fn wait_for_core_ready(&self, runtime: &NavRuntime, timeout_s: f64, poll: Duration, deadline: Instant) -> (bool, String) {
+    async fn wait_for_core_ready(&self, runtime: &NavRuntime, timeout_s: f64, poll: Duration, deadline: Mono) -> (bool, String) {
         let mut readiness = Readiness::default();
-        while Instant::now() < deadline {
+        while self.ctx.clock.mono() < deadline {
             if self.cancel_requested() {
                 return (false, "canceled".into());
             }
@@ -1027,7 +1112,7 @@ impl Execution {
             if readiness.ready() {
                 return (true, "Nav2 is active".into());
             }
-            tokio::time::sleep(poll.min(deadline.saturating_duration_since(Instant::now()))).await;
+            self.ctx.clock.sleep(poll.min(deadline.saturating_duration_since(self.ctx.clock.mono()))).await;
         }
         let mut message = format!("Nav2 readiness timed out after {timeout_s:.1}s (last state: inactive); missing: {}", missing_inputs(&readiness));
         let tick_age = runtime.last_tick_age();
@@ -1044,9 +1129,9 @@ impl Execution {
 
     /// Run one dispatched Nav2 task to its terminal result.
     async fn wait_for_nav_task(&mut self, task_name: &str) -> bool {
-        let started_at = Instant::now();
+        let started_at = self.ctx.clock.mono();
         let mut last_feedback: Option<String> = None;
-        let (canceled_before_running, reserved, uncertain) = {
+        let canceled_before_running = {
             let mut st = self.ctx.state.lock().unwrap();
             st.active_task_name = Some(task_name.to_string());
             st.last_task_name = Some(task_name.to_string());
@@ -1055,9 +1140,9 @@ impl Execution {
                 st.nav_state = "running".into();
                 st.last_status_message = format!("Navigation running: {task_name}");
             }
-            (canceled, st.goal_reserved, st.nav2_task_uncertain)
+            self.ctx.publish_nav_operation_active(&st);
+            canceled
         };
-        self.ctx.publish_nav_operation_active(reserved || uncertain);
         if canceled_before_running {
             self.ctx.publish_safety_zero();
         }
@@ -1134,7 +1219,7 @@ impl Execution {
                     last_feedback = Some(fb);
                 }
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.ctx.clock.sleep(Duration::from_millis(50)).await;
         }
 
         let cancel_after_completion = self.ctx.state.lock().unwrap().external_cancel_requested;
@@ -1173,7 +1258,7 @@ impl Execution {
                 false
             }
             TaskResult::Failed => {
-                let elapsed = started_at.elapsed().as_secs_f64();
+                let elapsed = self.ctx.clock.mono().saturating_duration_since(started_at).as_secs_f64();
                 let task_error = format!("Nav2 task error: code={}, msg=\"{}\"", terminal.error_code, terminal.error_msg);
                 let feedback_summary = last_feedback.clone().unwrap_or_else(|| "last_feedback=None".into());
                 let log_summary = self.ctx.recent_nav2_log_summary(started_at);
@@ -1186,9 +1271,9 @@ impl Execution {
         }
     }
 
-    fn stamp_path_for_execution(path: &mut Path) {
+    fn stamp_path_for_execution(&self, path: &mut Path) {
         let frame = geometry::path_frame_id(path).to_string();
-        let now = stamp_now();
+        let now = self.ctx.stamp_now();
         path.header.frame_id = frame.clone();
         path.header.stamp = now.clone();
         for pose in &mut path.poses {
@@ -1202,7 +1287,7 @@ impl Execution {
     fn publish_split_points_marker(&self, points: &[Pose]) {
         let mut marker = Marker::default();
         marker.header.frame_id = "map".into();
-        marker.header.stamp = stamp_now();
+        marker.header.stamp = self.ctx.stamp_now();
         marker.ns = "coverage_split_points".into();
         marker.id = 0;
         marker.type_ = 7; // SPHERE_LIST
@@ -1294,7 +1379,7 @@ impl Execution {
             true
         });
 
-        Self::stamp_path_for_execution(&mut path);
+        self.stamp_path_for_execution(&mut path);
         let mut start_pose = path.poses[0].clone();
         if first > 1 {
             self.ctx.info(&format!("從檢查點續割：導航到第 {first} 段起點"));
@@ -1323,7 +1408,7 @@ impl Execution {
                 return self.canceled_before_task();
             }
             *split_path = geometry::densify_path(split_path, FOLLOW_PATH_MAX_STEP_M);
-            Self::stamp_path_for_execution(split_path);
+            self.stamp_path_for_execution(split_path);
             let _ = self.ctx.split_path_pub.lock().unwrap().publish(split_path);
             let distance = geometry::path_distance(split_path);
             let (start_pose, goal_pose) = (split_path.poses[0].clone(), split_path.poses[split_path.poses.len() - 1].clone());
@@ -1398,9 +1483,9 @@ fn missing_inputs(r: &Readiness) -> String {
 
 /// Goal admission (`_goal_callback`) + the reserved-goal bookkeeping around
 /// one execution (`_run_reserved_goal`).
-async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Waypoint::Action>) {
+async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<WaypointAction>) {
     let goal = &req.goal;
-    let reject = |ctx: &Ctx, why: &str, req: r2r::ActionServerGoalRequest<Waypoint::Action>| {
+    let reject = |ctx: &Ctx, why: &str, req: ActionServerGoalRequest<WaypointAction>| {
         ctx.warn(&format!("Rejecting navigation goal: {why}"));
         let _ = req.reject();
     };
@@ -1429,7 +1514,7 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
     }
     {
         let mut st = ctx.state.lock().unwrap();
-        if let Some(reason) = st.navigation_admission_block_reason(&ctx.safety, Instant::now()) {
+        if let Some(reason) = st.navigation_admission_block_reason(&ctx.safety, ctx.clock.mono()) {
             drop(st);
             return reject(&ctx, &reason, req);
         }
@@ -1446,10 +1531,11 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
         st.pending_dispatch_id = Some(dispatch_id.clone());
         st.last_task_name = Some("Navigation goal".into());
         st.last_feedback_message = "last_feedback=None".into();
+        st.goal_end_decided = false;
         st.nav_state = "pending_confirmation".into();
         st.last_status_message = "Navigation goal accepted; waiting for dispatch confirmation".into();
+        ctx.publish_nav_operation_active(&st);
     }
-    ctx.publish_nav_operation_active(true);
     let zone_id = req.goal.zone_id;
     let (goal_handle, mut cancel_requests) = match req.accept() {
         Ok(v) => v,
@@ -1461,19 +1547,35 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
     };
     // `_cancel_callback`: accept a cancel only for the reserved dispatch.
     let action_cancel_accepted = Arc::new(AtomicBool::new(false));
+    let end = Decision::default();
     {
         let ctx = ctx.clone();
         let dispatch_id = dispatch_id.clone();
         let accepted = action_cancel_accepted.clone();
+        let end = end.clone();
         tokio::spawn(async move {
+            // A cancel is handled under `end`, which `Execution::terminate`
+            // takes to decide the end: one accepted before the decision ends
+            // the goal CANCELED, and one that comes after it changes nothing.
+            // Those are kept until the goal has ended and then accepted, which
+            // answers them `GoalTerminated`, as rcl answered a cancel for a
+            // goal that had ended when nav ended it in `terminate`.
+            let mut late = Vec::new();
             while let Some(request) = cancel_requests.next().await {
-                if ctx.request_navigation_cancel("Navigation action cancel requested", Some(&dispatch_id)) {
-                    ctx.warn("Navigation action cancel requested");
+                let decided = end.lock().unwrap();
+                if decided.is_some() {
+                    late.push(request);
+                } else if ctx.request_navigation_cancel("Navigation action cancel requested", Some(&dispatch_id)) {
                     accepted.store(true, Ordering::SeqCst);
                     request.accept();
+                    drop(decided);
+                    ctx.warn("Navigation action cancel requested");
                 } else {
                     request.reject();
                 }
+            }
+            for request in late {
+                request.accept();
             }
         });
     }
@@ -1481,10 +1583,12 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: r2r::ActionServerGoalRequest<Wa
         p.begin(&dispatch_id, zone_id);
         true
     });
-    let mut execution = Execution { ctx: ctx.clone(), goal: Mutex::new(goal_handle), action_cancel_accepted, dispatch_id };
+    let mut execution = Execution { ctx: ctx.clone(), goal: Mutex::new(goal_handle), action_cancel_accepted, end, dispatch_id };
     let outcome = execution.run().await;
     finish_progress(&ctx, &outcome);
     finish_reserved_goal(&ctx);
+    // Only now does the caller learn the end (`Execution::terminate`).
+    execution.end_goal();
 }
 
 /// Final `/coverage_progress` of an execution. A cancel during a Nav2 task
@@ -1507,28 +1611,25 @@ fn finish_progress(ctx: &Ctx, outcome: &Outcome) {
 }
 
 fn finish_reserved_goal(ctx: &Ctx) {
-    let uncertain = {
-        let mut st = ctx.state.lock().unwrap();
-        let finished = st.pending_dispatch_id.take();
-        st.goal_reserved = false;
-        st.active_task_name = None;
-        st.external_cancel_requested = false;
-        st.dispatch_confirmed = false;
-        let uncertain = st.nav2_task_uncertain;
-        if let Some(id) = finished {
-            if uncertain {
-                st.uncertain_dispatch_id = Some(id);
-            } else {
-                st.terminal_dispatch_ids.insert(id);
-            }
+    let mut st = ctx.state.lock().unwrap();
+    let finished = st.pending_dispatch_id.take();
+    st.goal_reserved = false;
+    st.goal_end_decided = false;
+    st.active_task_name = None;
+    st.external_cancel_requested = false;
+    st.dispatch_confirmed = false;
+    if let Some(id) = finished {
+        if st.nav2_task_uncertain {
+            st.uncertain_dispatch_id = Some(id);
+        } else {
+            st.terminal_dispatch_ids.insert(id);
         }
-        uncertain
-    };
-    ctx.publish_nav_operation_active(uncertain);
+    }
+    ctx.publish_nav_operation_active(&st);
 }
 
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
 /// `nav_core.*`: what the in-process runtime reads and publishes.
@@ -1561,7 +1662,13 @@ fn pose_source(value: &str) -> Result<PoseSource, String> {
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    run_node(node, m).await
+}
+
+/// Everything after `Node::create`, so that a test can hand in a node whose
+/// parameters it has set itself.
+pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
     r2r::log_info!(&logger, "NavActionServer initialized (mower_rs)");
 
@@ -1619,25 +1726,30 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         other => return Err(format!("Unknown nav_backend \"{other}\"; expected \"nav2\" or \"nav_core\"").into()),
     };
 
+    // Every bus name below is what rcl makes of it on the node, the absolute
+    // ones too (ModuleCtx::resolve_topic / resolve_service).
     let ctx = Arc::new(Ctx {
         logger: logger.clone(),
+        clock: m.clock.clone(),
         safety,
         exec,
         state: Mutex::new(NavState::new()),
         nav2: Mutex::new(Nav2Tracker::default()),
         confirm: Notify::new(),
-        nav_operation_active_pub: Mutex::new(node.create_publisher::<Bool>("/nav_operation_active", latched())?),
-        safety_stop_pub: Mutex::new(node.create_publisher::<TwistStamped>("/navigation_safety_stop", QosProfile::default())?),
-        coordinator_lock_pub: Mutex::new(node.create_publisher::<Bool>("/navigation_coordinator_lock", QosProfile::default())?),
-        split_path_pub: Mutex::new(node.create_publisher::<Path>("/split_path", QosProfile::default().keep_last(1))?),
-        split_points_pub: Mutex::new(node.create_publisher::<Marker>("/coverage_split_points", QosProfile::default().keep_last(1))?),
+        nav_operation_active_pub: Mutex::new(m.bus.publisher::<Bool>(&m.resolve_topic("/nav_operation_active")?, latched())?),
+        safety_stop_pub: Mutex::new(m.bus.publisher::<TwistStamped>(&m.resolve_topic("/navigation_safety_stop")?, Qos::default())?),
+        coordinator_lock_pub: Mutex::new(m.bus.publisher::<Bool>(&m.resolve_topic("/navigation_coordinator_lock")?, Qos::default())?),
+        split_path_pub: Mutex::new(m.bus.publisher::<Path>(&m.resolve_topic("/split_path")?, Qos::default().keep_last(1))?),
+        split_points_pub: Mutex::new(m.bus.publisher::<Marker>(&m.resolve_topic("/coverage_split_points")?, Qos::default().keep_last(1))?),
         progress: Mutex::new(ProgressState {
             progress: restored.as_ref().map(Checkpoint::restored_progress).unwrap_or_default(),
             checkpoint: restored,
             ..Default::default()
         }),
-        progress_pub: Mutex::new(node.create_publisher::<CoverageProgress>("/coverage_progress", latched())?),
+        progress_pub: Mutex::new(m.bus.publisher::<CoverageProgress>(&m.resolve_topic("/coverage_progress")?, latched())?),
         backend: match nav_core {
+            // nav2 is outside the process: its two actions and bt_navigator's
+            // state stay r2r clients on the node until E9.
             None => Backend::Nav2 {
                 navigate_client: node.create_action_client::<NavigateToPose::Action>("navigate_to_pose")?,
                 follow_client: node.create_action_client::<FollowPath::Action>("follow_path")?,
@@ -1645,17 +1757,17 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             },
             Some(core) => {
                 r2r::log_info!(&logger, "nav_backend nav_core: mower_nav_core in process, pose source {:?}", core.pose_source);
-                Backend::Core(NavRuntime::start(&mut node, core, &logger)?)
+                Backend::Core(NavRuntime::start(&m, core, &logger)?)
             }
         },
         exiting: AtomicBool::new(false),
     });
-    ctx.publish_nav_operation_active(false);
+    ctx.publish_nav_operation_active(&ctx.state.lock().unwrap());
     ctx.update_progress(true, |_| true);
 
     // ---- manual sources: manual motion and autonomy are mutually exclusive
     for topic in ["/joy_cmd", "/physical_joy_cmd", "/keyboard_cmd_vel"] {
-        let mut stream = node.subscribe::<TwistStamped>(topic, QosProfile::default())?;
+        let mut stream = m.bus.subscribe::<TwistStamped>(&m.resolve_topic(topic)?, Qos::default())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
@@ -1664,7 +1776,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 let cancel_dispatch = {
                     let mut st = ctx.state.lock().unwrap();
                     let hold = Duration::from_secs_f64(ctx.safety.manual_command_hold_s.max(0.5));
-                    let deadline = Instant::now() + hold;
+                    let deadline = ctx.clock.mono() + hold;
                     st.manual_command_deadlines.insert(topic.to_string(), deadline);
                     if invalid {
                         st.invalid_manual_command_deadlines.insert(topic.to_string(), deadline);
@@ -1680,44 +1792,45 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     ctx.error(&format!("Non-finite manual velocity received on {topic}; forcing safety stop"));
                 }
                 if let Some(id) = cancel_dispatch {
-                    ctx.request_navigation_cancel(&format!("Manual velocity on {topic} requested navigation stop"), Some(&id));
-                    let status = ctx.state.lock().unwrap().last_status_message.clone();
-                    ctx.warn(&status);
+                    if ctx.request_navigation_cancel(&format!("Manual velocity on {topic} requested navigation stop"), Some(&id)) {
+                        let status = ctx.state.lock().unwrap().last_status_message.clone();
+                        ctx.warn(&status);
+                    }
                 }
             }
         });
     }
     // ---- health sources ------------------------------------------------------
     {
-        let mut stream = node.subscribe::<PoseStamped>("/adapter/robot_pose", QosProfile::default())?;
+        let mut stream = m.bus.subscribe::<PoseStamped>(&m.resolve_topic("/adapter/robot_pose")?, Qos::default())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let p = &msg.pose;
                 let reason = state::robot_pose_block_reason(
-                    stamp_age_s(&msg.header.stamp),
+                    ctx.stamp_age_s(&msg.header.stamp),
                     &msg.header.frame_id,
                     [p.position.x, p.position.y, p.position.z],
                     [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w],
                     &ctx.safety,
                 );
                 if reason.is_none() {
-                    ctx.progress.lock().unwrap().robot_pose = msg.clone();
+                    ctx.progress.lock().unwrap().robot_pose = PoseStamped::clone(&msg);
                 }
                 let mut st = ctx.state.lock().unwrap();
-                st.last_robot_pose_received_at = if reason.is_none() { Some(Instant::now()) } else { None };
+                st.last_robot_pose_received_at = if reason.is_none() { Some(ctx.clock.mono()) } else { None };
                 st.robot_pose_rejection_reason = reason;
             }
         });
     }
     {
-        let mut stream = node.subscribe::<Imu>(&imu_topic, QosProfile::sensor_data())?;
+        let mut stream = m.bus.subscribe::<Imu>(&m.resolve_topic(&imu_topic)?, Qos::sensor_data())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let (o, w, a) = (&msg.orientation, &msg.angular_velocity, &msg.linear_acceleration);
                 let reason = state::imu_block_reason(
-                    stamp_age_s(&msg.header.stamp),
+                    ctx.stamp_age_s(&msg.header.stamp),
                     &msg.header.frame_id,
                     [o.x, o.y, o.z, o.w],
                     [w.x, w.y, w.z],
@@ -1728,19 +1841,19 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     &ctx.safety,
                 );
                 let mut st = ctx.state.lock().unwrap();
-                st.last_imu_received_at = if reason.is_none() { Some(Instant::now()) } else { None };
+                st.last_imu_received_at = if reason.is_none() { Some(ctx.clock.mono()) } else { None };
                 st.imu_rejection_reason = reason;
             }
         });
     }
     {
-        let mut stream = node.subscribe::<NavSatFix>(&gps_fix_topic, QosProfile::sensor_data())?;
+        let mut stream = m.bus.subscribe::<NavSatFix>(&m.resolve_topic(&gps_fix_topic)?, Qos::sensor_data())?;
         let ctx = ctx.clone();
         let source = gps_fix_topic.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let reason = state::gps_fix_block_reason(
-                    stamp_age_s(&msg.header.stamp),
+                    ctx.stamp_age_s(&msg.header.stamp),
                     &source,
                     msg.status.status,
                     msg.latitude,
@@ -1752,7 +1865,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 let mut st = ctx.state.lock().unwrap();
                 match reason {
                     None => {
-                        st.valid_fix_received_at_by_topic.insert(source.clone(), Instant::now());
+                        st.valid_fix_received_at_by_topic.insert(source.clone(), ctx.clock.mono());
                         st.fix_rejections_by_topic.remove(&source);
                     }
                     Some(r) => {
@@ -1764,32 +1877,33 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.subscribe::<Odometry>(&gps_odometry_topic, QosProfile::default())?;
+        let mut stream = m.bus.subscribe::<Odometry>(&m.resolve_topic(&gps_odometry_topic)?, Qos::default())?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let p = &msg.pose.pose.position;
-                let reason = state::gps_odometry_block_reason(stamp_age_s(&msg.header.stamp), &msg.header.frame_id, [p.x, p.y, p.z], &msg.pose.covariance, &ctx.safety);
+                let reason = state::gps_odometry_block_reason(ctx.stamp_age_s(&msg.header.stamp), &msg.header.frame_id, [p.x, p.y, p.z], &msg.pose.covariance, &ctx.safety);
                 let mut st = ctx.state.lock().unwrap();
-                st.last_gps_odometry_received_at = if reason.is_none() { Some(Instant::now()) } else { None };
+                st.last_gps_odometry_received_at = if reason.is_none() { Some(ctx.clock.mono()) } else { None };
                 st.gps_odometry_rejection_reason = reason;
             }
         });
     }
-    // nav2's warnings for the failure messages (the runtime keeps its own)
+    // nav2's warnings for the failure messages (the runtime keeps its own);
+    // the bridge brings nav2's `/rosout` in from DDS until E9
     if matches!(ctx.backend, Backend::Nav2 { .. }) {
-        let mut stream = node.subscribe::<Log>("/rosout", QosProfile::default().keep_last(100))?;
+        let mut stream = m.bus.subscribe::<Log>(&m.resolve_topic("/rosout")?, Qos::default().keep_last(100))?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
-                ctx.state.lock().unwrap().record_nav2_log(msg.level, &msg.name, &msg.msg, Instant::now());
+                ctx.state.lock().unwrap().record_nav2_log(msg.level, &msg.name, &msg.msg, ctx.clock.mono());
             }
         });
     }
 
     // ---- services ------------------------------------------------------------
     for name in ["/cancel_nav2", "/cencel_nav2"] {
-        let mut stream = node.create_service::<Trigger::Service>(name, QosProfile::services_default())?;
+        let mut stream = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service(name)?)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1821,13 +1935,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<GetCoverageProgress::Service>("/coverage_progress_status", QosProfile::services_default())?;
+        let name = m.resolve_service("/coverage_progress_status")?;
+        let mut stream = m.bus.service::<GetCoverageProgress::Request, GetCoverageProgress::Response>(&name)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
                 let (progress, checkpoint) = {
                     let ps = ctx.progress.lock().unwrap();
-                    (ps.to_msg(), ps.checkpoint_msg())
+                    let stamp = ctx.stamp_now();
+                    (ps.to_msg(stamp.clone()), ps.checkpoint_msg(stamp))
                 };
                 let message = if progress.mission_id.is_empty() { "No coverage execution yet".to_string() } else { progress.status_text.clone() };
                 let _ = req.respond(GetCoverageProgress::Response { success: true, message, progress, checkpoint });
@@ -1835,7 +1951,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<Trigger::Service>("/check_nav_status", QosProfile::services_default())?;
+        let mut stream = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/check_nav_status")?)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1846,14 +1962,15 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     } else {
                         None
                     };
-                    st.status_json(&ctx.safety, Instant::now(), message.as_deref())
+                    st.status_json(&ctx.safety, ctx.clock.mono(), message.as_deref())
                 };
                 let _ = req.respond(Trigger::Response { success: true, message: json });
             }
         });
     }
     {
-        let mut stream = node.create_service::<ConfirmNavigationDispatch::Service>("/confirm_navigation_dispatch", QosProfile::services_default())?;
+        let name = m.resolve_service("/confirm_navigation_dispatch")?;
+        let mut stream = m.bus.service::<ConfirmNavigationDispatch::Request, ConfirmNavigationDispatch::Response>(&name)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1878,7 +1995,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<CancelNavigationDispatch::Service>("/cancel_navigation_dispatch", QosProfile::services_default())?;
+        let name = m.resolve_service("/cancel_navigation_dispatch")?;
+        let mut stream = m.bus.service::<CancelNavigationDispatch::Request, CancelNavigationDispatch::Response>(&name)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1930,7 +2048,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     {
-        let mut stream = node.create_service::<MissionOperationLock::Service>("/mission_operation_lock", QosProfile::services_default())?;
+        let name = m.resolve_service("/mission_operation_lock")?;
+        let mut stream = m.bus.service::<MissionOperationLock::Request, MissionOperationLock::Response>(&name)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
@@ -1944,7 +2063,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                 } else {
                     let mut st = ctx.state.lock().unwrap();
                     if req.message.acquire {
-                        if st.goal_reserved || st.nav2_task_uncertain || st.manual_motion_active(Instant::now()) {
+                        if st.goal_reserved || st.nav2_task_uncertain || st.manual_motion_active(ctx.clock.mono()) {
                             (false, "Navigation/manual motion is active or termination is uncertain".to_string())
                         } else if st.mutation_owner.is_some() {
                             (false, format!("Another mission mutation is active: {}", st.mutation_operation.clone().unwrap_or_else(|| "unknown".into())))
@@ -1967,8 +2086,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
 
     // ---- action servers (both names run the same bounded execution) --------
+    // Relative names, which rcl_action resolves with the topic rules.
     for name in ["nav_action", "nav_action_follow_path"] {
-        let mut requests = node.create_action_server::<Waypoint::Action>(name)?;
+        let mut requests = m.bus.action_server::<WaypointAction>(&m.resolve_topic(name)?)?;
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = requests.next().await {
@@ -1986,8 +2106,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             // (that drifted the heartbeat to ~18.5 Hz under VM jitter), and
             // not Burst: back-to-back publishes buy nothing for a freshness
             // watchdog. This mirrors the Python thread's resync loop.
-            let mut tick = tokio::time::interval(Duration::from_millis(50));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut tick = ctx.clock.interval(Duration::from_millis(50));
+            tick.set_missed_tick_behavior(MissedTick::Skip);
             loop {
                 tick.tick().await;
                 if ctx.exiting.load(Ordering::Relaxed) {
@@ -2001,7 +2121,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     {
         let ctx = ctx.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            let mut tick = ctx.clock.interval(Duration::from_millis(500));
             loop {
                 tick.tick().await;
                 if ctx.exiting.load(Ordering::Relaxed) {
@@ -2013,6 +2133,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
 
     // ---- spin until SIGINT / SIGTERM, or until the nav_core runtime stops --
+    // The bus needs no spinning; the node still does, for nav2's clients.
     let running = Arc::new(AtomicBool::new(true));
     let spin = {
         let running = running.clone();
@@ -2031,8 +2152,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     running.store(false, Ordering::Relaxed);
     let _ = spin.await;
     match stopped {
-        // the node is gone, so twist_mux's lock goes stale (locked) and the
-        // action server with it; mower_rsd starts the module again in 2 s
+        // mower_rsd closes the module's scope, so twist_mux's lock goes stale
+        // (locked) and the action servers go with it; it starts the module
+        // again in 2 s
         Some(cause) => Err(format!("nav_core: {cause}; restarting the nav module").into()),
         None => Ok(()),
     }

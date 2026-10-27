@@ -13,7 +13,9 @@ name = "mower_nav"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_rs_common = { path = "../mower_rs_common" }
+mower_bus = { path = "../mower_bus" }
 mower_nav_core = { path = "../mower_nav_core" }
 # nav_core.pose_source: tfbus reads the robot pose from mower_localize's
 # in-process transform cache (core_backend).
@@ -25,3 +27,8 @@ tokio.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# tests/bus.rs runs coverage against nav on one bus: the one action pair in
+# the process.
+mower_coverage = { path = "../mower_coverage" }

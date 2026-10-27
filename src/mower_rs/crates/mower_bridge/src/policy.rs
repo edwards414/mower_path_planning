@@ -11,7 +11,7 @@ use mower_bus_ros::{BridgeError, Direction, RosBridge};
 use mower_rs_common::{NameKind, Remaps};
 
 use crate::manifest::{MODULES, OUTSIDE};
-use crate::types::{Endpoint, Iface, Instance, Kind, Module, Profile};
+use crate::types::{Endpoint, Iface, Instance, Kind, Module, Profile, Space};
 
 /// An instance that runs in this process.
 #[derive(Clone, Debug)]
@@ -93,6 +93,8 @@ impl Declaration {
             (Iface::Topic(t, qos), Direction::FromRos) => t.declare_from_ros(bridge, &self.name, *qos),
             (Iface::Service(s), Direction::ServiceToRos) => s.declare_to_ros(bridge, &self.name),
             (Iface::Service(s), Direction::ServiceFromRos) => s.declare_from_ros(bridge, &self.name),
+            (Iface::Action(a), Direction::ActionToRos) => a.declare_to_ros(bridge, &self.name),
+            (Iface::Action(a), Direction::ActionFromRos) => a.declare_from_ros(bridge, &self.name),
             (iface, direction) => unreachable!("{direction} for {iface:?}: the policy pairs topics with topic directions"),
         }
     }
@@ -104,12 +106,13 @@ impl fmt::Display for Declaration {
         match &self.iface {
             Iface::Topic(t, qos) => write!(f, "{} {} {} {qos}", self.direction, self.name, t.ros_type()),
             Iface::Service(s) => write!(f, "{} {} {}", self.direction, self.name, s.ros_type()),
+            Iface::Action(a) => write!(f, "{} {} {}", self.direction, self.name, a.ros_type()),
         }
     }
 }
 
-/// What the bridge of a process declares: topics first, then services, each
-/// sorted by name.
+/// What the bridge of a process declares: topics first, then services, then
+/// actions, each sorted by name.
 #[derive(Clone, Debug, Default)]
 pub struct Plan {
     pub declarations: Vec<Declaration>,
@@ -247,14 +250,15 @@ struct Outcome {
 ///   writer that is not on the bus here (an r2r module, a module that does not
 ///   run here, a node outside), or no known writer at all;
 /// - a service an instance on the bus serves is served on DDS; one it calls
-///   whose server is not on the bus here is called on DDS;
+///   whose server is not on the bus here is called on DDS; and so are
+///   actions;
 /// - a name that would need both directions is an error (docs/BUS_TOPICS.md
 ///   5.5 d), except where the bus side of it is writers that never publish,
 ///   or endpoints that are not in production, which are then left out.
 pub fn plan(running: &[Running], remaps: &Remaps) -> Result<Plan, PlanError> {
     let mut problems = Vec::new();
-    // (is a service, name) -> every endpoint of that name
-    let mut names: BTreeMap<(bool, String), Vec<End>> = BTreeMap::new();
+    // (namespace, name) -> every endpoint of that name
+    let mut names: BTreeMap<(Space, String), Vec<End>> = BTreeMap::new();
     for module in MODULES {
         for instance in module.instances {
             let here = running.iter().find(|r| r.instance.node == instance.node);
@@ -271,24 +275,27 @@ pub fn plan(running: &[Running], remaps: &Remaps) -> Result<Plan, PlanError> {
                     None => (endpoint.name.to_string(), Side::Elsewhere),
                 };
                 let end = End { owner: instance.node, endpoint, side };
-                names.entry((!endpoint.kind.is_topic(), name)).or_default().push(end);
+                names.entry((endpoint.kind.space(), name)).or_default().push(end);
             }
         }
     }
     for outside in OUTSIDE {
         for endpoint in outside.endpoints {
             let end = End { owner: outside.node, endpoint, side: Side::Outside };
-            names.entry((!endpoint.kind.is_topic(), endpoint.name.to_string())).or_default().push(end);
+            names.entry((endpoint.kind.space(), endpoint.name.to_string())).or_default().push(end);
         }
     }
 
     let mut plan = Plan::default();
-    for ((service, name), ends) in &names {
+    for ((space, name), ends) in &names {
         let ends: Vec<&End> = ends.iter().collect();
         let outcome = match same_type(name, &ends) {
             Err(problem) => Err(problem),
-            Ok(()) if *service => service_outcome(name, &ends),
-            Ok(()) => topic_outcome(name, &ends),
+            Ok(()) => match space {
+                Space::Topic => topic_outcome(name, &ends),
+                Space::Service => service_outcome(name, &ends),
+                Space::Action => action_outcome(name, &ends),
+            },
         };
         match outcome {
             Ok(outcome) => {
@@ -311,6 +318,7 @@ fn same_type(name: &str, ends: &[&End]) -> Result<(), String> {
     let same = ends.iter().all(|e| match (&e.endpoint.iface, first) {
         (Iface::Topic(a, _), Iface::Topic(b, _)) => a == b,
         (Iface::Service(a), Iface::Service(b)) => a == b,
+        (Iface::Action(a), Iface::Action(b)) => a == b,
         _ => false,
     });
     if same {
@@ -374,7 +382,7 @@ fn topic_directions(name: &str, ends: &[&End]) -> Result<Outcome, String> {
     }
     let msg_type = match ends[0].endpoint.iface {
         Iface::Topic(t, _) => t,
-        Iface::Service(_) => unreachable!("a topic"),
+        Iface::Service(_) | Iface::Action(_) => unreachable!("a topic"),
     };
     if to_ros {
         outcome.declarations.push(Declaration {
@@ -480,7 +488,7 @@ fn service_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
     }
     let srv_type = match ends[0].endpoint.iface {
         Iface::Service(s) => s,
-        Iface::Topic(..) => unreachable!("a service"),
+        Iface::Topic(..) | Iface::Action(_) => unreachable!("a service"),
     };
     let mut outcome = Outcome::default();
     if to_ros {
@@ -498,6 +506,54 @@ fn service_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Service(srv_type),
             why: format!("for {}, served by {server}", owners(&bus_callers)),
+        });
+    }
+    Ok(outcome)
+}
+
+/// The services' rule, for an action: an action server on the bus is served
+/// on DDS (`action_to_ros`: the CI tools' rclpy clients reach a standalone
+/// nav); an action client on the bus whose server is not on the bus here
+/// sends its goals to DDS (`action_from_ros`: a standalone coverage reaches
+/// coverage_cancel_check.py's rclpy server, or nav on r2r). Both is an error.
+fn action_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
+    let of = |kind: Kind, bus: bool| -> Vec<&End> {
+        ends.iter().copied().filter(|e| e.endpoint.kind == kind && e.on_bus() == bus).collect()
+    };
+    let bus_servers = of(Kind::ServeAction, true);
+    let other_servers = of(Kind::ServeAction, false);
+    let bus_clients = of(Kind::CallAction, true);
+    let to_ros = !bus_servers.is_empty();
+    let from_ros = !bus_clients.is_empty() && (!other_servers.is_empty() || bus_servers.is_empty());
+    if to_ros && from_ros {
+        return Err(format!(
+            "{name}: action served on the bus by {} and also by {}, with goals sent on the bus by {}: both \
+             directions (docs/BUS_TOPICS.md 5.5 d)",
+            owners(&bus_servers),
+            owners(&other_servers),
+            owners(&bus_clients)
+        ));
+    }
+    let act_type = match ends[0].endpoint.iface {
+        Iface::Action(a) => a,
+        Iface::Topic(..) | Iface::Service(_) => unreachable!("an action"),
+    };
+    let mut outcome = Outcome::default();
+    if to_ros {
+        outcome.declarations.push(Declaration {
+            direction: Direction::ActionToRos,
+            name: name.to_string(),
+            iface: Iface::Action(act_type),
+            why: format!("served by {}", owners(&bus_servers)),
+        });
+    }
+    if from_ros {
+        let server = if other_servers.is_empty() { "a server the manifest does not know".to_string() } else { owners(&other_servers) };
+        outcome.declarations.push(Declaration {
+            direction: Direction::ActionFromRos,
+            name: name.to_string(),
+            iface: Iface::Action(act_type),
+            why: format!("for {}, served by {server}", owners(&bus_clients)),
         });
     }
     Ok(outcome)

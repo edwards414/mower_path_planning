@@ -15,16 +15,16 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
     declarations.
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
-- **Today:** battery, status, map, record, adapter, imu, gps and localize are on the bus (E2 steps 1-4); the other
-  flags are false until their modules move.
+- **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
+  1-5); base, pid_autotune and the guards stay on r2r until they move after E3.
 
 ## The manifest
 
 `MODULES` holds the 13 typed modules of `mower_rsd` (18 instances); `OUTSIDE` holds the nodes they depend on.
 
 - **The module code is the source of truth.** BUS_TOPICS.md sections 2 and 3 cite the lines.
-- **One entry per endpoint:** what it does (`publishes`, `subscribes`, `serves`, `calls`), its name, its r2r type and,
-  for a topic, the QoS profile the code hands r2r, written as BUS_TOPICS.md writes it (`R V 10`, `BE V 1`, `R TL 1`,
+- **One entry per endpoint:** what it does (`publishes`, `subscribes`, `serves`, `calls`, and for an action
+  `serves_action`, `calls_action`), its name, its r2r type and, for a topic, the QoS profile the code hands r2r, written as BUS_TOPICS.md writes it (`R V 10`, `BE V 1`, `R TL 1`,
   `SD`). The types are values (`MsgType::of::<T>()`), so the manifest is a static table that also knows how to declare
   each name on a bridge.
 - **Two names per endpoint:**
@@ -40,16 +40,21 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
       "`/tf_static` question". `/tf_static` then only goes DDS → bus.
     - The adapter's 1 Hz calls to `/map_manage/get_parameters` and `/boustrophedon_coverage/get_parameters`: parameter
       services stay on r2r (E2 decision 2), and so do their callers.
-  - `silent`: a writer that is made and never publishes: coverage's `/free_space_inflated` and `/risk_map_inflated`
-    (BUS_TOPICS.md 5.8 #2), mower_base's `/tf` (`enable_odom_tf` is false).
+    - nav's clients of nav2, until E9: `/bt_navigator/get_state` and the actions `/navigate_to_pose` and
+      `/follow_path`, next to nav2 outside the process.
+  - `silent`: a writer that is made and never publishes: mower_base's `/tf` (`enable_odom_tf` is false). Coverage's
+    `/free_space_inflated` and `/risk_map_inflated` were (BUS_TOPICS.md 5.8 #2) until step 5 dropped them.
   - `only`: not in production. nav's `nav_core` backend (robot.launch.py `rust_nav_core:=true`, CI's
     `nav_core_check.py`), with `/tf` and `/tf_static` for `nav_core.pose_source: tf`.
 - **Outside** (BUS_TOPICS.md 5.3, "DDS→bus"), each with the step that removes it: ws_bridge's writers (E3), twist_mux's
-  `/cmd_vel_guard_input` (E4), robot_state_publisher's `/tf_static` and `/tf` (E4), nav2's `/rosout` and
-  `/bt_navigator/get_state` (E9), the two teleop nodes (off by default) and the recorder's `/mower_base/rear_light`
-  (E5). Their QoS is upstream behaviour, unconfirmed (BUS_TOPICS.md 1.3).
+  `/cmd_vel_guard_input` (E4), robot_state_publisher's `/tf_static` and `/tf` (E4), nav2's `/rosout`,
+  `/bt_navigator/get_state` and two actions (E9), the two teleop nodes (off by default) and the recorder's
+  `/mower_base/rear_light` (E5). Their QoS is upstream behaviour, unconfirmed (BUS_TOPICS.md 1.3).
+- **Actions** (step 5): nav serves `/nav_action` and `/nav_action_follow_path`, coverage sends its goals to the second.
+  An action is a namespace of its own, as on DDS (`<name>/_action/...`) and on the bus, and its name resolves with the
+  topic rules, as rcl_action resolves it.
 - **Not listed:**
-  - parameter services and actions, which stay on r2r in E2 (decision 2);
+  - parameter services, which stay on r2r in E2 (decision 2);
   - endpoints only a non-production setting makes, but for nav's `nav_core` ones: robot_status's own heartbeat
     subscription (`heartbeat_source_topic` ≠ `odom_topic`), the final guard's command clock
     (`require_command_session`). The check reports them if they appear.
@@ -59,7 +64,7 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
   - the parameter files robot.launch.py passes, in its order (mower_rsd.yaml, gps.yaml,
     dual_ekf_navsat_params.yaml): every name a parameter sets has the file's value;
   - rcl itself: the resolver oracle;
-  - one type per name, one server per service.
+  - one type per name, one server per service or action.
 
 ## The flags
 
@@ -90,6 +95,13 @@ each with its flag; every other instance is elsewhere, on DDS.
     README, "Graph presence"). mower_rs_common's guard then says "unavailable", as before, instead of meeting a lock
     service that never answers.
   - **Both** (a server on the bus and another elsewhere): an error.
+- **Actions,** by the services' rule:
+  - **action_to_ros:** an action an instance on the bus serves: nav's two, which the CI tools' rclpy clients and
+    `nav_action_client.py` reach on DDS, also in mower_rsd with coverage on the bus;
+  - **action_from_ros:** an action an instance on the bus sends goals to, whose server is not on the bus here: coverage
+    standalone (coverage_cancel_check.py's rclpy server), or with nav still on r2r. Its bus server too exists only while
+    the graph shows the DDS server, so coverage finds "Navigation action server unavailable" as before.
+  - **Both:** an error.
 - **QoS of to_ros:** the bus writers' profile (5.5 a, c). Writers that differ get one profile that matches every reader
   either of them did: the deepest depth, reliable if any is reliable. Writers that differ in durability are an error.
   So far that is only `/tf`: the EKFs' `R V 100` and mower_base's silent `SD` give `R V 100`.
@@ -111,7 +123,8 @@ each with its flag; every other instance is elsewhere, on DDS.
   for the module's node name on a standalone bridge) would put the bridge's DDS endpoint on another name than the
   module's. `Plan::check_names` refuses such a name: `rsd_plan`, so mower_rsd does not start, and the bridge before it
   declares anything. robot.launch.py's rules rename none.
-- **Deterministic:** topics first, then services, each sorted by name; the order of `--modules` does not matter.
+- **Deterministic:** topics first, then services, then actions, each sorted by name; the order of `--modules` does not
+  matter.
 - **What it derives for the steps** (`src/tests.rs` has every line):
 
 | Bus | to_ros | from_ros | service_to_ros | service_from_ros |
@@ -143,7 +156,7 @@ each with its flag; every other instance is elsewhere, on DDS.
     patch for node options. Its log name is `mower_bus_bridge.<node>`, and tools that look at an endpoint's node name
     (`nav_core_check.py`) see the module's. The bridge warns if a rule renames it anyway (`__ns:=`).
   - A bridge that fails stops the module, and the process exits non-zero, for launch's `respawn`.
-  - The `main.rs` of every module on the bus uses it. `tests/dds.rs` runs a battery module with `run_standalone`, and
+  - Every moved module's `main.rs` uses it. `tests/dds.rs` runs a battery module with `run_standalone`, and
     `tests/standalone.rs` runs `module_main` itself, under launch's `-r __node:=battery_state`.
 
 ## The check
@@ -151,9 +164,9 @@ each with its flag; every other instance is elsewhere, on DDS.
 The policy plans from the manifest, so an endpoint the manifest lacks is a name nothing bridges, and nothing else would
 say so.
 
-- **What:** every endpoint on the bus (mower_bus introspection: name, type, each endpoint's QoS), by scope. An
-  endpoint of a running instance must be in that instance's manifest entry with the same type and QoS (`bus_qos` of the
-  profile).
+- **What:** every endpoint on the bus (mower_bus introspection: name, type, each endpoint's QoS), by scope: topics,
+  services and actions. An endpoint of a running instance must be in that instance's manifest entry with the same type
+  (an action's three) and QoS (`bus_qos` of the profile).
 - **What it reports,** one line each:
   - no such endpoint in the manifest (a new or renamed name; a parameter set to a value other than production's);
   - another type or QoS there;
@@ -172,7 +185,8 @@ say so.
 
 1. Convert its IO to `m.bus`, naming every endpoint through `m.resolve_topic` / `m.resolve_service`, with the QoS it
    had (`types::R_V_10.bus()` and the rest, or `mower_bus::Qos`). Keep the r2r node for parameters, parameter
-   services, actions, `/rosout` and graph presence (decision 1).
+   services, the log and graph presence (decision 1), and for what it reaches outside without a bridge (nav2's clients
+   until E9).
 2. Call `assert_in_manifest` in its tests. If an endpoint is new or changed, change the manifest with it.
 3. Switch its `main.rs` to `mower_bridge::module_main`.
 4. Flip its flag in `src/on_bus.rs`.
@@ -197,4 +211,5 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (201 names).
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (205 names, the five action
+  ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).
