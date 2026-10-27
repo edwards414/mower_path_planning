@@ -82,6 +82,13 @@ for dev in stmcom imu_usb gps_rtk lte_at; do
 done
 
 echo "== systemd"
+# A timer someone switched off stays off: the hourly pull was disabled on
+# purpose (2026-10-12, pulls could hard-reset the board), and a re-run of this
+# script must not undo that. A first install enables it as before.
+update_timer_off=false
+if [ -e /etc/systemd/system/mower-update.timer ] && ! systemctl is-enabled -q mower-update.timer; then
+  update_timer_off=true
+fi
 for unit in mower.service mower-host-request.path mower-host-request.service mower-update.service mower-update.timer mower-update-check.service mower-update-check.timer mower-link-status.service mower-camera.service mower-lte.service; do
   sed "s#/home/cat/.mower#$state_dir#g; s#/home/cat#$home#g; s#^User=cat#User=$user#" "$here/host/$unit" > "/etc/systemd/system/$unit"
 done
@@ -92,7 +99,11 @@ systemctl daemon-reload
 systemctl is-failed -q ntpsec.service && systemctl restart ntpsec.service || true
 systemctl enable mower.service >/dev/null
 systemctl enable --now mower-host-request.path >/dev/null
-systemctl enable --now mower-update.timer >/dev/null
+if $update_timer_off; then
+  echo "   mower-update.timer was disabled and stays so (systemctl enable --now mower-update.timer turns it on)"
+else
+  systemctl enable --now mower-update.timer >/dev/null
+fi
 systemctl enable --now mower-update-check.timer >/dev/null
 systemctl enable --now mower-link-status.service >/dev/null
 systemctl enable --now mower-camera.service >/dev/null
