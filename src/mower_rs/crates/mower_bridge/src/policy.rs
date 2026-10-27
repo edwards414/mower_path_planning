@@ -281,6 +281,10 @@ pub fn plan(running: &[Running], remaps: &Remaps) -> Result<Plan, PlanError> {
     }
     for outside in OUTSIDE {
         for endpoint in outside.endpoints {
+            // a node a module of this process takes the place of is not there
+            if endpoint.replaced_by.is_some_and(|id| running.iter().any(|r| r.module.id == id)) {
+                continue;
+            }
             let end = End { owner: outside.node, endpoint, side: Side::Outside };
             names.entry((endpoint.kind.space(), endpoint.name.to_string())).or_default().push(end);
         }

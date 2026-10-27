@@ -15,6 +15,8 @@ the bottom drive an A/B measurement on the real robot.
 | `nav_progress_check.py` | `/coverage_progress` and `/coverage_progress_status` of a navigation server, black box: the server (`mower_nav` or the rclpy `nav_action_server`, given as the command line) against a fake Nav2 (lifecycle state, `navigate_to_pose`, `follow_path` with a falling `distance_to_goal`); a 3-segment run to success, a cancel halfway through segment 2, a restart that restores the checkpoint, rejected resume goals and a resume at segment 2. `--restart-as` restarts into the other server, so the checkpoint crosses implementations; CI's mower_rs tests job runs it both ways: `python3 tools/nav_progress_check.py --restart-as "python3 -m mower_mission.navigation.nav_action_server" -- target/debug/mower_nav` |
 | `nav_core_check.py` | `mower_nav`'s in-process navigation (`nav_backend:=nav_core`, `nav_core.pose_source:=tf`, no Nav2), black box: the real binary against both maps (a 10 x 6 m free field with a lethal border), `map -> odom` and `odom -> base_footprint` on `/tf` plus `/odom` at 50 Hz from a kinematic robot that follows `/nav_cmd_vel`. It first checks the in-process stack is on the graph, then: no map, so the mission fails after `nav2_ready_timeout_s` with the readiness message; a 3-segment run to success (progress 3/3, `/plan`, the robot stops at the last pose, `/nav_cmd_vel` stamps never step back); a cancel in segment 1 (CANCELED, `/nav_cmd_vel` zero within 0.5 s); a wall in `/map_grid` only, so the mission fails with `Nav2 task error: code=104` after the tree's recoveries (~35 s). Run by CI's mower_rs tests job: `python3 tools/nav_core_check.py -- target/debug/mower_nav` |
 | `autotune_telemetry_check.py` | `mower_pid_autotune` subscribes to `/mower_base/telemetry` only while a session runs, black box: the real binary against a fake 20 Hz telemetry frame; no subscriber while idle, one per session (the frame reaches the precheck), none 1 s after it, and "no /mower_base/telemetry" after ~1.5 s when the base is quiet. Run by CI's mower_rs tests job: `python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune` |
+| `mux_oracle.py` | **twist_mux** (step E4): the real C++ twist_mux 4.5.0 and `mower_rsd --modules mux` in the runtime image, on the same timed input scripts (S01-S18 of the E4 design and a 10-minute random segment), every forwarded message, its content, its latency and every `/diagnostics` status compared with each other and with a model of twist_mux's rules; `vectors` writes `crates/mower_mux/tests/vectors/` from a C++ run ("The twist_mux oracle" below) |
+| `rsp_capture.py` | **robot_state_publisher** (step E4): what rsp 3.3.4 publishes for the real robot's xacro (`/tf_static`, `/robot_description`, and `/tf` for a script of `/joint_states` around its 20 Hz throttle), every float as written, into `crates/mower_static_tf/tests/rsp_capture.json` |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline and on content (robot online, base and odometry fresh, pose updating) |
 | `switch.sh`, `measure.sh` | put the robot on a test image with `NAV_COMPOSITION` / `RUST_DAEMON` / `RUST_BASE` / `RUST_LOCALIZE` / `RUST_NAV_CORE` / any `KEY=VAL`, check which drivers actually run, and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 
@@ -48,6 +50,44 @@ on `main` (18 topics delivered, 22 listed). It has no rates, so the rate check
 only applies to a baseline saved with this version. Indoors
 `/adapter/map_datum` and the three inflated map layers are legitimately empty,
 which is why the check compares against a recording rather than a fixed list.
+
+## The twist_mux oracle
+
+`mux_oracle.py run` starts `--cpp` copies of the image's twist_mux (node `twist_mux_cppN`, output
+`/oracle/cppN/cmd_vel_guard_input`) and, with `--rust`, `mower_rsd --modules mux` (node `twist_mux`, output
+`/cmd_vel_guard_input`), all on the production twist_mux_topics.yaml, and drives them from one rclpy probe with the
+production writer QoS. Every input carries `<source>#<seq>` in its frame_id, so every output names what it forwarded.
+Three sessions, each with fresh processes: `main` (S01-S14, S16, S17, the random segment), `startup` (S15: the muxes
+start under running inputs) and `generic` (S18: a tie, priority 0, timeout 0 for an input and a lock, a priority-0
+lock).
+
+```bash
+docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=71 \
+  -v <repo>:/r:ro -v <out>:/o [-v <dir with mower_rsd>:/b:ro] \
+  --entrypoint bash mower_path_planning:ros-free-test -c \
+  'source /opt/ros/jazzy/setup.bash && source /mower_ws/install/setup.bash && \
+   python3 /r/src/mower_rs/tools/mux_oracle.py run --out /o --cpp 2 [--rust /b/mower_rsd]'
+python3 mux_oracle.py compare <out> [--latency]   # MUX_ORACLE_OK / MUX_ORACLE_FAIL
+python3 mux_oracle.py vectors <out> ../crates/mower_mux/tests/vectors
+```
+
+`compare` takes the first C++ copy as the reference. A decision within 3 ms of a timeout, of another handle's
+message, or of the same input's next message (a depth-1 reader keeps only the newer one) depends on delivery and is
+listed, not compared. S16 compares the counts, S17 the first forwarded sequence number (within one).
+
+**The noise floor**, two C++ copies on the same samples (2026-10-27, Docker Desktop on an M4, 10 cores):
+
+- S01-S15 and S18: the same forwarded sequence as each other and as the model, message for message; S16 200 of 200 on
+  both; S17 the same first message.
+- The random segment (600 s, 29.5 k inputs, 8.2 k forwarded): 4 decisions away from a boundary differ, after 1610
+  ambiguous ones are set aside. The probe stalls now and then for up to 1.2 s (both copies see the same latency then),
+  and what arrives bunched after a stall is what differs.
+- Latency, send to receipt through a mux: p50 1.2 ms, p99 6.4 ms. One copy against the other, per message: p50
+  +0.12 ms, p99 +1.10 ms.
+- `/diagnostics`: 2.00 a second, the "Node starting up" status first (when the probe matched the new writer in time),
+  none at the end. The two of a second come from two timers on two clocks (twist_mux's wall timer, the updater's on
+  the node clock): their order changes with the clock's slew, and the one that comes first carries the lock priority
+  of the previous tick (216 of 1367 statuses), its very first one no handles at all.
 
 ## Switching and measuring on the robot
 
