@@ -1,0 +1,85 @@
+# Development only: the robot's production stack (robot.launch.py with the
+# robot's RUST_* switches, nav2 for navigation) on simulated hardware --
+# mower_sim's STM32, WIT IMU and u-blox F9P on ptys, driven by one truth
+# world (src/mower_rs/crates/mower_sim) -- plus MediaMTX with the repo's
+# synthetic front camera. For the app on a phone or the iOS simulator
+# without a robot (README.md next to this file).
+#
+#   docker compose -f deploy/sim/docker-compose.sim.yaml up
+#
+# then connect the app by direct IP to this machine (ws://<ip>:9090).
+#
+# Never on a robot: it mounts no host /dev, and sim-entry.sh and mower_sim
+# refuse to start where the robot's devices are. mower_sim is not in the
+# image: a local build of it is mounted (README.md, "Start"). Nothing in the
+# robot's deploy/docker-compose.yaml, image or launch files refers to it.
+name: mower-sim
+
+services:
+  sim:
+    # The robot's runtime image, unchanged.
+    image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-main}
+    pull_policy: missing
+    hostname: mower-sim
+    # root only to link the devices into the container's own /dev and turn
+    # on multicast on its loopback; the stack itself runs as mower (uid
+    # 1000), as on the robot
+    user: "0:0"
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/bash", "/sim/sim-entry.sh"]
+    # `ros2 launch` stops its nodes in order on SIGINT
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    environment:
+      # its own network namespace: the graph cannot meet any other
+      - ROS_DOMAIN_ID=17
+      - MOWER_STATE_DIR=/home/mower/.mower
+      - MOWER_FIRMWARE_SYNC=0
+      - MOWER_STM_PORT=/dev/stmcom
+      # no fleet backend: the agent stays idle
+      - MOWER_BACKEND_URL=
+      - MOWER_PROVISION_TOKEN=
+      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
+      - MOWER_MODEL=lubancat
+      # 1 = a dev pairing identity (MW-SIM001) and the gate on
+      - SIM_PAIRED=${SIM_PAIRED:-0}
+      # the address the phone reaches this machine at (pairing URL, camera)
+      - SIM_HOST_IP=${SIM_HOST_IP:-}
+      # extra mower_sim options (mower_sim --help), e.g. "--gps-mode float"
+      - SIM_ARGS=${SIM_ARGS:-}
+      # the robot's .env defaults; RUST_NAV_CORE=true steers with
+      # mower_nav_core instead of nav2
+      - RUST_NAV_CORE=${RUST_NAV_CORE:-false}
+    ports:
+      - "9090:9090"       # ws_bridge, the app's direct-IP connection
+      - "8889:8889"       # MediaMTX WHEP: the front camera
+      - "8189:8189/udp"   # MediaMTX WebRTC media
+    volumes:
+      - ./:/sim:ro
+      - sim_state:/home/mower/.mower
+      # a Linux build of mower_sim (README.md): not made here when missing,
+      # so a missing build stops `up` with its path
+      - type: bind
+        source: ${MOWER_SIM_BIN:-../../src/mower_rs/target/release/mower_sim}
+        target: /usr/local/bin/mower_sim
+        read_only: true
+        bind:
+          create_host_path: false
+
+  # The front camera: the repo's mediamtx.yml (a testsrc2 pattern, encoded
+  # on demand), in the sim's network namespace, so the app finds it where
+  # it does on the robot: at the rosbridge host's :8889.
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    network_mode: service:sim
+    depends_on:
+      - sim
+    environment:
+      # ICE candidates the phone can reach (the published 8189/udp)
+      - MTX_WEBRTCADDITIONALHOSTS=${SIM_HOST_IP:-127.0.0.1}
+    volumes:
+      - ../../mediamtx.yml:/mediamtx.yml:ro
+
+volumes:
+  sim_state:
