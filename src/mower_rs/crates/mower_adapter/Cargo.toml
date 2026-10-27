@@ -13,9 +13,16 @@ name = "mower_adapter"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_rs_common = { path = "../mower_rs_common" }
+mower_bus = { path = "../mower_bus" }
 r2r.workspace = true
 futures.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
+
+[dev-dependencies]
+# tests/bus.rs runs the adapter with the real map_manage and recorder too.
+mower_map = { path = "../mower_map" }
+mower_record = { path = "../mower_record" }

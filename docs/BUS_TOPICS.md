@@ -190,7 +190,7 @@ Each citation is `alias:line`.
 | `/odometry/gps` | `Odometry` | `navsat_transform`, `R V 10` (mower_localize/navsat:41, 181) | `ekf_filter_node_map` as `odom1`, `BE V 10` (ekf_params:78, 84); `nav_action_server`, `R V 10` (mower_nav:1609-1611, 1767) | data collection | unknown: the loop runs at 30 Hz (ekf_params:141) and publishes only what the core prepared (mower_localize/navsat:383-393) | no | in-process only |
 | `/gps/filtered` | `NavSatFix` | `navsat_transform`, `R V 10` (mower_localize/navsat:42, 182-186; ekf_params:147) | `robot_status`, `BE V 5` (robot_status:102, 168) | — | unknown (same loop) | no | in-process only |
 | `/tf` | `tf2_msgs/TFMessage` | <ul><li>`ekf_filter_node_odom` (odom→base_footprint) and `ekf_filter_node_map` (map→odom), `R V 100` (mower_localize/ekf:107-109, 216, 287-323; ekf_params:9, 61)</li><li>`mower_base`, an `SD` writer that never publishes: `enable_odom_tf` is false (mower_base:619-621, 740; README:155)</li><li>robot_state_publisher: the wheel joints</li></ul> | none in production: the EKFs share their edges through `mower_localize::tfbus` (mower_localize/tfbus:1-33), and *nav_core* reads tfbus too (robot.launch.py:222-225) | nav2 tf listeners (QoS unconfirmed); recorder (record_topics.yaml:32) | 76.6 Hz measured 2026-09, with 30 Hz EKFs and 50 Hz joint states (REFACTOR:19); now unknown | no | bus→DDS until E9 and E5; nothing needs DDS→bus |
-| `/tf_static` | `TFMessage` | robot_state_publisher (base_link→imu_link, gps_link, ...; QoS unconfirmed); `navsat_transform`, the `utm` frame, `R TL 1` (mower_localize/navsat:187-191; ekf_params:146) | both EKFs and `navsat_transform`, `R TL 100` (mower_localize/ekf:111-113, 185; mower_localize/navsat:84-86, 114) | nav2 tf listeners; recorder, override `R TL 100` (qos_overrides.yaml:51-55) | latched: once per writer | no | both ways: DDS→bus for rsp's frames until E4, bus→DDS for `utm`; must not echo (5.5 d) |
+| `/tf_static` | `TFMessage` | robot_state_publisher (base_link→imu_link, gps_link, ...; QoS unconfirmed); `navsat_transform`, the `utm` frame, `R TL 1` (mower_localize/navsat:187-191; ekf_params:146) | both EKFs and `navsat_transform`, `R TL 100` (mower_localize/ekf:111-113, 185; mower_localize/navsat:84-86, 114) | nav2 tf listeners; recorder, override `R TL 100` (qos_overrides.yaml:51-55) | latched: once per writer | no | DDS→bus until E4. Decided: navsat's `utm` writer stays on r2r until E4, so nothing goes bus→DDS and nothing can echo (5.5 d) |
 
 ### 2.4 Maps and mission geometry
 
@@ -314,7 +314,7 @@ therefore finds nothing.
 
 | Service | Type | Server | Client | E2 |
 |---|---|---|---|---|
-| `/bt_navigator/get_state` | `lifecycle_msgs/GetState` | nav2 bt_navigator | `nav_action_server`, by the relative name `bt_navigator/get_state` (mower_nav:1644); polled every 0.2 s while it waits for nav2 (mower_nav:973, 1584) | stays an r2r client until E9; nav2 backend only |
+| `/bt_navigator/get_state` | `lifecycle_msgs/GetState` | nav2 bt_navigator | `nav_action_server`, by the relative name `bt_navigator/get_state` (mower_nav:1644); polled every 0.2 s while it waits for nav2 (mower_nav:973, 1584) | nav2 backend only. Stays an r2r client next to nav2's two actions until E9: nav polls it while it waits for nav2, so it belongs with them (marked `stays_on_r2r` in mower_bridge's manifest) |
 
 ### 3.3 Only through ws_bridge
 
@@ -329,8 +329,8 @@ therefore finds nothing.
 
 | Action | Type | Server | Clients in mower_rsd | Outside | E2 |
 |---|---|---|---|---|---|
-| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | the bus has no actions in E1: build this from a goal service, a feedback topic and a result service (bus/README:143-145). Move nav and coverage together |
-| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | same construction, or drop it |
+| `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `nav_action_server`, by a relative name (mower_nav:1970-1979) | `boustrophedon_coverage`, by the relative name `nav_action_follow_path` (mower_coverage:1769) | test tools only (`nav_progress_check.py`, `coverage_cancel_check.py`, `nav_core_check.py`) | the bus's actions (bus/README, "Actions", added in E2). Move nav and coverage together. Standalone, the tools reach nav through `action_to_ros` and coverage through `action_from_ros` (bus_ros/README, "Actions") |
+| `/nav_action` | `Waypoint` | same loop (mower_nav:1970) | — | none in production; only the dev utility `src/mower_mission/mower_mission/utils/nav_action_client.py:51` | the same, or drop it |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | nav2 bt_navigator | `nav_action_server`, by a relative name (mower_nav:1642) | the recorder records its `_action/feedback` and `_action/status` (record_topics.yaml:40-41) | stays an r2r client until E9 (*nav_core* replaces it) |
 | `/follow_path` | `nav2_msgs/action/FollowPath` | nav2 controller_server | `nav_action_server`, by a relative name (mower_nav:1643) | — | stays an r2r client until E9 |
 
@@ -478,6 +478,12 @@ coverage rely on relative names too.
 
 Every rule above is passed to `mower_rsd` as a node-scoped `-r <node>:<from>:=<to>` (robot.launch.py:77-99, 230-243).
 
+- mower_bridge's resolver oracle (`crates/mower_bridge/tests/resolver.rs`) has rcl itself resolve this table, and every
+  other name of the modules, with these rules: all 201 come out as the manifest and `Remaps::resolve` say.
+- Trap for the standalone `mower_localize`: `run_all` gives its three roles a `ModuleCtx` without the process's rules
+  (`src/mower_rs/crates/mower_localize/src/lib.rs:86-88`), so their `resolve_topic` would not apply them. The localize
+  conversion hands them `m.remaps`.
+
 ### 5.5 QoS: DDS-incompatible pairs, and the traps the bridge can create
 
 **No pair is refused today.**
@@ -508,6 +514,10 @@ a. **Bridge writers must copy the source's durability and reliability.**
    - A volatile writer for a latched app topic would make ws_bridge's `matching_qos` pick a volatile reader. Late app
      clients would then lose the replay of `/robot/online`, the map layers and the rest.
    - The same applies to the recorder's transient-local overrides.
+   - The bridge's DDS *readers* (DDS→bus) mirror the module readers they stand in for instead, so that every pair DDS
+     has today stays: best effort where a module reader was (the EKFs' `/odom`, robot_status's `/fix`), which also
+     matches the test harnesses' best-effort writers; transient local only where the module readers were and every
+     writer is (mower_bridge README, "The policy").
 
 b. **Bridge writer lifetime.** Today a module's latched history disappears when it restarts: the node and its writer go
    away (rsd/main.rs:40-49). The bus behaves the same way (bus/README:33-40). A bridge writer that outlives the bus
@@ -522,6 +532,11 @@ d. **Echo on topics bridged both ways.** `/tf_static` is the only one today: rsp
    out. The bridge's DDS reader must not take back its own samples. rcl's `ignore_local_publications` is not the fix:
    all of `mower_rsd` is one participant (rsd/main.rs:346-354), so it would also hide modules that are still on r2r.
    Filtering by writer is needed. Whether r2r exposes the publisher GID is unconfirmed.
+   - **Decided for E2:** navsat's `utm` writer stays on r2r until E4 (mower_bus_ros README, option 1), so `/tf_static`
+     is DDS→bus only, and mower_bridge's policy refuses any name that would need both directions.
+   - The only combination of module moves that would need one is mower_base on the bus with exactly one of the two
+     `/mower_base/led_command` writers (`robot_status`, `pid_autotune`). Step 6 moves pid_autotune with the base,
+     after status, so the order never meets it.
 
 e. **Several latched writers on one topic:**
    - `/mower_base/led_command`: `robot_status` and `pid_autotune`;
@@ -538,7 +553,8 @@ f. **Graph-presence checks.**
      publisher (mower_base:160-185). A bridge always counts as one, so move the guard and pid_autotune with the base.
    - `/rosapi/topics` (3.3) and graph_snapshot's node list (5.3) read the DDS graph.
    - `autotune_telemetry_check.py` checks pid_autotune's DDS subscriber count while idle
-     (`src/mower_rs/tools/README.md:17`). It must change with that module.
+     (`src/mower_rs/tools/README.md:17`). The bridge's `from_ros` DDS reader exists only while the bus has a reader
+     (mower_bus_ros README, "Graph presence"), so the check holds through the bridge, up to its 200 ms dwell.
 
 ### 5.6 High-rate and large messages
 
@@ -602,6 +618,9 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
 2. **Coverage holds silent writers.** It creates publishers on `/free_space_inflated` and `/risk_map_inflated` that never
    publish (`#[allow(dead_code)]`, mower_coverage:442-445). On the bus they are harmless, but they fix the type and show
    up in introspection.
+   - They also looked like a two-way name in step 3: map on the bus writes both, the adapter on the bus reads both,
+     and coverage, still on r2r, writes them on DDS. A writer that never publishes has nothing to forward, so
+     mower_bridge's manifest marks them `silent`, and its policy bridges both names bus→DDS only.
 3. **`mower_base` holds a `/tf` writer that never publishes** (mower_base:619-621). It shows up in the graph as a
    publisher, and on the bus it would show up in introspection.
 4. **The plan is wrong about `/map_manage/get_parameters`.** PLAN:356 says E3 must emulate it for the app. The app never
@@ -634,13 +653,31 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
 
 ### Step 0: prerequisites (no module moves)
 
+**Done** (2026-10-27). The resolver is `ModuleCtx::resolve_topic` / `resolve_service`
+(`src/mower_rs/crates/mower_rs_common/src/names.rs`). The configuration is
+[`crates/mower_bridge`](../src/mower_rs/crates/mower_bridge/README.md):
+
+- a typed manifest of every module endpoint (sections 2 and 3), checked against the launch file's rules, the parameter
+  files and rcl's own resolution of 5.4;
+- one flag per module (`src/on_bus.rs`), all false at step 0 and flipped as each module moved;
+- a policy that derives the bridge's declarations from the modules of a process and their flags;
+- a check that every endpoint a module makes on the bus is in the manifest;
+- `mower_rsd`'s bridge module (`mower_bus_bridge`, started only when a module is on the bus) and a runner for the
+  standalone binaries.
+
+`mower_bus_ros`'s `service_from_ros` now serves on the bus only while the graph shows the DDS server, so a bus caller
+sees an r2r server's absence as it did (mower_bus_ros README, "Graph presence").
+
+What it was asked to provide:
+
 - **The resolver** in `ModuleCtx`, covering 5.4. Test it with the table as vectors.
 - **`mower_bus_ros`.** Generate its configuration from this file's tables, with:
   - QoS copied from the source endpoint (5.5 a);
   - the lifetime tied to the source writer (5.5 b);
-  - writer-filtered two-way topics (5.5 d);
+  - writer-filtered two-way topics (5.5 d): not needed, since no name crosses both ways (5.5 d, decided);
   - service proxies in both directions;
-  - a per-topic "until step" tag, so a bridge is deleted when its outside end goes away.
+  - a per-topic "until step" tag, so a bridge is deleted when its outside end goes away. mower_bridge tags each
+    outside node instead (`Outside::until`): a bridge goes when its last outside end is taken out of the manifest.
 - **Keep the r2r nodes for now.** Keep each moved module's r2r node alive for its parameter services, graph presence and
   `/rosout` until E3 or E5 (5.3, 5.8 #6).
 
@@ -663,7 +700,8 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
    - shadow_compare already checks their JSON layers byte for byte (PLAN:102).
    - It is the first step that needs:
      - the transient-local bridge to nav2's StaticLayer (5.5 a);
-     - the parameter-service proxies (app, recorder), or keeping `map_manage`'s r2r node for them (5.3).
+     - the parameter-service proxies (app, recorder), or keeping `map_manage`'s r2r node for them (5.3). Decided:
+       the parameter services stay on r2r in E2, and so do the adapter's 1 Hz `get_parameters` calls to them.
    - Coverage stays behind because of the action.
 4. **imu, gps, localize.**
    - localize is already pure core plus thin IO (PLAN:355) and already shares transforms in process through tfbus.
@@ -673,12 +711,14 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
      display-only steps.
    - Check with localize_compare.py and datum_check.py.
 5. **coverage and nav.**
-   - This is the only in-process action pair. It needs the goal-service, feedback-topic and result-service construction
-     (bus/README:143-145), plus the five dispatch and lock services. nav's IO is the largest (`mower_nav/src/lib.rs`,
-     2094 lines).
+   - This is the only in-process action pair. It uses the bus's actions (bus/README, "Actions"; the cheat sheet maps
+     every r2r call nav and coverage make), plus the five dispatch and lock services. nav's IO is the largest
+     (`mower_nav/src/lib.rs`, 2094 lines).
+   - Action names resolve with the topic rules (rcl_action), so `resolve_topic` names them.
    - nav keeps r2r for nav2's two actions, `/bt_navigator/get_state` and `/rosout` until E9, or until *nav_core* is the
-     default.
-   - Check with nav_progress_check.py, coverage_cancel_check.py and nav_core_check.py.
+     default. Moving nav2's actions onto `action_from_ros` is not mechanical (bus_ros/README, "nav2's actions").
+   - Check with nav_progress_check.py, coverage_cancel_check.py and nav_core_check.py. Standalone, nav serves its two
+     actions to the tools through `action_to_ros`, and coverage reaches the tool's server through `action_from_ros`.
 6. **base, pid_autotune and the final `velocity_command_guard`, together.**
    - Base and guard are pure core plus thin IO (`mower_base_core`, `core.rs`; PLAN:355).
    - Moving the three together makes the drivetrain edge and the wheel-override edge in-process, so the arm latch's

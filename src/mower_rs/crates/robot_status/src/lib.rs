@@ -19,23 +19,27 @@
 //! process handles the same ~45 events/s for well under 1 % of a core.
 //! Timestamps use the monotonic and wall clocks (the Python nodes ran with
 //! use_sim_time:=false for the same reason).
+//!
+//! The topics, services and timers are on the in-process bus
+//! (`ModuleCtx::bus`, step E2 of docs/ROS_FREE_PLAN.md); the bus/DDS bridge
+//! carries what crosses the process boundary. The r2r node stays for the
+//! parameters, the /rosout logs and the ROS graph.
 
 mod host;
 mod info;
 mod state;
 mod telemetry;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use mower_bus::Qos;
 use mower_rs_common::{hostname, params, read_json_file, state_dir as default_state_dir, write_host_request, ModuleCtx, ModuleResult};
 use r2r::nav_msgs::msg::Odometry;
 use r2r::sensor_msgs::msg::{BatteryState, Imu, NavSatFix};
 use r2r::std_msgs::msg::{Bool, String as StringMsg};
 use r2r::std_srvs::srv::Trigger;
-use r2r::QosProfile;
 use serde_json::Value;
 use tokio::sync::Notify;
 
@@ -120,8 +124,8 @@ fn load_config(node: &r2r::Node) -> (Config, InfoConfig) {
     (cfg, info)
 }
 
-fn latched() -> QosProfile {
-    QosProfile::default().keep_last(1).reliable().transient_local()
+fn latched() -> Qos {
+    Qos::default().keep_last(1).reliable().transient_local()
 }
 
 fn period(rate_hz: f64) -> Duration {
@@ -136,7 +140,7 @@ fn json_string(v: &Value) -> StringMsg {
 /// module of `mower_rsd`; the node name, namespace, parameters and every
 /// topic / service / action name are the same either way.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
     let (cfg, info_cfg) = load_config(&node);
     let info_cfg = Arc::new(info_cfg);
@@ -144,16 +148,18 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let start = Instant::now();
 
     // ---- publishers --------------------------------------------------------
-    let pub_online = node.create_publisher::<Bool>("/robot/online", latched())?;
-    let pub_info = node.create_publisher::<StringMsg>("/robot/info", latched())?;
+    // Every bus name below is what rcl makes of it on the node, the absolute
+    // ones too (ModuleCtx::resolve_topic / resolve_service).
+    let pub_online = m.bus.publisher::<Bool>(&m.resolve_topic("/robot/online")?, latched())?;
+    let pub_info = m.bus.publisher::<StringMsg>(&m.resolve_topic("/robot/info")?, latched())?;
     // reliable (not best-effort): rosbridge picks its subscriber QoS from the
     // publishers it has discovered, and a best-effort publisher that shows up
     // late leaves the app on a reliable subscription with no data.
-    let pub_telemetry = node.create_publisher::<StringMsg>("/robot/telemetry", QosProfile::default())?;
+    let pub_telemetry = m.bus.publisher::<StringMsg>(&m.resolve_topic("/robot/telemetry")?, Qos::default())?;
     let pub_led = if cfg.led_topic.is_empty() {
         None
     } else {
-        Some(node.create_publisher::<StringMsg>(&cfg.led_topic, latched())?)
+        Some(m.bus.publisher::<StringMsg>(&m.resolve_topic(&cfg.led_topic)?, latched())?)
     };
 
     // ---- subscriptions -----------------------------------------------------
@@ -161,31 +167,34 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let mut sub_heartbeat = if hb_shares_odom {
         None
     } else {
-        Some(node.subscribe::<Odometry>(&cfg.heartbeat_source_topic, QosProfile::default())?)
+        Some(m.bus.subscribe::<Odometry>(&m.resolve_topic(&cfg.heartbeat_source_topic)?, Qos::default())?)
     };
-    let mut sub_odom = node.subscribe::<Odometry>(&cfg.odom_topic, QosProfile::default())?;
-    let mut sub_fix = node.subscribe::<NavSatFix>(&cfg.gps_fix_topic, QosProfile::sensor_data())?;
-    let mut sub_filtered = node.subscribe::<NavSatFix>(&cfg.gps_filtered_topic, QosProfile::sensor_data())?;
-    let mut sub_imu = node.subscribe::<Imu>(&cfg.imu_topic, QosProfile::sensor_data())?;
-    let mut sub_base = node.subscribe::<StringMsg>(&cfg.base_telemetry_topic, QosProfile::default().keep_last(1).best_effort())?;
-    let mut sub_battery = node.subscribe::<BatteryState>(&cfg.battery_topic, QosProfile::default())?;
-    let mut sub_aon = node.subscribe::<BatteryState>(&cfg.aon_battery_topic, QosProfile::default())?;
+    let mut sub_odom = m.bus.subscribe::<Odometry>(&m.resolve_topic(&cfg.odom_topic)?, Qos::default())?;
+    let mut sub_fix = m.bus.subscribe::<NavSatFix>(&m.resolve_topic(&cfg.gps_fix_topic)?, Qos::sensor_data())?;
+    let mut sub_filtered = m.bus.subscribe::<NavSatFix>(&m.resolve_topic(&cfg.gps_filtered_topic)?, Qos::sensor_data())?;
+    let mut sub_imu = m.bus.subscribe::<Imu>(&m.resolve_topic(&cfg.imu_topic)?, Qos::sensor_data())?;
+    let base_qos = Qos::default().keep_last(1).best_effort();
+    let mut sub_base = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&cfg.base_telemetry_topic)?, base_qos)?;
+    let mut sub_battery = m.bus.subscribe::<BatteryState>(&m.resolve_topic(&cfg.battery_topic)?, Qos::default())?;
+    let mut sub_aon = m.bus.subscribe::<BatteryState>(&m.resolve_topic(&cfg.aon_battery_topic)?, Qos::default())?;
     let mut sub_firmware = if cfg.firmware_info_topic.is_empty() {
         None
     } else {
-        Some(node.subscribe::<StringMsg>(&cfg.firmware_info_topic, latched())?)
+        Some(m.bus.subscribe::<StringMsg>(&m.resolve_topic(&cfg.firmware_info_topic)?, latched())?)
     };
-    let mut sub_nav_active = node.subscribe::<Bool>(&cfg.nav_active_topic, latched())?;
+    let mut sub_nav_active = m.bus.subscribe::<Bool>(&m.resolve_topic(&cfg.nav_active_topic)?, latched())?;
 
     // ---- services ----------------------------------------------------------
-    let mut srv_update = node.create_service::<Trigger::Service>("/system/update", QosProfile::services_default())?;
-    let mut srv_restart = node.create_service::<Trigger::Service>("/system/restart", QosProfile::services_default())?;
-    let mut srv_check = node.create_service::<Trigger::Service>("/system/check_update", QosProfile::services_default())?;
+    let mut srv_update = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/system/update")?)?;
+    let mut srv_restart = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/system/restart")?)?;
+    let mut srv_check = m.bus.service::<Trigger::Request, Trigger::Response>(&m.resolve_service("/system/check_update")?)?;
 
     // ---- timers ------------------------------------------------------------
-    let mut timer_heartbeat = node.create_wall_timer(period(cfg.heartbeat_publish_rate_hz))?;
-    let mut timer_info = node.create_wall_timer(period(cfg.info_publish_rate_hz))?;
-    let mut timer_telemetry = node.create_wall_timer(period(cfg.telemetry_publish_rate_hz))?;
+    // rcl's wall timers on the module's clock: the first tick one period
+    // after creation, overruns skipped, and no ticks once the scope closes.
+    let mut timer_heartbeat = m.bus.wall_timer(&m.clock, period(cfg.heartbeat_publish_rate_hz))?;
+    let mut timer_info = m.bus.wall_timer(&m.clock, period(cfg.info_publish_rate_hz))?;
+    let mut timer_telemetry = m.bus.wall_timer(&m.clock, period(cfg.telemetry_publish_rate_hz))?;
     let info_now = Arc::new(Notify::new());
 
     r2r::log_info!(
@@ -456,20 +465,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
 
-    // ---- spin until SIGINT / SIGTERM ---------------------------------------
-    let running = Arc::new(AtomicBool::new(true));
-    let spin = {
-        let running = running.clone();
-        tokio::task::spawn_blocking(move || {
-            while running.load(Ordering::Relaxed) {
-                node.spin_once(Duration::from_millis(100));
-            }
-            drop(node);
-        })
-    };
+    // ---- run until SIGINT / SIGTERM ----------------------------------------
+    // The bus needs no spinning, and the node has nothing to serve: it only
+    // has to live as long as the module does.
     m.shutdown.wait().await;
     r2r::log_info!(&logger, "robot_status: shutting down");
-    running.store(false, Ordering::Relaxed);
-    let _ = spin.await;
+    drop(node);
     Ok(())
 }

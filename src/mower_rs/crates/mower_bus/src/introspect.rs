@@ -1,7 +1,9 @@
-//! What `Bus::topics` / `Bus::services` report: what `/rosapi/topics` (E3)
-//! and `mowerctl topic list/hz` (E8) are built from.
+//! What `Bus::topics` / `Bus::services` / `Bus::actions` report: what
+//! `/rosapi/topics` (E3) and `mowerctl topic list/hz` (E8) are built from.
 
 use std::time::Instant;
+
+use crate::Qos;
 
 /// One topic, as the bus sees it now.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,8 +15,12 @@ pub struct TopicInfo {
     pub ros_type: Option<String>,
     /// Scope names, one entry per live writer.
     pub publishers: Vec<String>,
+    /// Each live writer's QoS, in the order of `publishers`.
+    pub publisher_qos: Vec<Qos>,
     /// Scope names, one entry per live reader (typed and erased).
     pub subscribers: Vec<String>,
+    /// Each live reader's QoS, in the order of `subscribers`.
+    pub subscriber_qos: Vec<Qos>,
     /// Messages held for late joiners, over all writers.
     pub retained: usize,
     /// Messages published on this name since the bus started.
@@ -40,6 +46,28 @@ pub struct ServiceInfo {
     /// not. Calls refused at call time (no server, closed scope, bad JSON)
     /// are not counted.
     pub calls: u64,
+}
+
+/// One action name, as the bus sees it now.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionInfo {
+    pub name: String,
+    pub goal_type: &'static str,
+    pub result_type: &'static str,
+    pub feedback_type: &'static str,
+    /// e.g. `mower_interface/action/Waypoint` for r2r's
+    /// `mower_interface::action::Waypoint::Goal`.
+    pub ros_type: Option<String>,
+    /// The serving scope's name, if a server is live.
+    pub server: Option<String>,
+    /// Scope names, one entry per live client.
+    pub clients: Vec<String>,
+    /// Goal requests that reached a live server since the bus started,
+    /// answered or not.
+    pub goals: u64,
+    /// Goals accepted that have not ended yet, whichever server accepted
+    /// them.
+    pub active: usize,
 }
 
 /// The ROS interface name of an r2r-generated type, from its Rust path

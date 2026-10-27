@@ -653,6 +653,10 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bridge",
+ "mower_bus",
+ "mower_map",
+ "mower_record",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -702,9 +706,24 @@ name = "mower_battery"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "mower_bridge"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_bus",
+ "mower_bus_ros",
+ "mower_rs_common",
+ "r2r",
+ "serde_yaml",
  "tokio",
 ]
 
@@ -755,6 +774,8 @@ dependencies = [
 name = "mower_gps"
 version = "0.1.0"
 dependencies = [
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "mower_ubx",
  "r2r",
@@ -767,6 +788,8 @@ dependencies = [
 name = "mower_imu"
 version = "0.1.0"
 dependencies = [
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serialport",
@@ -778,6 +801,8 @@ name = "mower_localize"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_localize_core",
  "mower_rs_common",
  "r2r",
@@ -798,6 +823,8 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -845,6 +872,8 @@ name = "mower_record"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -870,6 +899,7 @@ dependencies = [
  "mower_agent",
  "mower_base",
  "mower_battery",
+ "mower_bridge",
  "mower_bus",
  "mower_coverage",
  "mower_gps",
@@ -1302,6 +1332,8 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "libc",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",

@@ -161,7 +161,7 @@ fn odom_block(st: &State, now: Instant) -> Value {
 
 fn battery_block(st: &State, now: Instant) -> Value {
     let mut block = valid_block(&st.battery, now);
-    if let Value::Object(fields) = battery_fields(st.battery.msg.as_ref()) {
+    if let Value::Object(fields) = battery_fields(st.battery.msg.as_deref()) {
         block.extend(fields);
     }
     block.insert(

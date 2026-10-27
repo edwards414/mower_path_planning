@@ -20,6 +20,10 @@ use futures::{FutureExt, Stream, StreamExt};
 use mower_bus::{Bus, BusError, Qos, Scope};
 use mower_bus_ros::{BridgeError, BridgeMessage, BridgeStats, Direction, EntryStats, RosBridge, ServiceTimeouts};
 use r2r::builtin_interfaces::msg::Time;
+use r2r::mower_interface::action::Waypoint;
+use r2r::nav_msgs::srv::SetMap;
+use r2r::robot_localization::srv::GetState;
+use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::{Header, String as Text};
 use r2r::std_srvs::srv::SetBool;
 use r2r::QosProfile;
@@ -107,11 +111,35 @@ impl Peer {
             .collect()
     }
 
+    /// How many readers of `topic` the graph shows this node.
+    fn readers(&self, topic: &str) -> usize {
+        self.with(|node| node.get_subscriptions_info_by_topic(topic, false).unwrap()).len()
+    }
+
     fn writer_gids(&self, topic: &str) -> Vec<Vec<u8>> {
         self.with(|node| node.get_publishers_info_by_topic(topic, false).unwrap())
             .into_iter()
             .map(|info| info.endpoint_gid.to_vec())
             .collect()
+    }
+
+    /// What the servers of service `name` have on the graph: their reply
+    /// writers (`rr<name>Reply`) and request readers (`rq<name>Request`). A
+    /// client has the other two.
+    fn service_servers(&self, name: &str) -> (usize, usize) {
+        self.with(|node| {
+            let writers = node.get_publishers_info_by_topic(&format!("rr{name}Reply"), true).unwrap();
+            let readers = node.get_subscriptions_info_by_topic(&format!("rq{name}Request"), true).unwrap();
+            (writers.len(), readers.len())
+        })
+    }
+
+    /// Every endpoint the servers of action `name` have on the graph: two
+    /// for each of its three services, its feedback and status writers.
+    fn action_server_endpoints(&self, name: &str) -> usize {
+        let services = ["send_goal", "cancel_goal", "get_result"].map(|s| self.service_servers(&format!("{name}/_action/{s}")));
+        let topics = ["feedback", "status"].map(|t| self.writers(&format!("{name}/_action/{t}")).len());
+        services.iter().map(|(w, r)| w + r).sum::<usize>() + topics.iter().sum::<usize>()
     }
 }
 
@@ -229,6 +257,105 @@ fn a_writer_counts_the_readers_of_other_nodes_in_the_process_and_the_graph_shows
         drop(writer);
         eventually("the graph to lose the writer with its node", || observer.writers(topic).is_empty()).await;
     });
+}
+
+/// The vendored r2r's `destroy_service` (vendor/r2r/VENDORED.md), which
+/// `service_to_ros` uses on its spin thread: on a node that spins, a service
+/// leaves the graph as it does with its node, and one made again under its
+/// name works. A request held across the destroy answers with an error.
+#[test]
+fn r2r_destroys_a_service_on_a_spinning_node_and_makes_it_again_under_its_name() {
+    within(async {
+        let name = "/bridge_test/r2r_destroy_service";
+        let server = Peer::new("r2r_destroy_service_server");
+        let app = Peer::new("r2r_destroy_service_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        for round in 0..3 {
+            let mut requests = server.with(|n| n.create_service::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+            eventually("the service on the graph", || app.service_servers(name) == (1, 1)).await;
+            wait_for_service(&client).await;
+            let call = client.request(&set_bool(true)).unwrap();
+            let message = format!("round {round}");
+            next("a request", &mut requests).await.respond(SetBool::Response { success: true, message: message.clone() }).unwrap();
+            assert_eq!(tokio::time::timeout(WAIT, call).await.unwrap().unwrap().message, message);
+
+            let _unanswered = client.request(&set_bool(false)).unwrap();
+            let held = next("a request to hold", &mut requests).await;
+            server.with(|n| n.destroy_service(requests));
+            eventually("nothing of the service left on the graph", || app.service_servers(name) == (0, 0)).await;
+            assert!(held.respond(SetBool::Response::default()).is_err(), "round {round}: answered after the destroy");
+        }
+    });
+}
+
+/// The same for `destroy_action_server`, for `action_to_ros`: its three
+/// services and two topics leave the graph, a goal request held across the
+/// destroy answers `accept` with an error (upstream r2r panics there), and
+/// so does a goal of the destroyed server.
+#[test]
+fn r2r_destroys_an_action_server_on_a_spinning_node_and_makes_it_again_under_its_name() {
+    within(async {
+        let name = "/bridge_test/r2r_destroy_action";
+        let server = Peer::new("r2r_destroy_action_server");
+        let app = Peer::new("r2r_destroy_action_app");
+        let client = app.with(|n| n.create_action_client::<Waypoint::Action>(name)).unwrap();
+        let goal = |id: &str| Waypoint::Goal { dispatch_id: id.into(), ..Default::default() };
+        for round in 0..3 {
+            let mut requests = server.with(|n| n.create_action_server::<Waypoint::Action>(name)).unwrap();
+            eventually("the action server on the graph", || app.action_server_endpoints(name) == 8).await;
+            let available = r2r::Node::is_available(&client).unwrap();
+            tokio::time::timeout(WAIT, available).await.expect("timed out waiting for the action server").unwrap();
+
+            // a goal that runs to its end
+            let sent = client.send_goal_request(goal("done")).unwrap();
+            let (mut done, _cancels) = next("a goal request", &mut requests).await.accept().unwrap();
+            let (_goal, result, _feedback) = tokio::time::timeout(WAIT, sent).await.unwrap().unwrap();
+            done.succeed(Waypoint::Result { success: true }).unwrap();
+            let (status, result) = tokio::time::timeout(WAIT, result).await.unwrap().unwrap();
+            assert_eq!((status, result.success), (r2r::GoalStatus::Succeeded, true), "round {round}");
+
+            // a goal running and a goal request unanswered, held across the
+            // destroy
+            let sent = client.send_goal_request(goal("running")).unwrap();
+            let (mut running, mut cancels) = next("a goal request", &mut requests).await.accept().unwrap();
+            let _accepted = tokio::time::timeout(WAIT, sent).await.unwrap().unwrap();
+            let _unanswered = client.send_goal_request(goal("held")).unwrap();
+            let held = next("a goal request to hold", &mut requests).await;
+            server.with(|n| n.destroy_action_server(requests));
+            eventually("nothing of the action server left on the graph", || app.action_server_endpoints(name) == 0).await;
+            assert!(held.accept().is_err(), "round {round}: accepted after the destroy");
+            assert!(running.succeed(Waypoint::Result { success: true }).is_err(), "round {round}: ended after the destroy");
+            assert!(running.is_cancelling().is_err());
+            assert!(next_or_end(&mut cancels).await.is_none(), "round {round}: its cancel requests end");
+        }
+    });
+}
+
+/// The same for `destroy_subscription`, for `from_ros`'s DDS reader: it
+/// leaves the graph and its writers at once, and one made again under its
+/// name gets the latched value.
+#[test]
+fn r2r_destroys_a_subscription_on_a_spinning_node_and_makes_it_again_under_its_name() {
+    within(async {
+        let topic = "/bridge_test/r2r_destroy_subscription";
+        let reader = Peer::new("r2r_destroy_subscription_reader");
+        let base = Peer::new("r2r_destroy_subscription_base");
+        let publisher = base.with(|n| n.create_publisher::<Text>(topic, latched())).unwrap();
+        for round in 0..3 {
+            publisher.publish(&text(round)).unwrap();
+            let mut sub = reader.with(|n| n.subscribe::<Text>(topic, latched())).unwrap();
+            assert_eq!(next("the latched value", &mut sub).await.data, round.to_string());
+            eventually("the reader on the graph", || base.readers(topic) == 1).await;
+            reader.with(|n| n.destroy_subscription(sub));
+            eventually("nothing of the reader left on the graph", || base.readers(topic) == 0).await;
+            assert_eq!(publisher.get_inter_process_subscription_count().unwrap(), 0, "round {round}");
+        }
+    });
+}
+
+/// The next item of `stream`, or `None` once it ends.
+async fn next_or_end<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+    tokio::time::timeout(WAIT, stream.next()).await.expect("timed out waiting for the stream")
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +700,12 @@ fn from_ros_forwards_dds_samples_to_bus_readers_in_order() {
     });
 }
 
+/// A latched DDS value published before the bridge exists and before any
+/// module reads it: the first bus reader makes the bridge's DDS reader, to
+/// which the DDS writer replays its history, as it did to the module's own
+/// r2r reader (mower_rsd starts the bridge first, and its modules subscribe
+/// as they start). The bridge's bus writer retains it, so the next bus late
+/// joiner has it at once.
 #[test]
 fn from_ros_replays_a_latched_dds_value_to_a_late_bus_subscriber() {
     within(async {
@@ -585,12 +718,12 @@ fn from_ros_replays_a_latched_dds_value_to_a_late_bus_subscriber() {
         let mut bridge = new_bridge("static_frames_bridge", &bus.scope("bridge"));
         bridge.from_ros::<Text>(topic, latched()).unwrap();
         let running = start(bridge);
-        eventually("the DDS replay to reach the bus", || running.topic(topic).forwarded == 1).await;
 
-        // The bridge's bus writer retains it, so a bus late joiner has it at
-        // once.
         let localize = bus.scope("ekf_filter_node_map");
-        let mut late = localize.subscribe::<Text>(topic, Qos::latched()).unwrap();
+        let mut first = localize.subscribe::<Text>(topic, Qos::latched()).unwrap();
+        assert_eq!(tokio::time::timeout(WAIT, first.recv()).await.unwrap().unwrap().data, "imu_link");
+        assert!(running.topic(topic).dds_reader);
+        let mut late = bus.scope("navsat").subscribe::<Text>(topic, Qos::latched()).unwrap();
         assert_eq!(late.try_recv().unwrap().data, "imu_link");
         publisher.publish(&text("gps_link")).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, late.recv()).await.unwrap().unwrap().data, "gps_link");
@@ -598,8 +731,142 @@ fn from_ros_replays_a_latched_dds_value_to_a_late_bus_subscriber() {
     });
 }
 
-/// docs/BUS_TOPICS.md 5.5 f: the bridge's bus writer is a publisher for as
-/// long as the bridge runs, whether or not DDS has one.
+/// The bridge's DDS reader exists while the bus has a reader of the name, as
+/// a module's own r2r reader existed while it subscribed: nav's `/rosout`
+/// reader with nav_core, or its nav_core inputs in a standalone nav, leave no
+/// DDS reader behind that every writer of the name sends to for nothing.
+#[test]
+fn from_ros_reads_dds_only_while_the_bus_has_a_reader() {
+    within(async {
+        let topic = "/bridge_test/rosout_like";
+        // read all along: once its DDS reader is on the graph, the bridge
+        // runs, and the other name's absence means something
+        let witness = "/bridge_test/rosout_like_witness";
+        let bus = Bus::new();
+        let nav = bus.scope("nav");
+        let _witness_reader = nav.subscribe::<Text>(witness, Qos::default()).unwrap();
+        let mut bridge = new_bridge("rosout_like_bridge", &bus.scope("bridge"));
+        bridge.from_ros::<Text>(topic, QosProfile::default()).unwrap();
+        bridge.from_ros::<Text>(witness, QosProfile::default()).unwrap();
+        let running = start(bridge);
+        let nav2 = Peer::new("rosout_like_nav2");
+        let writer = nav2.with(|n| n.create_publisher::<Text>(topic, QosProfile::default())).unwrap();
+        eventually("the witness's DDS reader", || nav2.readers(witness) == 1).await;
+        assert_eq!(nav2.readers(topic), 0);
+        assert_eq!(writer.get_inter_process_subscription_count().unwrap(), 0);
+        assert!(!running.topic(topic).dds_reader);
+
+        for round in 0..3 {
+            // A bus reader comes: so does the DDS reader, and samples reach it.
+            // (The stats say a DDS endpoint exists once it does: the graph
+            // can show it first.)
+            let mut reader = nav.subscribe::<Text>(topic, Qos::default()).unwrap();
+            eventually("the DDS reader", || running.topic(topic).dds_reader).await;
+            eventually("its match", || writer.get_inter_process_subscription_count().unwrap() == 1).await;
+            let deadline = Instant::now() + WAIT;
+            loop {
+                writer.publish(&text(round)).unwrap();
+                if let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), reader.recv()).await {
+                    assert_eq!(msg.data, round.to_string());
+                    break;
+                }
+                assert!(Instant::now() < deadline, "round {round}: nothing reached the bus reader");
+            }
+            // It goes: so does the DDS reader.
+            drop(reader);
+            eventually("the DDS reader to leave the graph", || nav2.readers(topic) == 0).await;
+            assert!(!running.topic(topic).dds_reader);
+            assert_eq!(writer.get_inter_process_subscription_count().unwrap(), 0);
+        }
+        running.stop().await.unwrap();
+    });
+}
+
+/// The last bus reader goes, and the DDS writer publishes after it: the
+/// bridge did not hear that. A bus reader that comes next must get what DDS
+/// has now, as an r2r reader that subscribed then did, not what the bridge
+/// heard before: the transient-local bus writer goes with the DDS reader.
+/// The bus readers keep 2, so a stale value would come before the new one.
+#[test]
+fn a_latched_value_heard_before_the_last_bus_reader_went_does_not_reach_the_next() {
+    within(async {
+        let topic = "/bridge_test/firmware_info";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("firmware_info_bridge", &bus.scope("bridge"));
+        bridge.from_ros::<Text>(topic, latched()).unwrap();
+        let running = start(bridge);
+        let base = Peer::new("firmware_info_base");
+        let writer = base.with(|n| n.create_publisher::<Text>(topic, latched())).unwrap();
+        writer.publish(&text("t0")).unwrap();
+        let status = bus.scope("robot_status");
+        let mut first = status.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
+        assert_eq!(tokio::time::timeout(WAIT, first.recv()).await.unwrap().unwrap().data, "t0");
+
+        drop(first);
+        eventually("the DDS reader to go with the last bus reader", || base.readers(topic) == 0).await;
+        assert!(!running.topic(topic).bus_writer, "the bus writer stayed, and with it t0");
+        writer.publish(&text("t1")).unwrap();
+        let mut next = status.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
+        assert_eq!(tokio::time::timeout(WAIT, next.recv()).await.unwrap().unwrap().data, "t1", "a stale value first");
+        assert!(running.topic(topic).dds_reader);
+        running.stop().await.unwrap();
+    });
+}
+
+/// README.md, "Graph presence": a transient-local `from_ros` bus writer
+/// exists while DDS has a writer, so the history a bus late joiner gets goes
+/// with the DDS writer, as it went for the module's own r2r reader: coverage
+/// crashes, and the adapter that restarts after it must not relay the dead
+/// instance's path to the app. Depth 2: a stale value would reach a late
+/// joiner before the fresh one.
+#[test]
+fn a_latched_dds_value_leaves_the_bus_with_its_writer_and_a_new_writer_s_comes_alone() {
+    within(async {
+        let topic = "/bridge_test/coverage_path_markers";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("path_markers_bridge", &bus.scope("bridge"));
+        bridge.from_ros::<Text>(topic, latched_2()).unwrap();
+        let running = start(bridge);
+        let adapter = bus.scope("flutter_adapter");
+        let mut live = adapter.subscribe::<Text>(topic, Qos::latched().keep_last(10)).unwrap();
+        eventually("the bridge to look at the graph", || running.topic(topic).resyncs >= 2).await;
+        assert!(!running.topic(topic).bus_writer, "no DDS writer, no bus writer");
+        assert_eq!(live.publisher_count(), 0);
+
+        // coverage, still on r2r, publishes its path
+        let coverage = Peer::new("path_markers_coverage");
+        let publisher = coverage.with(|n| n.create_publisher::<Text>(topic, latched_2())).unwrap();
+        publisher.publish(&text("old path")).unwrap();
+        assert_eq!(tokio::time::timeout(WAIT, live.recv()).await.unwrap().unwrap().data, "old path");
+        assert!(running.topic(topic).bus_writer);
+        let mut late = adapter.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
+        assert_eq!(late.try_recv().unwrap().data, "old path");
+
+        // coverage dies: its path leaves the bus with its writer
+        drop(publisher);
+        drop(coverage);
+        eventually("the bridge to drop its bus writer", || !running.topic(topic).bus_writer).await;
+        assert_eq!(live.publisher_count(), 0);
+        let mut fresh = adapter.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
+        assert!(fresh.try_recv().is_err(), "a bus late joiner got the dead writer's value");
+
+        // coverage comes back: a late joiner gets the new path alone
+        let restarted = Peer::new("path_markers_coverage");
+        let publisher = restarted.with(|n| n.create_publisher::<Text>(topic, latched_2())).unwrap();
+        publisher.publish(&text("new path")).unwrap();
+        assert_eq!(tokio::time::timeout(WAIT, live.recv()).await.unwrap().unwrap().data, "new path");
+        let mut later = adapter.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
+        assert_eq!(later.try_recv().unwrap().data, "new path");
+        assert!(later.try_recv().is_err(), "the dead writer's value came back");
+        // counted once the publish has returned, which a reader may beat
+        eventually("both counted", || running.topic(topic).forwarded == 2).await;
+        running.stop().await.unwrap();
+    });
+}
+
+/// docs/BUS_TOPICS.md 5.5 f: a volatile `from_ros` bus writer is a publisher
+/// for as long as the bridge runs, whether or not DDS has one. It has no
+/// history to keep, and no module asks for its presence.
 #[test]
 fn a_from_ros_bus_writer_counts_as_a_publisher_while_the_bridge_runs() {
     within(async {
@@ -713,82 +980,186 @@ fn service_to_ros_leaves_a_dds_call_unanswered_when_the_bus_call_fails() {
     within(async {
         let name = "/bridge_test/start_recording";
         let bus = Bus::new();
-        let wait = Duration::from_millis(300);
-        let timeouts = ServiceTimeouts { bus_server: wait, ..ServiceTimeouts::default() };
-        let mut bridge = new_bridge("start_recording_bridge", &bus.scope("bridge")).with_service_timeouts(timeouts);
+        let mut bridge = new_bridge("start_recording_bridge", &bus.scope("bridge"));
         bridge.service_to_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
-        let app = Peer::new("start_recording_app");
-        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
-        wait_for_service(&client).await;
-
-        // No bus server, and none comes within the wait: no answer on DDS.
-        let called = Instant::now();
-        let mut unavailable = Box::pin(client.request(&set_bool(true)).unwrap());
-        eventually("the call to be given up", || running.service(name).unanswered == 1).await;
-        assert!(called.elapsed() >= wait, "given up only after waiting for a server: {:?}", called.elapsed());
         // A bus server that drops its requests: NoResponse, no answer.
         let module = bus.scope("recorder");
         let mut dropping = module.service::<SetBool::Request, SetBool::Response>(name).unwrap();
         let dropper = tokio::spawn(async move { while let Some(request) = dropping.next().await { drop(request) } });
+        let app = Peer::new("start_recording_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+        wait_for_service(&client).await;
         let mut dropped = Box::pin(client.request(&set_bool(false)).unwrap());
-        eventually("the call to be given up", || running.service(name).unanswered == 2).await;
-        // Neither will ever be answered: the bridge has let go of them.
+        eventually("the call to be given up", || running.service(name).unanswered == 1).await;
+        // It will never be answered: the bridge has let go of it.
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!((&mut unavailable).now_or_never().is_none());
         assert!((&mut dropped).now_or_never().is_none());
 
-        // The forwarder carries on once the bus server answers.
+        // The forwarder carries on once a bus server answers: the dropping
+        // one goes, and its DDS server with it, then the answering one comes.
+        // (Until the graph has lost the old DDS server, the client could
+        // still call it.)
         dropper.abort();
         let _ = dropper.await;
+        eventually("the DDS server to go with the bus server", || app.service_servers(name) == (0, 0)).await;
         let _server = serve_on_bus(&module, name);
+        wait_for_service(&client).await;
         let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap().unwrap();
         assert_eq!(answer.message, "bus got true");
         eventually("the answer counted", || running.service(name).forwarded == 1).await;
-        assert_eq!(running.service(name).unanswered, 2);
+        assert_eq!(running.service(name).unanswered, 1);
         running.stop().await.unwrap();
     });
 }
 
-/// The DDS service stays advertised while no bus server exists, so a DDS
-/// client that checks `is_available` first (ws_bridge does, with a 5 s
-/// bound) calls it while the module that serves it restarts. The call waits
-/// for the restarted server instead of being dropped, which would leave the
-/// client waiting for its own timeout (ws_bridge: 30 s).
+/// A DDS client's `is_available` does not complete within a second: what
+/// ws_bridge (hub.rs, 5 s) turns into "service unavailable" for the app.
+async fn assert_no_dds_server(client: &r2r::Client<SetBool::Service>, what: &str) {
+    let available = r2r::Node::is_available(client).unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(1), available).await.is_err(), "{what}: a DDS server is advertised");
+}
+
+/// The DDS server exists only while the bus has a server, as the module's
+/// own r2r server lived and died with its node: a module that is down (or
+/// in a crash loop) leaves no server that DDS clients call in vain, and
+/// ws_bridge's 5 s availability check fails, where a call to an advertised
+/// server would wait out its 30 s `service_timeout`.
 #[test]
-fn a_dds_call_made_while_the_bus_server_restarts_is_answered_once_it_is_back() {
+fn service_to_ros_serves_on_dds_only_while_the_bus_has_a_server() {
     within(async {
-        let name = "/bridge_test/restarting_save_map";
+        let name = "/bridge_test/save_zone";
+        // up all along: once it is on the graph, the bridge runs and the
+        // graph is current, so the other name's absence means something
+        let witness = "/bridge_test/save_zone_witness";
         let bus = Bus::new();
-        let mut bridge = new_bridge("restart_bridge", &bus.scope("bridge"));
+        let _witness_server = serve_on_bus(&bus.scope("record"), witness);
+        let mut bridge = new_bridge("save_zone_bridge", &bus.scope("bridge"));
+        bridge.service_to_ros::<SetBool::Service>(name).unwrap();
+        bridge.service_to_ros::<SetBool::Service>(witness).unwrap();
+        let running = start(bridge);
+        let app = Peer::new("save_zone_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
+
+        // No bus server: no DDS server.
+        eventually("the witness's DDS server", || app.service_servers(witness) == (1, 1)).await;
+        assert_eq!(app.service_servers(name), (0, 0));
+        assert!(!running.service(name).dds_server);
+        assert_no_dds_server(&client, "no module").await;
+
+        for round in 0..3 {
+            // The module comes up: so does the DDS server, which answers.
+            let module = bus.scope("map_manage");
+            let _server = serve_on_bus(&module, name);
+            eventually("the DDS server", || running.service(name).dds_server).await;
+            wait_for_service(&client).await;
+            eventually("one DDS server on the graph, none left over", || app.service_servers(name) == (1, 1)).await;
+            let answer = tokio::time::timeout(WAIT, client.request(&set_bool(round % 2 == 0)).unwrap()).await.unwrap().unwrap();
+            assert_eq!(answer.message, format!("bus got {}", round % 2 == 0));
+
+            // It fails: within about a second its DDS server is gone.
+            module.close();
+            let failed = Instant::now();
+            eventually("the DDS server to leave the graph", || app.service_servers(name) == (0, 0)).await;
+            assert!(failed.elapsed() < Duration::from_secs(1), "round {round}: gone after {:?}", failed.elapsed());
+            assert!(!running.service(name).dds_server);
+            assert_no_dds_server(&client, &format!("round {round}, the module down")).await;
+        }
+        let stats = running.service(name);
+        assert_eq!((stats.forwarded, stats.unanswered), (3, 0));
+        running.stop().await.unwrap();
+    });
+}
+
+/// A bus server that comes and goes every few milliseconds (a module that
+/// keeps dropping its `Service`; a failed module waits 2 s for its restart):
+/// the DDS server changes at most once per 200 ms (`DWELL`), so the spin
+/// thread does not thrash. Once the module stays up there is one DDS
+/// server, which answers, and once it stays down none: nothing is left
+/// behind on the graph.
+#[test]
+fn a_bus_server_that_flaps_leaves_one_dds_server_or_none() {
+    within(async {
+        let name = "/bridge_test/flapping";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("flapping_bridge", &bus.scope("bridge"));
         bridge.service_to_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
+        let app = Peer::new("flapping_app");
+        let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
         let module = bus.scope("map_manage");
-        let _first = serve_on_bus(&module, name);
-        let app = Peer::new("restart_app");
+        let flapping = Instant::now();
+        for _ in 0..100 {
+            let server = module.service::<SetBool::Request, SetBool::Response>(name).unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            drop(server);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let flapped = flapping.elapsed();
+        let changes = running.service(name).resyncs;
+        let bound = flapped.as_millis() as u64 / 200 + 2;
+        assert!(changes <= bound, "{changes} DDS server changes in {flapped:?}");
+
+        // It stays down, then up. The DDS server lags the bus by up to one
+        // dwell, so a call to it in between could be lost with it, as one to
+        // a module's own r2r server that it destroys and makes again.
+        eventually("the DDS server to go once the module stays down", || app.service_servers(name) == (0, 0)).await;
+        let _server = serve_on_bus(&module, name);
+        wait_for_service(&client).await;
+        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap().unwrap();
+        assert_eq!(answer.message, "bus got true");
+        eventually("one DDS server on the graph, none left over", || app.service_servers(name) == (1, 1)).await;
+        module.close();
+        eventually("the DDS server to leave the graph", || app.service_servers(name) == (0, 0)).await;
+        assert!(!running.service(name).dds_server);
+        running.stop().await.unwrap();
+    });
+}
+
+/// A DDS call made as the module fails may reach the bridge before its DDS
+/// server goes, and then finds no bus server. It must not be made to the
+/// module that comes up next: the DDS server that took it is gone, so the
+/// client would never get the answer, but a dispatch or a lock would have
+/// run. It is lost, as a call to a crashed r2r server was.
+#[test]
+fn a_dds_call_made_as_the_bus_server_goes_is_not_made_to_the_next_one() {
+    on_one_thread(async {
+        let name = "/bridge_test/dispatch_as_it_goes";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("dispatch_as_it_goes_bridge", &bus.scope("bridge"));
+        bridge.service_to_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counting = |scope: &Scope| {
+            let mut service = scope.service::<SetBool::Request, SetBool::Response>(name).unwrap();
+            let runs = runs.clone();
+            tokio::spawn(async move {
+                while let Some(request) = service.next().await {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = request.respond(SetBool::Response { success: true, message: "ran".into() });
+                }
+            })
+        };
+        let first = bus.scope("mission_manager");
+        let _first = counting(&first);
+        let app = Peer::new("dispatch_as_it_goes_app");
         let client = app.with(|n| n.create_client::<SetBool::Service>(name, QosProfile::services_default())).unwrap();
         wait_for_service(&client).await;
-        let first = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await;
-        assert!(matches!(first, Ok(Ok(_))), "the first call is answered");
 
-        // The module fails; the supervisor restarts it a while later.
-        module.close();
-        let still_available = r2r::Node::is_available(&client).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), still_available)
-            .await
-            .expect("the DDS server stays advertised while no bus server exists")
-            .unwrap();
-        let call = client.request(&set_bool(true)).unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let restarted = bus.scope("map_manage");
-        let _second = serve_on_bus(&restarted, name);
-        let answer = tokio::time::timeout(Duration::from_secs(5), call).await;
-        assert!(
-            matches!(answer, Ok(Ok(_))),
-            "the call made during the restart was dropped (unanswered: {}), so the client waits for its own timeout",
-            running.service(name).unanswered
-        );
-        assert_eq!(running.service(name).unanswered, 0);
+        // No await in between: the bridge has not looked yet.
+        first.close();
+        let mut lost = Box::pin(client.request(&set_bool(true)).unwrap());
+        eventually("the DDS server to go", || app.service_servers(name) == (0, 0)).await;
+        assert!(!running.service(name).dds_server);
+        let second = bus.scope("mission_manager");
+        let _second = counting(&second);
+        wait_for_service(&client).await;
+        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(false)).unwrap()).await.unwrap().unwrap();
+        assert_eq!(answer.message, "ran");
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "the call made as the first server went ran on the second");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!((&mut lost).now_or_never().is_none(), "answered by a DDS server that is gone");
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
         running.stop().await.unwrap();
     });
 }
@@ -886,16 +1257,10 @@ fn service_from_ros_calls_the_dds_server_for_bus_clients() {
         bridge.service_from_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
         let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
-        // Discovery may still be under way: the first calls may come back
-        // NoResponse, never anything else.
-        let deadline = Instant::now() + WAIT;
-        let answer = loop {
-            match client.request(&set_bool(true)).unwrap().await {
-                Ok(answer) => break answer,
-                Err(BusError::NoResponse { .. }) => assert!(Instant::now() < deadline, "the DDS server never matched"),
-                Err(e) => panic!("{e}"),
-            }
-        };
+        // The bus server comes once the graph shows the DDS server and the
+        // bridge's client is matched with it: the first call is answered.
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
+        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap().unwrap();
         assert_eq!(answer.message, "dds got true");
         let calls = [false, true].map(|data| client.request(&set_bool(data)).unwrap());
         let answers = tokio::time::timeout(WAIT, futures::future::join_all(calls)).await.unwrap();
@@ -905,8 +1270,11 @@ fn service_from_ros_calls_the_dds_server_for_bus_clients() {
     });
 }
 
+/// Until the bus caller's call is in flight, there is no bus server while
+/// there is no DDS server; a held call ends when its server goes with its
+/// process.
 #[test]
-fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_goes() {
+fn a_call_held_by_a_dds_server_that_goes_ends_and_the_bus_server_goes_with_it() {
     within(async {
         let name = "/bridge_test/navigate";
         let bus = Bus::new();
@@ -914,11 +1282,9 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
         bridge.service_from_ros::<SetBool::Service>(name).unwrap();
         let running = start(bridge);
         let client = bus.scope("nav_action_server").client::<SetBool::Request, SetBool::Response>(name).unwrap();
-        let started = Instant::now();
-        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap();
-        assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
-        assert!(started.elapsed() < Duration::from_secs(5), "given up within the probe window: {:?}", started.elapsed());
-        assert_eq!(running.service(name).unanswered, 1);
+        eventually("the bridge to look at the graph", || running.service(name).resyncs >= 2).await;
+        assert!(!running.service(name).bus_server);
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })), "refused at the call");
 
         // A server that takes the call and then goes away with its process.
         let nav2 = Peer::new("navigate_nav2");
@@ -932,22 +1298,84 @@ fn service_from_ros_gives_no_response_while_no_dds_server_is_matched_or_once_it_
                 while requests.next().await.is_some() {}
             }
         });
-        let deadline = Instant::now() + WAIT;
-        let pending = loop {
-            let call = client.request(&set_bool(true)).unwrap();
-            let mut call = Box::pin(call);
-            // Until the server is matched, calls come back NoResponse.
-            match tokio::time::timeout(Duration::from_secs(2), &mut call).await {
-                Ok(Err(BusError::NoResponse { .. })) => assert!(Instant::now() < deadline, "the DDS server never matched"),
-                Ok(other) => panic!("a held call cannot be answered: {other:?}"),
-                Err(_) => break call,
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
+        // The bridge's client is matched by then: the server takes the call.
+        let mut pending = Box::pin(client.request(&set_bool(true)).unwrap());
+        tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
+        assert!((&mut pending).now_or_never().is_none(), "a held call cannot be answered");
+        drop(nav2);
+        // The bus server goes with it (ServiceUnavailable), or a check of the
+        // pending call finds it gone first (NoResponse).
+        let answer = tokio::time::timeout(WAIT, pending).await.unwrap();
+        assert!(
+            matches!(answer, Err(BusError::ServiceUnavailable { .. } | BusError::NoResponse { .. })),
+            "{answer:?}"
+        );
+        eventually("the bus server to go", || !running.service(name).bus_server).await;
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })));
+        let _ = tokio::time::timeout(WAIT, holder).await;
+        running.stop().await.unwrap();
+    });
+}
+
+/// mower_rs_common's guard waits a second for the lock service, then says
+/// "unavailable", which a caller retries; a call that gets no answer is a
+/// lock that may have been granted, and it stays latched until a restart.
+/// Through the bridge it must see what it saw on r2r: no server while nav is
+/// down, one when it is up, and none again once nav goes, never a server
+/// that takes calls nobody answers. The graph shows nav's server before the
+/// bridge's client is matched with it, which is why the bus server waits for
+/// a probe: a call in that window would come back `NoResponse`.
+#[test]
+fn service_from_ros_serves_on_the_bus_only_while_a_dds_server_is_there() {
+    within(async {
+        let name = "/bridge_test/mission_operation_lock";
+        let bus = Bus::new();
+        let mut bridge = new_bridge("comes_and_goes_bridge", &bus.scope("bridge"));
+        bridge.service_from_ros::<SetBool::Service>(name).unwrap();
+        let running = start(bridge);
+        let client = bus.scope("map_manage").client::<SetBool::Request, SetBool::Response>(name).unwrap();
+        // The guard's two outcomes: the call's answer, or "unavailable".
+        let guard = || async {
+            match tokio::time::timeout(Duration::from_secs(1), client.wait_for_service()).await {
+                Err(_) => None,
+                Ok(waited) => {
+                    waited.unwrap();
+                    Some(client.request(&set_bool(true)))
+                }
             }
         };
-        tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
-        drop(nav2);
-        let answer = tokio::time::timeout(WAIT, pending).await.unwrap();
-        assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
-        let _ = tokio::time::timeout(WAIT, holder).await;
+
+        // nav is down
+        eventually("the bridge to look at the graph", || running.service(name).resyncs >= 2).await;
+        assert!(guard().await.is_none(), "unavailable, retryable");
+        assert!(matches!(client.request(&set_bool(true)), Err(BusError::ServiceUnavailable { .. })));
+
+        for round in 0..2 {
+            // nav comes up
+            let nav = Peer::new(&format!("comes_and_goes_nav_{round}"));
+            let server = serve_on_dds(&nav, name);
+            let deadline = Instant::now() + WAIT;
+            let answer = loop {
+                match guard().await {
+                    None => assert!(Instant::now() < deadline, "round {round}: the bus server never came"),
+                    // Whatever the timing, the first call the guard makes is
+                    // answered.
+                    Some(call) => match call.unwrap().await {
+                        Ok(answer) => break answer,
+                        Err(e) => panic!("round {round}: the guard's call failed ({e}): it would stay latched"),
+                    },
+                }
+            };
+            assert_eq!(answer.message, "dds got true");
+            assert!(running.service(name).bus_server);
+
+            // nav goes
+            server.abort();
+            drop(nav);
+            eventually("the bus server to go", || !running.service(name).bus_server).await;
+            assert!(guard().await.is_none(), "round {round}: unavailable again");
+        }
         running.stop().await.unwrap();
     });
 }
@@ -974,20 +1402,15 @@ fn a_dds_call_that_is_never_answered_ends_at_its_deadline() {
                 let _ = taken.send(request);
             }
         });
-        // Until the server is matched, calls come back NoResponse at once;
-        // the first one it takes runs into the deadline.
-        let deadline_at = Instant::now() + WAIT;
-        loop {
-            let started = Instant::now();
-            let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap();
-            assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
-            if held.try_recv().is_ok() {
-                let took = started.elapsed();
-                assert!(took >= deadline && took < deadline + Duration::from_secs(5), "ended after {took:?}");
-                break;
-            }
-            assert!(Instant::now() < deadline_at, "the DDS server never took a call");
-        }
+        // Once the bus server is there, the server is matched: it takes the
+        // first call, which runs into the deadline.
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
+        let started = Instant::now();
+        let answer = tokio::time::timeout(WAIT, client.request(&set_bool(true)).unwrap()).await.unwrap();
+        assert_eq!(answer, Err(BusError::NoResponse { name: name.into() }));
+        assert!(held.try_recv().is_ok(), "the DDS server never took the call");
+        let took = started.elapsed();
+        assert!(took >= deadline && took < deadline + Duration::from_secs(5), "ended after {took:?}");
         eventually("the call counted", || running.service(name).unanswered >= 1).await;
         running.stop().await.unwrap();
     });
@@ -1018,16 +1441,10 @@ fn a_dds_call_whose_server_is_replaced_mid_call_still_ends() {
                 while requests.next().await.is_some() {}
             }
         });
-        let deadline = Instant::now() + WAIT;
-        let pending = loop {
-            let mut call = Box::pin(client.request(&set_bool(true)).unwrap());
-            match tokio::time::timeout(Duration::from_secs(2), &mut call).await {
-                Ok(Err(BusError::NoResponse { .. })) => assert!(Instant::now() < deadline, "never matched"),
-                Ok(other) => panic!("a held call cannot be answered: {other:?}"),
-                Err(_) => break call,
-            }
-        };
+        tokio::time::timeout(WAIT, client.wait_for_service()).await.expect("the bus server").unwrap();
+        let mut pending = Box::pin(client.request(&set_bool(true)).unwrap());
         tokio::time::timeout(WAIT, held).await.unwrap().unwrap();
+        assert!((&mut pending).now_or_never().is_none(), "a held call cannot be answered");
 
         // Its replacement comes up, then the first one goes with its process.
         let second = Peer::new("replaced_server_second");
@@ -1039,6 +1456,121 @@ fn a_dds_call_whose_server_is_replaced_mid_call_still_ends() {
         let answer = tokio::time::timeout(Duration::from_secs(8), pending).await;
         assert!(answer.is_ok(), "the call the first server took never ended (unanswered so far: {})", running.service(name).unanswered);
         assert_eq!(answer.unwrap(), Err(BusError::NoResponse { name: name.into() }));
+        running.stop().await.unwrap();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Values r2r cannot convert
+// ---------------------------------------------------------------------------
+
+/// A fix whose covariance has 8 entries where `NavSatFix` fixes 9: r2r
+/// asserts the length when it converts the value to its C message.
+fn short_covariance(latitude: f64) -> NavSatFix {
+    NavSatFix { latitude, position_covariance: vec![0.0; 8], ..Default::default() }
+}
+
+fn fix(latitude: f64) -> NavSatFix {
+    NavSatFix { latitude, ..Default::default() }
+}
+
+/// A module that makes a value its ROS type cannot carry used to panic in its
+/// own publish or respond, and only it restarted. Through the bridge the
+/// value is dropped, counted (`invalid`) and logged, and the forwarder, the
+/// spin thread and every other name carry on.
+#[test]
+fn a_value_r2r_cannot_convert_is_dropped_and_the_bridge_carries_on() {
+    within(async {
+        let [fixes_name, latched_name, get_state, set_map] =
+            ["fixes", "latched_fix", "get_state", "set_map"].map(|n| format!("/bridge_test/invalid_{n}"));
+        let bus = Bus::new();
+        let gps = bus.scope("gps");
+        let fixes = gps.publisher::<NavSatFix>(&fixes_name, Qos::default()).unwrap();
+        let latched_fixes = gps.publisher::<NavSatFix>(&latched_name, Qos::latched()).unwrap();
+        // An EKF whose state has 14 entries where GetState fixes 15, when it
+        // is asked for frame "bad".
+        let mut states = gps.service::<GetState::Request, GetState::Response>(&get_state).unwrap();
+        let _ekf = tokio::spawn(async move {
+            while let Some(request) = states.next().await {
+                let n = if request.message.frame_id == "bad" { 14 } else { 15 };
+                let _ = request.respond(GetState::Response { state: vec![1.0; n], ..Default::default() });
+            }
+        });
+        let mut bridge = new_bridge("invalid_bridge", &bus.scope("bridge"));
+        bridge.to_ros::<NavSatFix>(&fixes_name, QosProfile::default()).unwrap();
+        bridge.to_ros::<NavSatFix>(&latched_name, latched()).unwrap();
+        bridge.service_to_ros::<GetState::Service>(&get_state).unwrap();
+        bridge.service_from_ros::<SetMap::Service>(&set_map).unwrap();
+        let running = start(bridge);
+        let app = Peer::new("invalid_app");
+
+        // to_ros, volatile: the bad fix is dropped, the next one goes out.
+        let mut sub = app.with(|n| n.subscribe::<NavSatFix>(&fixes_name, QosProfile::default())).unwrap();
+        let deadline = Instant::now() + WAIT;
+        loop {
+            fixes.publish(&fix(1.0)).unwrap();
+            if let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(50), sub.next()).await {
+                break;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for the match");
+        }
+        fixes.publish(&short_covariance(2.0)).unwrap();
+        fixes.publish(&fix(3.0)).unwrap();
+        while next("the fix after the bad one", &mut sub).await.latitude != 3.0 {}
+        eventually("the bad fix counted", || running.topic(&fixes_name).invalid == 1).await;
+
+        // to_ros, transient local: the bad value supersedes on the bus what
+        // the DDS writer held, so a DDS late joiner gets neither, as when the
+        // module died of it; then the next value.
+        latched_fixes.publish(&fix(4.0)).unwrap();
+        eventually("the latched fix on DDS", || running.topic(&latched_name).forwarded == 1).await;
+        eventually("the bridge's DDS writer on the graph", || app.writer_gids(&latched_name).len() == 1).await;
+        let writer = app.writer_gids(&latched_name);
+        latched_fixes.publish(&short_covariance(5.0)).unwrap();
+        eventually("the bad latched fix counted", || running.topic(&latched_name).invalid == 1).await;
+        eventually("a DDS writer without the superseded value", || {
+            let now = app.writer_gids(&latched_name);
+            now.len() == 1 && now != writer
+        })
+        .await;
+        let mut late = app.with(|n| n.subscribe::<NavSatFix>(&latched_name, latched())).unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(500), late.next()).await.is_err(), "the superseded value stayed on DDS");
+        latched_fixes.publish(&fix(6.0)).unwrap();
+        assert_eq!(next("the next latched fix", &mut late).await.latitude, 6.0);
+
+        // service_to_ros: the bad answer leaves the DDS call unanswered, the
+        // next call is answered.
+        let state_client = app.with(|n| n.create_client::<GetState::Service>(&get_state, QosProfile::services_default())).unwrap();
+        let available = r2r::Node::is_available(&state_client).unwrap();
+        tokio::time::timeout(WAIT, available).await.expect("the DDS server").unwrap();
+        let mut bad = Box::pin(state_client.request(&GetState::Request { frame_id: "bad".into(), ..Default::default() }).unwrap());
+        eventually("the bad answer counted", || running.service(&get_state).invalid == 1).await;
+        assert_eq!(running.service(&get_state).unanswered, 1);
+        let good = GetState::Request { frame_id: "good".into(), ..Default::default() };
+        let answer = tokio::time::timeout(WAIT, state_client.request(&good).unwrap()).await.unwrap().unwrap();
+        assert_eq!(answer.state.len(), 15);
+        assert!((&mut bad).now_or_never().is_none(), "the bad answer reached DDS");
+
+        // service_from_ros: a bus request with a 35-entry covariance where
+        // the type fixes 36 gets NoResponse, the next one its answer.
+        let map_server = Peer::new("invalid_map_server");
+        let mut maps = map_server.with(|n| n.create_service::<SetMap::Service>(&set_map, QosProfile::services_default())).unwrap();
+        let _map_server = tokio::spawn(async move {
+            while let Some(request) = maps.next().await {
+                let _ = request.respond(SetMap::Response { success: true });
+            }
+        });
+        let map_client = bus.scope("map_manage").client::<SetMap::Request, SetMap::Response>(&set_map).unwrap();
+        tokio::time::timeout(WAIT, map_client.wait_for_service()).await.expect("the bus server").unwrap();
+        let mut bad_map = SetMap::Request::default();
+        bad_map.initial_pose.pose.covariance = vec![0.0; 35];
+        let refused = tokio::time::timeout(WAIT, map_client.request(&bad_map).unwrap()).await.unwrap();
+        assert_eq!(refused, Err(BusError::NoResponse { name: set_map.clone() }));
+        assert_eq!(running.service(&set_map).invalid, 1);
+        let answer = tokio::time::timeout(WAIT, map_client.request(&SetMap::Request::default()).unwrap()).await.unwrap().unwrap();
+        assert!(answer.success);
+
+        // Nothing stopped: the bridge still runs, and stops cleanly.
         running.stop().await.unwrap();
     });
 }
@@ -1237,8 +1769,8 @@ fn header() -> Header {
     Header { stamp: Time { sec: 1_761_400_000, nanosec: 123_456_789 }, frame_id: "割草機/base_link".into() }
 }
 
-fn nav_sat_fix() -> r2r::sensor_msgs::msg::NavSatFix {
-    let mut fix = r2r::sensor_msgs::msg::NavSatFix { header: header(), ..Default::default() };
+fn nav_sat_fix() -> NavSatFix {
+    let mut fix = NavSatFix { header: header(), ..Default::default() };
     fix.status.status = -1; // STATUS_NO_FIX, a negative i8
     fix.status.service = 1 | 8; // GPS | GALILEO, a u16 bit set
     fix.latitude = 23.695_012_345_678_9;

@@ -18,6 +18,11 @@ pub(crate) struct Counters {
     unanswered: AtomicU64,
     dropped: AtomicU64,
     dds_writer: AtomicBool,
+    bus_server: AtomicBool,
+    invalid: AtomicU64,
+    bus_writer: AtomicBool,
+    dds_reader: AtomicBool,
+    dds_server: AtomicBool,
 }
 
 impl Counters {
@@ -48,13 +53,34 @@ impl Counters {
     pub(crate) fn set_dds_writer(&self, exists: bool) {
         self.dds_writer.store(exists, Ordering::Relaxed);
     }
+
+    pub(crate) fn set_bus_server(&self, exists: bool) {
+        self.bus_server.store(exists, Ordering::Relaxed);
+    }
+
+    pub(crate) fn invalid(&self) {
+        self.invalid.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_bus_writer(&self, exists: bool) {
+        self.bus_writer.store(exists, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_dds_reader(&self, exists: bool) {
+        self.dds_reader.store(exists, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_dds_server(&self, exists: bool) {
+        self.dds_server.store(exists, Ordering::Relaxed);
+    }
 }
 
 /// A snapshot of one bridged name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntryStats {
     pub direction: Direction,
-    /// Messages published on the other side; for services, calls answered.
+    /// Messages published on the other side; for services, calls answered;
+    /// for actions, goal requests answered (accepted or rejected).
     pub forwarded: u64,
     /// `to_ros`, volatile: bus messages not published because no DDS reader
     /// was matched.
@@ -63,8 +89,11 @@ pub struct EntryStats {
     /// any more when they came up (README.md, "Writer lifetime").
     pub stale: u64,
     /// `to_ros`: writer changes handled (`publisher_changes` items).
+    /// `service_from_ros`: looks at the graph for a DDS server.
     pub resyncs: u64,
     /// Services: calls the bridge left unanswered (README.md, "Services").
+    /// Actions: goal requests left unanswered, and accepted goals whose
+    /// result never reached the other side (README.md, "Actions").
     pub unanswered: u64,
     /// `to_ros`: bus messages the bridge's reader lost to its full queue,
     /// because the forwarder fell more than its depth (at least 64) behind.
@@ -72,6 +101,24 @@ pub struct EntryStats {
     pub dropped: u64,
     /// `to_ros`: whether the bridge's DDS writer exists now.
     pub dds_writer: bool,
+    /// `service_from_ros`: whether the bridge's bus server exists now, which
+    /// it does while the graph shows a DDS server.
+    pub bus_server: bool,
+    /// Messages and calls dropped because r2r cannot convert a value to its
+    /// C message, e.g. a fixed-size array of another length (README.md,
+    /// "Values r2r cannot convert"). Such a call is `unanswered` too.
+    pub invalid: u64,
+    /// `from_ros`: whether the bridge's bus writer exists now. Transient
+    /// local: while the DDS reader exists and the graph shows a DDS writer,
+    /// or a sample shows one the graph does not yet; its looks at the graph
+    /// count in `resyncs`. Volatile: from the declaration on.
+    pub bus_writer: bool,
+    /// `from_ros`: whether the bridge's DDS reader exists now, which it does
+    /// while the bus has a reader of the name.
+    pub dds_reader: bool,
+    /// `service_to_ros`: whether the bridge's DDS server exists now, which
+    /// it does while the bus has a server. Its changes count in `resyncs`.
+    pub dds_server: bool,
 }
 
 /// Every forwarder's counters, by kind and name.
@@ -105,6 +152,11 @@ impl BridgeStats {
         self.get(Kind::Service, name)
     }
 
+    /// The forwarder of action `name`, if the bridge has one.
+    pub fn action(&self, name: &str) -> Option<EntryStats> {
+        self.get(Kind::Action, name)
+    }
+
     fn get(&self, kind: Kind, name: &str) -> Option<EntryStats> {
         let entries = self.lock();
         let (direction, c) = entries.get(&(kind, name.to_string()))?;
@@ -118,6 +170,11 @@ impl BridgeStats {
             unanswered: load(&c.unanswered),
             dropped: load(&c.dropped),
             dds_writer: c.dds_writer.load(Ordering::Relaxed),
+            bus_server: c.bus_server.load(Ordering::Relaxed),
+            invalid: load(&c.invalid),
+            bus_writer: c.bus_writer.load(Ordering::Relaxed),
+            dds_reader: c.dds_reader.load(Ordering::Relaxed),
+            dds_server: c.dds_server.load(Ordering::Relaxed),
         })
     }
 

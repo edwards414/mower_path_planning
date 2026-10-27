@@ -17,13 +17,21 @@
 //!
 //! Step E1 of docs/ROS_FREE_PLAN.md adds the in-process bus: `m.bus` is the
 //! instance's `mower_bus::Scope`, the bus's counterpart of its `r2r::Node`,
-//! and `m.clock` the clock to read time from. No module uses either yet; E2
-//! moves their IO from r2r onto them.
+//! and `m.clock` the clock to read time from. Step E2 moves the modules' IO
+//! from r2r onto them, one module at a time (`mower_bridge`'s `on_bus.rs`
+//! says which have moved; the bridge carries their names to DDS). The bus
+//! takes absolute names only, so a moved module names its endpoints through
+//! [`ModuleCtx::resolve_topic`] and
+//! [`ModuleCtx::resolve_service`], which apply the process's remap rules the
+//! way rcl applies them to the module's node ([`crate::names`]).
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use tokio::sync::watch;
+
+use crate::names::{NameError, NameKind, Remaps};
 
 /// Error type for a module: `Send + Sync` so it can cross a task boundary.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -113,13 +121,18 @@ pub struct ModuleCtx {
     /// the instance's scope of the process's one bus, which the supervisor
     /// closes when the instance ends.
     ///
-    /// No module uses it yet: their topics and services stay on r2r until
-    /// step E2 moves them here.
+    /// A module that has moved in step E2 does its topics, services and
+    /// timers here; the others still do theirs on r2r.
     pub bus: mower_bus::Scope,
     /// Where modules are to read time from, so that tests and replay can
-    /// drive it by hand. Unused until E2, like `bus`: modules still call
+    /// drive it by hand. The modules moved in E2 read their timers (and
+    /// some their stamps and ages) from it; the rest still call
     /// `tokio::time`, `Instant::now()` and `SystemTime::now()`.
     pub clock: mower_bus::Clock,
+    /// The `-r` rules of the process's `--ros-args`, for
+    /// [`ModuleCtx::resolve_topic`]. rcl reads the same argv for the r2r
+    /// node, so a name resolves to the same thing on both.
+    pub remaps: Arc<Remaps>,
 }
 
 impl ModuleCtx {
@@ -135,6 +148,7 @@ impl ModuleCtx {
             shutdown,
             bus: mower_bus::Bus::new().scope(node_name),
             clock: mower_bus::Clock::system(),
+            remaps: Arc::default(),
         }
     }
 
@@ -154,6 +168,24 @@ impl ModuleCtx {
     pub fn with_clock(mut self, clock: mower_bus::Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Resolve names with the remap rules of `--ros-args` (`module_main` and
+    /// `mower_rsd` pass the process's).
+    pub fn with_remaps(mut self, remaps: Arc<Remaps>) -> Self {
+        self.remaps = remaps;
+        self
+    }
+
+    /// The absolute name rcl gives topic `name` on this module's node: the
+    /// name to use on the bus (docs/BUS_TOPICS.md 5.4).
+    pub fn resolve_topic(&self, name: &str) -> Result<String, NameError> {
+        self.remaps.resolve(NameKind::Topic, &self.node_name, &self.namespace, name)
+    }
+
+    /// [`ModuleCtx::resolve_topic`] for a service name.
+    pub fn resolve_service(&self, name: &str) -> Result<String, NameError> {
+        self.remaps.resolve(NameKind::Service, &self.node_name, &self.namespace, name)
     }
 }
 
@@ -187,8 +219,9 @@ where
         let ctx = r2r::Context::create()?;
         let shutdown = Shutdown::new();
         shutdown.install_signal_handlers()?;
-        let m = ModuleCtx::new(node_name, shutdown)
-            .with_args(std::env::args().skip(1).collect());
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let remaps = Arc::new(Remaps::from_args(&args)?);
+        let m = ModuleCtx::new(node_name, shutdown).with_args(args).with_remaps(remaps);
         run(ctx, m).await
     });
     match result {
@@ -242,5 +275,21 @@ mod tests {
         let m = m.with_bus(given.clone());
         given.close();
         assert!(m.bus.is_closed());
+    }
+
+    #[test]
+    fn names_resolve_under_the_modules_node_name() {
+        let argv: Vec<String> =
+            ["--ros-args", "-r", "imu:imu/data_raw:=imu/data", "-r", "rosservice://a:=b"].map(str::to_string).to_vec();
+        let remaps = Arc::new(Remaps::from_args(&argv).unwrap());
+        let imu = ModuleCtx::new("imu", Shutdown::new()).with_remaps(remaps.clone());
+        let gps = ModuleCtx::new("gps", Shutdown::new()).with_remaps(remaps);
+        assert_eq!(imu.resolve_topic("imu/data_raw").unwrap(), "/imu/data");
+        assert_eq!(gps.resolve_topic("imu/data_raw").unwrap(), "/imu/data_raw");
+        assert_eq!(imu.resolve_topic("~/status").unwrap(), "/imu/status");
+        assert_eq!(imu.resolve_service("a").unwrap(), "/b");
+        assert_eq!(imu.resolve_topic("a").unwrap(), "/a");
+        // Without rules (a standalone test context), names only expand.
+        assert_eq!(ModuleCtx::new("n", Shutdown::new()).resolve_topic("x/y").unwrap(), "/x/y");
     }
 }

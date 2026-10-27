@@ -11,12 +11,26 @@ pub enum BusError {
     TypeMismatch { name: String, existing: &'static str, requested: &'static str },
     /// The endpoint's scope is closed (the module instance ended).
     Closed { scope: String },
-    /// Another live server already serves `name`.
+    /// Another live server already serves `name` (a service or an action).
     ServiceTaken { name: String, server: String },
-    /// No server for `name`, or it went away before answering.
+    /// No server for `name`, or it went away before answering. For an
+    /// action: also a goal lost because its server's scope closed before
+    /// the goal ended.
     ServiceUnavailable { name: String },
-    /// The server dropped the request without answering.
+    /// The server dropped the request without answering. For an action:
+    /// also a goal whose server dropped its last handle before ending it.
     NoResponse { name: String },
+    /// The action server rejected the goal (r2r's
+    /// `RCL_RET_ACTION_GOAL_REJECTED`).
+    GoalRejected { name: String },
+    /// The action server rejected the cancel request (r2r's
+    /// `GoalCancelRejected`), or takes no cancel requests.
+    CancelRejected { name: String },
+    /// The goal has ended: it cannot be ended again, given feedback or
+    /// canceled. A cancel request gets it also for a goal that is canceling
+    /// already, as rcl_action answers that (r2r's
+    /// `GoalCancelAlreadyTerminated`).
+    GoalTerminated { name: String },
     /// Erased access to a name whose type no typed endpoint has fixed yet.
     UnknownName { name: String },
     /// JSON encoding or decoding with the name's codec failed.
@@ -31,9 +45,12 @@ impl fmt::Display for BusError {
                 write!(f, "{name} carries {existing}, not {requested}")
             }
             BusError::Closed { scope } => write!(f, "bus scope {scope:?} is closed"),
-            BusError::ServiceTaken { name, server } => write!(f, "service {name} is already served by {server:?}"),
-            BusError::ServiceUnavailable { name } => write!(f, "service {name} is not available"),
-            BusError::NoResponse { name } => write!(f, "service {name} dropped the request without answering"),
+            BusError::ServiceTaken { name, server } => write!(f, "{name} is already served by {server:?}"),
+            BusError::ServiceUnavailable { name } => write!(f, "{name}: no server, or it went away before answering"),
+            BusError::NoResponse { name } => write!(f, "{name}: the server dropped the request without answering"),
+            BusError::GoalRejected { name } => write!(f, "{name}: the server rejected the goal"),
+            BusError::CancelRejected { name } => write!(f, "{name}: the server rejected the cancel request"),
+            BusError::GoalTerminated { name } => write!(f, "{name}: the goal has ended (or is canceling already)"),
             BusError::UnknownName { name } => write!(f, "{name}: type not known yet (no typed endpoint)"),
             BusError::Json { name, error } => write!(f, "{name}: JSON: {error}"),
         }

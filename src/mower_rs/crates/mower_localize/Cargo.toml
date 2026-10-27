@@ -13,7 +13,9 @@ name = "mower_localize"
 path = "src/main.rs"
 
 [dependencies]
+mower_bridge = { path = "../mower_bridge" }
 mower_rs_common = { path = "../mower_rs_common" }
+mower_bus = { path = "../mower_bus" }
 mower_localize_core = { path = "../mower_localize_core" }
 r2r.workspace = true
 tokio.workspace = true

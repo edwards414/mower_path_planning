@@ -44,11 +44,17 @@
 //! Not reproduced: `lazy` (off in both launch entries, so topic_tools
 //! publishes whether or not anyone listens, as this does), the `bytes` mode,
 //! and the runtime QoS-override parameters nobody sets.
+//!
+//! [`SlowCopy`] publishes through the module's r2r node; [`BusSlowCopy`] is
+//! the same copy for a module whose topics are on the in-process bus (step E2
+//! of docs/ROS_FREE_PLAN.md).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use r2r::qos::LivelinessPolicy;
 use r2r::{QosProfile, WrappedTypesupport};
+
+use crate::ModuleCtx;
 
 /// What [`MessageThrottle::admit`] decided about one message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +186,84 @@ impl<T: WrappedTypesupport + 'static> SlowCopy<T> {
     /// It goes out unchanged if the period has elapsed since the last one.
     pub fn offer(&mut self, msg: &T) {
         match self.gate.admit(system_now_ns()) {
+            Verdict::Forward => {
+                if let Err(e) = self.publisher.publish(msg) {
+                    r2r::log_error!(&self.logger, "publish {} failed: {:?}", self.topic, e);
+                }
+            }
+            Verdict::Drop => {}
+            Verdict::ClockWentBack => r2r::log_warn!(
+                &self.logger,
+                "{}: detected jump back in time, resetting throttle period to now",
+                self.topic
+            ),
+        }
+    }
+}
+
+/// [`output_qos`] in bus terms: keep last 10 with the source's reliability
+/// and durability. The bus has no liveliness.
+pub fn bus_output_qos(source: mower_bus::Qos) -> mower_bus::Qos {
+    source.keep_last(10)
+}
+
+/// [`SlowCopy`] for a module whose source topic is on the bus: the same gate,
+/// fed the same way, publishing on the module's scope. The arrival time is
+/// read from the module's clock, which in production is the system clock
+/// that [`system_now_ns`] reads.
+pub struct BusSlowCopy<T: mower_bus::Message> {
+    publisher: mower_bus::Publisher<T>,
+    clock: mower_bus::Clock,
+    gate: MessageThrottle,
+    topic: String,
+    logger: String,
+}
+
+impl<T: mower_bus::Message> BusSlowCopy<T> {
+    /// [`SlowCopy::create`] on `m`'s bus scope: `None` when `topic` is empty
+    /// (the switch that turns the copy off), the rate is not usable, or the
+    /// name does not resolve or the bus refuses it (both logged on `logger`,
+    /// the node's logger). `topic` is the name as the module has it,
+    /// resolved as rcl resolves it on the module's node
+    /// ([`ModuleCtx::resolve_topic`]); `source_qos` is the source publisher's.
+    pub fn create(
+        m: &ModuleCtx,
+        logger: &str,
+        topic: &str,
+        msgs_per_sec: f64,
+        source_qos: mower_bus::Qos,
+    ) -> Option<Self> {
+        if topic.is_empty() {
+            return None;
+        }
+        let Some(gate) = MessageThrottle::new(msgs_per_sec, m.clock.now().ns()) else {
+            r2r::log_warn!(logger, "{topic}: rate {msgs_per_sec} is not a positive number; not publishing it");
+            return None;
+        };
+        let publisher = m
+            .resolve_topic(topic)
+            .map_err(|e| e.to_string())
+            .and_then(|name| m.bus.publisher::<T>(&name, bus_output_qos(source_qos)).map_err(|e| e.to_string()));
+        let publisher = match publisher {
+            Ok(publisher) => publisher,
+            Err(e) => {
+                r2r::log_error!(logger, "{topic}: cannot create the publisher ({e}); not publishing it");
+                return None;
+            }
+        };
+        Some(BusSlowCopy {
+            publisher,
+            clock: m.clock.clone(),
+            gate,
+            topic: topic.to_string(),
+            logger: logger.to_string(),
+        })
+    }
+
+    /// Offer the message the module has just published on the source topic.
+    /// It goes out unchanged if the period has elapsed since the last one.
+    pub fn offer(&mut self, msg: &T) {
+        match self.gate.admit(self.clock.now().ns()) {
             Verdict::Forward => {
                 if let Err(e) = self.publisher.publish(msg) {
                     r2r::log_error!(&self.logger, "publish {} failed: {:?}", self.topic, e);
@@ -358,5 +442,85 @@ mod tests {
         ok.offer(&Odometry::default());
         let relative = SlowCopy::<Odometry>::create(&mut node, "odometry/global_slow", 5.0, &qos);
         assert!(relative.is_some());
+    }
+
+    /// A module on a bus of its own, reading time from a manual clock that
+    /// starts at `T0`.
+    fn bus_module(node: &str, rules: &str) -> (ModuleCtx, mower_bus::ManualClock) {
+        let (clock, manual) = mower_bus::Clock::manual(mower_bus::Time::from_ns(T0));
+        let argv: Vec<String> = rules.split_whitespace().map(str::to_string).collect();
+        let remaps = std::sync::Arc::new(crate::Remaps::from_args(&argv).unwrap());
+        let m = ModuleCtx::new(node, crate::Shutdown::new()).with_clock(clock).with_remaps(remaps);
+        (m, manual)
+    }
+
+    /// The bus copy refuses what the r2r one refuses, and a name the bus
+    /// cannot carry, by turning itself off: the module's fast topic must not
+    /// fail with it.
+    #[test]
+    fn a_name_the_bus_refuses_turns_the_bus_copy_off() {
+        use r2r::nav_msgs::msg::Odometry;
+        let (m, _manual) = bus_module("ekf", "");
+        let qos = mower_bus::Qos::default().keep_last(10).reliable().volatile();
+        for bad in ["/odom_slow/", "odometry/global slow", "/odom//slow"] {
+            assert!(BusSlowCopy::<Odometry>::create(&m, "ekf", bad, 5.0, qos).is_none(), "{bad}");
+        }
+        assert!(BusSlowCopy::<Odometry>::create(&m, "ekf", "", 5.0, qos).is_none());
+        assert!(BusSlowCopy::<Odometry>::create(&m, "ekf", "/odom_slow", 0.0, qos).is_none());
+        // a name that already carries another type
+        let _other = m.bus.publisher::<r2r::std_msgs::msg::String>("/taken", qos).unwrap();
+        assert!(BusSlowCopy::<Odometry>::create(&m, "ekf", "/taken", 5.0, qos).is_none());
+        let mut ok =
+            BusSlowCopy::<Odometry>::create(&m, "ekf", "/odom_slow", 5.0, qos).expect("a valid topic and rate");
+        ok.offer(&Odometry::default());
+    }
+
+    /// A relative name comes out where rcl would put it on the module's
+    /// node, its rules included, with the throttle's QoS.
+    #[test]
+    fn the_bus_copy_s_name_resolves_on_the_module_s_node() {
+        use r2r::nav_msgs::msg::Odometry;
+        let rules = "--ros-args -r ekf_filter_node_odom:odometry/global_slow:=/nope";
+        let (m, _manual) = bus_module("ekf_filter_node_map", rules);
+        let source = mower_bus::Qos::default().keep_last(10).reliable().volatile();
+        let copy = BusSlowCopy::<Odometry>::create(&m, "ekf", "odometry/global_slow", 5.0, source).unwrap();
+        assert_eq!(copy.publisher.name(), "/odometry/global_slow");
+        assert_eq!(copy.publisher.qos(), source);
+        let rules = "--ros-args -r ekf_filter_node_map:odometry/global_slow:=/x/slow";
+        let (m, _manual) = bus_module("ekf_filter_node_map", rules);
+        let latched = mower_bus::Qos::latched();
+        let copy = BusSlowCopy::<Odometry>::create(&m, "ekf", "odometry/global_slow", 5.0, latched).unwrap();
+        assert_eq!(copy.publisher.name(), "/x/slow");
+        assert_eq!(copy.publisher.qos(), mower_bus::Qos::default().keep_last(10).reliable().transient_local());
+    }
+
+    /// The gate on the module's clock: the 25 Hz `/odom` case of
+    /// `a_steady_source_is_divided_exactly`, through the bus, the forwarded
+    /// messages unchanged.
+    #[test]
+    fn the_bus_copy_forwards_what_the_gate_admits_at_the_module_clock_s_time() {
+        use r2r::nav_msgs::msg::Odometry;
+        let (m, manual) = bus_module("mower_base", "");
+        let qos = mower_bus::Qos::default().keep_last(10).reliable().volatile();
+        let mut copy = BusSlowCopy::<Odometry>::create(&m, "base", "/odom_slow", 5.0, qos).unwrap();
+        let reader = m.bus.bus().scope("reader");
+        let mut slow = reader.subscribe::<Odometry>("/odom_slow", mower_bus::Qos::default().keep_last(1000)).unwrap();
+        let mut forwarded = Vec::new();
+        for k in 0..250i64 {
+            let mut msg = Odometry::default();
+            msg.header.frame_id = format!("odom {k}");
+            copy.offer(&msg);
+            while let Ok(got) = slow.try_recv() {
+                forwarded.push((m.clock.now().ns(), got.header.frame_id.clone()));
+            }
+            manual.advance(std::time::Duration::from_millis(40));
+        }
+        assert_eq!(forwarded.len(), 49);
+        assert_eq!(forwarded[0], (T0 + 200 * MS, "odom 5".to_string()));
+        assert!(forwarded.windows(2).all(|w| w[1].0 - w[0].0 == 200 * MS));
+        // NTP steps the clock back: the period restarts, that message stays
+        manual.set_wall(mower_bus::Time::from_ns(T0));
+        copy.offer(&Odometry::default());
+        assert!(slow.try_recv().is_err());
     }
 }

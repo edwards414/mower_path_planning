@@ -28,14 +28,12 @@ pub fn from_ns(ns: i64) -> Time {
     }
 }
 
-/// Wall clock in nanoseconds; the filters run on the system clock exactly as
-/// the C++ nodes do (`use_sim_time` is false everywhere in production, and
-/// robot.launch.py refuses any other value).
-pub fn now_ns() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
+/// Wall clock in nanoseconds, from the module's clock: in production the
+/// system clock, so the filters run on it exactly as the C++ nodes do
+/// (`use_sim_time` is false everywhere in production, and robot.launch.py
+/// refuses any other value); a test or a replay drives it by hand.
+pub fn now_ns(clock: &mower_bus::Clock) -> i64 {
+    clock.now().ns()
 }
 
 fn mat6(v: &[f64]) -> cm::Mat6 {

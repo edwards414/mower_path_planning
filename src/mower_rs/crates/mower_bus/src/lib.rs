@@ -1,8 +1,8 @@
 //! The in-process message bus of the mower daemon (docs/ROS_FREE_PLAN.md,
-//! step E1): typed topics, services, type-erased (JSON) access and a clock
-//! that tests and replay can drive. README.md has the model and the semantics
-//! every part keeps; this file holds the two handles everything hangs off,
-//! [`Bus`] and [`Scope`].
+//! step E1): typed topics, services, actions (added in E2), type-erased
+//! (JSON) access and a clock that tests and replay can drive. README.md has
+//! the model and the semantics every part keeps; this file holds the two
+//! handles everything hangs off, [`Bus`] and [`Scope`].
 //!
 //! No r2r, no ROS: what crosses to DDS goes through `mower_bus_ros`.
 
@@ -20,6 +20,7 @@ use serde::Serialize;
 
 use crate::wake::{UserCode, WakerSet};
 
+mod action;
 mod clock;
 mod codec;
 mod erased;
@@ -31,14 +32,19 @@ mod timer;
 mod topic;
 mod wake;
 
+pub use action::{
+    Action, ActionClient, ActionClientGoal, ActionServer, ActionServerCancelRequest, ActionServerGoal,
+    ActionServerGoalRequest, CancelFuture, CancelRequests, FeedbackStream, GoalId, GoalResponseFuture, GoalStatus,
+    ResultFuture,
+};
 pub use clock::{Clock, Elapsed, Interval, ManualClock, MissedTick, Mono, Sleep, Time, Timeout};
 pub use erased::{ErasedMsg, ErasedSubscriber, JsonPublisher};
 pub use error::{BusError, RecvError};
-pub use introspect::{ros_type_name, ServiceInfo, TopicInfo};
+pub use introspect::{ros_type_name, ActionInfo, ServiceInfo, TopicInfo};
 pub use qos::{Durability, Qos, Reliability};
 pub use service::{Client, Request, ResponseFuture, Service};
 pub use timer::Timer;
-pub use topic::{Publisher, PublisherChanges, Subscriber};
+pub use topic::{Publisher, PublisherChanges, Subscriber, SubscriptionChanges};
 
 /// What can travel on the bus. Blanket-implemented, so r2r's generated
 /// message types (which derive `Clone, Serialize, Deserialize`) qualify as
@@ -46,8 +52,8 @@ pub use topic::{Publisher, PublisherChanges, Subscriber};
 pub trait Message: Clone + Send + Sync + Serialize + DeserializeOwned + 'static {}
 impl<T> Message for T where T: Clone + Send + Sync + Serialize + DeserializeOwned + 'static {}
 
-/// The process-wide registry of topics and services. Cheap to clone; every
-/// clone is the same bus.
+/// The process-wide registry of topics, services and actions. Cheap to
+/// clone; every clone is the same bus.
 #[derive(Clone, Default)]
 pub struct Bus {
     inner: Arc<BusInner>,
@@ -57,6 +63,7 @@ pub struct Bus {
 struct BusInner {
     topics: topic::Registry,
     services: service::Registry,
+    actions: action::Registry,
     next_scope: AtomicU64,
 }
 
@@ -97,12 +104,21 @@ impl Bus {
         self.inner.services.info()
     }
 
+    /// Every action name the bus has seen, sorted by name.
+    pub fn actions(&self) -> Vec<ActionInfo> {
+        self.inner.actions.info()
+    }
+
     pub(crate) fn topic_registry(&self) -> &topic::Registry {
         &self.inner.topics
     }
 
     pub(crate) fn service_registry(&self) -> &service::Registry {
         &self.inner.services
+    }
+
+    pub(crate) fn action_registry(&self) -> &action::Registry {
+        &self.inner.actions
     }
 }
 
@@ -417,6 +433,16 @@ impl Scope {
     /// Call service `name` with a JSON request, using the server's codec.
     pub async fn call_json(&self, name: &str, request: serde_json::Value) -> Result<serde_json::Value, BusError> {
         service::call_json(self, name, request).await
+    }
+
+    /// The server side of action `name` (README.md, "Actions").
+    pub fn action_server<A: Action>(&self, name: &str) -> Result<ActionServer<A>, BusError> {
+        action::serve(self, name)
+    }
+
+    /// A client of action `name` (README.md, "Actions").
+    pub fn action_client<A: Action>(&self, name: &str) -> Result<ActionClient<A>, BusError> {
+        action::client(self, name)
     }
 }
 

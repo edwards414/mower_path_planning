@@ -473,14 +473,16 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert_eq!(o.ros_type.as_deref(), Some("nav_msgs/msg/Odometry"));
     assert_eq!(o.publishers, ["localize", "ws_bridge"]);
+    assert_eq!(o.publisher_qos, [Qos::latched().keep_last(2), Qos::default()], "one per writer, clones included");
     assert_eq!(o.subscribers, ["nav", "ws_bridge"]);
+    assert_eq!(o.subscriber_qos, [Qos::default(), Qos::default()]);
     assert_eq!((o.retained, o.published), (2, 3));
     let last = o.last_published.unwrap();
     assert!(before <= last && last <= after);
 
     let untyped = by_name["/app/only"];
     assert_eq!((untyped.type_name, untyped.ros_type.as_deref()), (None, None));
-    assert!(untyped.publishers.is_empty());
+    assert!(untyped.publishers.is_empty() && untyped.publisher_qos.is_empty());
     assert_eq!(untyped.subscribers, ["ws_bridge"]);
     assert_eq!((untyped.published, untyped.last_published), (0, None));
 
@@ -492,6 +494,7 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     let o = bus.topics().into_iter().find(|t| t.name == "/odometry/global").unwrap();
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert!(o.publishers.is_empty() && o.subscribers.is_empty());
+    assert!(o.publisher_qos.is_empty() && o.subscriber_qos.is_empty());
     assert_eq!((o.retained, o.published), (0, 3));
 }
 
@@ -574,6 +577,62 @@ async fn publisher_changes_report_writers_coming_and_going_until_the_readers_sco
     let mut parked = sub.publisher_changes();
     let task = tokio::spawn(async move { parked.next().await });
     drop(sub);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    bridge.close();
+    assert_eq!(tokio::time::timeout(WAIT, task).await.unwrap().unwrap(), None);
+    assert_eq!(changes.next().await, None, "the end wins over a change not yet reported");
+    assert_eq!(changes.next().await, None);
+}
+
+/// The mirror for readers, which the ROS bridge's `from_ros` follows with its
+/// DDS reader: a writer's `subscription_changes()` reports readers, typed and
+/// erased, coming and going, and ends when the writer's scope closes, also
+/// once the publisher itself is gone (the bridge keeps the stream of a
+/// publisher it dropped at once).
+#[tokio::test]
+async fn subscription_changes_report_readers_coming_and_going_until_the_writers_scope_closes() {
+    let bus = Bus::new();
+    let bridge = bus.scope("ros_bridge");
+    let p = bridge.publisher::<Pose>("/map", Qos::latched()).unwrap();
+    let mut changes = p.subscription_changes();
+    assert_eq!(p.subscription_count(), 0);
+    assert_eq!(changes.next().now_or_never(), None, "nothing has changed yet");
+
+    let nav = bus.scope("nav");
+    let sub = nav.subscribe::<Pose>("/map", Qos::latched()).unwrap();
+    assert_eq!(changes.next().await, Some(1));
+    assert_eq!(changes.next().now_or_never(), None, "one item per change");
+
+    // several changes between two looks give one item; a writer is no change
+    let app = bus.scope("ws_bridge");
+    let erased = app.subscribe_erased("/map", Qos::default()).unwrap();
+    let _writer = app.publisher_json("/map", Qos::default()).unwrap();
+    assert_eq!(changes.next().await, Some(2));
+    drop(erased);
+    let _other = app.subscribe::<Pose>("/map", Qos::default()).unwrap();
+    assert_eq!(changes.next().await, Some(2));
+    assert_eq!(changes.next().now_or_never(), None);
+
+    // a module restart: the reader goes with its scope and a new one comes;
+    // the count ends where it was, the item still comes
+    nav.close();
+    drop(sub);
+    let restarted = bus.scope("nav");
+    let _sub = restarted.subscribe::<Pose>("/map", Qos::latched()).unwrap();
+    assert_eq!(changes.next().await, Some(2));
+
+    // a task parked on a stream is woken by the change
+    let mut parked = p.subscription_changes();
+    let task = tokio::spawn(async move { parked.next().await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    restarted.close();
+    assert_eq!(tokio::time::timeout(WAIT, task).await.unwrap().unwrap(), Some(1));
+
+    // the writer's scope closing ends its streams, parked or not, also after
+    // the publisher itself is gone
+    let mut parked = p.subscription_changes();
+    let task = tokio::spawn(async move { parked.next().await });
+    drop(p);
     tokio::time::sleep(Duration::from_millis(20)).await;
     bridge.close();
     assert_eq!(tokio::time::timeout(WAIT, task).await.unwrap().unwrap(), None);
