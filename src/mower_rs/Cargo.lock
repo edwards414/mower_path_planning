@@ -722,9 +722,12 @@ dependencies = [
  "mower_bus",
  "mower_bus_ros",
  "mower_rs_common",
+ "mower_ws_bridge",
  "r2r",
+ "serde_json",
  "serde_yaml",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

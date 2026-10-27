@@ -715,6 +715,169 @@ fn the_bridge_module_is_ws_bridge_yaml_s_allow_list() {
     assert!(!subscribed.contains("/gps/fix"));
 }
 
+/// E3.1's switch: ws_bridge on the bus. The names the app uses that only DDS
+/// has (the guards, mower_base, pid_autotune, coverage's parameter node,
+/// the recorder) are bridged for it, with the QoS ws_bridge's r2r endpoints
+/// had: 5 from_ros, 4 to_ros, 4 service_from_ros. Nothing else changes.
+#[test]
+fn ws_bridge_on_the_bus_adds_the_thirteen_names_only_dds_has() {
+    let on = rsd_plan_with(&PRODUCTION_MODULES, &["bridge"], &production_remaps()).unwrap();
+    let lines = on.lines();
+    let removed: Vec<&str> = E2_PRODUCTION_PLAN.iter().copied().filter(|l| !lines.iter().any(|g| g == l)).collect();
+    assert!(removed.is_empty(), "{removed:#?}");
+    let added: Vec<&str> = lines.iter().map(String::as_str).filter(|l| !E2_PRODUCTION_PLAN.contains(l)).collect();
+    assert_eq!(
+        added,
+        [
+            "to_ros /app_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+            "from_ros /manual_command_clock std_msgs/msg/Header R V 10",
+            "to_ros /mower_base/blade_command std_msgs/msg/String R V 10",
+            "to_ros /mower_base/servo_command std_msgs/msg/String R V 10",
+            "from_ros /mower_recorder/bags std_msgs/msg/String R TL 10",
+            "to_ros /mower_recorder/command std_msgs/msg/String R V 10",
+            "from_ros /mower_recorder/command_result std_msgs/msg/String R V 10",
+            "from_ros /mower_recorder/status std_msgs/msg/String R TL 10",
+            "from_ros /pid_autotune/status std_msgs/msg/String R TL 10",
+            "service_from_ros /boustrophedon_coverage/set_parameters rcl_interfaces/srv/SetParameters",
+            "service_from_ros /mower_recorder/start std_srvs/srv/Trigger",
+            "service_from_ros /mower_recorder/stop std_srvs/srv/Trigger",
+            "service_from_ros /pid_autotune mower_interface/srv/PidAutotune",
+        ]
+    );
+    assert_eq!(on.notes, [E2_PRODUCTION_NOTE]);
+    // whom each is for, and from where
+    let why = |name: &str| on.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
+    assert_eq!(why("/pid_autotune/status"), "for mower_ws_bridge, from pid_autotune (r2r)");
+    assert_eq!(why("/mower_recorder/status"), "for mower_ws_bridge, from recorder_manager (outside)");
+    assert_eq!(why("/boustrophedon_coverage/set_parameters"), "for mower_ws_bridge, served by boustrophedon_coverage (r2r)");
+    assert_eq!(why("/app_joy_cmd"), "from mower_ws_bridge");
+}
+
+/// Only ws_bridge's flag is set at run time: any other id is on_bus.rs's.
+#[test]
+fn the_run_time_flags_are_ws_bridge_s_alone() {
+    let remaps = production_remaps();
+    assert_eq!(rsd_plan_with(&PRODUCTION_MODULES, &[] as &[&str], &remaps).unwrap().lines(), E2_PRODUCTION_PLAN);
+    let e = rsd_plan_with(&PRODUCTION_MODULES, &["base"], &remaps).unwrap_err();
+    assert_eq!(e.problems, ["base: its flag is on_bus.rs's, not set at run time"]);
+    // the bus bridge module's arguments carry them
+    let args = rsd_args(&["status", "bridge"], &["bridge"]);
+    assert_eq!(args, ["status", "bridge", "--on-bus", "bridge"]);
+    assert_eq!(
+        crate::run::parse_rsd_args(&args),
+        Ok((vec!["status".to_string(), "bridge".to_string()], vec!["bridge".to_string()]))
+    );
+    assert_eq!(crate::run::parse_rsd_args(&rsd_args(&["status"], &[] as &[&str])), Ok((vec!["status".to_string()], vec![])));
+    assert!(crate::run::parse_rsd_args(&["status".to_string(), "--on-bus".to_string()]).is_err());
+}
+
+/// Where each other end of `name` is (`kind` of it), with the flags `on`
+/// and every module running: whether one is an instance on the bus.
+fn on_the_bus(name: &str, kind: Kind, on: &dyn Fn(&str) -> bool) -> bool {
+    MODULES.iter().filter(|m| on(m.id)).flat_map(|m| m.instances).flat_map(|i| i.endpoints).any(|e| {
+        e.kind == kind && e.name == name && !e.stays_on_r2r && e.only.is_none()
+    })
+}
+
+/// RUST_BRIDGE=false (the Python rosbridge) or the separate binary: ws_bridge
+/// is not in mower_rsd's `--modules`, and every name of its allow-list keeps
+/// a DDS face, whatever the flags: a topic it reads is written on DDS or
+/// goes out to it, a topic it writes is read on DDS or comes in from it, a
+/// service it calls is served on DDS or is served out to it.
+#[test]
+fn without_ws_bridge_in_the_process_every_name_of_its_allow_list_faces_dds() {
+    let without: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != "bridge").collect();
+    let (_, bridge) = instance("mower_ws_bridge").unwrap();
+    let flags: [(&str, &dyn Fn(&str) -> bool); 2] = [("on_bus.rs", &on_bus), ("every flag", &|id: &str| id != "bridge")];
+    for (what, on) in flags {
+        let lines = plan(&Running::rsd(&without, on), &production_remaps()).unwrap().lines();
+        let has = |direction: &str, name: &str| lines.iter().any(|l| l.starts_with(&format!("{direction} {name} ")));
+        for e in bridge.endpoints {
+            let faced = match e.kind {
+                Kind::Subscribe => !on_the_bus(e.name, Kind::Publish, on) || has("to_ros", e.name),
+                Kind::Publish => !on_the_bus(e.name, Kind::Subscribe, on) || has("from_ros", e.name),
+                Kind::Call => !on_the_bus(e.name, Kind::Serve, on) || has("service_to_ros", e.name),
+                other => panic!("ws_bridge does not {}", other.verb()),
+            };
+            assert!(faced, "{what}: {} {} has no DDS face", e.kind.verb(), e.name);
+        }
+    }
+}
+
+/// The separate binary with `--backend bus` (RUST_DAEMON=false): a bus of its
+/// own, and every name ws_bridge reaches carried by the bridge next to it,
+/// with the QoS its r2r endpoints had.
+#[test]
+fn ws_bridge_standalone_carries_every_name_it_reaches() {
+    let running = Running::standalone("bridge", "mower_ws_bridge").unwrap();
+    let alone = plan(&running, &Remaps::default()).unwrap();
+    let count = |direction: &str| alone.lines().iter().filter(|l| l.starts_with(&format!("{direction} "))).count();
+    assert_eq!((count("from_ros"), count("to_ros"), count("service_from_ros")), (28, 4, 32));
+    assert_eq!(alone.declarations.len(), 64);
+    let lines = alone.lines();
+    for line in [
+        "from_ros /adapter/map_layers/map_grid std_msgs/msg/String R TL 10",
+        "from_ros /adapter/robot_pose geometry_msgs/msg/PoseStamped R V 10",
+        "from_ros /robot/online std_msgs/msg/Bool R TL 10",
+        "from_ros /robot/telemetry std_msgs/msg/String R V 10",
+        "from_ros /fix sensor_msgs/msg/NavSatFix R V 10",
+        "from_ros /coverage_progress mower_interface/msg/CoverageProgress R TL 10",
+        "to_ros /app_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+        "service_from_ros /system/update std_srvs/srv/Trigger",
+    ] {
+        assert!(lines.iter().any(|l| l == line), "{line} in {lines:#?}");
+    }
+    assert!(alone.notes.is_empty(), "{:?}", alone.notes);
+}
+
+/// E2 steps 6 and 7 after E3: base, pid_autotune and the guards on the bus as
+/// well. ws_bridge's names that only DDS had are then in the process: the
+/// from_ros of /manual_command_clock and /pid_autotune/status and the
+/// service_from_ros of /pid_autotune go. The recorder's six and
+/// set_parameters stay (until E5, and until the parameter services move).
+/// So do the to_ros of the three command topics: ws_bridge writes them on
+/// the bus, and the policy gives every topic written on the bus a DDS face
+/// (README.md, "The policy"), which carries nothing while no DDS node reads
+/// them.
+#[test]
+fn steps_6_and_7_after_e3_leave_the_recorder_s_names_and_set_parameters_bridged() {
+    let e3 = rsd_plan_with(&PRODUCTION_MODULES, &["bridge"], &production_remaps()).unwrap().lines();
+    let all = lines(&MODULES.iter().map(|m| m.id).collect::<Vec<_>>());
+    let gone: Vec<&String> = e3.iter().filter(|l| !all.contains(l)).collect();
+    let came: Vec<&String> = all.iter().filter(|l| !e3.contains(l)).collect();
+    for line in [
+        "from_ros /manual_command_clock std_msgs/msg/Header R V 10",
+        "from_ros /pid_autotune/status std_msgs/msg/String R TL 10",
+        "service_from_ros /pid_autotune mower_interface/srv/PidAutotune",
+    ] {
+        assert!(gone.iter().any(|l| *l == line), "{line} goes: {gone:#?}");
+    }
+    for line in [
+        "to_ros /manual_command_clock std_msgs/msg/Header R V 1",
+        "to_ros /pid_autotune/status std_msgs/msg/String R TL 1",
+        "service_to_ros /pid_autotune mower_interface/srv/PidAutotune",
+    ] {
+        assert!(came.iter().any(|l| *l == line), "{line} comes, for DDS: {came:#?}");
+    }
+    for line in [
+        "from_ros /mower_recorder/bags std_msgs/msg/String R TL 10",
+        "from_ros /mower_recorder/command_result std_msgs/msg/String R V 10",
+        "from_ros /mower_recorder/status std_msgs/msg/String R TL 10",
+        "to_ros /mower_recorder/command std_msgs/msg/String R V 10",
+        "service_from_ros /mower_recorder/start std_srvs/srv/Trigger",
+        "service_from_ros /mower_recorder/stop std_srvs/srv/Trigger",
+        "service_from_ros /boustrophedon_coverage/set_parameters rcl_interfaces/srv/SetParameters",
+        "to_ros /app_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+        "to_ros /mower_base/blade_command std_msgs/msg/String R V 10",
+        "to_ros /mower_base/servo_command std_msgs/msg/String R V 10",
+    ] {
+        assert!(all.iter().any(|l| l == line), "{line} stays: {all:#?}");
+    }
+    // nothing of ws_bridge comes in from DDS but the recorder's
+    let from: Vec<&String> = all.iter().filter(|l| l.starts_with("from_ros ") && l.contains("/mower_recorder/")).collect();
+    assert_eq!(from.len(), 3, "{from:#?}");
+}
+
 // ---------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------

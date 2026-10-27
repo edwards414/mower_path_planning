@@ -26,16 +26,60 @@ pub const STANDALONE_NAMESPACE: &str = "/mower_bus_bridge";
 /// flags of `on_bus.rs`. Empty while none of them is on the bus: mower_rsd
 /// then starts no bridge.
 pub fn rsd_plan<S: AsRef<str>>(ids: &[S], remaps: &Remaps) -> Result<Plan, PlanError> {
-    let plan = plan(&Running::rsd(ids, crate::on_bus), remaps)?;
+    rsd_plan_with(ids, &[] as &[&str], remaps)
+}
+
+/// [`rsd_plan`] with the run-time flags `on_now` set as well: the modules of
+/// [`crate::RUNTIME`] that run on the bus in this process (ws_bridge with
+/// `--backend bus`). Any other id there is an error: its flag is
+/// on_bus.rs's.
+pub fn rsd_plan_with<S: AsRef<str>, T: AsRef<str>>(ids: &[S], on_now: &[T], remaps: &Remaps) -> Result<Plan, PlanError> {
+    let problems: Vec<String> = on_now
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|id| !crate::RUNTIME.contains(id))
+        .map(|id| format!("{id}: its flag is on_bus.rs's, not set at run time"))
+        .collect();
+    if !problems.is_empty() {
+        return Err(PlanError { problems });
+    }
+    let plan = plan(&Running::rsd(ids, crate::on_bus_with(on_now)), remaps)?;
     plan.check_names(remaps, NODE, "")?;
     Ok(plan)
 }
 
-/// mower_rsd's bridge module. `m.args` are the module ids of `--modules`;
-/// it forwards what [`rsd_plan`] derives for them, on node `m.node_name`
-/// ([`NODE`]) and scope `m.bus`, until the shutdown.
+/// The bus bridge module's arguments in mower_rsd: the ids of `--modules`,
+/// then `--on-bus <id>` for each run-time flag that is set ([`rsd_plan_with`]).
+pub fn rsd_args<S: AsRef<str>, T: AsRef<str>>(ids: &[S], on_now: &[T]) -> Vec<String> {
+    let mut args: Vec<String> = ids.iter().map(|id| id.as_ref().to_string()).collect();
+    for id in on_now {
+        args.push("--on-bus".to_string());
+        args.push(id.as_ref().to_string());
+    }
+    args
+}
+
+/// What [`rsd_args`] made: the ids, and the run-time flags.
+pub(crate) fn parse_rsd_args(args: &[String]) -> Result<(Vec<String>, Vec<String>), String> {
+    let (mut ids, mut on_now) = (Vec::new(), Vec::new());
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--on-bus" {
+            on_now.push(it.next().ok_or("--on-bus needs a module id")?.clone());
+        } else {
+            ids.push(arg.clone());
+        }
+    }
+    Ok((ids, on_now))
+}
+
+/// mower_rsd's bridge module. `m.args` are what [`rsd_args`] made of
+/// `--modules` and the run-time flags; it forwards what [`rsd_plan_with`]
+/// derives for them, on node `m.node_name` ([`NODE`]) and scope `m.bus`,
+/// until the shutdown.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let plan = rsd_plan(&m.args, &m.remaps)?;
+    let (ids, on_now) = parse_rsd_args(&m.args)?;
+    let plan = rsd_plan_with(&ids, &on_now, &m.remaps)?;
     let bridge = new_bridge(ctx, &m.node_name, &m.namespace, &plan, &m.remaps, m.bus.clone())?;
     bridge.run(m.shutdown.wait()).await?;
     Ok(())

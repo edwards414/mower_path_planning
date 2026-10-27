@@ -82,6 +82,14 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
 `src/on_bus.rs` has one flag per module. Moving a module is flipping its flag, in the commit that merges its
 conversion. A flag says "this module's code uses the bus"; the module itself does not read it.
 
+- **Set at run time:** `RUNTIME` lists the modules whose flag mower_rsd sets when it starts, from how it runs them:
+  ws_bridge, whose backend is a module argument (`--backend bus`, robot.launch.py's `ws_bridge_bus`). It is the app's
+  only door, the in-app update's included, so it moves back without a new image. Its flag in `ON_BUS` stays false,
+  the default backend's.
+- **Where mower_rsd uses it:** the bus bridge's plan (`rsd_plan_with`), which the bridge gets in its arguments
+  (`rsd_args`: the ids of `--modules`, then `--on-bus bridge`), and the manifest check (`on_bus_with`). Any other id
+  there is refused.
+
 ## The policy
 
 `plan(running, remaps)`: what the bridge of a process declares. `running` is the instances that run in that process,
@@ -144,6 +152,16 @@ each with its flag; every other instance is elsewhere, on DDS.
 | battery, status | 6 | 7 | 3 | 0 |
 | + map, record, adapter | 39 | 11 | 28 | 2 |
 | + imu, gps, localize | 48 | 9 | 32 | 1 |
+
+- **ws_bridge on the bus** (E3.1, `ws_bridge_bus:=true`) adds the 13 names the app uses that only DDS has, and changes
+  nothing else: `from_ros` of `/manual_command_clock` (`R V 10`), `/pid_autotune/status`, `/mower_recorder/status` and
+  `/mower_recorder/bags` (`R TL 10`) and `/mower_recorder/command_result` (`R V 10`); `to_ros` of `/app_joy_cmd`, the
+  servo and blade commands and `/mower_recorder/command` (`R V 10`); `service_from_ros` of `/pid_autotune`,
+  `/boustrophedon_coverage/set_parameters` and the recorder's start and stop. With ws_bridge on r2r, or not in
+  mower_rsd, the plan is E2's line for line.
+- **E2 steps 6 and 7 after it** take the guards' and pid_autotune's names into the process. What stays for ws_bridge
+  is the recorder's six (until E5), `set_parameters` (until the parameter services move), and the `to_ros` of the
+  three command topics: ws_bridge writes them on the bus, and every topic written on the bus gets its DDS face.
 
 - **Refused:** of all 16384 combinations of flags with the production set, only those that put mower_base on the bus
   with exactly one of robot_status and pid_autotune: `/mower_base/led_command` would then need both directions. Base and
@@ -218,7 +236,10 @@ say so.
   and their planned bridge. A latched bus topic reaches a DDS late joiner from a transient-local writer, a volatile
   one reaches a DDS reader, a DDS topic reaches a bus reader, a DDS client gets a bus server's answer, and a bus client
   is refused while there is no DDS server, then gets its answer once there is one. Then the standalone runner with a
-  battery module.
+  battery module, and with ws_bridge's bus backend (E3.1) against a recorder and a manual guard on DDS: the recorder's
+  latched status reaches a WebSocket client that came later, and a second one from ws_bridge's cache; the joystick
+  reaches the guard; a call reaches the recorder's server, and one with no server is unavailable after 5 s; ws_bridge's
+  own r2r node has no endpoint.
 - `tests/standalone.rs` (domain 78, its own `main`): a battery module's binary as the roll-back launches it, with
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
