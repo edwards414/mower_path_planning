@@ -4,7 +4,8 @@
 #   tests/oracle/generate.sh [workdir]
 #
 # workdir defaults to a temp dir and is where ros2_controllers / control_toolbox
-# get cloned. Needs clang++ (or g++) and git; no ROS installation.
+# get fetched, at the commits below. Needs clang++ (or g++) and git; no ROS
+# installation. tools/oracle/regen.sh runs it in the oracle image.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,10 +16,17 @@ out="$crate/tests/vectors"
 cxx="${CXX:-clang++}"
 
 mkdir -p "$work" "$out"
-[ -d "$work/ros2_controllers" ] || git clone --depth 1 -b jazzy \
-  https://github.com/ros-controls/ros2_controllers "$work/ros2_controllers"
-[ -d "$work/control_toolbox" ] || git clone --depth 1 -b jazzy \
-  https://github.com/ros-controls/control_toolbox "$work/control_toolbox"
+# The jazzy commits the vectors were generated from (README.md); a branch
+# head would move under them.
+ros2_controllers_rev="${ROS2_CONTROLLERS_REV:-516a88be02b658effa34c5a39e8bb971cddab930}"
+control_toolbox_rev="${CONTROL_TOOLBOX_REV:-71fbf3b6d8b643ef9380e3d4eef6bcb22984ed2b}"
+fetch() {  # fetch <url> <dir> <commit>
+  [ -d "$2/.git" ] || git init -q "$2"
+  git -C "$2" fetch -q --depth 1 "$1" "$3"
+  git -C "$2" checkout -q --detach FETCH_HEAD
+}
+fetch https://github.com/ros-controls/ros2_controllers "$work/ros2_controllers" "$ros2_controllers_rev"
+fetch https://github.com/ros-controls/control_toolbox "$work/control_toolbox" "$control_toolbox_rev"
 
 ddc="$work/ros2_controllers/diff_drive_controller"
 ct="$work/control_toolbox/control_toolbox"
