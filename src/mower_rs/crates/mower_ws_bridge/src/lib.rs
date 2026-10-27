@@ -12,11 +12,14 @@
 //! Usage (rosbridge.launch.py):
 //!   mower_ws_bridge --address 10.77.0.2 --port 9090 --loopback-port 9091
 //!                   --policy ws_bridge.yaml [--state-dir DIR] [--max-size N]
+//!                   [--backend r2r]
 
 pub mod auth;
 mod client;
 mod config;
+mod entry;
 mod hub;
+mod r2r_hub;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +38,23 @@ use crate::auth::{Identity, NonceCache};
 use crate::client::Client;
 use crate::config::Policy;
 use crate::hub::Hub;
+use crate::r2r_hub::R2rHub;
+
+/// What the bridge's hub talks to (`--backend`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// One r2r node and its spin thread: the bridge as it has always been.
+    R2r,
+}
+
+impl Backend {
+    fn parse(value: &str) -> Result<Backend, String> {
+        match value {
+            "r2r" => Ok(Backend::R2r),
+            other => Err(format!("--backend takes r2r, not {other:?}")),
+        }
+    }
+}
 
 struct Args {
     address: String,
@@ -44,6 +64,7 @@ struct Args {
     state_dir: String,
     max_size: usize,
     service_timeout_s: u64,
+    backend: Backend,
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -55,6 +76,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         state_dir: mower_rs_common::state_dir(),
         max_size: 64 * 1024 * 1024,
         service_timeout_s: 30,
+        backend: Backend::R2r,
     };
     let mut it = argv.iter().cloned();
     while let Some(a) = it.next() {
@@ -70,6 +92,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--state-dir" => args.state_dir = value("--state-dir")?,
             "--max-size" => args.max_size = value("--max-size")?.parse().map_err(|_| "--max-size".to_string())?,
             "--service-timeout" => args.service_timeout_s = value("--service-timeout")?.parse().map_err(|_| "--service-timeout".to_string())?,
+            "--backend" => args.backend = Backend::parse(&value("--backend")?)?,
             "--ros-args" => break, // ros2 launch appends --ros-args ...; the node reads those itself
             other => return Err(format!("unknown argument {other}")),
         }
@@ -204,12 +227,14 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shar
 /// `mower_rsd`; the listeners, gate, policy and node name are the same, and
 /// `m.args` carries what the launch file used to pass on the command line.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S]"))?;
+    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S] [--backend r2r]"))?;
     let policy = Arc::new(Policy::from_yaml(&std::fs::read_to_string(&args.policy).map_err(|e| format!("{}: {e}", args.policy))?)?);
 
     let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
-    let hub = Hub::start(node)?;
+    let hub = match args.backend {
+        Backend::R2r => Hub::R2r(R2rHub::start(node)?),
+    };
 
     let identity = Identity::load(&args.state_dir)?;
     match &identity {
@@ -277,4 +302,23 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     }
     shared.hub.shutdown();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(s: &str) -> Result<Args, String> {
+        parse_args(&s.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn the_backend_is_r2r_unless_told_otherwise() {
+        assert_eq!(args("--policy p.yaml").unwrap().backend, Backend::R2r);
+        assert_eq!(args("--policy p.yaml --backend r2r").unwrap().backend, Backend::R2r);
+        assert_eq!(args("--policy p.yaml --backend dds").err().as_deref(), Some("--backend takes r2r, not \"dds\""));
+        assert!(args("--policy p.yaml --backend").is_err());
+        // launch's ROS block ends what the bridge reads
+        assert_eq!(args("--policy p.yaml --ros-args --backend nonsense").unwrap().backend, Backend::R2r);
+    }
 }

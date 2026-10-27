@@ -15,7 +15,22 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::config::Policy;
-use crate::hub::{Hub, TopicEntry};
+use crate::entry::TopicEntry;
+use crate::hub::Hub;
+
+/// The answer to a `call_service`: `values` and `result: true`, or the
+/// error text as `values` and `result: false`, with the request's `id` if it
+/// had one. The text of a `serde_json::Value`, as every frame.
+pub fn service_response_frame(service: &str, response: Result<Value, String>, id: Option<Value>) -> String {
+    let mut reply = match response {
+        Ok(values) => json!({"op": "service_response", "service": service, "values": values, "result": true}),
+        Err(e) => json!({"op": "service_response", "service": service, "values": e, "result": false}),
+    };
+    if let Some(id) = id {
+        reply["id"] = id;
+    }
+    reply.to_string()
+}
 
 /// Outgoing side of a client, shared with topic fan-out.
 #[derive(Clone)]
@@ -102,9 +117,8 @@ impl Client {
                     return self.status("error", format!("subscribe: {topic} is not allowed"), id.as_ref());
                 }
                 let throttle = doc.get("throttle_rate").and_then(|v| v.as_u64()).unwrap_or(0);
-                match self.hub.subscribe(&topic, str_field("type")).await {
+                match self.hub.subscribe(&topic, str_field("type"), &self.handle, throttle).await {
                     Ok(entry) => {
-                        entry.add_client(self.handle.clone(), throttle);
                         self.subscriptions.insert(topic, entry);
                     }
                     Err(e) => self.status("error", format!("subscribe: {e}"), id.as_ref()),
@@ -150,7 +164,7 @@ impl Client {
                     Ok(self.rosapi_topics().await)
                 } else if service == "/rosapi/get_time" {
                     // the studio's latency ping
-                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    let now = self.hub.now();
                     Ok(json!({"time": {"sec": now.as_secs() as i64, "nanosec": now.subsec_nanos()}}))
                 } else {
                     match self.policy.service_type(&service) {
@@ -158,17 +172,10 @@ impl Client {
                         Some(t) => self.hub.call_service(&service, t, args, self.service_timeout).await,
                     }
                 };
-                let mut reply = match response {
-                    Ok(values) => json!({"op": "service_response", "service": service, "values": values, "result": true}),
-                    Err(e) => {
-                        r2r::log_warn!(&self.logger, "{}: call_service {}: {}", self.peer, service, e);
-                        json!({"op": "service_response", "service": service, "values": e, "result": false})
-                    }
-                };
-                if let Some(id) = id {
-                    reply["id"] = id;
+                if let Err(e) = &response {
+                    r2r::log_warn!(&self.logger, "{}: call_service {}: {}", self.peer, service, e);
                 }
-                self.handle.send_json(&reply);
+                self.handle.send(service_response_frame(&service, response, id).into());
             }
             "set_level" | "auth" | "fragment" => {}
             other => self.status("error", format!("unsupported op {other:?}"), id.as_ref()),
