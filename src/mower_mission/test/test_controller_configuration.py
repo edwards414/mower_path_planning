@@ -1317,10 +1317,44 @@ def test_nav2_clock_is_controlled_only_by_the_launch_argument():
 
 def test_runtime_container_sets_non_root_home():
     source = DOCKERFILE.read_text(encoding='utf-8')
-    runtime = source.split('FROM ros:${ROS_DISTRO}-ros-core AS runtime', 1)[1]
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
     # runtime is the last stage: the GPS driver ships inside it
     assert '\nFROM ' not in runtime
     assert 'ENV HOME=/home/${USER_NAME}' in runtime
+
+
+def test_image_bases_are_pinned_and_the_install_tree_is_stored_once():
+    """A floating base tag ships whatever upstream rebuilt last (and a new
+    ~150 MB base layer to every robot); a `chown -R` of the workspace after
+    the COPY stored the install tree twice in every update."""
+    source = DOCKERFILE.read_text(encoding='utf-8')
+    pins = dict(re.findall(r'^ARG (\w+_IMAGE)=(\S+)$', source, re.M))
+    assert set(pins) == {'ROS_BASE_IMAGE', 'ROS_CORE_IMAGE',
+                         'FIRMWARE_BUILD_IMAGE', 'MANIFESTS_IMAGE'}
+    for name, image in pins.items():
+        assert re.fullmatch(r'docker\.io/library/[\w.-]+:[\w.-]+@sha256:[0-9a-f]{64}',
+                            image), name
+    # every stage starts from one of them or from an earlier stage
+    stages = re.findall(r'^FROM (?:--platform=\S+ )?(\S+) AS (\S+)$', source, re.M)
+    assert len(stages) == len(re.findall(r'^FROM ', source, re.M))
+    seen = set()
+    for base, stage in stages:
+        assert base in seen or base.strip('${}') in pins, (stage, base)
+        seen.add(stage)
+
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
+    # instructions only, one per line
+    runtime = re.sub(r'^\s*#.*\n', '', runtime, flags=re.M).replace('\\\n', ' ')
+    assert not re.search(r'chown -R [^\n]*\$\{WORKSPACE\}', runtime)
+    copies = re.findall(r'^COPY (.*)$', runtime, re.M)
+    install = [c for c in copies if '${WORKSPACE}/install' in c]
+    assert len(install) == 2, install
+    for copy in install:
+        assert '--link --from=builder --chown=${USER_ID}:${GROUP_ID}' in copy
+    assert '--exclude=mower_rs' in install[0]
+    assert install[1].split()[-1] == '${WORKSPACE}/install/mower_rs'
+    # the user exists before the tree is copied in
+    assert runtime.index('useradd') < runtime.index(install[0])
 
 
 def test_gps_driver_runs_inside_the_runtime_container():

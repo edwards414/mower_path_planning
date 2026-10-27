@@ -2,10 +2,24 @@
 ARG ROS_DISTRO=jazzy
 ARG WORKSPACE=/mower_ws
 
+# Every base image is pinned by digest. A floating tag puts whatever
+# upstream rebuilt last into the robot image: an unreviewed ros-core
+# (rclcpp, rcl, the RMWs) or toolchain, and a new ~150 MB base layer in the
+# next robot update. These are the digests main's build of the image the
+# robot runs resolved (run 41050491406, 89bf8f9, image sha256:00c56fec...;
+# BuildKit's "FROM ...@sha256" lines): ros-core and ros-base as Docker Hub
+# rebuilt them on 2026-10-27. Bump one in its own PR, with the
+# `dpkg-query -W` diff of the runtime image. The ROS ones must match
+# ROS_DISTRO.
+ARG ROS_BASE_IMAGE=docker.io/library/ros:jazzy-ros-base@sha256:8eed0a4669bbf43ee331878a4c39bd8ebddea8e3312a58b4fae8edb14526b617
+ARG ROS_CORE_IMAGE=docker.io/library/ros:jazzy-ros-core@sha256:e4b2124bfa4d2021d50f094391d369349189bf090e25d904ff013ec5093ac565
+ARG FIRMWARE_BUILD_IMAGE=docker.io/library/ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+ARG MANIFESTS_IMAGE=docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+
 ##############################################
 # Stage 1: Base
 ##############################################
-FROM ros:${ROS_DISTRO}-ros-base AS base
+FROM ${ROS_BASE_IMAGE} AS base
 
 ARG ROS_DISTRO
 ARG WORKSPACE
@@ -44,7 +58,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ##############################################
 # Stage 1b: package manifests only (for the builder's rosdep layer)
 ##############################################
-FROM --platform=$BUILDPLATFORM alpine:3.20 AS manifests
+FROM --platform=$BUILDPLATFORM ${MANIFESTS_IMAGE} AS manifests
 COPY ./src /src
 RUN find /src -type f ! -name package.xml -delete \
     && find /src -mindepth 1 -type d -empty -delete
@@ -145,7 +159,7 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
 # runtime image ships in /opt/mower/firmware; firmware-sync flashes it at
 # container start. Same commit as the ros2_control driver in src/mower_hardware.
 ##############################################
-FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS firmware
+FROM --platform=$BUILDPLATFORM ${FIRMWARE_BUILD_IMAGE} AS firmware
 
 ARG MOWER_VERSION
 ARG MOWER_GIT_SHA
@@ -180,7 +194,7 @@ RUN make -j"$(nproc)" TOOLCHAIN_BIN= \
 ##############################################
 # Stage 3: Runtime
 ##############################################
-FROM ros:${ROS_DISTRO}-ros-core AS runtime
+FROM ${ROS_CORE_IMAGE} AS runtime
 
 ARG ROS_DISTRO
 ARG WORKSPACE
@@ -254,29 +268,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && find /opt/ros/${ROS_DISTRO}/share -path '*/cmake/*' -delete \
     && du -xsh /usr /opt /var 2>/dev/null || true
 
-COPY --from=builder ${WORKSPACE}/install ${WORKSPACE}/install
-COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY ./utils/firmware-sync ./utils/mower-host-request /usr/local/bin/
-# STM32 firmware built from this same commit + the tool that flashes it.
-COPY --from=firmware /fw/build/mower_robot_firmware.bin \
-                     /fw/build/mower_robot_firmware.json \
-                     /fw/bootloader/build/bootloader.bin \
-                     /opt/mower/firmware/
-COPY ./firmware/tools/mower_flash.py /opt/mower/firmware/mower_flash.py
-# DDS: same RMW as the development containers, graph kept on loopback.
-COPY ./deploy/ros/cyclonedds.xml /etc/mower/cyclonedds.xml
-ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-    CYCLONEDDS_URI=file:///etc/mower/cyclonedds.xml
-
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request
-# The command-line tool (src/mower_rs/crates/mowerctl) on the PATH, for
-# `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
-RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
-# The Rust port of mower_flash.py (src/mower_rs/crates/mower_flash), next to
-# it; firmware-sync still runs the Python one (E6-4 adds the switch).
-RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash /usr/local/bin/mower_flash
-
+# The user exists before the install tree comes in, and the tree is copied
+# with its owner (COPY --chown). A `chown -R ${WORKSPACE}` afterwards stored
+# the whole tree a second time (layer 16 of 18, 26-43 MB compressed, in every
+# robot update).
 RUN if getent group ${GROUP_ID} > /dev/null; then \
         existing_group="$(getent group ${GROUP_ID} | cut -d: -f1)"; \
         if [ "${existing_group}" != "${GROUP_NAME}" ]; then groupmod --new-name ${GROUP_NAME} "${existing_group}"; fi; \
@@ -299,7 +294,41 @@ RUN if getent group ${GROUP_ID} > /dev/null; then \
     && mkdir -p /home/${USER_NAME}/.mower/zone_record \
         /home/${USER_NAME}/.mower/sites \
         /home/${USER_NAME}/.mower/bags \
-    && chown -R ${USER_ID}:${GROUP_ID} ${WORKSPACE} /home/${USER_NAME}
+    && chown -R ${USER_ID}:${GROUP_ID} /home/${USER_NAME}
+
+# The install tree in two layers: mower_rs (mower_rsd and the per-module
+# binaries) changes with every Rust commit, the rest (meshes, interface
+# typesupport, launch, config, Python) with its own packages only. --link
+# keeps each layer independent of everything before it: BuildKit reuses it
+# whenever the copied files' content, modes and owners are unchanged (their
+# mtimes are not part of the key), so an update that changed only Rust code
+# downloads the mower_rs layer and the KB-sized ones. The parent directories
+# --link creates get the --chown owner, as `chown -R` gave them before.
+COPY --link --from=builder --chown=${USER_ID}:${GROUP_ID} --exclude=mower_rs \
+     ${WORKSPACE}/install ${WORKSPACE}/install
+COPY --link --from=builder --chown=${USER_ID}:${GROUP_ID} \
+     ${WORKSPACE}/install/mower_rs ${WORKSPACE}/install/mower_rs
+COPY ./utils/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY ./utils/firmware-sync ./utils/mower-host-request /usr/local/bin/
+# STM32 firmware built from this same commit + the tool that flashes it.
+COPY --from=firmware /fw/build/mower_robot_firmware.bin \
+                     /fw/build/mower_robot_firmware.json \
+                     /fw/bootloader/build/bootloader.bin \
+                     /opt/mower/firmware/
+COPY ./firmware/tools/mower_flash.py /opt/mower/firmware/mower_flash.py
+# DDS: same RMW as the development containers, graph kept on loopback.
+COPY ./deploy/ros/cyclonedds.xml /etc/mower/cyclonedds.xml
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    CYCLONEDDS_URI=file:///etc/mower/cyclonedds.xml
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request
+# The command-line tool (src/mower_rs/crates/mowerctl) on the PATH, for
+# `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
+RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
+# The Rust port of mower_flash.py (src/mower_rs/crates/mower_flash), next to
+# it; firmware-sync still runs the Python one (E6-4 adds the switch).
+RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash /usr/local/bin/mower_flash
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc \
     && echo "source ${WORKSPACE}/install/setup.bash" >> /home/${USER_NAME}/.bashrc \
