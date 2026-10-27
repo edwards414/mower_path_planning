@@ -298,7 +298,14 @@ jobs:
     # minutes like ubuntu-latest). Both images are arm64-only for the robot;
     # building them under QEMU on x86 took 82 min, native is ~10 min.
     runs-on: ubuntu-24.04-arm
-    needs: [python-tests, coverage-core-tests, mower-rs-tests, firmware, driver-tests]
+    # No `needs`: the image builds while the tests run. A PR only loads and
+    # smoke-tests it. Everything else that publishes (main, v* tags,
+    # workflow_dispatch, a PR labeled push-image) pushes it under a staging
+    # tag, sha-<commit>, which nothing follows; the `publish` job moves the
+    # real tags (main, stable, semver, pr-N) onto that exact manifest once
+    # every test job has passed, so they still never point at an untested
+    # image.
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
 
     # Only the image something actually pulls from GHCR:
     #   runtime  deploy/docker-compose.yaml  (robot, arm64); it also carries
@@ -319,6 +326,16 @@ jobs:
 
     env:
       REPOSITORY_LC: ${{ github.repository }}
+      # 'true' when this run publishes the image (pushes the staging tag)
+      PUSH: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') }}
+      # Only main writes the build caches. A PR reads main's (GitHub lets a
+      # PR restore the default branch's caches); PR entries had pushed the
+      # Actions cache past its 10 GB limit, which evicts main's.
+      WRITE_CACHE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
 
     steps:
       - name: Checkout
@@ -328,7 +345,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set lower case repo name
-        run: echo "REPOSITORY_LC=${REPOSITORY_LC,,}" >> $GITHUB_ENV
+        run: echo "REPOSITORY_LC=${REPOSITORY_LC,,}" >> "$GITHUB_ENV"
 
       - name: Build identity
         # Embedded in the image (MOWER_* env, /robot/info) and in the STM32
@@ -373,8 +390,28 @@ jobs:
             # release channel the robots follow (deploy/docker-compose.yaml IMAGE_TAG=stable)
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
+      # What build-push pushes when publishing: the same repositories as the
+      # tags above, under sha-<commit> (publish copies it to those tags).
+      - name: Staging tags
+        id: staging
+        if: env.PUSH == 'true'
+        env:
+          DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
+          IMAGE_SUFFIX: ${{ matrix.image_suffix }}
+        run: |
+          ghcr="ghcr.io/${REPOSITORY_LC}${IMAGE_SUFFIX}:sha-${GITHUB_SHA}"
+          {
+            echo "ghcr=${ghcr}"
+            echo 'tags<<EOF'
+            echo "${ghcr}"
+            if [ -n "${DOCKERHUB_REPO}" ]; then
+              echo "docker.io/${DOCKERHUB_REPO}${IMAGE_SUFFIX}:sha-${GITHUB_SHA}"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
-        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/')
+        if: env.PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -385,7 +422,7 @@ jobs:
       # the repository must exist (private) before the first push, otherwise
       # Docker Hub creates it public.
       - name: Login to Docker Hub
-        if: vars.DOCKERHUB_REPO != '' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))
+        if: vars.DOCKERHUB_REPO != '' && env.PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: docker.io
@@ -405,14 +442,18 @@ jobs:
       # round-trips through actions/cache.
       - name: Restore git mtimes
         if: matrix.name == 'runtime'
+        timeout-minutes: 10
         run: |
           sudo apt-get install -y --no-install-recommends git-restore-mtime
           git restore-mtime --skip-missing
           ls -l --time-style=+%F src/mower_hardware/package.xml
 
+      # main restores the newest entry and saves its own; everything else only
+      # restores (actions/cache/restore has no post step that saves).
       - name: Restore build caches
-        if: matrix.name == 'runtime'
+        if: matrix.name == 'runtime' && env.WRITE_CACHE == 'true'
         id: build-cache
+        timeout-minutes: 10
         uses: actions/cache@v4
         with:
           path: .buildkit-cache
@@ -420,6 +461,18 @@ jobs:
           restore-keys: |
             runtime-build-cache-
 
+      - name: Restore build caches (read-only)
+        if: matrix.name == 'runtime' && env.WRITE_CACHE != 'true'
+        timeout-minutes: 10
+        uses: actions/cache/restore@v4
+        with:
+          path: .buildkit-cache
+          key: runtime-build-cache-${{ github.sha }}
+          restore-keys: |
+            runtime-build-cache-
+
+      # Extraction (the post step, ~65 s) only feeds the cache save above, so
+      # it is skipped whenever nothing is saved.
       - name: Inject build caches into BuildKit
         if: matrix.name == 'runtime'
         uses: reproducible-containers/buildkit-cache-dance@v3.4.0
@@ -431,9 +484,12 @@ jobs:
               ".buildkit-cache/cargo-registry": "/usr/local/cargo/registry",
               ".buildkit-cache/cargo-git": "/usr/local/cargo/git"
             }
-          skip-extraction: ${{ steps.build-cache.outputs.cache-hit }}
+          skip-extraction: ${{ env.WRITE_CACHE != 'true' || steps.build-cache.outputs.cache-hit == 'true' }}
 
       - name: Build and push
+        id: build
+        # a cold build (no cache at all) is ~25 min; this only catches a hang
+        timeout-minutes: 45
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -448,29 +504,33 @@ jobs:
           # arm64 everywhere, PRs included: the runner is arm64 so the PR
           # image loads and smoke-tests natively.
           platforms: ${{ matrix.push_platforms }}
-          push: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/') }}
-          load: ${{ github.event_name == 'pull_request' && matrix.name == 'runtime' && !contains(github.event.pull_request.labels.*.name, 'push-image') }}
-          # Always keep the fast GitHub Actions cache. Additionally publish a
-          # GHCR registry cache for the runtime target (only when GHCR login has
-          # run: pushes, tags, or PRs labeled push-image) so local
-          # `docker buildx` builds can reuse the same builder layers via
-          # --cache-from. The expression collapses to an empty line otherwise.
+          push: ${{ env.PUSH == 'true' }}
+          load: ${{ env.PUSH != 'true' && matrix.name == 'runtime' }}
+          # Read both caches; write them only on main. The GHCR registry cache
+          # (runtime target, only once GHCR login has run) is never evicted and
+          # lets local `docker buildx` builds reuse the builder layers via
+          # --cache-from. An expression that does not apply collapses to an
+          # empty line.
           cache-from: |
             type=gha,scope=${{ matrix.name }}
-            ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
+            ${{ (matrix.name == 'runtime' && env.PUSH == 'true') && format('type=registry,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
           cache-to: |
-            type=gha,mode=max,scope=${{ matrix.name }}
-            ${{ (matrix.name == 'runtime' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image') || startsWith(github.ref, 'refs/tags/'))) && format('type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
+            ${{ env.WRITE_CACHE == 'true' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
+            ${{ (matrix.name == 'runtime' && env.WRITE_CACHE == 'true') && format('type=registry,mode=max,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/{0}-buildcache:runtime', env.REPOSITORY_LC) || '' }}
+          # provenance off and one platform: a single image manifest, not an
+          # index, which mower-update.sh --check compares by digest
           provenance: false
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.PUSH == 'true' && steps.staging.outputs.tags || steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      # A PR smoke-tests the image it loaded; a PR labeled push-image pulls
+      # the staging tag it just pushed (its pr-N tag moves only in publish).
       - name: Select runtime image tag
         id: runtime-image
         if: github.event_name == 'pull_request' && matrix.name == 'runtime'
         shell: bash
         env:
-          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_TAGS: ${{ env.PUSH == 'true' && steps.staging.outputs.ghcr || steps.meta.outputs.tags }}
         run: |
           tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
@@ -526,3 +586,77 @@ jobs:
             echo "image ${MOWER_IMAGE} version ${MOWER_VERSION} sha ${MOWER_GIT_SHA}"
           '
 
+  publish:
+    # Moves the tags robots and people follow (main, stable, semver, pr-N)
+    # onto the manifest `build` pushed as sha-<commit>, once every test job
+    # has passed: the same gate the push had before `build` stopped waiting
+    # for the tests. imagetools copies that manifest byte for byte
+    # (--prefer-index=false; its default wraps a single manifest in an
+    # index), so the digest a robot compares (mower-update.sh --check,
+    # /robot/info) is the one build-push produced. The dry run is checked
+    # first, every tag again afterwards.
+    name: Publish runtime tags
+    runs-on: ubuntu-latest
+    needs: [python-tests, coverage-core-tests, mower-rs-tests, firmware, driver-tests, build]
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image')
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: vars.DOCKERHUB_REPO != ''
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Point the tags at the tested manifest
+        timeout-minutes: 10
+        shell: bash
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+          TAGS: ${{ needs.build.outputs.tags }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest from build: '$DIGEST'"; exit 1; }
+          # $1 = file holding one manifest (an optional trailing newline is
+          # dropped): exit 1 unless it is $DIGEST and a single image manifest
+          check_manifest() {
+            python3 - "$DIGEST" "$1" <<'PY'
+          import hashlib, json, sys
+          want, path = sys.argv[1], sys.argv[2]
+          raw = open(path, 'rb').read()
+          if raw.endswith(b'\n'):
+              raw = raw[:-1]
+          got = 'sha256:' + hashlib.sha256(raw).hexdigest()
+          kind = json.loads(raw).get('mediaType')
+          ok = got == want and kind in ('application/vnd.oci.image.manifest.v1+json',
+                                        'application/vnd.docker.distribution.manifest.v2+json')
+          print(f'{path}: {kind} {got}' + ('' if ok else f' -- expected the single image manifest {want}'))
+          sys.exit(0 if ok else 1)
+          PY
+          }
+          # one call per repository, from that repository's own copy (the
+          # staging push put the blobs there)
+          for repo in $(printf '%s\n' "$TAGS" | sed -n 's/:[^:/]*$//p' | sort -u); do
+            repo_tags=() args=()
+            while IFS= read -r tag; do
+              repo_tags+=("$tag") args+=(-t "$tag")
+            done < <(printf '%s\n' "$TAGS" | awk -v r="${repo}:" 'index($0, r) == 1')
+            docker buildx imagetools create --dry-run --prefer-index=false "${args[@]}" "${repo}@${DIGEST}" > dry-run.json
+            check_manifest dry-run.json
+            docker buildx imagetools create --prefer-index=false "${args[@]}" "${repo}@${DIGEST}"
+            for tag in "${repo_tags[@]}"; do
+              docker buildx imagetools inspect --raw "$tag" > published.json
+              check_manifest published.json
+              echo "$tag -> $DIGEST" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          done
