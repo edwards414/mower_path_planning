@@ -934,6 +934,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "mower_bridge",
  "mower_bus",
  "mower_rs_common",
  "r2r",
