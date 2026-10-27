@@ -36,6 +36,17 @@ MASKS = {
     '/manual_command_clock': {'frame_id': re.compile(r'[0-9a-f]{32}')},   # manual-session-v1:<id>
 }
 CONTENT_LINES_MAX = 40   # a longer content is compared by its digest
+# Live values compared within a tolerance, on the window's last message: the
+# robot stands still on the fake devices, so where the app shows it on the map
+# and how the map lies on the aerial image (the datum's bearing) settle. Seen
+# on the images of 2026-10-24..27: the pose the same to 1e-6 in every run;
+# the bearing within 0.01 rad from 3827804 on (PR #45), 0.28 rad apart in two
+# runs of f3f4630. A line `... = V (±T)` of B equal to A's within T is A's.
+NEAR = {
+    '/adapter/robot_pose': (('pose.position.', 0.01), ('pose.orientation.', 0.001)),
+    '/adapter/map_datum': (('data<json>.bearing_rad', 0.05),),
+}
+NEAR_LINE = re.compile(r'^(topic \S+ last \S+) = (\S+) \(±(\S+)\)$')
 
 # the parameter files launch writes for each run (launch_params_XXXXXXXX,
 # robot.launch.py's mower_rsd_<node>_XXXXXXXX.yaml)
@@ -231,7 +242,8 @@ def services(d, ident):
 
 def topics(d, ident):
     """Every listed topic through the gate: delivered or not, the JSON shape,
-    and (but for DYNAMIC) the distinct contents."""
+    the NEAR values of its last message, and (but for DYNAMIC) the distinct
+    contents."""
     doc = load(os.path.join(d, 'topics.json'), {})
     if not doc:
         return ['topics: nothing recorded']
@@ -239,6 +251,10 @@ def topics(d, ident):
     for name, e in sorted(doc['topics'].items()):
         lines.append(f'topic {name} ' + ('delivered' if e['count'] else f'nothing in {doc["seconds"]} s'))
         lines += [f'topic {name} shape {s}' for s in e['shape']]
+        for k, v in sorted(flatten(e.get('last', {})).items()):
+            for prefix, tol in NEAR.get(name, ()):
+                if k.startswith(prefix) and isinstance(v, (int, float)) and not isinstance(v, bool):
+                    lines.append(f'topic {name} last {k} = {v + 0.0} (±{tol})')
         if name in DYNAMIC or not e['contents']:
             continue
         variants = sorted({'\n'.join(content_lines(f'topic {name} content', c, ident, MASKS.get(name)))
@@ -305,6 +321,19 @@ def log(d, ident):
     return sorted({f'log {line}' for line in lines if not TIMING.search(line)})
 
 
+def near(a_lines, b_lines):
+    """B's lines `... = V (±T)` (NEAR) become A's where A has the same key
+    within T, so only a difference beyond the tolerance shows in the diff."""
+    a = {m.group(1): (float(m.group(2)), line) for line in a_lines if (m := NEAR_LINE.match(line))}
+    out = []
+    for line in b_lines:
+        m = NEAR_LINE.match(line)
+        if m and m.group(1) in a and abs(float(m.group(2)) - a[m.group(1)][0]) <= float(m.group(3)):
+            line = a[m.group(1)][1]
+        out.append(line)
+    return out
+
+
 def summarize(d, ident):
     return {'contract': contract(d, ident), 'lists': lists(d, ident), 'services': services(d, ident),
             'topics': topics(d, ident), 'frames': frames(d, ident), 'log': log(d, ident)}
@@ -358,7 +387,8 @@ def render(out, gate=CHECKS):
                 f.writelines(f'{line}\n' for line in summary[label][c])
     diff, per_check = [], {}
     for c in CHECKS:
-        d = list(difflib.unified_diff(summary['A'][c], summary['B'][c], f'A {c}', f'B {c}', n=0, lineterm=''))
+        b = near(summary['A'][c], summary['B'][c])
+        d = list(difflib.unified_diff(summary['A'][c], b, f'A {c}', f'B {c}', n=0, lineterm=''))
         per_check[c] = sum(1 for x in d if x[:1] in '+-' and not x.startswith(('+++', '---')))
         diff += d
     with open(os.path.join(out, 'diff.txt'), 'w') as f:

@@ -28,11 +28,18 @@ iterations, add `--stop-grace 10 --cpu-seconds 0`.
 
 In CI: Actions, "Image A/B", "Run workflow" (`.github/workflows/ab.yml`), with
 two image refs: a Docker Hub digest as above, or a GHCR ref such as
-`ghcr.io/edwards414/mower_path_planning:main`. Leave `checks` at all of them
-unless a step changes something on purpose (E4 moving `twist_mux` and `rsp`
-in-process changes the log, for example). Then list the checks that must stay
-the same, or tick `report_only`. The job uploads the whole output directory as
-an artifact and puts `report.md` in the job summary.
+`ghcr.io/edwards414/mower_path_planning:main`. A PR's image is
+`ghcr.io/edwards414/mower_path_planning:pr-<N>` once the PR carries the
+`push-image` label (build.yml). Older images are untagged, so name them by
+digest; `gh api /users/edwards414/packages/container/mower_path_planning/versions`
+lists the digests with their dates, and the image's `MOWER_GIT_SHA` says
+which commit it is.
+
+Leave `checks` at all of them unless a step changes something on purpose (E4
+moving `twist_mux` and `rsp` in-process changes the log, for example). Then
+list the checks that must stay the same, or tick `report_only`. The job
+uploads the whole output directory as an artifact and puts `report.md` in the
+job summary. It needs about 2 minutes to pull the two images and 3 to run.
 
 `ab.py compare DIR` redoes the comparison of an earlier run, for example after
 a change to the normalisation.
@@ -107,7 +114,7 @@ per-check counts, and the numbers that are not compared.
 | `contract` (O1) | `probe_app.py`'s verdict (`APP_CONTRACT_OK`, `content=`, `services=`, missing topics) for one client and for two at once, and the topics each one got | timings, rates, message counts |
 | `lists` | `/rosapi/topics` (names and types); the bridge policy `ws_bridge.yaml` that mower_rsd was given (what the app may subscribe to, publish and call) | comments |
 | `services` | the answers of the policy's read-only services on 9091: `/site_op` (list), `/check_nav_status`, `/coverage_progress_status`, `/rosapi/get_time` (result only) | header stamps; floats to 1e-6 |
-| `topics` | for every listed topic, through the gate: whether it delivered, the JSON shape of every message (each key path with its JSON type, inside JSON strings too: an int where there was a float breaks the Dart app), and the distinct contents | stamps, floats to 1e-6; see below |
+| `topics` | for every listed topic, through the gate: whether it delivered, the JSON shape of every message (each key path with its JSON type, inside JSON strings too: an int where there was a float breaks the Dart app), the distinct contents, and the robot's pose and the map datum's bearing within a tolerance | stamps, floats to 1e-6; see below |
 | `frames` (O2) | per STM32 frame type the host sent (`fake_base.py`'s rx), the payloads in order with consecutive repeats collapsed (e2-verify's `base_frames.py`) | counts and rates |
 | `log` (O5) | the set of distinct lines the stack printed while it ran | timestamps, pids, launch's process numbers, client ports, temp file names, decimal numbers (measured values) |
 
@@ -124,7 +131,17 @@ Contents that cannot be the same from run to run are not compared
   the same sources 4 bytes apart.
 - `/adapter/map_datum`'s `bearing_rad` is the EKF's yaw at the moment navsat
   locks the datum, so it depends on how far the filter has converged by then.
-  It is masked.
+  It is masked there, and compared within a tolerance instead (below).
+
+Two live values are compared within a tolerance on the window's last message
+(`NEAR` in `compare.py`): where the app shows the robot (`/adapter/robot_pose`,
+±1 cm and ±0.001 per quaternion component) and how it lays the map over the
+aerial image (the datum's bearing, ±0.05 rad). On the fake devices the robot
+stands still, so both settle. The pose was the same to 1e-6 in every run of
+every image tried. The bearing stayed within 0.01 rad from 3827804 on (after
+PR #45's datum fix), while two runs of f3f4630 locked it 0.28 rad apart. In
+the summary files these lines end in `(±T)`; B's value counts as A's when it
+is within T.
 
 Each side's own build identity (its image's `MOWER_GIT_SHA`, `MOWER_VERSION`,
 `MOWER_BUILD_UNIX` and `MOWER_IMAGE`) is replaced by a placeholder wherever it
@@ -156,7 +173,9 @@ counted.
 Not compared, in the report only (O6 and friends): how long the bridge and the
 app contract took to come up, the rates `probe_app.py` measured, message and
 frame counts, CPU per process, whether mower_rsd's argv and the process list
-are the same, and how `docker stop` went.
+are the same, and how `docker stop` went. The state directory after the run
+(`state/`, O3) is kept but not compared: `robot_status.json` in it is
+rewritten with live values, and its file contract is E6's golden test.
 
 ## Stopping
 

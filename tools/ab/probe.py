@@ -11,7 +11,7 @@ the robot (rosbridge v2 JSON over WebSocket). Stdlib + websockets.
         through the pairing gate: subscribe to every topic /rosapi/topics
         lists for SECONDS; per topic the message count, the JSON shape of what
         arrived (every key path with its JSON type, inside JSON strings too),
-        and the distinct contents (stamps dropped, floats rounded)
+        the distinct contents and the last one (stamps dropped, floats rounded)
 
 MOWER_PAIR_FILE (robot_id, secret) signs the gate's headers as probe_app.py
 does.
@@ -175,6 +175,7 @@ async def topics(url, seconds, out):
             e['max_bytes'] = max(e.get('max_bytes', 0), len(raw))
             shape(m.get('msg'), '', e['shape'])
             c = norm(m.get('msg'))
+            e['last'] = c
             if c not in e['contents'] and len(e['contents']) < 50:
                 e['contents'].append(c)
     for e in seen.values():
