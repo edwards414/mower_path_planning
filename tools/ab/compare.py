@@ -54,11 +54,14 @@ LOG_SUBS = [
     (re.compile(r'\((\d+) so far'), '(N so far'),
     (re.compile(r'command_age_ms \d+'), 'command_age_ms N'),
 ]
-# Lines that say the host stalled a thread, and what such a stall leads to: a
-# message that arrived too late, or a heartbeat tick before the first
-# odometry (at start, robot_status's first tick 0.5 s in races mower_base's
-# first /odom_slow). How many there are depends on the machine's load, not on
-# the image: listed in the report, not diffed.
+# Lines that depend on the machine, not on the image: listed in the report,
+# not diffed. The host stalled a thread, or what such a stall leads to (a
+# message that arrived too late); at start, a node's first check came before
+# its first input (robot_status's first heartbeat tick 0.5 s in, before
+# mower_base's first /odom_slow; path_record_node's first try for the EKF's
+# map pose); or the host's clock was stepped (Docker Desktop's VM corrects its
+# clock under load, and every node that checks a stamp against it says so in
+# its own way).
 TIMING = re.compile('|'.join([
     r'\[mower_base\]: (no wheel feedback for|feedback resumed|control cycle overrun)',
     r'\[mower_base\]: arm latch: (the control loop did not run|wheel feedback lost)',
@@ -67,7 +70,10 @@ TIMING = re.compile('|'.join([
     r'\[mower_base\]: Ignoring the received message .* older than the current time',
     r'\[imu\]: Discarded IMU serial backlog after a host timing gap',
     r'\[robot_status\]: /robot/online -> false',
-    r'\[velocity_command_guard\]: Rejected drivetrain command: velocity timestamp is stale',
+    r'\[path_record_node\]: (機器人位置不可用: 尚未收到或已過期|等待機器人位置)',
+    r'\[velocity_command_guard\]: Rejected drivetrain command: velocity '
+    r'(timestamp is stale|timestamp is too far in the future|source timestamp moved backward)',
+    r'detected jump back in time|Moved backwards in time',
 ]))
 
 # side.sh's own processes in procs.txt

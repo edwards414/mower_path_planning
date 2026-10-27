@@ -111,35 +111,47 @@ per-check counts, and the numbers that are not compared.
 | `frames` (O2) | per STM32 frame type the host sent (`fake_base.py`'s rx), the payloads in order with consecutive repeats collapsed (e2-verify's `base_frames.py`) | counts and rates |
 | `log` (O5) | the set of distinct lines the stack printed while it ran | timestamps, pids, launch's process numbers, client ports, temp file names, decimal numbers (measured values) |
 
-Contents that cannot be the same from run to run are not compared:
+Contents that cannot be the same from run to run are not compared
+(`DYNAMIC` and `MASKS` in `compare.py`):
 
 - `/robot/telemetry`, `/gps/status` and `/adapter/robot_pose` carry live
   values, so only their shape is compared.
-- `/robot/info`'s `uptime_s` is masked, and so are its bundled firmware's
-  `crc32` and `size`. The firmware embeds the build identity, and whether a
-  constant takes one Thumb-2 instruction or two depends on its value: 3827804
-  and 16f7356 build the same sources 4 bytes apart. `/pid_autotune/status`'s
-  `updated_at` and the random session id in `/manual_command_clock` are
-  masked too.
-- `/adapter/map_datum`'s `bearing_rad` is masked too. It is the EKF's yaw at
-  the moment navsat locks the datum, so it depends on how far the filter has
-  converged by then.
+- Masked fields: `/robot/info`'s `uptime_s`, `/pid_autotune/status`'s
+  `updated_at` and the random session id in `/manual_command_clock`.
+- `/robot/info`'s bundled firmware `crc32` and `size` are masked as well.
+  The firmware embeds the build identity, and whether a constant takes one
+  Thumb-2 instruction or two depends on its value: 3827804 and 16f7356 build
+  the same sources 4 bytes apart.
+- `/adapter/map_datum`'s `bearing_rad` is the EKF's yaw at the moment navsat
+  locks the datum, so it depends on how far the filter has converged by then.
+  It is masked.
 
 Each side's own build identity (its image's `MOWER_GIT_SHA`, `MOWER_VERSION`,
 `MOWER_BUILD_UNIX` and `MOWER_IMAGE`) is replaced by a placeholder wherever it
 shows. A side that reports its own version therefore compares equal. A side
 that reports some other version shows up in the diff.
 
-Some log lines depend on the machine's load, not on the image (`TIMING` in
-`compare.py`). These are the lines that say the host stalled a thread
-(mower_base's feedback-loss, overrun and arm-latch-gap lines, the IMU's "host
-timing gap"), and the lines such a stall leads to: a command that arrived too
-late, or `/robot/online -> false` at start, when robot_status's first
-heartbeat tick, 0.5 s in, comes before mower_base's first `/odom_slow`. The
-report lists them with their counts; the diff leaves them out. A robot that
-is offline while the probes run still fails the `contract` check, and one
-whose `/robot/online` flips during the `topics` window fails that one. Lines
-printed after `docker stop` (`stack_stop.log`) are only counted.
+Some log lines depend on the machine, not on the image (`TIMING` in
+`compare.py`):
+
+- Lines that say the host stalled a thread: mower_base's feedback-loss,
+  overrun and arm-latch-gap lines, and the IMU's "host timing gap".
+- Lines such a stall leads to: a command that arrived too late.
+- Lines that say a node's first check at start came before its first input:
+  `/robot/online -> false`, when robot_status's first heartbeat tick, 0.5 s
+  in, comes before mower_base's first `/odom_slow`; path_record_node waiting
+  for the EKF's first map pose.
+- Lines that say the clock stepped: "jump back in time", "Moved backwards
+  in time", and the guard rejecting a command's stamp. Docker Desktop's VM
+  corrects its clock under load, and both sides see it at the same instant.
+
+The report lists them with their counts; the diff leaves them out. A robot
+that is offline while the probes run still fails the `contract` check, and
+one whose `/robot/online` flips during the `topics` window fails that one.
+Another such line can turn up on another machine. It then shows on one side
+of an A=A diff, and belongs in `TIMING` once it is clear that it depends on
+the host. Lines printed after `docker stop` (`stack_stop.log`) are only
+counted.
 
 Not compared, in the report only (O6 and friends): how long the bridge and the
 app contract took to come up, the rates `probe_app.py` measured, message and
@@ -151,9 +163,10 @@ are the same, and how `docker stop` went.
 `ros2 launch` has no working SIGTERM handler in these images. As PID 1 (which
 is what compose runs) it ignores `docker stop`'s SIGTERM. The stack keeps
 running until compose's 60 s grace period runs out, and then everything is
-SIGKILLed (exit code 137). The robot's container does the same on every
-update. The harness keeps the robot's behaviour. An image whose stack stops
-on SIGTERM shows its shorter stop time and its exit code in the report.
+SIGKILLed (exit code 137). Compose starts the robot's container the same way,
+so an update there presumably waits the same 60 s (not checked on the
+robot). The harness keeps that behaviour. An image whose stack stops on
+SIGTERM shows its shorter stop time and its exit code in the report.
 
 ## Compared with e2-verify
 
