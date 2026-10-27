@@ -20,6 +20,8 @@
 //!   publish and kept; **a call** through a JSON client, made at the first
 //!   call and kept. A call waits 5 s for a server, and fails at once when
 //!   the server goes while it holds the call (decision 15).
+//! - **`/rosapi/topics`** lists the typed names with a live endpoint, and
+//!   the typed names of the manifest entry with or without one.
 //! - **Time** is the module's clock: the throttle, the 5 s and 30 s bounds
 //!   and the linger.
 
@@ -256,12 +258,16 @@ impl BusHub {
         Ok(client)
     }
 
-    /// `/rosapi/topics` from the bus: every name with a fixed type and a live
-    /// endpoint, typed by its ROS type.
+    /// `/rosapi/topics` from the bus: every name with a fixed type that has a
+    /// live endpoint or is a name of ws_bridge's manifest entry, typed by its
+    /// ROS type. The manifest's names count with no endpoint: a
+    /// transient-local name the bus bridge brings in from DDS has a bus
+    /// writer only while somebody reads it, where the r2r backend listed it
+    /// while its DDS writer lived and, once subscribed, for good.
     pub fn topics_and_types(&self) -> HashMap<String, Vec<String>> {
         let topics = self.inner.scope.bus().topics().into_iter();
         topics
-            .filter(|t| !t.publishers.is_empty() || !t.subscribers.is_empty())
+            .filter(|t| self.inner.known.contains(&t.name) || !t.publishers.is_empty() || !t.subscribers.is_empty())
             .filter_map(|t| Some((t.name, vec![t.ros_type?])))
             .collect()
     }

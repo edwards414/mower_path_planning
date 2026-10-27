@@ -421,16 +421,21 @@ async fn rosapi_answers_from_the_bus_and_the_module_clock() {
     let _pose = world.publisher::<PoseStamped>("/adapter/robot_pose", Qos::default()).unwrap();
     // typed, but not allowed to clients
     let _odom = world.publisher::<Bool>("/odom_typed_but_not_allowed", Qos::default()).unwrap();
-    // allowed, typed, but every endpoint gone
-    drop(world.publisher::<Text>("/site_list", Qos::latched()).unwrap());
-    // a reader is an endpoint too: the bus bridge's from_ros keeps one
+    // allowed and typed, but not ws_bridge's, and every endpoint gone
+    drop(world.publisher::<Bool>("/mw_2/online", Qos::latched()).unwrap());
+    // ws_bridge's, typed, every endpoint gone: listed, as a transient-local
+    // name the bus bridge declared but nobody reads now
+    drop(world.publisher::<Text>("/pid_autotune/status", Qos::latched()).unwrap());
+    // a reader is an endpoint too
     let _clock = world.subscribe::<Header>("/manual_command_clock", Qos::default()).unwrap();
+    // ws_bridge's, but untyped: no type to list
+    drop(door.m.bus.subscribe_erased("/mower_recorder/bags", Qos::latched()).unwrap());
     let mut app = door.client().await;
 
     app.call("t", "/rosapi/topics", json!({})).await;
     let topics = json!({
-        "topics": ["/adapter/robot_pose", "/manual_command_clock", "/robot/online"],
-        "types": ["geometry_msgs/msg/PoseStamped", "std_msgs/msg/Header", "std_msgs/msg/Bool"]
+        "topics": ["/adapter/robot_pose", "/manual_command_clock", "/pid_autotune/status", "/robot/online"],
+        "types": ["geometry_msgs/msg/PoseStamped", "std_msgs/msg/Header", "std_msgs/msg/String", "std_msgs/msg/Bool"]
     });
     assert_eq!(app.recv().await, answer("t", "/rosapi/topics", topics, true));
 
