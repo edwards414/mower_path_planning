@@ -632,7 +632,7 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
         SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
     ).read_text(encoding='utf-8')
     assert 'EkfSettings::from_params(' in ekf_rs
-    assert 'MissedTickBehavior::Skip' in ekf_rs
+    assert 'set_missed_tick_behavior(MissedTick::Skip)' in ekf_rs
 
 
 def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
