@@ -159,8 +159,10 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
             ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
+          # the pinned compiler (src/mower_rs/rust-toolchain.toml)
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' src/mower_rs/rust-toolchain.toml)"
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable
+            | sh -s -- -y --profile minimal --default-toolchain "$channel"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo
@@ -256,8 +258,10 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
             ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
+          # the pinned compiler (src/mower_rs/rust-toolchain.toml)
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' src/mower_rs/rust-toolchain.toml)"
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable
+            | sh -s -- -y --profile minimal --default-toolchain "$channel"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo
@@ -345,8 +349,10 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3-serial
+          # the pinned compiler (src/mower_rs/rust-toolchain.toml)
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' src/mower_rs/rust-toolchain.toml)"
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable
+            | sh -s -- -y --profile minimal --default-toolchain "$channel"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo
@@ -371,6 +377,88 @@ jobs:
           cargo build --locked -p mower_flash
           python3 tools/flash_check.py check --impl "python=python3 ../../firmware/tools/mower_flash.py" \
             --impl rust=target/debug/mower_flash --golden ../../deploy/test/golden/firmware_sync
+
+  rust-ros:
+    # The same tests on the robot's architecture, in the pinned oracle image
+    # (tools/oracle/): ROS, the message packages r2r binds, rmw_cyclonedds,
+    # the black-box tools' rclpy and nav2_simple_commander, and rustc 1.99.1
+    # are already in it, so there is no apt or rustup step. Runs next to the
+    # x86 mower-rs-tests job until the two have agreed for a week; then that
+    # job goes, and this one joins the image job's `needs` (E9-04).
+    name: mower_rs tests (arm64)
+    runs-on: ubuntu-24.04-arm
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container:
+      # tools/oracle/README.md: the digest the oracle workflow published
+      image: ghcr.io/edwards414/mower-oracle@sha256:18c55b256d68d13de55dbb781dbfa3264c6bef962cc80e4ef48eaaf437382296
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo
+        timeout-minutes: 10
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/mower_rs
+          # see mower-rs-tests: a changed interface needs a fresh cache
+          key: ${{ hashFiles('src/mower_interface/msg/**', 'src/mower_interface/srv/**', 'src/mower_interface/action/**') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build mower_interface and test
+        shell: bash
+        run: |
+          rustc --version
+          source /opt/ros/jazzy/setup.bash
+          colcon build --packages-select mower_interface --event-handlers console_direct-
+          source install/setup.bash
+          cd src/mower_rs
+          cargo test --locked --workspace
+
+      - name: Coverage node cancel tracking (black box)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_coverage
+          python3 tools/coverage_cancel_check.py --binary target/debug/mower_coverage
+
+      - name: Coverage progress of both navigation servers (black box)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_nav
+          export PYTHONPATH="$GITHUB_WORKSPACE/src/mower_mission:$PYTHONPATH"
+          py_nav=(python3 -m mower_mission.navigation.nav_action_server)
+          python3 tools/nav_progress_check.py --restart-as "${py_nav[*]}" -- target/debug/mower_nav
+          python3 tools/nav_progress_check.py --restart-as target/debug/mower_nav -- "${py_nav[@]}"
+
+      - name: In-process navigation of mower_nav (black box)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_nav
+          python3 tools/nav_core_check.py -- target/debug/mower_nav
+
+      - name: pid_autotune telemetry only during a session (black box)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_pid_autotune
+          python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`

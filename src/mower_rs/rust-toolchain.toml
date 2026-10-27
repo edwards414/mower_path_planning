@@ -1,0 +1,9 @@
+# The compiler the robot's binaries are built with: the shipped mower_rsd
+# reports `rustc version 1.99.1 (58cf8f9c3 2026-10-13)`. Pinned so that
+# neither the image nor CI moves to a new stable on its own: a new compiler
+# changes every binary on the robot, so it gets a PR (and an A/B) of its own.
+# The Dockerfile's builder and the oracle image (tools/oracle/Dockerfile)
+# install this channel.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"

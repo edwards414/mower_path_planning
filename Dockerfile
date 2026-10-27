@@ -76,12 +76,18 @@ ARG WORKSPACE
 # plain Rust library src/mower_coverage_core through a cargo path dependency.
 # Builder-only: the compiled binaries are installed into the workspace, so the
 # runtime stage never needs cargo. Placed before COPY so source edits don't
-# bust this layer.
+# bust this layer. The channel is src/mower_rs/rust-toolchain.toml's, the one
+# the robot's binaries are built with (cargo in src/mower_rs would ask rustup
+# for it anyway); it used to be whatever `stable` was when the layer last ran.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --no-modify-path
+RUN --mount=type=bind,source=src/mower_rs/rust-toolchain.toml,target=/tmp/rust-toolchain.toml \
+    channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /tmp/rust-toolchain.toml)" \
+    && test -n "$channel" \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain "$channel" --no-modify-path \
+    && rustc --version
 
 # rosdep only needs the package manifests. Copying them on their own (the
 # `manifests` stage below strips everything else) keeps this apt layer

@@ -90,4 +90,10 @@ vector changed. Run by hand with `publish`, it also:
     contraction-off build (or g++, -std=c++17) differs in more lines.
   - The port's tests (1e-12) pass against both.
 
-Published digest (pinned by build.yml's `rust-ros` job): *not published yet*.
+Published digest (pinned by build.yml's `rust-ros` job):
+`ghcr.io/edwards414/mower-oracle@sha256:18c55b256d68d13de55dbb781dbfa3264c6bef962cc80e4ef48eaaf437382296`, from main 49606d1 (run
+41074506255, 2026-10-30; tags `jazzy` and
+`jazzy-49606d1ddfe5f670f0c92cad22eaf90249cbb25b`). Its `docker save` is the
+run's artifact `mower-oracle-jazzy-49606d1ddfe5f670f0c92cad22eaf90249cbb25b`
+(519 MB, kept until 2027-01-28); `zstd -d` it and `docker load` it to have the
+image without GHCR.
