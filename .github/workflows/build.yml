@@ -468,6 +468,10 @@ jobs:
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_gps"
             # the only coverage planner (no rclpy version any more)
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_coverage"
+            # the command-line tool, on the PATH for docker exec (crates/mowerctl)
+            test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl"
+            test "$(command -v mowerctl)" = /usr/local/bin/mowerctl
+            mowerctl help >/dev/null
             test -s "$(ros2 pkg prefix mower_bringup)/share/mower_bringup/config/gps.yaml"
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
             ros2 launch mower_bringup robot.launch.py --show-args >/tmp/robot_launch_args.txt

@@ -270,6 +270,9 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request \
     && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /usr/local/bin/mower-host-request
+# The command-line tool (src/mower_rs/crates/mowerctl) on the PATH, for
+# `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
+RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
 
 RUN if getent group ${GROUP_ID} > /dev/null; then \
         existing_group="$(getent group ${GROUP_ID} | cut -d: -f1)"; \
