@@ -15,6 +15,11 @@ on:
       - 'utils/**'
       - 'firmware/**'
       - 'docker-compose.yaml'
+  # A PR runs whenever it touches a file a job reads: besides the image inputs
+  # above, the Python tests read deploy/ (compose, .env.example, host scripts,
+  # udev rules, mediamtx.yml), the root Makefile and mediamtx.yml, and
+  # docs/ROBOT_API.md. Pushes keep their own list: a deploy/-only merge would
+  # otherwise publish a new :main image whose content did not change.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
@@ -25,6 +30,11 @@ on:
       - '.github/workflows/build.yml'
       - 'src/**'
       - 'utils/**'
+      - 'firmware/**'
+      - 'deploy/**'
+      - 'docs/ROBOT_API.md'
+      - 'Makefile'
+      - 'mediamtx.yml'
       - 'docker-compose.yaml'
 
 permissions:
@@ -51,12 +61,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Every step that downloads something has a 10 min limit: a stalled
+      # mirror once held a job for 23 min (run 37686141645), and the job's
+      # own default limit is 6 h.
       - name: Set up Python
+        timeout-minutes: 10
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install test dependencies
+        timeout-minutes: 10
         run: python -m pip install numpy opencv-python-headless pytest pyyaml websockets
 
       - name: Run ROS-free mower_mission tests
@@ -101,10 +116,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Only main saves the cache (PRs restore main's): PR entries pushed the
+      # repository's Actions cache over its 10 GB limit, which evicts entries
+      # and brings back cold builds.
       - name: Cache cargo
+        timeout-minutes: 10
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/mower_coverage_core
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test
         working-directory: src/mower_coverage_core
@@ -126,6 +146,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
+        timeout-minutes: 10
         shell: bash
         # rmw_cyclonedds_cpp: the image ships only Fast DDS, and mower_bus_ros's
         # DDS tests run on the robot's RMW (they select it themselves; every
@@ -140,6 +161,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo
+        timeout-minutes: 10
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/mower_rs
@@ -147,6 +169,7 @@ jobs:
           # an edited .msg/.srv/.action, so a changed interface needs a
           # fresh cache.
           key: ${{ hashFiles('src/mower_interface/msg/**', 'src/mower_interface/srv/**', 'src/mower_interface/action/**') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build mower_interface and test
         shell: bash
@@ -219,6 +242,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install arm-none-eabi toolchain
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
@@ -253,6 +277,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
+        timeout-minutes: 10
         shell: bash
         run: |
           apt-get update
