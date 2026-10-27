@@ -41,6 +41,23 @@ pub fn starting_up(node: &str) -> Status {
     Status { name: name(node), level: OK, message: "Node starting up".into(), hardware_id: String::new(), values: Vec::new() }
 }
 
+/// The updater's status before twist_mux's first tick handed it the
+/// handles: what twist_mux publishes when the updater's first tick comes
+/// first.
+pub fn status_without_handles(node: &str) -> Status {
+    Status {
+        name: name(node),
+        level: OK,
+        message: "ok".into(),
+        hardware_id: "none".into(),
+        values: vec![
+            ("current priority".into(), "0".into()),
+            ("loop time in [sec]".into(), "0".into()),
+            ("data age in [sec]".into(), "0".into()),
+        ],
+    }
+}
+
 /// The task's status at `now`, with `lock_priority` from twist_mux's last
 /// tick:
 ///
@@ -135,6 +152,18 @@ mod tests {
         assert!(s.values.iter().any(|(k, v)| k == "lock locks.navigation_coordinator" && v.starts_with(" free (")));
         assert!(s.values.iter().any(|(k, v)| k == "current priority" && v == "0"));
         assert!(s.values.iter().any(|(k, v)| k == "velocity topics.navigation" && v.starts_with(" unmasked (")));
+    }
+
+    /// tools/mux_oracle.py's generic session: the updater's first tick
+    /// before twist_mux's, a status with the three last values only.
+    #[test]
+    fn before_twist_mux_s_first_tick_the_status_has_no_handles() {
+        let s = status_without_handles("twist_mux_cpp1");
+        assert_eq!((s.name.as_str(), s.level, s.message.as_str(), s.hardware_id.as_str()),
+                   ("twist_mux_cpp1: Twist mux status", 0, "ok", "none"));
+        let keys: Vec<&str> = s.values.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["current priority", "loop time in [sec]", "data age in [sec]"]);
+        assert_eq!(s.values[0].1, "0");
     }
 
     #[test]

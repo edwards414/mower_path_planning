@@ -31,6 +31,17 @@ def _rust_binary(flag, rust_daemon):
     ]))
 
 
+def _unless_in_daemon(flag, rust_daemon):
+    """Run the C++ node that a mower_rsd module replaces: unless the switch
+    and the daemon are both on, which is when robot.launch.py puts the module
+    in mower_rsd's set (its _truthy's spellings, so every value starts exactly
+    one of the two). rust_daemon:=false is the C++ node whatever the switch."""
+    return IfCondition(PythonExpression([
+        "not ('", flag, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() in ", _TRUE, ")",
+    ]))
+
+
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -41,6 +52,9 @@ def generate_launch_description():
     # only (robot.launch.py already enforces use_sim_time:=false there).
     rust_guards = LaunchConfiguration('rust_guards')
     rust_daemon = LaunchConfiguration('rust_daemon')
+    # rust_mux:=true with the daemon: mower_rsd's mux module (mower_mux,
+    # node twist_mux, the same yaml) instead of this C++ twist_mux
+    rust_mux = LaunchConfiguration('rust_mux')
 
     twist_mux_config = os.path.join(
         get_package_share_directory('mower_bringup'),
@@ -53,6 +67,7 @@ def generate_launch_description():
         executable='twist_mux',
         name='twist_mux',
         output='screen',
+        condition=_unless_in_daemon(rust_mux, rust_daemon),
         parameters=[twist_mux_config, {'use_sim_time': use_sim_time}],
         remappings=[('/cmd_vel_out', '/cmd_vel_guard_input')],
     )
@@ -115,6 +130,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('rust_guards', default_value='false'),
         DeclareLaunchArgument('rust_daemon', default_value='false'),
+        DeclareLaunchArgument('rust_mux', default_value='false'),
         manual_velocity_guard,
         manual_velocity_guard_rs,
         twist_mux,

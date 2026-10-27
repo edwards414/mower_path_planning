@@ -63,6 +63,11 @@ services:
       - rust_map:=${RUST_MAP:-false}
       - rust_agent:=${RUST_AGENT:-false}
       - rust_guards:=${RUST_GUARDS:-false}
+      # RUST_MUX (with RUST_DAEMON): mower_rsd's mux module instead of the
+      # C++ twist_mux, on the same twist_mux_topics.yaml. It is the drive
+      # path (manual priority, the navigation lock, the safety stop): the
+      # first switch of a robot is a supervised run.
+      - rust_mux:=${RUST_MUX:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
       # WS_BRIDGE_BUS: mower_ws_bridge (RUST_BRIDGE) on mower_bus instead of

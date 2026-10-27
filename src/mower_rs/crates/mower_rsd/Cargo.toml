@@ -19,6 +19,7 @@ tokio.workspace = true
 
 robot_status = { path = "../robot_status" }
 velocity_command_guard = { path = "../velocity_command_guard" }
+mower_mux = { path = "../mower_mux" }
 mower_adapter = { path = "../mower_adapter" }
 mower_imu = { path = "../mower_imu" }
 mower_gps = { path = "../mower_gps" }

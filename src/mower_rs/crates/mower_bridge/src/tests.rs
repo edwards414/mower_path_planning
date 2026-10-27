@@ -14,16 +14,43 @@ use r2r::std_srvs::srv::Trigger;
 use crate::types::*;
 use crate::*;
 
-/// What robot.launch.py puts in `--modules` with every switch on.
+/// What robot.launch.py puts in `--modules` on the robot: every rust_*
+/// switch of E2 on. E4's modules are off by default ([`E4_MODULES`]).
 const PRODUCTION_MODULES: [&str; 15] = [
     "base", "status", "guards", "imu", "gps", "localize", "map", "coverage", "nav", "record", "adapter", "battery",
     "pid_autotune", "bridge", "agent",
 ];
 
+/// E4's modules, behind switches that are off by default, each where
+/// robot.launch.py's `_DAEMON_MODULES` puts it. They are born on the bus.
+const E4_MODULES: [(&str, &str); 1] = [("mux", "guards")];
+
+/// [`PRODUCTION_MODULES`] with E4's modules `e4` switched on, in
+/// robot.launch.py's order.
+fn with_e4(e4: &[&str]) -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = PRODUCTION_MODULES.to_vec();
+    for (id, after) in E4_MODULES {
+        if e4.contains(&id) {
+            let at = ids.iter().position(|m| *m == after).unwrap() + 1;
+            ids.insert(at, id);
+        }
+    }
+    ids
+}
+
 /// The plan of the production process with the modules `on` on the bus.
 fn production_plan(on: &[&str]) -> Result<Plan, PlanError> {
     plan(&Running::rsd(&PRODUCTION_MODULES, |id| on.contains(&id)), &production_remaps())
 }
+
+/// The same with E4's modules `e4` in the set, on the bus.
+fn e4_plan(on: &[&str], e4: &[&str]) -> Result<Plan, PlanError> {
+    plan(&Running::rsd(&with_e4(e4), |id| on.contains(&id) || e4.contains(&id)), &production_remaps())
+}
+
+/// The E2 production flags: everything on the bus but base, the guards and
+/// pid_autotune.
+const E2_ON: [&str; 10] = ["status", "imu", "gps", "localize", "map", "coverage", "nav", "record", "adapter", "battery"];
 
 fn lines(on: &[&str]) -> Vec<String> {
     production_plan(on).unwrap_or_else(|e| panic!("{on:?}: {e}")).lines()
@@ -244,7 +271,9 @@ fn the_readme_counts_the_declarations_of_each_step() {
 
 /// docs/BUS_TOPICS.md, "At a glance": 78 topics have an endpoint in a typed
 /// module (the 13 of E2; ws_bridge joined the manifest in E3), and the
-/// modules serve 45 services besides the parameter services.
+/// modules serve 45 services besides the parameter services. E4's mux adds
+/// two: `/diagnostics`, and `/nav_cmd_vel`, which only nav's nav_core backend
+/// had.
 #[test]
 fn the_manifest_has_bus_topics_md_s_counts() {
     let mut topics = BTreeSet::new();
@@ -258,7 +287,7 @@ fn the_manifest_has_bus_topics_md_s_counts() {
             served.insert(e.name);
         }
     }
-    assert_eq!((topics.len(), served.len()), (78, 45));
+    assert_eq!((topics.len(), served.len()), (80, 45));
 }
 
 /// Steps 5 to 7, for the record: the rest of the order needs no two-way
@@ -305,26 +334,131 @@ fn the_rest_of_the_order_plans_too() {
     assert_eq!(from.len(), 8, "only the writers outside the bus are left: {from:#?}");
 }
 
+/// E4-3: the mux in the production process. What the bridge carries for it
+/// is three new lines: nav2's `/nav_cmd_vel` comes in (velocity_smoother,
+/// R V 1), the output goes out to the final guard on r2r (R V 1), and so does
+/// `/diagnostics` (diagnostic_updater's R V 1). twist_mux itself is not there
+/// (`replaced_by`). One line goes: nav's own `/nav_cmd_vel` writer, which only
+/// the nav_core backend makes, reaches the mux in-process now instead of
+/// going out for twist_mux (both directions on one name are not possible).
+/// `/joy_cmd` and the teleop topics come in as before, for nav and the mux
+/// both (the deeper reader, nav's R V 10); the lock and the safety stop are
+/// in-process and still go out.
+#[test]
+fn the_mux_s_lines_in_the_production_plan() {
+    let before = production_plan(&E2_ON).unwrap();
+    let after = e4_plan(&E2_ON, &["mux"]).unwrap();
+    let (before_lines, after_lines) = (before.lines(), after.lines());
+    let gone: Vec<&String> = before_lines.iter().filter(|l| !after_lines.contains(l)).collect();
+    let new: Vec<&String> = after_lines.iter().filter(|l| !before_lines.contains(l)).collect();
+    assert_eq!(gone, ["to_ros /nav_cmd_vel geometry_msgs/msg/TwistStamped R V 10"]);
+    assert_eq!(
+        new,
+        [
+            "to_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1",
+            "to_ros /diagnostics diagnostic_msgs/msg/DiagnosticArray R V 1",
+            "from_ros /nav_cmd_vel geometry_msgs/msg/TwistStamped R V 1",
+        ]
+    );
+    for line in [
+        "from_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+        "from_ros /keyboard_cmd_vel geometry_msgs/msg/TwistStamped R V 10",
+        "from_ros /physical_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+        "to_ros /navigation_coordinator_lock std_msgs/msg/Bool R V 10",
+        "to_ros /navigation_safety_stop geometry_msgs/msg/TwistStamped R V 10",
+    ] {
+        assert!(after_lines.iter().any(|l| l == line), "{line}");
+    }
+    let new_notes: Vec<&String> = after.notes.iter().filter(|n| !before.notes.contains(n)).collect();
+    assert_eq!(
+        new_notes,
+        ["/nav_cmd_vel: not bridged for nav_action_server, which publishes it only with nav_backend: nav_core: that \
+          would need both directions"]
+    );
+    // without the mux, the plan is what it was before E4 (the other tests
+    // pin every line); with it, nothing of twist_mux's is planned for
+    assert!(after.declarations.iter().all(|d| !d.why.contains("twist_mux (outside)")), "{:#?}", after.declarations);
+    assert!(before.declarations.iter().all(|d| d.name != "/cmd_vel_guard_input"));
+}
+
+/// Step 6 after E4-3: the final guard on the bus reads the mux in-process,
+/// and the manual guard's `/joy_cmd` reaches it in-process too. Nothing of
+/// the drivetrain chain comes in from DDS any more; the output still goes
+/// out for the tools.
+#[test]
+fn with_the_guards_on_the_bus_the_mux_is_in_process() {
+    let mut on = E2_ON.to_vec();
+    on.extend(["base", "pid_autotune", "guards"]);
+    let lines = e4_plan(&on, &["mux"]).unwrap().lines();
+    assert!(lines.iter().any(|l| l == "to_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1"));
+    for name in ["/cmd_vel_guard_input", "/joy_cmd", "/navigation_safety_stop", "/navigation_coordinator_lock"] {
+        assert!(!lines.iter().any(|l| l.starts_with("from_ros ") && l.contains(&format!(" {name} "))), "{name}");
+    }
+    // without the mux, twist_mux's output comes in from DDS, as E2 planned
+    // step 6 (with the mux, twist_mux outside would make that name
+    // bidirectional: `replaced_by` is what keeps it one-way)
+    assert!(plan(&Running::rsd(&PRODUCTION_MODULES, |id| on.contains(&id)), &production_remaps())
+        .unwrap()
+        .lines()
+        .contains(&"from_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1".to_string()));
+}
+
+/// An outside endpoint marked `replaced_by` leaves the plan exactly when its
+/// module runs in the process, on the bus or not, and in no standalone
+/// binary but its own.
+#[test]
+fn an_outside_node_is_left_out_while_the_module_that_replaces_it_runs() {
+    let marked: Vec<(&str, &str)> = OUTSIDE
+        .iter()
+        .flat_map(|o| o.endpoints.iter().filter_map(move |e| e.replaced_by.map(|id| (o.node, id))))
+        .collect();
+    assert!(marked.contains(&("twist_mux", "mux")), "{marked:?}");
+    for (_, id) in &marked {
+        assert!(module(id).is_some(), "{id} is no module of the manifest");
+    }
+    // twist_mux's writer counts for a guard on the bus without the mux...
+    let guard = Running::standalone("guards", "velocity_command_guard").unwrap();
+    let p = plan(&guard, &production_remaps()).unwrap();
+    assert!(p.declarations.iter().any(|d| d.name == "/cmd_vel_guard_input" && d.why.contains("twist_mux (outside)")));
+    // ...and not with it
+    let mut both = guard.clone();
+    both.extend(Running::rsd(&["mux"], |_| true));
+    let p = plan(&both, &production_remaps()).unwrap();
+    assert!(!p.declarations.iter().any(|d| d.why.contains("twist_mux (outside)")), "{:#?}", p.declarations);
+}
+
 /// docs/BUS_TOPICS.md 5.5 d, e: /mower_base/led_command has two latched
 /// writers. With its reader on the bus and one writer on r2r, the bridge
 /// would have to read back what it writes. Every other combination of flags
 /// plans: that is the one order the steps must keep (base and pid_autotune
 /// move together, after status).
+///
+/// E4's modules are born on the bus: each is in the set or not, on the bus
+/// when it is, so the 16384 combinations of the E2 and E3 flags come twice
+/// over per E4 module.
 #[test]
 fn every_combination_of_flags_plans_but_a_split_led_command() {
-    let ids: Vec<&str> = MODULES.iter().map(|m| m.id).collect();
+    let ids: Vec<&str> = MODULES.iter().map(|m| m.id).filter(|id| !E4_MODULES.iter().any(|(e4, _)| e4 == id)).collect();
     let remaps = production_remaps();
-    for bits in 0u32..(1 << ids.len()) {
-        let on = |id: &str| ids.iter().position(|i| *i == id).is_some_and(|n| bits & (1 << n) != 0);
-        let refused = on("base") && on("status") != on("pid_autotune");
-        match plan(&Running::rsd(&PRODUCTION_MODULES, on), &remaps) {
-            Ok(_) => assert!(!refused, "{bits:#015b}: planned with base on the bus and the LED writers split"),
-            Err(e) => {
-                assert!(refused, "{bits:#015b}: {e}");
-                assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{e}");
+    let mut planned = 0;
+    for e4_bits in 0u32..(1 << E4_MODULES.len()) {
+        let e4: Vec<&str> =
+            E4_MODULES.iter().enumerate().filter(|(n, _)| e4_bits & (1 << n) != 0).map(|(_, (id, _))| *id).collect();
+        let set = with_e4(&e4);
+        for bits in 0u32..(1 << ids.len()) {
+            let on = |id: &str| e4.contains(&id) || ids.iter().position(|i| *i == id).is_some_and(|n| bits & (1 << n) != 0);
+            let refused = on("base") && on("status") != on("pid_autotune");
+            match plan(&Running::rsd(&set, on), &remaps) {
+                Ok(_) => assert!(!refused, "{e4:?} {bits:#015b}: planned with base on the bus and the LED writers split"),
+                Err(e) => {
+                    assert!(refused, "{e4:?} {bits:#015b}: {e}");
+                    assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{e}");
+                }
             }
+            planned += 1;
         }
     }
+    assert_eq!(planned, 16384 << E4_MODULES.len());
 }
 
 /// Deterministic: the same input gives the same declarations in the same
@@ -890,6 +1024,7 @@ fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
         ("base", vec!["mower_base"]),
         ("status", vec!["robot_status"]),
         ("guards", vec!["manual_velocity_guard", "velocity_command_guard"]),
+        ("mux", vec!["twist_mux"]),
         ("imu", vec!["imu"]),
         ("gps", vec!["gps"]),
         ("localize", vec!["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]),
@@ -988,7 +1123,9 @@ fn production_remaps_are_robot_launch_py_s() {
         }
     }
     assert!(launch.contains("remaps = [r for module in modules for r in _DAEMON_REMAPS.get(module, [])]"));
-    let mut argv: Vec<String> = PRODUCTION_MODULES.iter().flat_map(|m| by_module.remove(*m).unwrap_or_default()).collect();
+    // every switch on, E4's included
+    let all = with_e4(&E4_MODULES.map(|(id, _)| id));
+    let mut argv: Vec<String> = all.iter().flat_map(|m| by_module.remove(*m).unwrap_or_default()).collect();
     assert!(by_module.is_empty(), "rules of no module: {by_module:?}");
     assert!(launch.contains("remaps.append('navsat_transform:gps/fix:=' + LaunchConfiguration("));
     assert!(launch.contains("if gps_fix_topic.strip() != '/fix':"));
@@ -1005,17 +1142,34 @@ fn names_from_parameters_are_the_parameter_files_values() {
     let files = [
         "src/mower_bringup/config/mower_rsd.yaml",
         "src/mower_bringup/config/gps.yaml",
+        // with rust_mux (E4)
+        "src/mower_bringup/config/twist_mux_topics.yaml",
         "src/mower_nav2/config/dual_ekf_navsat_params.yaml",
     ];
     let mut values: BTreeMap<(String, String), String> = BTreeMap::new();
+    // rcl's names: the nested keys joined with dots
+    fn flatten(prefix: &str, value: &serde_yaml::Value, out: &mut Vec<(String, String)>) {
+        match value {
+            serde_yaml::Value::Mapping(map) => {
+                for (k, v) in map {
+                    let k = k.as_str().unwrap_or_default();
+                    flatten(&if prefix.is_empty() { k.to_string() } else { format!("{prefix}.{k}") }, v, out);
+                }
+            }
+            serde_yaml::Value::String(s) => out.push((prefix.to_string(), s.clone())),
+            _ => {}
+        }
+    }
     for file in files {
         let text = std::fs::read_to_string(repo().join(file)).unwrap();
         let doc: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
         for (node, section) in doc.as_mapping().unwrap() {
-            let Some(params) = section.get("ros__parameters").and_then(|p| p.as_mapping()) else { continue };
-            for (key, value) in params {
-                if let (Some(node), Some(key), Some(value)) = (node.as_str(), key.as_str(), value.as_str()) {
-                    values.insert((node.to_string(), key.to_string()), value.to_string());
+            let Some(params) = section.get("ros__parameters") else { continue };
+            let mut flat = Vec::new();
+            flatten("", params, &mut flat);
+            for (key, value) in flat {
+                if let Some(node) = node.as_str() {
+                    values.insert((node.to_string(), key), value);
                 }
             }
         }
@@ -1033,8 +1187,8 @@ fn names_from_parameters_are_the_parameter_files_values() {
         }
     }
     // robot_status (2), gps (2), the EKFs' inputs (5), the slow copies (2),
-    // nav, record, adapter
-    assert_eq!(checked, 14);
+    // nav, record, adapter; the mux's five inputs and its lock (E4)
+    assert_eq!(checked, 20);
     assert_eq!(values[&("robot_status".into(), "heartbeat_source_topic".into())], "/odom_slow", "one subscription with odom_topic");
 }
 

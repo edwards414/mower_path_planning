@@ -24,6 +24,7 @@
 //!   (mower_bringup/config/ws_bridge.yaml): the test
 //!   `the_bridge_module_is_ws_bridge_yaml_s_allow_list` keeps the two in step.
 
+use r2r::diagnostic_msgs::msg::DiagnosticArray;
 use r2r::geometry_msgs::msg::{PoseStamped, TwistStamped};
 use r2r::lifecycle_msgs::srv::GetState;
 use r2r::mower_interface::action::Waypoint;
@@ -54,13 +55,17 @@ const NAV_CORE_TF: &str = "nav_backend: nav_core and nav_core.pose_source: tf";
 
 /// The `-r` rules robot.launch.py passes mower_rsd in production, in argv
 /// order: `_DAEMON_REMAPS` in the order of the modules, then navsat's
-/// `gps/fix` rule with the `gps_fix_topic` the launch file pins.
+/// `gps/fix` rule with the `gps_fix_topic` the launch file pins. With every
+/// switch on, E4's (off by default) included: a rule scoped to a node of a
+/// module that does not run names nothing.
 pub const PRODUCTION_REMAPS: &[&str] = &[
     "manual_velocity_guard:cmd_vel_in:=/app_joy_cmd",
     "manual_velocity_guard:cmd_vel_out:=/joy_cmd",
     "manual_velocity_guard:command_clock:=/manual_command_clock",
     "velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input",
     "velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel",
+    // rust_mux (E4, off by default): twist_mux.launch.py's /cmd_vel_out rule
+    "twist_mux:cmd_vel_out:=/cmd_vel_guard_input",
     "imu:imu/data_raw:=imu/data",
     "ekf_filter_node_odom:odometry/filtered:=odometry/local",
     "ekf_filter_node_odom:imu:=imu/data",
@@ -156,6 +161,26 @@ pub static MODULES: &[Module] = &[
                 ],
             },
         ],
+    },
+    Module {
+        // E4: twist_mux_topics.yaml's handles, the same file the C++ node
+        // reads; rclcpp::SystemDefaultsQoS() readers, R V 1 on Cyclone
+        // (measured), and rclcpp::QoS(KeepLast(1)) for the output and
+        // diagnostic_updater's /diagnostics. Born on the bus.
+        id: "mux",
+        instances: &[Instance {
+            node: "twist_mux",
+            endpoints: &[
+                subscribes::<TwistStamped>("/joy_cmd", SD).param("topics.app_manual.topic"),
+                subscribes::<TwistStamped>("/keyboard_cmd_vel", SD).param("topics.keyboard.topic"),
+                subscribes::<TwistStamped>("/nav_cmd_vel", SD).param("topics.navigation.topic"),
+                subscribes::<TwistStamped>("/navigation_safety_stop", SD).param("topics.navigation_safety_stop.topic"),
+                subscribes::<TwistStamped>("/physical_joy_cmd", SD).param("topics.physical_joystick.topic"),
+                subscribes::<Bool>("/navigation_coordinator_lock", SD).param("locks.navigation_coordinator.topic"),
+                publishes::<TwistStamped>("cmd_vel_out", R_V_1).named("/cmd_vel_guard_input"),
+                publishes::<DiagnosticArray>("/diagnostics", R_V_1),
+            ],
+        }],
     },
     Module {
         id: "imu",
@@ -541,7 +566,8 @@ pub static OUTSIDE: &[Outside] = &[
         // cmd_vel_out, rclcpp::QoS(KeepLast(1)): R V 1, measured
         node: "twist_mux",
         until: "E4",
-        endpoints: &[publishes::<TwistStamped>("/cmd_vel_guard_input", R_V_1)],
+        // rust_daemon with rust_mux does not start it
+        endpoints: &[publishes::<TwistStamped>("/cmd_vel_guard_input", R_V_1).replaced_by("mux")],
     },
     Outside {
         // tf2_ros' StaticBroadcasterQoS and DynamicBroadcasterQoS, R TL 1 and
@@ -551,11 +577,14 @@ pub static OUTSIDE: &[Outside] = &[
         endpoints: &[publishes::<TFMessage>("/tf_static", R_TL_1), publishes::<TFMessage>("/tf", R_V_100)],
     },
     Outside {
-        // rcl's /rosout writer is on every node; mower_nav reads nav2's
+        // rcl's /rosout writer is on every node; mower_nav reads nav2's.
+        // velocity_smoother writes /nav_cmd_vel for twist_mux (R V 1,
+        // measured): with the mux on the bus it comes in from DDS.
         node: "nav2",
         until: "E9",
         endpoints: &[
             publishes::<Log>("/rosout", R_TL_1000),
+            publishes::<TwistStamped>("/nav_cmd_vel", R_V_1),
             serves::<GetState::Service>("/bt_navigator/get_state"),
             serves_action::<NavigateToPose::Action>("/navigate_to_pose"),
             serves_action::<FollowPath::Action>("/follow_path"),

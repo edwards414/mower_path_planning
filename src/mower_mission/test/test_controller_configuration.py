@@ -532,7 +532,7 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
         assert text in lawan, text
     assert '[RUST_NAV_CORE]=false' in switch
     assert ('for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON '
-            'RUST_NAV_CORE; do') in switch
+            'RUST_NAV_CORE RUST_MUX; do') in switch
 
     # the behavioural half needs ROS launch (not in the python-tests job)
     pytest.importorskip('launch')
@@ -591,6 +591,107 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
         assert _flat_ros_parameters(
             written['nav_action_server']['ros__parameters']) == {
                 'nav_backend': 'nav_core', 'nav_core.pose_source': 'tfbus'}
+
+
+def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
+    """rust_mux:=true (compose RUST_MUX, default false; E4): mower_rsd's mux
+    module (mower_mux, node twist_mux) instead of the C++ twist_mux, on the
+    same twist_mux_topics.yaml and the same output rule. It takes effect only
+    with rust_daemon: twist_mux.launch.py starts the C++ node unless both are
+    on, and robot.launch.py puts mux in the module set exactly then, so every
+    spelling starts one mux, never two and never none."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mower = MOWER_LAUNCH.read_text(encoding='utf-8')
+    mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
+
+    # declared off, and threaded down robot -> mower -> twist_mux.launch.py
+    for text in (robot, mower):
+        argument = re.search(
+            r"DeclareLaunchArgument\(\s*'rust_mux'(.*?)\n\s*\)", text,
+            flags=re.DOTALL)
+        assert argument is not None
+        assert "default_value='false'" in argument.group(1)
+    assert "DeclareLaunchArgument('rust_mux', default_value='false')," \
+        in mux_launch
+    mower_include = robot.split("'mower.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert "'rust_mux': rust_mux," in mower_include
+    mux_include = mower.split('twist_mux_launch = IncludeLaunchDescription(',
+                              1)[1].split('\n    )\n', 1)[0]
+    assert "'rust_mux': LaunchConfiguration('rust_mux')," in mux_include
+    assert "'rust_daemon': LaunchConfiguration('rust_daemon')," in mux_include
+    # the C++ node, behind both switches; its include stays unconditional
+    node = mux_launch.split('twist_mux = Node(', 1)[1].split('\n    )\n', 1)[0]
+    assert 'condition=_unless_in_daemon(rust_mux, rust_daemon),' in node
+    assert "remappings=[('/cmd_vel_out', '/cmd_vel_guard_input')]," in node
+    assert 'condition=' not in mux_include
+
+    # the module: after the guards, the same output rule, the same yaml
+    assert "('guards', 'rust_guards'),\n    ('mux', 'rust_mux')," in robot
+    assert "'mux': ['twist_mux:cmd_vel_out:=/cmd_vel_guard_input']," in robot
+    block = robot.split("if 'mux' in modules:", 1)[1].split('env = {}', 1)[0]
+    assert ("parameters.append(os.path.join(bringup, 'config', "
+            "'twist_mux_topics.yaml'))") in block
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    assert 'id: "mux",' in daemon_main
+    assert 'switch: "rust_mux",' in daemon_main
+    assert 'node: "twist_mux", run: |c, m| Box::pin(mower_mux::run(c, m))' \
+        in daemon_main
+    assert '"crates/mower_mux"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
+    # the twist_mux_topics.yaml key is the node name both muxes have
+    assert TWIST_MUX_CONFIG.read_text(encoding='utf-8').startswith(
+        'twist_mux:\n  ros__parameters:\n')
+
+    # compose and .env, default off
+    lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
+    assert '- rust_mux:=${RUST_MUX:-false}' in lawan
+    assert re.search(r'^RUST_MUX=false$',
+                     ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+    # switch.sh writes it every time, passes it, and checks the processes
+    switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
+    passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
+                            re.M | re.S).group(1)
+    assert "'rust_mux:=${RUST_MUX'" in passthrough
+    assert '[RUST_MUX]=false' in switch
+    assert 'if truthy "$mux" && truthy "$daemon"; then' in switch
+    assert '[ "$(n twist_mux)" -eq 0 ] || echo "C++ twist_mux still running"' \
+        in switch
+    assert '! rsd mux || echo "mower_rsd runs the mux module"' in switch
+
+    # the behavioural half needs ROS launch (not in the python-tests job)
+    pytest.importorskip('launch')
+    pytest.importorskip('launch_ros')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    robot_module = _load_launch_module(ROBOT_LAUNCH)
+    mux_module = _load_launch_module(TWIST_MUX_LAUNCH)
+    spellings = ('true', 'True', ' on', 'ON', 'yes', '1',
+                 'false', 'FALSE', '0', 'off', 'no', 'maybe', '')
+    for flag in spellings:
+        for daemon in spellings:
+            rust = robot_module._truthy(flag) and robot_module._truthy(daemon)
+            cpp = mux_module._unless_in_daemon(flag, daemon).evaluate(
+                LaunchContext())
+            assert cpp is not rust, (flag, daemon)
+
+
+def test_production_twist_mux_config_never_meets_the_degenerate_rules():
+    """twist_mux's rules for a timeout of 0 (fresh forever, also before the
+    first message: it masks everything below it from the start), a priority
+    of 0 (never selected, a priority-0 lock changes nothing) and a tie (the
+    name that sorts first) are reproduced by both muxes, but production must
+    not depend on them."""
+    import yaml
+    section = yaml.safe_load(TWIST_MUX_CONFIG.read_text(encoding='utf-8'))[
+        'twist_mux']['ros__parameters']
+    assert section['use_stamped'] is True
+    handles = list(section['topics'].values()) + list(section['locks'].values())
+    for handle in handles:
+        assert isinstance(handle['timeout'], float) and handle['timeout'] > 0
+        assert isinstance(handle['priority'], int) and handle['priority'] > 0
+    priorities = [h['priority'] for h in section['topics'].values()]
+    assert len(priorities) == len(set(priorities)), priorities
 
 
 def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():

@@ -60,6 +60,7 @@ _DAEMON_MODULES = (
     ('base', 'rust_base'),
     ('status', 'rust_status'),
     ('guards', 'rust_guards'),
+    ('mux', 'rust_mux'),
     ('imu', 'rust_imu'),
     ('gps', 'enable_gps'),
     ('localize', 'rust_localize'),
@@ -86,6 +87,8 @@ _DAEMON_REMAPS = {
         'velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input',
         'velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel',
     ],
+    # twist_mux.launch.py's remappings= for the C++ twist_mux
+    'mux': ['twist_mux:cmd_vel_out:=/cmd_vel_guard_input'],
     # dual_ekf_navsat.launch.py's remappings= for the three localization
     # nodes; navsat's gps/fix rule is added with the gps_fix_topic value.
     'localize': [
@@ -216,6 +219,10 @@ def _rust_daemon_node(context):
             'save_dir': LaunchConfiguration('zone_record_dir').perform(context),
             'sites_dir': LaunchConfiguration('sites_dir').perform(context),
         }))
+    if 'mux' in modules:
+        # rust_mux:=true: the file the C++ twist_mux reads, keyed by the same
+        # node name, so the two muxes have one configuration
+        parameters.append(os.path.join(bringup, 'config', 'twist_mux_topics.yaml'))
     env = {}
     if 'nav' in modules and _truthy(
             LaunchConfiguration('rust_nav_core').perform(context)):
@@ -300,6 +307,7 @@ def generate_launch_description():
     rust_map = LaunchConfiguration('rust_map')
     rust_agent = LaunchConfiguration('rust_agent')
     rust_guards = LaunchConfiguration('rust_guards')
+    rust_mux = LaunchConfiguration('rust_mux')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_localize = LaunchConfiguration('rust_localize')
     rust_bridge = LaunchConfiguration('rust_bridge')
@@ -324,6 +332,7 @@ def generate_launch_description():
             'gps_params_file': gps_params_file,
             'localize_params_file': localize_params_file,
             'rust_guards': rust_guards,
+            'rust_mux': rust_mux,
             'rust_imu': rust_imu,
             'rust_base': rust_base,
             'rust_localize': rust_localize,
@@ -528,6 +537,15 @@ def generate_launch_description():
             default_value='false',
             description='mower_rs velocity_command_guard for both guard '
                         'instances instead of the rclpy guard',
+        ),
+        DeclareLaunchArgument(
+            'rust_mux',
+            default_value='false',
+            description='mower_rsd module mux (mower_rs mower_mux, node '
+                        'twist_mux) instead of the C++ twist_mux, on the '
+                        'same twist_mux_topics.yaml; only with rust_daemon. '
+                        'It sits on the drive path: the first switch of a '
+                        'robot is a supervised run',
         ),
         DeclareLaunchArgument(
             'rust_imu',
