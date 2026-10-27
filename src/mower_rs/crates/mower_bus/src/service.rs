@@ -173,6 +173,21 @@ pub(crate) fn client<Req: Message, Resp: Message>(scope: &Scope, name: &str) -> 
     Ok(Client { inner: Arc::new(ClientInner { entry, caller, id }), _t: PhantomData })
 }
 
+/// Errors, in order: `InvalidName`, `Closed`, `UnknownName` (no endpoint ever
+/// declared the name, so its types are not known).
+pub(crate) fn client_json(scope: &Scope, name: &str) -> Result<JsonClient, BusError> {
+    check_name(name)?;
+    if scope.is_closed() {
+        return Err(closed(scope));
+    }
+    let registry = scope.bus().service_registry();
+    let entry = registry.get(name).ok_or_else(|| BusError::UnknownName { name: name.to_string() })?;
+    let caller = registry.caller(scope)?;
+    let id = entry.next_id();
+    lock(&entry.state).clients.insert(id, caller.clone());
+    Ok(JsonClient { inner: Arc::new(ClientInner { entry, caller, id }) })
+}
+
 /// Errors, in order: `InvalidName`, `UnknownName` (no endpoint ever declared
 /// the name), `Json` (the request does not decode), then those of a typed
 /// call (`Closed`, `ServiceUnavailable`, `NoResponse`).
@@ -584,6 +599,60 @@ impl<Req: Message, Resp: Message> fmt::Debug for Client<Req, Resp> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ClientInner { entry, caller, .. } = &*self.inner;
         f.debug_struct("Client").field("name", &entry.name).field("scope", &caller.scope).finish()
+    }
+}
+
+/// A client of one service name that takes and gives JSON, with the codecs
+/// the name's first endpoint fixed (README.md, "Erased access"): what
+/// ws_bridge holds per service the app calls. It is registered as a client,
+/// so introspection, and mower_bridge's manifest check, see its scope as a
+/// caller. Clones are the same client.
+#[derive(Clone)]
+pub struct JsonClient {
+    inner: Arc<ClientInner>,
+}
+
+impl JsonClient {
+    pub fn name(&self) -> &str {
+        &self.inner.entry.name
+    }
+
+    /// The request's Rust type, which `crate::ros_type_name` maps to the
+    /// service's ROS type.
+    pub fn request_type(&self) -> &'static str {
+        self.inner.entry.request.type_name
+    }
+
+    /// Whether a server is live now (as [`Client::is_available`]).
+    pub fn is_available(&self) -> bool {
+        lock(&self.inner.entry.state).server.is_some()
+    }
+
+    /// Resolve once a server is live (at once if one is). `Closed` if the
+    /// client's scope closes first.
+    pub async fn wait_for_service(&self) -> Result<(), BusError> {
+        WaitForService { client: &self.inner, served: true, closing: None, waiting: None }.await
+    }
+
+    /// Decode `request` with the name's request codec, call, and encode the
+    /// answer. Errors, in order: `Json` (the request does not decode), then
+    /// those of a typed call (`Closed`, `ServiceUnavailable` when no server
+    /// is live or it goes away before answering, `NoResponse`), and `Json`
+    /// if the answer does not encode.
+    pub async fn call(&self, request: serde_json::Value) -> Result<serde_json::Value, BusError> {
+        let ClientInner { entry, caller, .. } = &*self.inner;
+        let json_error = |error| BusError::Json { name: entry.name.clone(), error };
+        let request = (entry.request.from_json)(request).map_err(json_error)?;
+        let response = entry.call(caller, request)?.await?;
+        let json = (entry.response.to_json)(response.as_ref());
+        json.unwrap_or_else(|| Err("value/codec type mismatch".into())).map_err(json_error)
+    }
+}
+
+impl fmt::Debug for JsonClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ClientInner { entry, caller, .. } = &*self.inner;
+        f.debug_struct("JsonClient").field("name", &entry.name).field("scope", &caller.scope).finish()
     }
 }
 
