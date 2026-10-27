@@ -243,15 +243,18 @@ fn the_readme_counts_the_declarations_of_each_step() {
 }
 
 /// docs/BUS_TOPICS.md, "At a glance": 78 topics have an endpoint in a typed
-/// module, and the modules serve 45 services besides the parameter services.
+/// module (the 13 of E2; ws_bridge joined the manifest in E3), and the
+/// modules serve 45 services besides the parameter services.
 #[test]
 fn the_manifest_has_bus_topics_md_s_counts() {
     let mut topics = BTreeSet::new();
     let mut served = BTreeSet::new();
-    for e in MODULES.iter().flat_map(|m| m.instances).flat_map(|i| i.endpoints) {
+    let typed = MODULES.iter().filter(|m| m.id != "bridge");
+    for e in typed.flat_map(|m| m.instances).flat_map(|i| i.endpoints) {
+        let parameters = e.name.ends_with("/get_parameters") || e.name.ends_with("/set_parameters");
         if e.kind.is_topic() && e.only.is_none() {
             topics.insert(e.name);
-        } else if e.kind == Kind::Serve && !e.name.ends_with("/get_parameters") {
+        } else if e.kind == Kind::Serve && !parameters {
             served.insert(e.name);
         }
     }
@@ -298,7 +301,8 @@ fn the_rest_of_the_order_plans_too() {
         assert!(all.iter().any(|l| l == line), "{line} in {all:#?}");
     }
     let from: Vec<&String> = all.iter().filter(|l| l.starts_with("from_ros ")).collect();
-    assert_eq!(from.len(), 8, "only the outside writers are left: {from:#?}");
+    // ws_bridge's three writers (on r2r) among them
+    assert_eq!(from.len(), 8, "only the writers outside the bus are left: {from:#?}");
 }
 
 /// docs/BUS_TOPICS.md 5.5 d, e: /mower_base/led_command has two latched
@@ -480,15 +484,243 @@ fn a_binary_finds_its_instances_by_node_name() {
     assert_eq!(nodes("localize", "localize").unwrap().len(), 3);
     // a binary started by hand keeps its built-in name
     assert_eq!(nodes("imu", "imu_driver_node"), Ok(vec![pair("imu", "imu_driver_node")]));
-    assert!(nodes("bridge", "mower_ws_bridge").is_err(), "outside in E2");
+    assert_eq!(nodes("bridge", "mower_ws_bridge"), Ok(vec![pair("mower_ws_bridge", "mower_ws_bridge")]));
+    assert!(nodes("agent", "mower_agent").is_err(), "no endpoint of its own");
+}
+
+// ---------------------------------------------------------------------------
+// ws_bridge (step E3)
+// ---------------------------------------------------------------------------
+
+/// The production plan of E2 as merged (main fbf5afe, step 5 included),
+/// taken from that tree before E3 touched the manifest: every module with
+/// its flag, ws_bridge on r2r. 61 to_ros, 9 from_ros, 44 service_to_ros, 2
+/// action_to_ros.
+const E2_PRODUCTION_PLAN: [&str; 116] = [
+    "to_ros /adapter/coverage_settings std_msgs/msg/String R TL 1",
+    "to_ros /adapter/map_datum std_msgs/msg/String R TL 1",
+    "to_ros /adapter/map_layers/chennal_map_inflated std_msgs/msg/String R TL 1",
+    "to_ros /adapter/map_layers/free_space_inflated std_msgs/msg/String R TL 1",
+    "to_ros /adapter/map_layers/map_grid std_msgs/msg/String R TL 1",
+    "to_ros /adapter/map_layers/risk_map_inflated std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/channels std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/connectors std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/coverage_path std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/invalid_segments std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/risk_zones std_msgs/msg/String R TL 1",
+    "to_ros /adapter/marker_layers/zones std_msgs/msg/String R TL 1",
+    "to_ros /adapter/robot_pose geometry_msgs/msg/PoseStamped R V 10",
+    "to_ros /adapter/zone_summaries std_msgs/msg/String R TL 1",
+    "to_ros /aon_battery_state sensor_msgs/msg/BatteryState R V 10",
+    "to_ros /battery_state sensor_msgs/msg/BatteryState R V 10",
+    "to_ros /channel_path nav_msgs/msg/Path R V 10",
+    "to_ros /channel_path_array visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /chennal_map nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /chennal_map_inflated nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /chennal_path nav_msgs/msg/Path R V 10",
+    "to_ros /chennal_path_array visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /coverage_connectors visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /coverage_invalid_segments visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /coverage_path nav_msgs/msg/Path R TL 1",
+    "to_ros /coverage_path_markers visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /coverage_progress mower_interface/msg/CoverageProgress R TL 1",
+    "to_ros /coverage_split_points visualization_msgs/msg/Marker R V 1",
+    "to_ros /fix sensor_msgs/msg/NavSatFix R V 10",
+    "to_ros /free_space nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /free_space_inflated nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /gps/filtered sensor_msgs/msg/NavSatFix R V 10",
+    "to_ros /gps/status std_msgs/msg/String R V 10",
+    "to_ros /imu/data sensor_msgs/msg/Imu R V 10",
+    "from_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+    "from_ros /keyboard_cmd_vel geometry_msgs/msg/TwistStamped R V 10",
+    "to_ros /map_grid nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /map_grid_global nav_msgs/msg/OccupancyGrid R TL 1",
+    "from_ros /mower_base/firmware_info std_msgs/msg/String R TL 1",
+    "to_ros /mower_base/led_command std_msgs/msg/String R TL 1",
+    "to_ros /mower_base/rear_light std_msgs/msg/String R TL 1",
+    "from_ros /mower_base/telemetry std_msgs/msg/String BE V 1",
+    "to_ros /nav_cmd_vel geometry_msgs/msg/TwistStamped R V 10",
+    "to_ros /nav_operation_active std_msgs/msg/Bool R TL 1",
+    "to_ros /navigation_coordinator_lock std_msgs/msg/Bool R V 10",
+    "to_ros /navigation_safety_stop geometry_msgs/msg/TwistStamped R V 10",
+    "from_ros /odom nav_msgs/msg/Odometry BE V 10",
+    "from_ros /odom_slow nav_msgs/msg/Odometry R V 10",
+    "to_ros /odometry/global nav_msgs/msg/Odometry R V 10",
+    "to_ros /odometry/global_slow nav_msgs/msg/Odometry R V 10",
+    "to_ros /odometry/gps nav_msgs/msg/Odometry R V 10",
+    "to_ros /odometry/local nav_msgs/msg/Odometry R V 10",
+    "from_ros /physical_joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+    "to_ros /plan nav_msgs/msg/Path R V 1",
+    "to_ros /recorded_path nav_msgs/msg/Path R V 10",
+    "to_ros /risk_map nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /risk_map_inflated nav_msgs/msg/OccupancyGrid R TL 1",
+    "to_ros /risk_zone_list visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /risk_zone_markers visualization_msgs/msg/Marker R TL 1",
+    "to_ros /robot/info std_msgs/msg/String R TL 1",
+    "to_ros /robot/online std_msgs/msg/Bool R TL 1",
+    "to_ros /robot/telemetry std_msgs/msg/String R V 10",
+    "from_ros /rosout rcl_interfaces/msg/Log R V 100",
+    "to_ros /site_list std_msgs/msg/String R TL 1",
+    "to_ros /split_path nav_msgs/msg/Path R V 1",
+    "to_ros /tf tf2_msgs/msg/TFMessage R V 100",
+    "from_ros /tf_static tf2_msgs/msg/TFMessage R TL 100",
+    "to_ros /zone_list visualization_msgs/msg/MarkerArray R TL 1",
+    "to_ros /zone_markers visualization_msgs/msg/Marker R TL 1",
+    "to_ros /zone_sequence_status std_msgs/msg/String R TL 1",
+    "service_to_ros /cancel_nav2 std_srvs/srv/Trigger",
+    "service_to_ros /cancel_navigation_dispatch mower_interface/srv/CancelNavigationDispatch",
+    "service_to_ros /cencel_nav2 std_srvs/srv/Trigger",
+    "service_to_ros /channel_record_end std_srvs/srv/Trigger",
+    "service_to_ros /channel_record_start std_srvs/srv/Trigger",
+    "service_to_ros /check_nav_status std_srvs/srv/Trigger",
+    "service_to_ros /chennal_record_end std_srvs/srv/Trigger",
+    "service_to_ros /chennal_record_start std_srvs/srv/Trigger",
+    "service_to_ros /confirm_navigation_dispatch mower_interface/srv/ConfirmNavigationDispatch",
+    "service_to_ros /coverage_progress_status mower_interface/srv/GetCoverageProgress",
+    "service_to_ros /create_chennal_map std_srvs/srv/Trigger",
+    "service_to_ros /create_free_space std_srvs/srv/Trigger",
+    "service_to_ros /create_risk_map std_srvs/srv/Trigger",
+    "service_to_ros /datum robot_localization/srv/SetDatum",
+    "service_to_ros /edit_zone mower_interface/srv/EditZone",
+    "service_to_ros /fromLL robot_localization/srv/FromLL",
+    "service_to_ros /fromLLArray robot_localization/srv/FromLLArray",
+    "service_to_ros /generate_coverage_path std_srvs/srv/Trigger",
+    "service_to_ros /get_channel_path_list mower_interface/srv/ChannelPathList",
+    "service_to_ros /get_channel_route mower_interface/srv/ChannelRoute",
+    "service_to_ros /get_chennal_path_list mower_interface/srv/ChennalPathList",
+    "service_to_ros /get_record_zone_info std_srvs/srv/Trigger",
+    "service_to_ros /get_record_zone_list mower_interface/srv/GetZoneList",
+    "service_to_ros /get_risk_zone_list mower_interface/srv/GetZoneList",
+    "service_to_ros /get_zone_map_list_srv mower_interface/srv/ZoneMapList",
+    "service_to_ros /import_image_mask mower_interface/srv/ImportImageMask",
+    "service_to_ros /load_zone_list std_srvs/srv/Trigger",
+    "service_to_ros /mission_operation_lock mower_interface/srv/MissionOperationLock",
+    "service_to_ros /record_cancel std_srvs/srv/Trigger",
+    "service_to_ros /record_zone_end std_srvs/srv/Trigger",
+    "service_to_ros /record_zone_start std_srvs/srv/Trigger",
+    "service_to_ros /restore_free_space_coverage std_srvs/srv/Trigger",
+    "service_to_ros /resume_coverage mower_interface/srv/ResumeCoverage",
+    "service_to_ros /risk_zone_end std_srvs/srv/Trigger",
+    "service_to_ros /risk_zone_start std_srvs/srv/Trigger",
+    "service_to_ros /run_zone_sequence mower_interface/srv/ZoneSequence",
+    "service_to_ros /save_zone_list std_srvs/srv/Trigger",
+    "service_to_ros /site_op mower_interface/srv/SiteOp",
+    "service_to_ros /stop_zone_sequence std_srvs/srv/Trigger",
+    "service_to_ros /system/check_update std_srvs/srv/Trigger",
+    "service_to_ros /system/restart std_srvs/srv/Trigger",
+    "service_to_ros /system/update std_srvs/srv/Trigger",
+    "service_to_ros /toLL robot_localization/srv/ToLL",
+    "service_to_ros /zone_exec_path mower_interface/srv/ZoneExecPath",
+    "action_to_ros /nav_action mower_interface/action/Waypoint",
+    "action_to_ros /nav_action_follow_path mower_interface/action/Waypoint",
+];
+
+/// What the policy notes for the same plan.
+const E2_PRODUCTION_NOTE: &str = "/tf: not bridged for nav_action_server, which subscribes to it only with \
+                                  nav_backend: nav_core and nav_core.pose_source: tf: that would need both directions";
+
+#[track_caller]
+fn assert_same_lines(got: &[String], expected: &[&str], what: &str) {
+    let missing: Vec<&&str> = expected.iter().filter(|l| !got.iter().any(|g| g == *l)).collect();
+    let extra: Vec<&String> = got.iter().filter(|g| !expected.contains(&g.as_str())).collect();
+    assert!(missing.is_empty() && extra.is_empty(), "{what}\nmissing: {missing:#?}\nextra: {extra:#?}");
+    assert_eq!(got, expected, "{what}: the order");
+}
+
+/// With ws_bridge's flag false, the production plan is E2's line for line,
+/// whether ws_bridge runs in mower_rsd (rust_bridge:=true) or does not
+/// (rust_bridge:=false: the Python rosbridge, or the separate binary). The
+/// `bridge` module and the recorder's nodes outside add no declaration
+/// while nothing of theirs is on the bus. A later flag flip (E2 steps 6 and
+/// 7) changes this plan on purpose, and the snapshot with it.
+#[test]
+fn with_ws_bridge_off_the_production_plan_is_e2_s_line_for_line() {
+    let remaps = production_remaps();
+    let in_rsd = rsd_plan(&PRODUCTION_MODULES, &remaps).unwrap();
+    assert_same_lines(&in_rsd.lines(), &E2_PRODUCTION_PLAN, "ws_bridge in mower_rsd, on r2r");
+    assert_eq!(in_rsd.notes, [E2_PRODUCTION_NOTE]);
+    let without: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != "bridge").collect();
+    let elsewhere = rsd_plan(&without, &remaps).unwrap();
+    assert_same_lines(&elsewhere.lines(), &E2_PRODUCTION_PLAN, "ws_bridge not in mower_rsd");
+    assert_eq!(elsewhere.notes, [E2_PRODUCTION_NOTE]);
+}
+
+/// ws_bridge.yaml as ws_bridge reads it: topics_sub, topics_pub, and the
+/// services with their types.
+fn ws_bridge_yaml() -> (Vec<String>, Vec<String>, BTreeMap<String, String>) {
+    let text = std::fs::read_to_string(repo().join("src/mower_bringup/config/ws_bridge.yaml")).unwrap();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+    let list = |key: &str| -> Vec<String> {
+        doc[key].as_sequence().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    };
+    let services = doc["services"]
+        .as_mapping()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.as_str().unwrap().to_string(), v.as_str().unwrap().to_string()))
+        .collect();
+    (list("topics_sub"), list("topics_pub"), services)
+}
+
+/// The fnmatch subset ws_bridge's allow-list uses (mower_ws_bridge's
+/// config.rs): `*` is any run of characters, `/` included, as in Python's
+/// fnmatch, which rosbridge used.
+fn glob(pattern: &str, name: &str) -> bool {
+    fn rec(p: &[u8], n: &[u8]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some(b'*') => (0..=n.len()).any(|i| rec(&p[1..], &n[i..])),
+            Some(c) => n.first() == Some(c) && rec(&p[1..], &n[1..]),
+        }
+    }
+    rec(pattern.as_bytes(), name.as_bytes())
+}
+
+/// The `bridge` module is ws_bridge.yaml's allow-list: topics_sub's globs
+/// expanded to every name a module or a node outside writes, read R TL 10;
+/// topics_pub, written R V 10; the services, called, with the types the yaml
+/// gives them (which ws_bridge's r2r backend creates its clients with). The
+/// bus backend subscribes only to names of the module or typed on the bus,
+/// so a name added to the allow-list needs a line here too.
+/// mower_mission's `test_ws_bridge_policy_matches_the_rosbridge_allow_lists`
+/// keeps the yaml rosbridge's.
+#[test]
+fn the_bridge_module_is_ws_bridge_yaml_s_allow_list() {
+    let (topics_sub, topics_pub, services) = ws_bridge_yaml();
+    let written: BTreeSet<&str> = MODULES
+        .iter()
+        .flat_map(|m| m.instances)
+        .flat_map(|i| i.endpoints)
+        .chain(OUTSIDE.iter().flat_map(|o| o.endpoints))
+        .filter(|e| e.kind == Kind::Publish && e.only.is_none())
+        .map(|e| e.name)
+        .collect();
+    let reachable: BTreeSet<&str> = written.iter().copied().filter(|n| topics_sub.iter().any(|g| glob(g, n))).collect();
+
+    let (module, bridge) = instance("mower_ws_bridge").expect("ws_bridge's instance");
+    assert_eq!(module.id, "bridge");
+    let of = |kind: Kind| bridge.endpoints.iter().filter(move |e| e.kind == kind);
+    let subscribed: BTreeSet<&str> = of(Kind::Subscribe).map(|e| e.name).collect();
+    assert_eq!(subscribed, reachable, "topics_sub's names that have a writer");
+    assert!(of(Kind::Subscribe).all(|e| e.profile() == Some(R_TL_10)));
+    assert!(topics_pub.iter().all(|t| !t.contains('*')), "topics_pub names topics, it has no globs");
+    let published: BTreeSet<&str> = of(Kind::Publish).map(|e| e.name).collect();
+    assert_eq!(published, topics_pub.iter().map(String::as_str).collect::<BTreeSet<_>>());
+    assert!(of(Kind::Publish).all(|e| e.profile() == Some(R_V_10)));
+    let called: BTreeMap<String, String> = of(Kind::Call).map(|e| (e.name.to_string(), e.ros_type())).collect();
+    assert_eq!(called, services, "the services, with ws_bridge.yaml's types");
+    assert_eq!(bridge.endpoints.len(), subscribed.len() + published.len() + called.len(), "and nothing else");
+    // /gps/fix and /*/battery_state have no writer
+    assert_eq!((subscribed.len(), published.len(), called.len()), (28, 4, 32));
+    assert!(!subscribed.contains("/gps/fix"));
 }
 
 // ---------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------
 
-/// mower_rsd's module table, as its own test writes it, without `bridge` and
-/// `agent`, which are outside in E2.
+/// mower_rsd's module table, as its own test writes it, without `agent`,
+/// which has no endpoint of its own.
 #[test]
 fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
     let expected = [
@@ -505,6 +737,7 @@ fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
         ("adapter", vec!["flutter_adapter"]),
         ("battery", vec!["battery_state"]),
         ("pid_autotune", vec!["pid_autotune"]),
+        ("bridge", vec!["mower_ws_bridge"]),
     ];
     let got: Vec<(&str, Vec<&str>)> = MODULES.iter().map(|m| (m.id, m.instances.iter().map(|i| i.node).collect())).collect();
     assert_eq!(got, expected);

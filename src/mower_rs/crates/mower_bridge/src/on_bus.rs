@@ -20,10 +20,12 @@ pub const ON_BUS: &[(&str, bool)] = &[
     ("adapter", true),
     ("battery", true),
     ("pid_autotune", false),
+    // ws_bridge (step E3): on r2r, its only backend so far.
+    ("bridge", false),
 ];
 
 /// Whether module `id` is on the bus; false for an id the table does not
-/// have (`bridge`, `agent`).
+/// have (`agent`).
 pub fn on_bus(id: &str) -> bool {
     ON_BUS.iter().any(|&(module, on)| module == id && on)
 }

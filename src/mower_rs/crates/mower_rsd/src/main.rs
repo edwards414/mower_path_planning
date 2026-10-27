@@ -1016,7 +1016,7 @@ mod tests {
         if let Some(ids) = bridged {
             assert_eq!(ids, production);
         }
-        // ws_bridge and the agent are outside in E2
+        // ws_bridge on r2r and the agent have nothing on the bus
         assert_eq!(bus_bridge(&argv(&["bridge", "agent"]), &remaps), Ok(None));
         assert!(parse_args(&argv(&["--modules", "status,bus_bridge"])).is_err(), "not for --modules");
     }

@@ -28,8 +28,8 @@ pub struct Running {
 
 impl Running {
     /// mower_rsd: every instance of the modules in `--modules`, on the bus as
-    /// `on_bus` says. Ids the manifest does not have (`bridge`, `agent`) are
-    /// outside in E2.
+    /// `on_bus` says. An id the manifest does not have (`agent`) has no
+    /// endpoint to plan for.
     pub fn rsd<S: AsRef<str>>(ids: &[S], on_bus: impl Fn(&str) -> bool) -> Vec<Running> {
         let mut running: Vec<Running> = Vec::new();
         for id in ids {
