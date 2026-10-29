@@ -926,6 +926,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_sim"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mower_base_core",
+ "mower_ubx",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "mower_ubx"
 version = "0.1.0"
 

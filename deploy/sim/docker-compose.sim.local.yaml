@@ -1,0 +1,18 @@
+# The sim with this tree's mower_rsd instead of the image's, for a change to
+# mower_rs itself. Build it in the dev container (the image's platform and
+# glibc):
+#
+#   cd src/mower_rs && cargo build --release -p mower_rsd -p mower_sim
+#   docker compose -f deploy/sim/docker-compose.sim.yaml \
+#                  -f deploy/sim/docker-compose.sim.local.yaml up
+#
+# MOWER_RS_TARGET points elsewhere (default: this tree's target/release).
+services:
+  sim:
+    volumes:
+      - type: bind
+        source: ${MOWER_RS_TARGET:-../../src/mower_rs/target/release}/mower_rsd
+        target: /mower_ws/install/mower_rs/lib/mower_rs/mower_rsd
+        read_only: true
+        bind:
+          create_host_path: false

@@ -265,7 +265,7 @@ filter state 不可能逐位元相同，正確的讀法是跟「同一套實作�
 - ws_bridge、agent、robot_status、guards、record、map、coverage、battery、pid_autotune、imu 從 r2r 訂閱改讀 bus（大多只是把 `r2r::Subscriber` 換成 `bus.subscribe("/topic")`）。
 - GPS：ublox UBX 解析（只要 NAV-PVT/NAV-HPPOSLLH + RTCM 透傳）→ `/fix`。這順便把 outdoor 記錄裡「gps profile 從沒啟動過」的問題一起處理。
 - 映像：拿掉 ROS 基底（1.93 GB → 預估 < 100 MB）、CI 從 ~40 min 降到幾分鐘、開機到心跳從 ~90 s 降到幾秒。
-- `mower_sim`：base driver 加 `--sim` 後端（運動學模型 + 假 IMU/GPS），app 開發用；worlds/urdf 不再需要。
+- `mower_sim`：獨立的裝置模擬器（不是 base driver 的 `--sim` 旗標，E8 D4）：pty 上的 STM32、WIT IMU、u-blox，由一個真值世界（運動學、電池）驅動，生產程式碼零改動；`deploy/sim/` 的 compose 給 app 開發用；worlds/urdf 不再需要。
 - 錄放：bus tap 寫自家 binary log（`mower_recorder` 已是 opt-in 節點，改寫成 tap）；replay 就是把 log 餵回 bus + 假時鐘。
 - 觀測：`mowerctl topic echo/hz`、`mowerctl node` 走 ws_bridge，不會像 `ros2 topic hz` 那樣造成 overrun。
 - 拆掉：compose 裡的 `RUST_*` 開關、rosbridge 相關 yaml、launch 檔。
@@ -358,7 +358,7 @@ local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/glo
 | E5 | recorder 重寫 | app 用六個 `/mower_recorder/*` 端點，加 Bag 頁的改名、刪除、上傳 R2，加 MediaMTX 錄影 API 與尾燈。用 Rust 的 `mcap` crate 寫 MCAP，Foxglove 與 `mower-check-run` 不用重寫。資料收集 profile（gscam 進 MCAP 給 GrassVision）要決定留不留 |
 | E6 | host 整合 | `firmware/tools/mower_flash.py`（480 行）移植進 `firmware-sync`，協定核心 `mower_base_core` 已有；link-status、pairing、host.request 收進 mowerd。第一版保留 `~/.mower` 的 JSON 檔契約，一次只換一層 |
 | E7 | 打包 | 先不脫離 Docker：`debian:bookworm-slim` + `mowerd` 約 40 MB，`mower-update.sh` 與 OTA 流程不動，每次更新只剩幾 MB，pull 的負載（2026-10-08 讓板子硬重開的那種）也跟著消失。原生 systemd 留給 Phase F |
-| E8 | 觀測與模擬 | `mowerctl topic echo/hz` 走 bridge 的 loopback 9091；`--ros-tap` cargo feature 讓 D/E 開發期還能開 rviz；`mower_base --sim` 後端給 app 開發；replay 是把 MCAP 餵回 bus 加假時鐘 |
+| E8 | 觀測與模擬 | `mowerctl topic echo/hz` 走 bridge 的 loopback 9091；`--ros-tap` cargo feature 讓 D/E 開發期還能開 rviz；`mower_sim`（pty 上的裝置模擬器）給 app 開發；replay 是把 MCAP 餵回 bus 加假時鐘 |
 | E9 | CI 與清理 | cargo 交叉編 aarch64 幾分鐘取代 40 分鐘 QEMU colcon；留一個有 ROS 的 dev container 當離線 oracle；最後拆 launch、`RUST_*` 開關、cyclonedds、sysctl、package.xml |
 
 **時程**：D 10–15 天同第 6 節；E 第 6 節的 5 天太樂觀，recorder 與 bridge registry 各要三四天、host 整合兩三天，抓 2–3 週。

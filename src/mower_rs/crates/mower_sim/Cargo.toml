@@ -1,0 +1,20 @@
+[package]
+name = "mower_sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Development simulator: one truth world driving a fake STM32 base board, WIT IMU and u-blox F9P on ptys, so the production stack runs unchanged without hardware (never on a robot)"
+
+[[bin]]
+name = "mower_sim"
+path = "src/main.rs"
+
+# No r2r: the frames go through the production crates that have no ROS in
+# them, and the tests compile mower_imu's and mower_gps's parsers from their
+# source (#[path]).
+[dependencies]
+mower_base_core = { path = "../mower_base_core" }
+mower_ubx = { path = "../mower_ubx" }
+libc = "0.2"
+serde_json.workspace = true
+serde_yaml = "0.9"
