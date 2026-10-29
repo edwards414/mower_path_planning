@@ -1,0 +1,27 @@
+[package]
+name = "mowerctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line view of a running robot through ws_bridge's rosbridge protocol (topic list/info/echo/hz, service list/call, ping); no ROS, read-only unless told otherwise"
+
+[[bin]]
+name = "mowerctl"
+path = "src/main.rs"
+
+# No r2r and nothing that links C, so it also builds as a static binary for
+# the host (README.md, "Where it lives").
+[dependencies]
+futures.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-tungstenite = "0.24"
+# No serde_json features: the image's build is one cargo run of the whole
+# workspace, and a feature asked for here (float_roundtrip, raw_value) would
+# be unified into every binary it ships. echo prints a message from the
+# frame's own bytes instead (format::raw_member).
+serde_json.workspace = true
+serde_yaml = "0.9"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+data-encoding = "2"
