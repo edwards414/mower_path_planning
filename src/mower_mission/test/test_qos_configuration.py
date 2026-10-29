@@ -1,15 +1,15 @@
-"""Source-level regression checks for snapshot-topic QoS compatibility."""
+"""Source-level regression checks of safety rules in the rclpy nodes and
+their interfaces."""
 
 import ast
-import re
 from pathlib import Path
 
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
-# The only coverage planner (the rclpy coverage_node.py was removed).
-COVERAGE_RS = (
-    PACKAGE_DIR.parent / 'mower_rs/crates/mower_coverage/src/lib.rs'
-)
+# The checks of the Rust coverage module that used to grep its source here
+# (latched snapshots, the dispatch it confirms, its cancel tracking and its
+# zone-sequence stop) are its own tests now: src/mower_rs/crates/
+# mower_coverage/tests/{bus,source_rules}.rs (E9-07).
 MAP_MANAGE_NODE = PACKAGE_DIR / 'mower_mission/map_manage_node.py'
 FLUTTER_ADAPTER = (
     PACKAGE_DIR / 'mower_mission/adapters/flutter_adapter_node.py'
@@ -28,61 +28,6 @@ DISPATCH_CONFIRM_SRV = (
     / 'mower_interface/srv/ConfirmNavigationDispatch.srv'
 )
 WAYPOINT_ACTION = PACKAGE_DIR.parent / 'mower_interface/action/Waypoint.action'
-
-
-def _publisher_qos_for(topic: str) -> str:
-    """The QoS expression the Rust coverage module creates `topic` with on
-    the bus (the marker layers through their shared `markers` helper)."""
-    source = COVERAGE_RS.read_text(encoding='utf-8')
-    match = re.search(
-        r'\.publisher::<[\w:]+>\(&m\.resolve_topic\("' + re.escape(topic)
-        + r'"\)\?,\s*([^?]*?)\)\?',
-        source,
-    )
-    if match is None and f'markers("{topic}")?' in source:
-        match = re.search(
-            r'let markers = \|topic: &str\|.*?\.publisher::<MarkerArray>'
-            r'\(&m\.resolve_topic\(topic\)\?,\s*([^?]*?)\)\?',
-            source,
-            flags=re.S,
-        )
-    assert match is not None, f'publisher for {topic} not found'
-    return match.group(1).strip()
-
-
-def _rust_fn(source: str, name: str) -> str:
-    """Body of the Rust fn `name` (up to the next item at its level)."""
-    start = re.search(
-        rf'^\s*(?:pub )?(?:async )?fn {name}\b', source, flags=re.MULTILINE
-    )
-    assert start is not None, f'fn {name} not found'
-    rest = source[start.end():]
-    first_line_end = rest.index('\n') + 1
-    end = re.compile(
-        r'^(?:    (?:///|#\[|(?:pub )?(?:async )?fn )|\S)',
-        flags=re.MULTILINE,
-    ).search(rest, first_line_end)
-    return rest[:end.start()] if end else rest
-
-
-def test_coverage_snapshot_publishers_offer_transient_local_qos():
-    """Every current-plan/map snapshot must match late-joining consumers."""
-    source = COVERAGE_RS.read_text(encoding='utf-8')
-    assert (
-        'fn latched() -> Qos {\n'
-        '    Qos::default().keep_last(1).reliable().transient_local()'
-    ) in source
-    # /free_space_inflated and /risk_map_inflated are map_manage's: coverage's
-    # writers of them never published, and went with E2 step 5
-    # (docs/BUS_TOPICS.md 5.8 #2)
-    for topic in (
-        '/coverage_path',
-        '/coverage_path_markers',
-        '/coverage_invalid_segments',
-        '/coverage_connectors',
-        '/zone_sequence_status',
-    ):
-        assert _publisher_qos_for(topic) == 'latched()', topic
 
 
 def test_fixed_map_datum_fallback_is_opt_in():
@@ -135,24 +80,16 @@ def test_navigation_and_mutation_admission_share_a_central_lock():
 
 
 def test_navigation_dispatch_requires_a_correlated_confirmation():
+    """The Python server's half; the coverage module stamps every goal,
+    confirms that same id and tracks a failed confirmation in its own tests
+    (mower_coverage/tests/bus.rs)."""
     server = NAV_SERVER.read_text(encoding='utf-8')
-    coverage = COVERAGE_RS.read_text(encoding='utf-8')
     interface = DISPATCH_CONFIRM_SRV.read_text(encoding='utf-8')
     action = WAYPOINT_ACTION.read_text(encoding='utf-8')
     assert 'string dispatch_id' in interface
     assert 'string dispatch_id' in action
     assert 'dispatch_id != self._pending_dispatch_id' in server
     assert "self._nav_state = 'pending_confirmation'" in server
-    assert 'self.track_and_cancel_goal(' in coverage
-    assert 'navigation may be active' in coverage
-    # the coverage node stamps every goal and confirms that same id
-    assert (
-        'dispatch_id: dispatch_id.clone(), zone_id, resume_segment_index };'
-    ) in coverage
-    assert (
-        'ConfirmNavigationDispatch::Request { dispatch_id: '
-        'dispatch_id.clone() }'
-    ) in coverage
 
 
 def test_mutation_release_failure_is_never_acknowledged_as_success():
@@ -346,59 +283,6 @@ def test_map_inflation_cannot_start_or_change_below_safety_envelope():
     assert 'MIN_SAFE_INFLATE_RADIUS_M = 0.75' in source
     assert 'initial_inflate_radius_m < MIN_SAFE_INFLATE_RADIUS_M' in source
     assert 'next_inflate_radius_m < MIN_SAFE_INFLATE_RADIUS_M' in source
-
-
-def test_cancel_tracking_shares_attempts_and_stops_before_teardown():
-    """Source-level companion of src/mower_rs/tools/coverage_cancel_check.py
-    (the black-box behaviour check of the same tracker, run in CI's mower_rs
-    job), which replaced the deleted test_coverage_cancel_tracking.py. One correlated
-    cancel attempt per dispatch id, only the current attempt may clear
-    itself, no fallback after shutdown, and tracking stops before the node
-    stops spinning."""
-    source = COVERAGE_RS.read_text(encoding='utf-8')
-    fallback = _rust_fn(source, 'request_nav2_cancel_fallback')
-    finish = _rust_fn(source, 'finish_attempt')
-    assert re.search(r'if tr\.shutdown \{\s*return None;', fallback)
-    assert 'tr.attempts.get(dispatch_id).cloned()' in fallback
-    assert 'Arc::ptr_eq(a, attempt)' in finish
-    assert source.index('tr.shutdown = true;') < source.index(
-        'running.store(false, Ordering::Relaxed);'
-    )
-
-
-def test_zone_sequence_stop_tracks_the_exact_goal_outside_the_lock():
-    source = COVERAGE_RS.read_text(encoding='utf-8')
-    stop = source.split(
-        'm.resolve_service("/stop_zone_sequence")?)?;', 1
-    )[1].split('\n    }\n', 1)[0]
-    cancel = _rust_fn(source, 'cancel_sequence_active_goal')
-    clear = _rust_fn(source, 'clear_active_goal')
-    send = _rust_fn(source, 'send_follow_path')
-    sequence = _rust_fn(source, 'run_sequence')
-    # stop: flag the sequence first, then cancel its exact active goal
-    assert 'ctx.sequence_cancel.store(true, Ordering::SeqCst);' in stop
-    assert stop.index('ctx.sequence_cancel.store(true') < stop.index(
-        'ctx.cancel_sequence_active_goal('
-    )
-    # cancel once per goal, and track it only after the lock is released
-    assert 'Some(a) if a.cancel_marked => return false,' in cancel
-    assert 'a.cancel_marked = true;' in cancel
-    assert (
-        cancel.index('self.tracking.lock()')
-        < cancel.index('};')
-        < cancel.index('self.track_and_cancel_goal(')
-    )
-    # only the matching generation (handle, dispatch id, result) is cleared
-    assert (
-        'active.handle_id == handle_id && active.dispatch_id == dispatch_id '
-        '&& active.slot.id == slot_id'
-    ) in clear
-    # the result is captured before the dispatch is confirmed
-    assert send.index('handles.adopt(self, goal, result)') < send.index(
-        'ConfirmNavigationDispatch::Request {'
-    )
-    # both zone and channel legs of a sequence are sequence-owned goals
-    assert sequence.count(', true, true).await') == 2
 
 
 def test_nav2_dispatch_is_bounded_and_terminal_evidence_is_strict():

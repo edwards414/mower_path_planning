@@ -103,3 +103,26 @@ mod tests {
         }
     }
 }
+
+/// Only a terminal status is terminal evidence: _task_result_from_future's
+/// rule (E9-07, checked only on the Python node by
+/// test_qos_configuration.py).
+#[cfg(test)]
+mod terminal_evidence {
+    use super::*;
+
+    #[test]
+    fn only_succeeded_canceled_and_aborted_end_a_task() {
+        for status in [r2r::GoalStatus::Unknown, r2r::GoalStatus::Accepted, r2r::GoalStatus::Executing, r2r::GoalStatus::Canceling] {
+            assert!(terminal_from_status(status, 0, String::new()).is_err(), "{status:?}");
+        }
+        for (status, result) in [
+            (r2r::GoalStatus::Succeeded, TaskResult::Succeeded),
+            (r2r::GoalStatus::Canceled, TaskResult::Canceled),
+            (r2r::GoalStatus::Aborted, TaskResult::Failed),
+        ] {
+            let terminal = terminal_from_status(status, 105, "Failed to make progress".into()).expect("terminal");
+            assert_eq!((terminal.result, terminal.error_code, terminal.error_msg.as_str()), (result, 105, "Failed to make progress"));
+        }
+    }
+}

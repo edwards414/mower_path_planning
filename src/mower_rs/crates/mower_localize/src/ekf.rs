@@ -772,3 +772,24 @@ mod tests {
         });
     }
 }
+
+/// What the slow copy is when mower_rsd.yaml sets neither key: the
+/// `global_odom_throttle` of mission.launch.py it replaces (`messages
+/// /odometry/global 5.0 /odometry/global_slow`), on the map filter only
+/// (E9-07, from test_controller_configuration.py).
+#[cfg(test)]
+mod slow_copy_defaults {
+    use super::*;
+    use crate::testing;
+
+    #[test]
+    fn the_map_filter_copies_at_the_throttle_s_rate_and_topic_by_default() {
+        let Some(ctx) = testing::context() else { return };
+        let node = testing::node(&ctx, crate::NODE_EKF_MAP, "/ekf_slow_copy_defaults_test", &[]);
+        let map = slow_copy_settings(&node, crate::NODE_EKF_MAP);
+        assert_eq!((map.topic.as_str(), map.rate_hz), ("odometry/global_slow", 5.0));
+        // nothing throttles /odometry/local
+        let odom = slow_copy_settings(&node, crate::NODE_EKF_ODOM);
+        assert_eq!((odom.topic.as_str(), odom.rate_hz), ("", 5.0));
+    }
+}

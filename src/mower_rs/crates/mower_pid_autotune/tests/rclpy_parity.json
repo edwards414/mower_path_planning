@@ -1,0 +1,118 @@
+{
+  "about": "What pid_autotune_node.py / pid_tuning.py (the rclpy fallback) and mower_pid_autotune must agree on, read by src/mower_mission/test/test_controller_configuration.py (the Python side) and by this crate's tests (the Rust side): every declared parameter with its default, in declaration order, the telemetry flag bits and power state, and the plausibility limits of the step-response fit.",
+  "parameters": [
+    [
+      "telemetry_topic",
+      "/mower_base/telemetry"
+    ],
+    [
+      "pid_topic",
+      "/mower_base/pid_command"
+    ],
+    [
+      "override_topic",
+      "/mower_base/wheel_override"
+    ],
+    [
+      "led_topic",
+      "/mower_base/led_command"
+    ],
+    [
+      "status_topic",
+      "/pid_autotune/status"
+    ],
+    [
+      "nav_active_topic",
+      "/nav_operation_active"
+    ],
+    [
+      "lock_service",
+      "/mission_operation_lock"
+    ],
+    [
+      "step_low_permille",
+      400
+    ],
+    [
+      "step_high_permille",
+      700
+    ],
+    [
+      "hold_s",
+      2.5
+    ],
+    [
+      "verify_permille",
+      500
+    ],
+    [
+      "verify_hold_s",
+      3.0
+    ],
+    [
+      "tau_c_factor",
+      1.0
+    ],
+    [
+      "max_overshoot_pct",
+      25.0
+    ],
+    [
+      "max_settle_s",
+      1.5
+    ],
+    [
+      "max_ss_error_rpm",
+      1.5
+    ],
+    [
+      "telemetry_timeout_s",
+      0.5
+    ],
+    [
+      "review_timeout_s",
+      300.0
+    ],
+    [
+      "led_busy_rgb",
+      [
+        255,
+        180,
+        0
+      ]
+    ],
+    [
+      "led_busy_period_ms",
+      1600
+    ],
+    [
+      "led_normal_rgb",
+      [
+        110,
+        110,
+        110
+      ]
+    ]
+  ],
+  "telemetry_flags": {
+    "PID_FLAG_CLOSED_LOOP": 1,
+    "PID_FLAG_FLASH_VALID": 2,
+    "PID_FLAG_LAST_APPLY_OK": 8,
+    "MOTOR_FLAG_DRIVER_ALARM": 4,
+    "POWER_STATE_RUNNING": 0
+  },
+  "tuning_limits": {
+    "GAIN_RANGE": [
+      0.02,
+      5.0
+    ],
+    "TAU_RANGE": [
+      0.02,
+      3.0
+    ],
+    "DELAY_MAX": 0.6,
+    "MIN_RESPONSE_RPM": 2.0,
+    "MAX_FIT_RMSE_FRACTION": 0.1,
+    "TAU_DESIGN_MIN": 0.05
+  }
+}

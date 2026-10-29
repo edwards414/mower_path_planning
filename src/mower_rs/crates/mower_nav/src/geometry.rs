@@ -475,3 +475,22 @@ mod tests {
         assert!(horizontal_eigen(0.0004, 0.0004, 0.1, 0.0).is_none());
     }
 }
+
+/// The IMU gate bounds the largest eigenvalue from above, off-diagonal terms
+/// included (E9-07: `eigenvalue_upper_bound > max_variance`, checked only on
+/// the Python node by test_qos_configuration.py).
+#[cfg(test)]
+mod imu_eigenvalue_bound {
+    use super::*;
+
+    #[test]
+    fn correlated_axes_count_against_the_imu_limit() {
+        // 0.1 rad^2 a variance is inside 0.35 rad (0.1225 rad^2) ...
+        let independent = [0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.1];
+        assert_eq!(imu_covariance_block_reason(&independent, 0.35, "orientation"), None);
+        // ... but not with 0.03 rad^2 of correlation on each pair: a row
+        // sums to 0.16
+        let correlated = [0.1, 0.03, 0.03, 0.03, 0.1, 0.03, 0.03, 0.03, 0.1];
+        assert_eq!(imu_covariance_block_reason(&correlated, 0.35, "orientation").as_deref(), Some("IMU orientation uncertainty exceeds 0.350"));
+    }
+}

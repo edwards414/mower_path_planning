@@ -1,0 +1,13 @@
+{
+  "about": "What mower_agent.py and version.py (the Python fleet agent) and mower_agent must agree on, read by src/mower_mission/test/test_controller_configuration.py (the Python side) and by this crate's tests (the Rust side): the robot API version the backend and the app negotiate, and the agent's timing constants.",
+  "ROBOT_API_VERSION": 2,
+  "constants": {
+    "HEARTBEAT_S": 10,
+    "TELEMETRY_THROTTLE_MS": 5000,
+    "REGISTER_RETRY_S": 30,
+    "RECONNECT_MAX_S": 60,
+    "HTTP_RELAY_TIMEOUT_S": 10,
+    "TURN_REFRESH_S": 3600,
+    "TURN_RETRY_S": 60
+  }
+}

@@ -1574,3 +1574,178 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// What path_record_node.py's persistence rules are here (E9-07: the rules
+/// test_qos_configuration.py checks only on the Python node): a change is
+/// acknowledged only once it is saved and synced to the active site, or it
+/// is undone; a site is loaded only near the current datum; an active-site
+/// manifest that cannot be restored blocks every edit.
+#[cfg(test)]
+mod persistence_rules {
+    use super::*;
+
+    struct Quiet;
+
+    impl Outputs for Quiet {
+        fn recorded_path(&self, _: &PathMsg) {}
+        fn zone_marker(&self, _: &Marker) {}
+        fn zone_list(&self, _: &MarkerArray) {}
+        fn risk_marker(&self, _: &Marker) {}
+        fn risk_list(&self, _: &MarkerArray) {}
+        fn channel_path(&self, _: &PathMsg) {}
+        fn channel_list(&self, _: &MarkerArray) {}
+        fn site_list(&self, _: &str) {}
+        fn info(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("mower_record_rules_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A recorder with its working files, as at start.
+    fn recorder(dir: &Path) -> Recorder {
+        let cfg = Config {
+            frame_id: "map".into(),
+            save_dir: dir.join("zone_record").to_string_lossy().into_owned(),
+            sites_dir: dir.join("sites").to_string_lossy().into_owned(),
+            min_dist: 0.05,
+            min_dt: 0.0,
+            polygon_simplify_dist: 0.1,
+            max_site_datum_distance_m: 100.0,
+            robot_pose_max_age_s: 1.0,
+        };
+        let mut r = Recorder::new(cfg, Box::new(|| stamp(&Clock::system())));
+        r.restore_startup_persistence(&Quiet);
+        r
+    }
+
+    fn pose(x: f64, y: f64) -> PoseStamped {
+        let mut p = PoseStamped::default();
+        p.header.stamp = stamp(&Clock::system());
+        p.header.frame_id = "map".into();
+        p.pose.position.x = x;
+        p.pose.position.y = y;
+        p.pose.orientation.w = 1.0;
+        p
+    }
+
+    /// A navsat datum `north_m` north of 23.7 N 120.54 E.
+    fn datum(north_m: f64) -> String {
+        json!({"origin_lat": 23.7 + north_m / site_store::M_PER_DEG_LAT, "origin_lon": 120.54, "bearing_rad": 0.0, "source": "navsat"}).to_string()
+    }
+
+    fn read(path: std::path::PathBuf) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    /// The end of a recording is acknowledged only after its list is saved
+    /// atomically: a failed save keeps the recording for a retry and the
+    /// file on disk as it was.
+    #[test]
+    fn a_recording_is_ended_only_once_it_is_saved() {
+        let d = dir("end");
+        type Start = fn(&mut Recorder, &dyn Outputs) -> Reply;
+        type End = fn(&mut Recorder, &dyn Outputs) -> Result<String, String>;
+        let kinds: [(Start, End, &str); 3] = [
+            (Recorder::start_zone, Recorder::end_zone, "zone_list.json"),
+            (Recorder::start_risk, Recorder::end_risk, "risk_zone_list.json"),
+            (Recorder::start_channel, Recorder::end_channel, "chennal_path_list.json"),
+        ];
+        for (start, end, file) in kinds {
+            let mut r = recorder(&d);
+            r.on_pose_source("map", "base_footprint", pose(0.0, 0.0));
+            assert!(r.try_initialize(&Quiet));
+            assert!(start(&mut r, &Quiet).0, "{file}");
+            for (x, y) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.1), (1.9, 0.05)] {
+                r.on_pose_source("map", "base_footprint", pose(x, y));
+                assert!(r.sample(&Quiet));
+            }
+            // the atomic write's temporary file cannot be made
+            let blocker = d.join("zone_record").join(format!("{file}.tmp"));
+            std::fs::create_dir_all(&blocker).unwrap();
+            let before = read(d.join("zone_record").join(file));
+            assert!(end(&mut r, &Quiet).unwrap_err().contains("持久化失敗"), "{file}");
+            assert!(r.recording(), "{file}: still recording");
+            assert_eq!(read(d.join("zone_record").join(file)), before, "{file}");
+            std::fs::remove_dir(&blocker).unwrap();
+            assert!(end(&mut r, &Quiet).is_ok(), "{file}: the retry ends it");
+            assert!(!r.recording());
+            assert_ne!(read(d.join("zone_record").join(file)), before, "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Saving the three lists is a success only if all three were saved.
+    #[test]
+    fn a_partial_save_of_the_lists_is_no_success() {
+        let d = dir("partial");
+        let mut r = recorder(&d);
+        std::fs::create_dir_all(d.join("zone_record/risk_zone_list.json.tmp")).unwrap();
+        assert_eq!(r.save_zone_list_service(&Quiet), (false, "部分成功储存列表。错误: 储存风险区域列表失败".to_string()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// An edit of the active site's geometry that the site file cannot take
+    /// (no datum to write it in) is undone, in memory and on disk.
+    #[test]
+    fn an_edit_the_active_site_cannot_take_is_undone() {
+        let d = dir("sync");
+        let mut r = recorder(&d);
+        r.on_map_datum(&datum(0.0), &Quiet);
+        r.edit(&Quiet, "add", "zone", 0, &[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]).unwrap();
+        assert!(r.site_save("yard", &Quiet).0);
+        assert_eq!(r.active_site.as_deref(), Some("yard"));
+        r.datum = None;
+        let before = read(d.join("zone_record/zone_list.json"));
+        let err = r.edit(&Quiet, "add", "zone", 0, &[(5.0, 0.0), (9.0, 0.0), (9.0, 4.0)]).unwrap_err();
+        assert_eq!(err, "已新增 zone id=2；場地檔同步失敗，變更已回復");
+        assert_eq!(r.zone_list.markers.len(), 1);
+        assert_eq!(read(d.join("zone_record/zone_list.json")), before);
+        assert_eq!(r.manifest_blocked, None, "the rollback itself was saved");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A saved site is loaded only while the current datum is within
+    /// max_site_datum_distance_m of the site's.
+    #[test]
+    fn a_site_is_loaded_only_near_the_current_datum() {
+        let d = dir("distance");
+        let mut r = recorder(&d);
+        r.on_map_datum(&datum(0.0), &Quiet);
+        r.edit(&Quiet, "add", "zone", 0, &[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]).unwrap();
+        assert!(r.site_save("yard", &Quiet).0);
+        r.on_map_datum(&datum(150.0), &Quiet);
+        assert_eq!(r.site_load("yard", &Quiet), (false, "場地「yard」原點距目前定位約 150.0 m，超過安全上限 100.0 m，拒絕啟用".to_string()));
+        r.on_map_datum(&datum(50.0), &Quiet);
+        let (ok, message) = r.site_load("yard", &Quiet);
+        assert!(ok, "{message}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// At start the active site comes back from its manifest; a manifest
+    /// that names a site that is gone blocks every edit until /site_op load.
+    #[test]
+    fn the_active_site_is_restored_or_every_edit_is_blocked() {
+        let d = dir("manifest");
+        let mut r = recorder(&d);
+        r.on_map_datum(&datum(0.0), &Quiet);
+        r.edit(&Quiet, "add", "zone", 0, &[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]).unwrap();
+        assert!(r.site_save("yard", &Quiet).0);
+        let restored = recorder(&d);
+        assert_eq!((restored.active_site.as_deref(), restored.manifest_blocked.as_deref()), (Some("yard"), None));
+
+        let sites = d.join("sites").to_string_lossy().into_owned();
+        site_store::write_active_site(&sites, "ghost").unwrap();
+        let mut blocked = recorder(&d);
+        assert_eq!(blocked.active_site, None);
+        assert_eq!(blocked.manifest_blocked.as_deref(), Some("場地檔「ghost」不存在"));
+        let err = blocked.edit(&Quiet, "add", "zone", 0, &[(5.0, 0.0), (9.0, 0.0), (9.0, 4.0)]).unwrap_err();
+        assert_eq!(err, "無法編輯任務幾何：持久化場地狀態未就緒（場地檔「ghost」不存在），請先使用 /site_op load 重新載入場地");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

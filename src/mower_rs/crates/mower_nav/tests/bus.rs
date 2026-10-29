@@ -1004,3 +1004,79 @@ fn when_nav_restarts_mid_leg_coverage_keeps_the_goal_uncertain() {
         let _ = std::fs::remove_dir_all(&dir);
     });
 }
+
+/// The production safety defaults, on a manual clock (E9-07, from
+/// test_controller_configuration.py and test_qos_configuration.py): the
+/// health gate is on, a fix needs a 1.5 cm horizontal sigma, the inputs go
+/// stale after 0.30 s, and a manual command holds autonomy and the mission
+/// lease off for 0.75 s.
+#[test]
+fn the_health_gate_and_the_manual_hold_run_on_the_production_defaults() {
+    within(async {
+        let dir = dir("defaults");
+        let bus = Bus::new();
+        let (clock, manual) = Clock::manual(Time::from_system(std::time::SystemTime::now()));
+        // the tests' own default switches the gate off: back to the module's
+        let nav = Nav::start(&bus, clock.clone(), &dir, &[("require_navigation_health", ParameterValue::NotSet)]).await;
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale");
+
+        let sensors = bus.scope("sensors");
+        let (pose_pub, fix_pub, odom_pub, imu_pub) = (
+            sensors.publisher::<PoseStamped>("/adapter/robot_pose", Qos::default()).unwrap(),
+            sensors.publisher::<NavSatFix>("/fix", Qos::default()).unwrap(),
+            sensors.publisher::<Odometry>("/odometry/gps", Qos::default()).unwrap(),
+            sensors.publisher::<Imu>("/imu/data", Qos::default()).unwrap(),
+        );
+        // every input once, stamped now on the module's clock
+        let feed = |fix_variance: f64| {
+            let (sec, nanosec) = clock.now().to_parts();
+            let stamp = r2r::builtin_interfaces::msg::Time { sec, nanosec };
+            let mut p = pose(1.0, 2.0);
+            p.header.stamp = stamp.clone();
+            pose_pub.publish(&p).unwrap();
+            let mut fix = NavSatFix::default();
+            fix.header.stamp = stamp.clone();
+            (fix.latitude, fix.longitude, fix.status.status) = (25.0, 121.5, 2);
+            fix.position_covariance = vec![fix_variance, 0.0, 0.0, 0.0, fix_variance, 0.0, 0.0, 0.0, 0.0004];
+            fix.position_covariance_type = 2;
+            fix_pub.publish(&fix).unwrap();
+            let mut odom = Odometry::default();
+            odom.header.stamp = stamp.clone();
+            odom.header.frame_id = "map".into();
+            odom.pose.covariance = vec![0.0; 36];
+            (odom.pose.covariance[0], odom.pose.covariance[7]) = (0.0001, 0.0001);
+            odom_pub.publish(&odom).unwrap();
+            let mut imu = Imu::default();
+            imu.header.stamp = stamp;
+            imu.header.frame_id = "imu_link".into();
+            imu.orientation.w = 1.0;
+            let cov = vec![0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01];
+            (imu.orientation_covariance, imu.angular_velocity_covariance) = (cov.clone(), cov.clone());
+            imu.linear_acceleration_covariance = cov;
+            imu_pub.publish(&imu).unwrap();
+        };
+
+        feed(0.0151f64.powi(2));
+        nav.until_status("the 1.51 cm fix refused", |s| s["block_reason"] == "GPS horizontal uncertainty exceeds 0.015 m").await;
+        feed(0.01f64.powi(2));
+        nav.until_status("a healthy picture", |s| s["ready"] == true).await;
+        manual.advance(Duration::from_millis(290));
+        assert_eq!(nav.status().await["ready"], true, "0.29 s old inputs");
+        manual.advance(Duration::from_millis(20));
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.31 s old inputs");
+
+        feed(0.01f64.powi(2));
+        nav.until_status("healthy again", |s| s["ready"] == true).await;
+        let joy = sensors.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+        joy.publish(&TwistStamped::default()).unwrap();
+        nav.until_status("the manual command", |s| s["block_reason"] == "manual velocity command is active").await;
+        let busy = nav.lock("/map_manage:defaults_test", true).await;
+        assert_eq!((busy.success, busy.message.as_str()), (false, "Navigation/manual motion is active or termination is uncertain"));
+        manual.advance(Duration::from_millis(740));
+        assert_eq!(nav.status().await["block_reason"], "manual velocity command is active", "0.74 s after it");
+        manual.advance(Duration::from_millis(20));
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.76 s after it");
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}

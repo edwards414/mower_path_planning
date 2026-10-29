@@ -1228,3 +1228,63 @@ fn python_repr(s: &str) -> String {
         format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
     }
 }
+
+/// The telemetry bits and the fit's plausibility limits are pid_autotune_node.py's
+/// and pid_tuning.py's (E9-07, from test_controller_configuration.py: both
+/// sides are checked against tests/rclpy_parity.json), and the limits are the
+/// ones the fit enforces.
+#[cfg(test)]
+mod rclpy_parity {
+    use super::*;
+    use crate::tuning::{check_model, DELAY_MAX, GAIN_RANGE, MAX_FIT_RMSE_FRACTION, MIN_RESPONSE_RPM, TAU_DESIGN_MIN, TAU_RANGE};
+
+    fn parity() -> Value {
+        serde_json::from_str(include_str!("../tests/rclpy_parity.json")).expect("json")
+    }
+
+    #[test]
+    fn the_telemetry_flag_bits_are_the_python_node_s() {
+        let flags = &parity()["telemetry_flags"];
+        let flag = |name: &str| flags[name].as_i64().unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(PID_FLAG_CLOSED_LOOP, flag("PID_FLAG_CLOSED_LOOP"));
+        assert_eq!(PID_FLAG_FLASH_VALID, flag("PID_FLAG_FLASH_VALID"));
+        assert_eq!(PID_FLAG_LAST_APPLY_OK, flag("PID_FLAG_LAST_APPLY_OK"));
+        assert_eq!(MOTOR_FLAG_DRIVER_ALARM, flag("MOTOR_FLAG_DRIVER_ALARM"));
+        assert_eq!(POWER_STATE_RUNNING, flag("POWER_STATE_RUNNING"));
+    }
+
+    #[test]
+    fn the_fit_limits_are_pid_tuning_py_s() {
+        let parity = parity();
+        let limits = &parity["tuning_limits"];
+        let number = |name: &str| limits[name].as_f64().unwrap_or_else(|| panic!("{name}"));
+        let range = |name: &str| (limits[name][0].as_f64().expect(name), limits[name][1].as_f64().expect(name));
+        assert_eq!(GAIN_RANGE, range("GAIN_RANGE"));
+        assert_eq!(TAU_RANGE, range("TAU_RANGE"));
+        assert_eq!(DELAY_MAX, number("DELAY_MAX"));
+        assert_eq!(MIN_RESPONSE_RPM, number("MIN_RESPONSE_RPM"));
+        assert_eq!(MAX_FIT_RMSE_FRACTION, number("MAX_FIT_RMSE_FRACTION"));
+        assert_eq!(TAU_DESIGN_MIN, number("TAU_DESIGN_MIN"));
+    }
+
+    /// A clean first-order fit is refused just outside each plausibility
+    /// limit and taken on it.
+    #[test]
+    fn the_fit_refuses_a_model_just_outside_the_limits() {
+        let fit = |gain: f64, tau: f64, delay: f64| {
+            let m = FopdtModel { gain, tau, delay, y0: 0.0, y_ss: 40.0, u0: 0.0, u1: 140.0, fit_r2: 1.0, fit_rmse: 0.0 };
+            check_model(&m, 0.0).is_ok()
+        };
+        let (gain, tau, delay) = (0.29, 0.25, 0.05);
+        assert!(fit(gain, tau, delay));
+        for edge in [GAIN_RANGE.0, GAIN_RANGE.1] {
+            assert!(fit(edge, tau, delay), "gain {edge}");
+        }
+        assert!(!fit(GAIN_RANGE.0 * 0.999, tau, delay) && !fit(GAIN_RANGE.1 * 1.001, tau, delay));
+        for edge in [TAU_RANGE.0, TAU_RANGE.1] {
+            assert!(fit(gain, edge, delay), "tau {edge}");
+        }
+        assert!(!fit(gain, TAU_RANGE.0 * 0.999, delay) && !fit(gain, TAU_RANGE.1 * 1.001, delay));
+        assert!(fit(gain, tau, DELAY_MAX) && !fit(gain, tau, DELAY_MAX * 1.001));
+    }
+}

@@ -1037,3 +1037,63 @@ mod tests {
         assert_eq!(secret_bytes(&new_device_key()).len(), 32);
     }
 }
+
+/// The backend protocol of the Python fleet agent (E9-07, from
+/// test_controller_configuration.py): the API version and the timing
+/// constants come from tests/rclpy_parity.json, which the Python test checks
+/// against mower_agent.py and version.py; the rest is the backend's and the
+/// robot's own.
+#[cfg(test)]
+mod rclpy_parity {
+    use super::*;
+
+    fn parity() -> Value {
+        serde_json::from_str(include_str!("../tests/rclpy_parity.json")).expect("json")
+    }
+
+    #[test]
+    fn the_api_version_is_version_py_s() {
+        assert_eq!(Some(ROBOT_API_VERSION), parity()["ROBOT_API_VERSION"].as_i64());
+    }
+
+    #[test]
+    fn the_timing_constants_are_the_python_agent_s() {
+        let parity = parity();
+        let constant = |name: &str| parity["constants"][name].as_i64().unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(HEARTBEAT_S as i64, constant("HEARTBEAT_S"));
+        assert_eq!(TELEMETRY_THROTTLE_MS, constant("TELEMETRY_THROTTLE_MS"));
+        assert_eq!(REGISTER_RETRY_S as i64, constant("REGISTER_RETRY_S"));
+        assert_eq!(RECONNECT_MAX_S as i64, constant("RECONNECT_MAX_S"));
+        assert_eq!(HTTP_RELAY_TIMEOUT_S as i64, constant("HTTP_RELAY_TIMEOUT_S"));
+        assert_eq!(TURN_REFRESH_S, constant("TURN_REFRESH_S"));
+        assert_eq!(TURN_RETRY_S, constant("TURN_RETRY_S"));
+        assert_eq!(HTTP_RELAY_MAX_BODY, 64 * 1024);
+    }
+
+    /// The robot's local services, and the client name every signed request
+    /// carries.
+    #[test]
+    fn requests_name_the_robot_client_and_the_local_services() {
+        assert_eq!(
+            [LOCAL_GATE, LOCAL_ROSBRIDGE, LOCAL_MEDIAMTX, LOCAL_MEDIAMTX_API],
+            ["ws://127.0.0.1:9090", "ws://127.0.0.1:9091", "http://127.0.0.1:8889", "http://127.0.0.1:9997"]
+        );
+        let identity = Identity { robot_id: "MW-E907TEST".into(), name: String::new(), secret: String::new(), device_key: new_device_key(), doc: Map::new() };
+        let headers = signed_headers(&identity);
+        let header = |name: &str| headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+        assert_eq!(header("X-Mower-Client"), Some("@robot"));
+        assert_eq!(header("X-Mower-Robot"), Some("MW-E907TEST"));
+        // TURN: the robot side keeps udp and tcp relays
+        assert_eq!(TURN_ROBOT_TRANSPORTS, ["transport=udp", "transport=tcp"]);
+    }
+
+    /// The relay framing the backend speaks (mrelay1).
+    #[test]
+    fn the_relay_framing_is_mrelay1() {
+        use crate::relay::{CHUNK_SIZE, MAX_MESSAGE, SID_BYTES, SUBPROTOCOL, T_BIN, T_BIN_MORE, T_TEXT, T_TEXT_MORE};
+        assert_eq!(SUBPROTOCOL, "mrelay1");
+        assert_eq!(SID_BYTES, 8);
+        assert_eq!((T_TEXT, T_TEXT_MORE, T_BIN, T_BIN_MORE), (0x01, 0x11, 0x02, 0x12));
+        assert_eq!((CHUNK_SIZE, MAX_MESSAGE), (512 * 1024, 64 * 1024 * 1024));
+    }
+}

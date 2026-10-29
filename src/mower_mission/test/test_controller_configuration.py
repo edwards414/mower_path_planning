@@ -1,6 +1,7 @@
 """Regression checks for real/sim drivetrain geometry and frame alignment."""
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -32,31 +33,19 @@ UDEV_RULES = SRC_DIR.parent / 'deploy/udev/99-mower.rules'
 BRINGUP_PACKAGE = SRC_DIR / 'mower_bringup/package.xml'
 MOWER_RS_CMAKE = SRC_DIR / 'mower_rs/CMakeLists.txt'
 MOWER_RS_CARGO = SRC_DIR / 'mower_rs/Cargo.toml'
-MOWER_RSD_MAIN = SRC_DIR / 'mower_rs/crates/mower_rsd/src/main.rs'
 MOWER_RSD_PARAMS = SRC_DIR / 'mower_bringup/config/mower_rsd.yaml'
-GPS_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_gps/src/lib.rs'
-UBX_RS = SRC_DIR / 'mower_rs/crates/mower_ubx/src/lib.rs'
 NAV2_CONFIG = SRC_DIR / 'mower_nav2/config/nav2_no_map_params.yaml'
 NAV2_LAUNCH = SRC_DIR / 'mower_nav2/launch/navigation.launch.py'
 MAKEFILE = SRC_DIR.parent / 'Makefile'
 MOWER_SYSTEM = SRC_DIR / 'mower_controller/src/mower_system.cpp'
-MOWER_BASE_RS = SRC_DIR / 'mower_rs/crates/mower_base/src/lib.rs'
 ENV_EXAMPLE = SRC_DIR.parent / 'deploy/.env.example'
 STM_COMMS = SRC_DIR / 'mower_controller/src/Stm_Comms.cpp'
 IMU_DRIVER = SRC_DIR / 'wit_ros2_imu/wit_ros2_imu/wit_ros2_imu.py'
-IMU_DRIVER_RS = SRC_DIR / 'mower_rs/crates/mower_imu/src/lib.rs'
 PID_AUTOTUNE_NODE = SRC_DIR / 'mower_mission/mower_mission/pid_autotune_node.py'
 PID_TUNING = SRC_DIR / 'mower_mission/mower_mission/pid_tuning.py'
-PID_AUTOTUNE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/lib.rs'
-PID_AUTOTUNE_RS_TUNING = SRC_DIR / 'mower_rs/crates/mower_pid_autotune/src/tuning.rs'
 MAP_MANAGE_NODE = SRC_DIR / 'mower_mission/mower_mission/map_manage_node.py'
-MAP_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_map/src/lib.rs'
-MAP_RS_GRID = SRC_DIR / 'mower_rs/crates/mower_map/src/grid.rs'
-COVERAGE_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_coverage/src/lib.rs'
 MISSION_SETUP = SRC_DIR / 'mower_mission/setup.py'
 AGENT_PY = SRC_DIR / 'mower_mission/mower_mission/mower_agent.py'
-AGENT_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_agent/src/lib.rs'
-AGENT_RS_RELAY = SRC_DIR / 'mower_rs/crates/mower_agent/src/relay.rs'
 ROSBRIDGE_LAUNCH = SRC_DIR / 'mower_bringup/launch/rosbridge.launch.py'
 VERSION_PY = SRC_DIR / 'mower_mission/mower_mission/version.py'
 LOCAL_MEDIAMTX = SRC_DIR.parent / 'mediamtx.yml'
@@ -68,26 +57,8 @@ TELEOP_SETUP = SRC_DIR / 'mower_teleop/setup.py'
 KEYBOARD_TELEOP = SRC_DIR / 'mower_teleop/mower_teleop/teleop_keyboard.py'
 TWIST_MUX_LAUNCH = SRC_DIR / 'mower_bringup/launch/twist_mux.launch.py'
 SYSTEM_TEST_LAUNCH = SRC_DIR / 'mower_bringup/launch/system_test.launch.py'
-VELOCITY_GUARD_RS = (
-    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/core.rs'
-)
-VELOCITY_GUARD_RS_MAIN = (
-    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/lib.rs'
-)
-VELOCITY_GUARD_RS_BUS = (
-    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/bus.rs'
-)
-NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/lib.rs'
-BATTERY_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_battery/src/lib.rs'
-BATTERY_RS_ESTIMATOR = (
-    SRC_DIR / 'mower_rs/crates/mower_battery/src/estimator.rs'
-)
 BATTERY_ESTIMATOR = (
     SRC_DIR / 'mower_mission/mower_mission/battery_estimator.py'
-)
-NAV_SERVER_RS_STATE = SRC_DIR / 'mower_rs/crates/mower_nav/src/state.rs'
-NAV_SERVER_RS_GEOMETRY = (
-    SRC_DIR / 'mower_rs/crates/mower_nav/src/geometry.rs'
 )
 VELOCITY_GUARD = (
     SRC_DIR / 'mower_bringup/mower_bringup/velocity_command_guard.py'
@@ -95,6 +66,16 @@ VELOCITY_GUARD = (
 AUTO_COVERAGE = (
     SRC_DIR / 'mower_mission/mower_mission/auto_coverage_node.py'
 )
+# What an rclpy fallback and the Rust module that replaced it must agree on.
+# These tests check the Python side against them, and the crates' own tests
+# the Rust side (E9-07: no test here reads a .rs file; the Rust halves of the
+# checks that used to are tests of those crates now).
+PID_AUTOTUNE_PARITY = (
+    SRC_DIR / 'mower_rs/crates/mower_pid_autotune/tests/rclpy_parity.json'
+)
+MAP_PARITY = SRC_DIR / 'mower_rs/crates/mower_map/tests/rclpy_parity.json'
+AGENT_PARITY = SRC_DIR / 'mower_rs/crates/mower_agent/tests/rclpy_parity.json'
+BATTERY_PARITY = SRC_DIR / 'mower_rs/crates/mower_battery/tests/rclpy_parity.json'
 
 
 def _scalar(path: Path, key: str) -> str:
@@ -301,16 +282,15 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
         in robot_launch
     assert 'respawn=True' in robot_launch
 
-    # the same node names the module table uses, one parameter section each
+    # one parameter section per node name of the module table (the table:
+    # mower_rsd's module_table_carries_the_production_node_names)
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
     for node in ('robot_status', 'manual_velocity_guard',
                  'velocity_command_guard', 'map_manage',
                  'boustrophedon_coverage', 'nav_action_server',
                  'path_record_node', 'flutter_adapter', 'battery_state',
                  'pid_autotune'):
         assert f'\n{node}:\n  ros__parameters:' in params, node
-        assert f'node: "{node}"' in daemon_main, node
 
     # the daemon and the separate binaries are mutually exclusive everywhere
     for launch in (MISSION_LAUNCH, TWIST_MUX_LAUNCH, ROSBRIDGE_LAUNCH,
@@ -346,16 +326,9 @@ def test_ws_bridge_bus_is_a_run_time_switch_that_is_off_by_default(monkeypatch):
     assert re.search(r'^WS_BRIDGE_BUS=false$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
     # the Rust side reads the same argument: mower_rsd for the bus bridge's
-    # plan, the binary for its runner
-    rs = SRC_DIR / 'mower_rs/crates'
-    assert ('mower_ws_bridge::backend_of(&bridge_args) == '
-            'Ok(mower_ws_bridge::Backend::Bus)') in \
-        MOWER_RSD_MAIN.read_text(encoding='utf-8')
-    assert ('mower_bridge::module_main("bridge", "mower_ws_bridge", 4, '
-            'mower_ws_bridge::run)') in \
-        (rs / 'mower_ws_bridge/src/main.rs').read_text(encoding='utf-8')
-    assert '"bus" => Ok(Backend::Bus),' in \
-        (rs / 'mower_ws_bridge/src/lib.rs').read_text(encoding='utf-8')
+    # plan, the binary for its runner (mower_rsd's
+    # ws_bridge_is_on_the_bus_with_its_bus_backend, mower_ws_bridge's
+    # the_backend_is_r2r_unless_told_otherwise and tests/source_rules.rs)
 
     # the behavioural half needs ROS launch (not in the python-tests job)
     pytest.importorskip('launch')
@@ -639,11 +612,8 @@ def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
     block = robot.split("if 'mux' in modules:", 1)[1].split('env = {}', 1)[0]
     assert ("parameters.append(os.path.join(bringup, 'config', "
             "'twist_mux_topics.yaml'))") in block
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
-    assert 'id: "mux",' in daemon_main
-    assert 'switch: "rust_mux",' in daemon_main
-    assert 'node: "twist_mux", run: |c, m| Box::pin(mower_mux::run(c, m))' \
-        in daemon_main
+    # the module table's mux entry (id, switch, node, the crate it runs):
+    # mower_rsd's tests/module_table.rs and tests/source_rules.rs
     assert '"crates/mower_mux"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
     # the twist_mux_topics.yaml key is the node name both muxes have
     assert TWIST_MUX_CONFIG.read_text(encoding='utf-8').startswith(
@@ -737,9 +707,8 @@ def test_rust_static_tf_replaces_robot_state_publisher_only_inside_the_daemon():
     assert "'real_robot.xacro')).toxml()" in helper
     assert "'mower_robot',\n        'real_robot.xacro'\n    )" in mower
     assert "xacro.process_file(robot_description_path).toxml()" in mower
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
-    assert 'id: "static_tf",' in daemon_main
-    assert 'switch: "rust_static_tf",' in daemon_main
+    # the module table's static_tf entry (id, switch): mower_rsd's
+    # tests/module_table.rs
     assert '"crates/mower_static_tf"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
     lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
     assert '- rust_static_tf:=${RUST_STATIC_TF:-false}' in lawan
@@ -801,22 +770,19 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
     assert "'rust_localize',\n            default_value='true'," in robot
     assert "'rust_localize': LaunchConfiguration('rust_localize')," in mower
 
-    # one module, three nodes; under mower_rsd they read the C++ nodes' own
-    # params file (no copy in mower_rsd.yaml to drift) and get the same wiring.
-    # The one section mower_rsd.yaml has is ekf_filter_node_map's slow copy,
-    # keys robot_localization does not have.
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    # one module, three nodes (mower_rsd's tests/module_table.rs); under
+    # mower_rsd they read the C++ nodes' own params file (no copy in
+    # mower_rsd.yaml to drift) and get the same wiring. The one section
+    # mower_rsd.yaml has is ekf_filter_node_map's slow copy, keys
+    # robot_localization does not have.
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
     rl_params = (
         SRC_DIR / 'mower_nav2/config/dual_ekf_navsat_params.yaml'
     ).read_text(encoding='utf-8')
-    assert 'id: "localize"' in daemon_main
-    assert 'switch: "rust_localize"' in daemon_main
     import yaml
     rsd = yaml.safe_load(params)
     for node in ('ekf_filter_node_odom', 'ekf_filter_node_map',
                  'navsat_transform'):
-        assert f'node: "{node}"' in daemon_main, node
         assert f'\n{node}:\n  ros__parameters:' in rl_params, node
         own = rsd.get(node, {}).get('ros__parameters', {})
         assert set(own) <= {'odometry_slow_topic', 'odometry_slow_rate_hz'}, \
@@ -868,21 +834,17 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
         encoding='utf-8'
     )
     assert 'RUST_LOCALIZE=true' in env_example
-
-    # the filter settings are resolved from the node's parameters, not
-    # compiled in (mower_localize_core/tests/yaml_config.rs checks the yaml)
-    ekf_rs = (
-        SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
-    ).read_text(encoding='utf-8')
-    assert 'EkfSettings::from_params(' in ekf_rs
-    assert 'set_missed_tick_behavior(MissedTick::Skip)' in ekf_rs
+    # The filter's settings come from the node's parameters, not compiled in
+    # (mower_localize's on-bus tests in src/ekf.rs; mower_localize_core's
+    # tests/yaml_config.rs checks the yaml), and its timer skips missed ticks
+    # (mower_localize/tests/source_rules.rs).
 
 
 def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     """rust_guards:=true swaps in mower_rs velocity_command_guard: same
-    remappings, session requirement, limits, stop barriers and clocks."""
-    core = VELOCITY_GUARD_RS.read_text(encoding='utf-8')
-    main = VELOCITY_GUARD_RS_MAIN.read_text(encoding='utf-8')
+    remappings and session requirement. Its limits, stop barriers and clocks
+    are velocity_command_guard's own tests (src/core.rs, src/lib.rs,
+    tests/source_rules.rs)."""
     mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
     assert "package='mower_rs'" in mux_launch
     assert "condition=_rust_binary(rust_guards, rust_daemon)" in mux_launch
@@ -898,242 +860,84 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
         assert 'rust_coverage' not in text.lower()
     assert ("parameters=[{'require_command_session': True,\n"
             "                     'max_input_age_s': MANUAL_MAX_INPUT_AGE_S}]") in mux_launch
-    assert 'command_timeout_s", 0.20' in main
-    assert 'max_input_age_s", 0.25' in main
-    assert 'max_future_skew_s", 0.05' in main
-    assert 'max_linear_x_m_s", 0.50' in main
-    assert 'max_angular_z_rad_s", 1.00' in main
-    for rule in (
-        'velocity timestamp is too far in the future',
-        'velocity source timestamp moved backward',
-        'velocity timestamp is stale',
-        'manual velocity command session is missing or stale',
-        'manual velocity requires the robot command clock',
-        'velocity contains NaN or infinity',
-        'unsupported lateral or non-yaw velocity component',
-        'linear velocity exceeds robot safety limit',
-        'angular velocity exceeds robot safety limit',
-        'replayed velocity cannot resume stopped motion',
-    ):
-        assert rule in core, rule
-    assert 'is_finite()' in core
-    # receipt timeouts on a steady clock, stamps from the robot's own clock
-    assert 'Instant' in core
-    assert 'msg.header.stamp = stamp_now()' in main
-    assert 'publisher.publish(&twist(0.0, 0.0))' in main
-    assert 'make_parameter_handler' not in main  # limits are immutable
-    # the bus IO (E2 step 6, picked by the instance's flag): the same limits,
-    # the same robot restamp, a zero first and a zero last, names resolved
-    # through the node's remap rules
-    bus = VELOCITY_GUARD_RS_BUS.read_text(encoding='utf-8')
-    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in main
-    assert 'crate::read_limits(&node)' in bus
-    assert 'msg.header.stamp = self.stamp();' in bus
-    assert 'msg.header.frame_id = "base_footprint".to_string();' in bus
-    assert bus.count('publisher.publish(&clocks.twist(0.0, 0.0))') >= 2
-    for name in ('cmd_vel_in', 'cmd_vel_out', 'command_clock'):
-        assert f'm.resolve_topic("{name}")' in bus, name
-    assert 'make_parameter_handler' not in bus
-    # the manual guard's session and command clock on the bus (E2 step 7)
-    assert 'crate::new_session_id()' in bus
-    assert 'Header { stamp: clocks.stamp(), frame_id: session_id.clone() }' in bus
-    assert 'session_matches: session_id.as_deref() == Some(msg.header.frame_id.as_str())' in bus
-    assert 'limits.command_clock_period_s' in bus
 
 
 def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
-    """rust_nav:=true swaps in mower_rs mower_nav for nav_action_server: the
-    same node name, actions, services, admission/health rules, immutable
-    safety defaults, bounded Nav2 waits and the 20 Hz fail-safe heartbeat."""
-    main = NAV_SERVER_RS_MAIN.read_text(encoding='utf-8')
-    state = NAV_SERVER_RS_STATE.read_text(encoding='utf-8')
-    geometry = NAV_SERVER_RS_GEOMETRY.read_text(encoding='utf-8')
+    """rust_nav:=true swaps in mower_rs mower_nav for nav_action_server under
+    the same node name. Its actions, services, admission/health rules,
+    immutable safety defaults, bounded Nav2 waits and the 20 Hz fail-safe
+    heartbeat are mower_nav's own tests (src/state.rs, src/geometry.rs,
+    tests/bus.rs, tests/source_rules.rs)."""
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_nav'" in mission_launch
     assert "condition=_rust_binary(rust_nav, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_nav)" in mission_launch
     assert mission_launch.count("name='nav_action_server'") == 1
-    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
-    for name in ('nav_action', 'nav_action_follow_path'):
-        assert f'"{name}"' in main, name
-    for service in (
-        '/cancel_nav2', '/cencel_nav2', '/check_nav_status',
-        '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
-        '/mission_operation_lock',
-    ):
-        assert f'"{service}"' in main, service
-    for topic in (
-        '/navigation_coordinator_lock', '/navigation_safety_stop',
-        '/nav_operation_active', '/joy_cmd', '/physical_joy_cmd',
-        '/keyboard_cmd_vel', '/adapter/robot_pose', '/rosout',
-    ):
-        assert f'"{topic}"' in main, topic
-    # immutable production safety defaults (no parameter service at all)
-    assert 'make_parameter_handler' not in main
-    assert '"require_navigation_health", true' in main
-    assert '"navigation_health_timeout_s", 0.30' in main
-    assert '"max_gps_horizontal_sigma_m", 0.015' in main
-    assert '"manual_command_hold_s", 0.75' in main
-    assert '"gps_fix_topic", "/fix"' in main
-    assert '"imu_topic", "/imu/data"' in main
-    # bounded Nav2 waits and generation-correlated terminal evidence
-    for name in (
-        'nav2_action_server_timeout_s', 'nav2_goal_response_timeout_s',
-        'nav2_cancel_timeout_s', 'dispatch_confirmation_timeout_s',
-    ):
-        assert f'"{name}"' in main, name
-    assert 'mark_nav2_dispatch_terminal(terminal_generation)' in main
-    assert 'mark_nav2_task_uncertain(' in main
-    assert 'Duration::from_millis(50)' in main  # 20 Hz heartbeat
-    # the admission order and every block reason of the rclpy server
-    for rule in (
-        'previous Nav2 task termination is unconfirmed',
-        'another navigation goal is active',
-        'mission mutation is active: ',
-        'manual velocity command is active',
-        'robot pose/TF is unavailable or stale',
-        'GPS fix is unavailable',
-        'GPS fix is stale',
-        'GPS odometry from navsat_transform is unavailable or stale',
-        'IMU is unavailable or stale',
-        'source timestamp is in the future',
-        'source timestamp is stale',
-        'robot pose frame must be map',
-        'GPS has no valid fix',
-        'GPS covariance is unknown',
-        'horizontal covariance is degenerate',
-        'IMU frame_id must be imu_link',
-        'GPS odometry frame_id must be map',
-    ):
-        assert rule in state, rule
-    assert '(-90.0..=90.0).contains(&lat)' in state
-    assert '(-180.0..=180.0).contains(&lon)' in state
-    assert 'Navigation/manual motion is active or termination is uncertain' in main
-    assert 'navigation path requires at least two poses' in geometry
-    assert 'canonical_dispatch_id' in geometry
 
 
 def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
     """rust_pid_autotune:=true swaps in mower_rs mower_pid_autotune for
-    pid_autotune_node: same node name, service, parameters, plausibility
-    limits, flag bits and status states."""
-    main = PID_AUTOTUNE_RS_MAIN.read_text(encoding='utf-8')
-    tuning = PID_AUTOTUNE_RS_TUNING.read_text(encoding='utf-8')
+    pid_autotune_node under the same node name. The parameters, plausibility
+    limits and flag bits both must have are the crate's
+    tests/rclpy_parity.json: the Python side is checked here, the Rust side
+    by the crate (src/lib.rs, tests/source_rules.rs), which also has its
+    service, status states and immutable parameters."""
     py_node = PID_AUTOTUNE_NODE.read_text(encoding='utf-8')
     py_tuning = PID_TUNING.read_text(encoding='utf-8')
+    parity = json.loads(PID_AUTOTUNE_PARITY.read_text(encoding='utf-8'))
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_pid_autotune'" in mission_launch
     assert "condition=_rust_binary(rust_pid_autotune, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_pid_autotune)" in mission_launch
     assert mission_launch.count("name='pid_autotune'") == 2
-    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
-    assert 'create_service::<PidAutotune::Service>("/pid_autotune"' in main
-    # and on the bus (E2 step 6, picked by the module's flag): the same name
-    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in main
-    assert 'm.resolve_service("/pid_autotune")' in main
-    # every declared parameter with the same default
-    for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M):
-        rust_default = default.replace("'", '"').replace('[', '&[').replace('300.0', '300.0')
-        assert f'"{name}", {rust_default}' in main, (name, default)
-    # plausibility limits and flag bits are the Python ones
-    for const in ('GAIN_RANGE', 'TAU_RANGE', 'DELAY_MAX', 'MIN_RESPONSE_RPM', 'MAX_FIT_RMSE_FRACTION', 'TAU_DESIGN_MIN'):
-        py_value = re.search(rf'^{const} = ([^#\n]+)', py_tuning, re.M).group(1).strip()
-        assert re.search(rf'pub const {const}: [^=]+= {re.escape(py_value)};', tuning), const
-    for flag in ('PID_FLAG_CLOSED_LOOP = 0x01', 'PID_FLAG_FLASH_VALID = 0x02', 'PID_FLAG_LAST_APPLY_OK = 0x08',
-                 'MOTOR_FLAG_DRIVER_ALARM = 0x04', 'POWER_STATE_RUNNING = 0'):
-        assert flag in py_node
-        name, value = flag.split(' = ')
-        assert f'const {name}: i64 = {value};' in main, flag
-    for state in ('precheck', 'open_loop', 'fitting', 'verify', 'review', 'saving', 'done', 'failed', 'aborted'):
-        assert f'"{state}"' in main, state
-    assert 'flash save attempt {attempt}, flash_diag=0x{diag:04x}' in main
-    assert 'make_parameter_handler' not in main
+    # every declared parameter with its default, in order and of its type
+    declared = [(name, ast.literal_eval(default))
+                for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M)]
+
+    def typed(parameters):
+        return [(name, type(value).__name__, value) for name, value in parameters]
+    assert declared and typed(declared) == typed(parity['parameters'])
+    # plausibility limits and flag bits
+    for const, value in parity['tuning_limits'].items():
+        py_value = ast.literal_eval(
+            re.search(rf'^{const} = ([^#\n]+)', py_tuning, re.M).group(1).strip())
+        assert py_value == (tuple(value) if isinstance(value, list) else value), const
+    for name, value in parity['telemetry_flags'].items():
+        assert int(re.search(rf'^{name} = (\S+)', py_node, re.M).group(1), 0) == value, name
 
 
 def test_rust_map_manager_keeps_the_same_safety_rules_and_wiring():
-    """rust_map:=true swaps in mower_rs mower_map for map_manage_node: same
-    node name, services, latched topics, safety floor, fail-closed rules and
-    user-facing messages."""
-    main = MAP_RS_MAIN.read_text(encoding='utf-8')
-    grid = MAP_RS_GRID.read_text(encoding='utf-8')
+    """rust_map:=true swaps in mower_rs mower_map for map_manage_node under
+    the same node name, with the same 0.75 m safety floor and the same
+    user-facing messages (the crate's tests/rclpy_parity.json): the Python
+    side is checked here, the Rust side by the crate (tests/bus.rs,
+    tests/source_rules.rs), which also has its services, latched topics and
+    fail-closed rules."""
     py_node = MAP_MANAGE_NODE.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_map'" in mission_launch
     assert "condition=_rust_binary(rust_map, rust_daemon)" in mission_launch
     assert "condition=UnlessCondition(rust_map)" in mission_launch
     assert mission_launch.count("name='map_manage'") == 2
-    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
-    assert 'const MIN_SAFE_INFLATE_RADIUS_M: f64 = 0.75;' in main
     assert 'MIN_SAFE_INFLATE_RADIUS_M = 0.75' in py_node
-    for service in ('/create_risk_map', '/create_free_space', '/import_image_mask', '/create_chennal_map',
-                    '/get_zone_map_list_srv', '/restore_free_space_coverage', '/map_manage/get_parameters',
-                    '/map_manage/set_parameters', '/map_manage/set_parameters_atomically'):
-        assert f'"{service}"' in main, service
-    for topic in ('/free_space', '/free_space_inflated', '/risk_map', '/risk_map_inflated', '/chennal_map',
-                  '/chennal_map_inflated', '/map_grid', '/map_grid_global', '/nav_operation_active', '/mission_operation_lock'):
-        assert f'"{topic}"' in main, topic
-    # every Chinese / English user-facing message of the Python node survives
-    for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node):
-        if '{' in text or text.endswith(': '):
-            continue
-        assert text in main or text in grid, text
-    for text in ('held occupied until its risk map is ready', 'cannot fuse', 'base and channel grid geometries must match',
-                 'base and risk grid orientations must match', 'channel point is outside the navigation map',
-                 'mask_encoding must be base64_u8_row_major', 'robot_pose_header.frame_id must be map',
-                 'inflate_radius_m cannot change while navigation is active or unknown', 'inflate_radius_m must be finite'):
-        assert text in main or text in grid, text
-    assert 'guard.acquire("refresh inflated maps")' in main
-    assert 'make_parameter_handler' not in main
-
-
-# Frozen from the removed rclpy coverage_node.py (git show
-# dff480b:src/mower_mission/mower_mission/coverage_node.py) with the regexes
-# this test used to run on it: every declare_parameter default, written the
-# way the Rust node declares it ...
-COVERAGE_PARAMETER_DEFAULTS = (
-    ('strip_width_m', '0.8'),
-    ('waypoint_spacing_m', '0.2'),
-    ('zigzag_angle_deg', '0.0'),
-    ('unknown_as_obstacle', 'true'),
-    ('min_safe_component_area_m2', '0.05'),
-    ('coverage_pattern', '"zigzag"'),
-    # legacy, startup-only: still accepted (and validated), planning is Rust
-    ('coverage_backend', '"rust"'),
-    ('allow_backend_fallback', 'true'),
-    ('fallback_cancel_request_timeout_s', '5.0'),
-    ('boundary_ring', 'false'),
-)
-# ... and every Chinese user-facing message without a format field.
-COVERAGE_USER_MESSAGES = (
-    'boustrophedon_coverage 初始化',
-    '收到 risk_map 地圖',
-    '收到 risk_map_inflated 地圖',
-    '缺少 risk_map_inflated 地圖數據',
-    '覆蓋路徑生成成功',
-    '覆蓋路徑生成失敗',
-    '沒有可用的 zone map',
-    '已有任務序列執行中，請先呼叫 /stop_zone_sequence',
-    '前一序列的導航終止狀態尚未確認，拒絕啟動新序列',
-    'zone_ids 不可為空',
-    '已立即送出目前導航目標的取消請求；正追蹤至終止狀態',
-    '目前導航目標的取消已在追蹤中',
-    '已送出取消請求；序列尚未派送或正在步驟間切換',
-    '目前無執行中的任務序列',
-    '服務呼叫超時',
-    'Service 不可用',
-)
+    # every Chinese user-facing message without a format field
+    messages = [text for text in re.findall(r"'([^'\n]*[\u4e00-\u9fff][^'\n]*)'", py_node)
+                if '{' not in text and not text.endswith(': ')]
+    parity = json.loads(MAP_PARITY.read_text(encoding='utf-8'))
+    assert messages and list(dict.fromkeys(messages)) == parity['user_messages']
 
 
 def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
     """mower_rs mower_coverage is the only coverage planner (the rclpy
     coverage_node is gone): it always runs, as its own binary or as the
-    daemon's 'coverage' module, with the same node name, services, action,
-    topics, parameter defaults, dispatch deadlines, retry cadence and
-    user-facing messages the Python node had."""
-    main = COVERAGE_RS_MAIN.read_text(encoding='utf-8')
+    daemon's 'coverage' module, under the same node name. The services,
+    action, topics, parameter defaults, dispatch deadlines, retry cadence and
+    user-facing messages the Python node had are mower_coverage's own tests
+    (tests/bus.rs, tests/source_rules.rs; the defaults and messages frozen
+    from dff480b:src/mower_mission/mower_mission/coverage_node.py), the
+    daemon module's switch mower_rsd's tests/module_table.rs."""
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     robot_launch = ROBOT_LAUNCH.read_text(encoding='utf-8')
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
     # the Python planner and its entry points are gone
     assert not (SRC_DIR / 'mower_mission/mower_mission/coverage_node.py').exists()
     assert 'mower_mission.coverage_node' not in MISSION_SETUP.read_text(encoding='utf-8')
@@ -1143,13 +947,7 @@ def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
     assert "condition=_rust_only_binary(rust_daemon)" in mission_launch
     assert mission_launch.count("name='boustrophedon_coverage'") == 1
     assert "('coverage', None)," in robot_launch
-    coverage_module = daemon_main.split('id: "coverage",', 1)[1].split('},', 1)[0]
-    assert 'switch: ALWAYS,' in coverage_module
-    assert 'node: "boustrophedon_coverage"' in coverage_module
-    assert 'rust_coverage' not in daemon_main
     # the sim graphs start the same binary under its own default node name
-    assert 'module_main("coverage", "boustrophedon_coverage"' in (
-        COVERAGE_RS_MAIN.parent / 'main.rs').read_text(encoding='utf-8')
     for launch in (SYSTEM_TEST_LAUNCH, SMALL_TEST_LAUNCH):
         text = launch.read_text(encoding='utf-8')
         assert "'ros2', 'run', 'mower_rs', 'mower_coverage'" in text, launch.name
@@ -1157,45 +955,6 @@ def test_mower_coverage_keeps_the_same_safety_rules_and_wiring():
         assert 'coverage_backend' not in text, launch.name
     assert "['zigzag_angle_deg:=', zigzag_angle_deg]" in SYSTEM_TEST_LAUNCH.read_text(
         encoding='utf-8')
-    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
-    for name in ('/generate_coverage_path', '/zone_exec_path', '/run_zone_sequence', '/stop_zone_sequence',
-                 '/get_zone_map_list_srv', '/confirm_navigation_dispatch', '/cancel_navigation_dispatch',
-                 '/check_nav_status', '/get_channel_route', '/mission_operation_lock', 'nav_action_follow_path',
-                 '/coverage_path', '/coverage_path_markers', '/coverage_invalid_segments', '/coverage_connectors',
-                 '/risk_map', '/risk_map_inflated', '/nav_operation_active'):
-        assert f'"{name}"' in main, name
-    for name, default in COVERAGE_PARAMETER_DEFAULTS:
-        assert f'"{name}", {default}' in main, (name, default)
-    # the bounded dispatch: 3 s acceptance, a sequence leg's result within
-    # 600 s + its path at 0.05 m/s, 2 s confirmation, 2 s cancel cadence,
-    # 0.25 s fallback wait
-    assert 'let acceptance_timeout_s = 3.0;' in main
-    assert 'let timeout_s = sequence_leg_timeout_s(&path);' in main
-    assert 'const FLOOR_S: f64 = 600.0;' in main and 'const SLOWEST_M_PER_S: f64 = 0.05;' in main
-    assert 'Duration::from_secs(2)' in main and 'Duration::from_millis(250)' in main
-    assert '(0.5..=30.0).contains(&t)' in main
-    for text in COVERAGE_USER_MESSAGES:
-        assert text in main, text
-    for text in ('Navigation action goal accepted', 'Zone not found', 'Zone coverage path is empty',
-                 'Navigation action server unavailable', 'busy or a safety precondition failed',
-                 'A previous zone-sequence goal is not terminal; the new accepted goal is being canceled',
-                 'Zone sequence was canceled before goal dispatch', 'Navigation action completed unsuccessfully',
-                 'is a legacy startup-only parameter; coverage always plans with mower_coverage_core',
-                 'coverage parameters cannot change while navigation or coverage generation is active/unknown',
-                 'action is still not terminal; retrying correlated cancel',
-                 'action cancellation acknowledgment timed out', 'navigation action is now terminal'):
-        assert text in main, text
-    # zigzag: the boustrophedon planner (straight lanes at any angle, cells,
-    # optimised order); the sweep angle is searched only when asked, so an
-    # angle set from the app / Qt is never silently overridden
-    assert 'plan_boustrophedon_rs(' in main
-    assert 'generate_coverage_zigzag_path_rs' not in main
-    assert '"zigzag_auto_angle", false' in main
-    assert 'if p.zigzag_auto_angle { None } else { Some(zigzag_angle_deg) }' in main
-    assert '"zigzag_auto_angle"' in main.split('let guarded = [', 1)[1].split(']', 1)[0]
-    # /coverage_path carries the planned paths, not only the clearing message
-    assert 'pubs.lock().unwrap().path.publish(&all)' in main
-    assert 'make_parameter_handler' not in main
 
 
 def test_coverage_binary_and_daemon_module_are_exact_complements():
@@ -1236,42 +995,30 @@ def test_coverage_binary_and_daemon_module_are_exact_complements():
 
 def test_rust_agent_keeps_the_same_backend_protocol_and_wiring():
     """rust_agent:=true swaps in mower_rs mower_agent for the Python fleet
-    agent: same endpoints, constants, relay framing, control messages, log
-    lines and launch arguments."""
-    main = AGENT_RS_MAIN.read_text(encoding='utf-8')
-    relay = AGENT_RS_RELAY.read_text(encoding='utf-8')
+    agent, with the same launch arguments. The API version and the timing
+    constants both have are the crate's tests/rclpy_parity.json: the Python
+    side is checked here, the Rust side by the crate (src/lib.rs), which also
+    has the endpoints, relay framing, control messages and log lines
+    (tests/source_rules.rs)."""
     py = AGENT_PY.read_text(encoding='utf-8')
     launch = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_agent'" in launch and launch.count("name='mower_agent'") == 2
     assert "condition=_rust_binary(rust_agent, rust_daemon)" in launch and "condition=UnlessCondition(rust_agent)" in launch
     assert launch.count("'--rosbridge', 'ws://127.0.0.1:9091'") == 2
+    parity = json.loads(AGENT_PARITY.read_text(encoding='utf-8'))
     api = re.search(r'^ROBOT_API_VERSION = (\d+)', VERSION_PY.read_text(encoding='utf-8'), re.M).group(1)
-    assert f'const ROBOT_API_VERSION: i64 = {api};' in main
-    for const in ('HEARTBEAT_S = 10', 'TELEMETRY_THROTTLE_MS = 5000', 'REGISTER_RETRY_S = 30', 'RECONNECT_MAX_S = 60',
-                  'HTTP_RELAY_TIMEOUT_S = 10', 'TURN_REFRESH_S = 3600', 'TURN_RETRY_S = 60'):
-        assert const in py
-        name, value = const.split(' = ')
-        assert re.search(rf'const {name}: \w+ = {value};', main), const
-    assert 'HTTP_RELAY_MAX_BODY: usize = 64 * 1024;' in main
-    for text in ('/v1/robots/register', '/v1/relay/robot/', '/turn', '/v3/config/global/patch', 'webrtcICEServers2',
-                 'ws://127.0.0.1:9090', 'ws://127.0.0.1:9091', 'http://127.0.0.1:8889', 'http://127.0.0.1:9997',
-                 'MOWER_BACKEND_URL not set: agent idle (development mode)', 'MOWER_PROVISION_TOKEN not set: skipping registration',
-                 'relay refused us: HTTP', 'reconnecting in', 'gate refused', 'gate unreachable', 'no such session',
-                 'session ended', 'relay lost', 'not relayed', 'camera server unreachable', 'not implemented yet',
-                 'another device_key holds this robot_id', 'bad provision token', '"X-Mower-Client"', '"@robot"'):
-        assert text in main, text
-    for const in ('SUBPROTOCOL: &str = "mrelay1"', 'SID_BYTES: usize = 8', 'T_TEXT: u8 = 0x01', 'T_TEXT_MORE: u8 = 0x11',
-                  'T_BIN: u8 = 0x02', 'T_BIN_MORE: u8 = 0x12', 'CHUNK_SIZE: usize = 512 * 1024', 'MAX_MESSAGE: usize = 64 * 1024 * 1024'):
-        assert const in relay, const
-    assert '"transport=udp", "transport=tcp"' in main
+    assert int(api) == parity['ROBOT_API_VERSION']
+    for name, value in parity['constants'].items():
+        assert f'{name} = {value}' in py, name
 
 
 def test_rust_battery_node_keeps_the_same_model_and_wiring():
     """rust_battery:=true swaps in mower_rs mower_battery for
-    battery_state_node: same node name, topics, OCV table, launch
-    parameters and BatteryState semantics."""
-    main = BATTERY_RS_MAIN.read_text(encoding='utf-8')
-    estimator = BATTERY_RS_ESTIMATOR.read_text(encoding='utf-8')
+    battery_state_node: same node name and launch parameters, and the OCV
+    table of the crate's tests/rclpy_parity.json (the Python side is checked
+    here, the Rust side by the crate's src/lib.rs). Its topics, defaults and
+    BatteryState semantics are mower_battery's own tests (tests/bus.rs,
+    src/lib.rs, tests/source_rules.rs)."""
     python_estimator = BATTERY_ESTIMATOR.read_text(encoding='utf-8')
     mission_launch = MISSION_LAUNCH.read_text(encoding='utf-8')
     assert "executable='mower_battery'" in mission_launch
@@ -1280,26 +1027,11 @@ def test_rust_battery_node_keeps_the_same_model_and_wiring():
     assert mission_launch.count("name='battery_state'") == 2
     assert mission_launch.count("'charger_present_min_v': 25.0") == 2
     assert mission_launch.count("'meter_current_wired': False") == 2
-    assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
-    for name, default in (
-        ('base_telemetry_topic', '"/mower_base/telemetry"'),
-        ('battery_topic', '"/battery_state"'),
-        ('aon_battery_topic', '"/aon_battery_state"'),
-        ('stale_timeout_s', '5.0'),
-        ('charger_present_min_v', '25.0'),
-        ('low_battery_pct', '20.0'),
-        ('frame_id', '"base_footprint"'),
-    ):
-        assert f'"{name}", {default}' in main, name
-    # the OCV table is the Python one, row for row
-    python_rows = re.findall(r'\((\d\.\d\d), (\d\.\d\d)\)', python_estimator)
-    rust_rows = re.findall(r'\((\d\.\d\d), (\d\.\d\d)\)', estimator)
-    assert python_rows and rust_rows[:len(python_rows)] == python_rows
-    assert 'msg.percentage = est.fraction as f32' in main  # 0..1, not %
-    assert 'POWER_SUPPLY_TECHNOLOGY_LION: u8 = 2' in main
-    assert 'POWER_SUPPLY_HEALTH_DEAD: u8 = 3' in main
-    assert 'POWER_SUPPLY_HEALTH_OVERVOLTAGE: u8 = 4' in main
-    assert 'make_parameter_handler' not in main
+    # the OCV table, row for row
+    python_rows = [[float(volts), float(charge)] for volts, charge
+                   in re.findall(r'\((\d\.\d\d), (\d\.\d\d)\)', python_estimator)]
+    parity = json.loads(BATTERY_PARITY.read_text(encoding='utf-8'))
+    assert python_rows and python_rows == parity['ocv_table']
 
 
 def test_imu_drivers_are_respawned_after_a_serial_failure():
@@ -1513,15 +1245,8 @@ def test_imu_driver_discards_backlog_and_requires_fresh_complete_samples():
     assert 'if buff_count > 88:' in source
     assert 'components_are_fresh = all(' in source
     assert "f'IMU serial read/parser failed: {exc}'" in source
-    # the mower_rs driver (rust_imu:=true) keeps the same fail-closed rules
-    rust = IMU_DRIVER_RS.read_text(encoding='utf-8')
-    assert 'const MAX_BACKLOG_BYTES: u32 = 88;' in rust
-    assert 'Duration::from_millis(200)' in rust
-    assert 'Discarded oversized IMU serial backlog' in rust
-    assert 'Discarded IMU serial backlog after a host timing gap' in rust
-    assert 'acceleration/gyro components are stale' in rust
-    # a dead port ends the process, now as an Err the caller turns into exit 1
-    assert 'Some(message) => Err(message.into())' in rust
+    # the mower_rs driver (rust_imu:=true) keeps the same fail-closed rules:
+    # mower_imu's serial_rules (src/lib.rs) and tests/source_rules.rs
 
 
 def test_mower_camera_exposes_only_required_protocols():
@@ -1678,24 +1403,6 @@ def test_containers_see_the_live_dev_tree_not_static_device_nodes():
     assert 'ATTR{idProduct}=="0610", TEST=="power/control", ATTR{power/control}="on"' in udev
 
 
-def test_gps_driver_fails_closed_and_keeps_the_ublox_gps_fix_contract():
-    """Rules the navigation gate and navsat_transform rely on, checked at
-    the source so a refactor cannot quietly relax them: exit on serial
-    error / EOF / missing NAV-PVT, NO_FIX -> NaN, GBAS only for RTK fixed."""
-    main = GPS_RS_MAIN.read_text(encoding='utf-8')
-    assert 'returned EOF' in main
-    assert 'no NAV-PVT from the receiver for' in main
-    assert 'no NAV-PVT from the receiver within' in main
-    assert 'Some(message) => Err(message.into())' in main
-    assert 'serial_thread.is_finished()' in main
-    assert 'COVARIANCE_TYPE_DIAGONAL_KNOWN' in main
-    ubx = UBX_RS.read_text(encoding='utf-8')
-    assert 'matches!(self.fix_type, 2 | 3 | 4)' in ubx
-    assert ('if self.carrier_solution() == CarrierSolution::Fixed {\n'
-            '            2\n') in ubx
-    assert 'if status < 0 { (f64::NAN, f64::NAN, f64::NAN) }' in ubx
-
-
 def test_nav2_local_and_global_costmaps_use_full_robot_radius():
     source = NAV2_CONFIG.read_text(encoding='utf-8')
     radii = re.findall(
@@ -1763,11 +1470,8 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
     assert "'rust_base': rust_base," in robot_launch
     assert "('base', 'rust_base')," in robot_launch
 
-    # one module of mower_rsd, one parameter section, one installed binary
-    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
-    assert 'id: "base"' in daemon_main
-    assert 'switch: "rust_base"' in daemon_main
-    assert 'node: "mower_base"' in daemon_main
+    # one module of mower_rsd (its tests/module_table.rs), one parameter
+    # section, one installed binary
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
     assert '\nmower_base:\n  ros__parameters:' in params
     assert 'mower_base' in MOWER_RS_CMAKE.read_text(encoding='utf-8').split(
@@ -1820,41 +1524,12 @@ def test_rust_base_and_localize_sides_are_exact_complements_for_any_value():
 
 
 def test_rust_base_reproduces_the_launched_controller_parameters():
-    """The Rust driver's built-in defaults are the production
-    diff_controller yaml, not mower_hardware's bench file: the two differ in
-    open_loop, enable_odom_tf, the base frame and the wheel geometry."""
-    source = MOWER_BASE_RS.read_text(encoding='utf-8')
-    block = source.split('pub fn production_diff_drive()', 1)[1]
-    for key, value in (
-        ('wheel_separation', _scalar(REAL_CONTROLLER, 'wheel_separation')),
-        ('wheel_radius', _scalar(REAL_CONTROLLER, 'wheel_radius')),
-        ('publish_rate', _scalar(REAL_CONTROLLER, 'publish_rate')),
-        ('cmd_vel_timeout', _scalar(REAL_CONTROLLER, 'cmd_vel_timeout')),
-    ):
-        assert f'{key}: {float(value)}' in block, key
-    assert f"base_frame_id: \"{_scalar(REAL_CONTROLLER, 'base_frame_id')}\"" in block
-    assert f"odom_frame_id: \"{_scalar(REAL_CONTROLLER, 'odom_frame_id')}\"" in block
-    assert 'open_loop: true' in block
-    assert 'enable_odom_tf: false' in block
-    for axis in ('linear', 'angular'):
-        prefix = 'linear.x' if axis == 'linear' else 'angular.z'
-        for key in ('max_velocity', 'min_velocity', 'max_acceleration',
-                    'max_acceleration_reverse', 'max_deceleration',
-                    'max_deceleration_reverse'):
-            expected = float(_scalar(REAL_CONTROLLER, f'{prefix}.{key}'))
-            assert f'{key}: {expected}' in block, f'{prefix}.{key}'
-    # the input topic and the two side channels the app and the auto-tune use
-    # (on r2r, or on the bus by the module's flag, E2 step 6, the same names)
-    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in source
-    assert 'm.resolve_topic(&cmd_vel_topic)' in source
-    assert '"/drivetrain_guarded_cmd_vel"' in source
-    assert '"/mower_base/telemetry"' in source
-    assert '"/mower_base/firmware_info"' in source
-    assert '"/mower_base/wheel_override"' in source
-    # the recorders' rear light, as mower_hardware read it: R TL 8, a 6 s keep-alive per source
-    assert 'params::string(&node, "rear_light_topic", "/mower_base/rear_light")' in source
-    assert 'params::f64(&node, "rear_light_timeout_s", 6.0)' in source
-    assert 'QosProfile::default().keep_last(8).transient_local().reliable()' in source
+    """The Rust driver's built-in defaults are the production diff_controller
+    yaml and the rest of what mower_hardware read; mower_base's own tests
+    hold its side (tests/controller_yaml.rs, tests/rear_light.rs,
+    tests/source_rules.rs). Here, mower_hardware's side of the rear light:
+    the recorders' topic and the 6 s keep-alive per source that mower_base
+    keeps (E9-07)."""
     hw = (SRC_DIR / 'mower_hardware/include/mower_hardware/mower_system.hpp').read_text(encoding='utf-8')
     assert 'rear_light_topic_ = "/mower_base/rear_light"' in hw and 'rear_light_timeout_s_ = 6.0' in hw
 
@@ -1886,18 +1561,10 @@ def test_rust_source_modules_publish_the_slow_copies_their_throttle_made():
     assert "'rust_base': rust_base," in mission_include
     assert "'rust_localize': rust_localize," in mission_include
 
-    # topic and rate are parameters whose defaults are the throttles' values,
+    # topic and rate are parameters whose defaults are the throttles' values
+    # (mower_base's tests/source_rules.rs, mower_localize's src/ekf.rs),
     # written out in the parameter file both launch paths of mower_base and
     # the daemon read
-    base_rs = MOWER_BASE_RS.read_text(encoding='utf-8')
-    assert 'params::string(&node, "odom_slow_topic", "/odom_slow")' in base_rs
-    assert 'params::f64(&node, "odom_slow_rate_hz", 5.0)' in base_rs
-    ekf_rs = (
-        SRC_DIR / 'mower_rs/crates/mower_localize/src/ekf.rs'
-    ).read_text(encoding='utf-8')
-    assert '"odometry_slow_topic"' in ekf_rs
-    assert 'crate::NODE_EKF_MAP => "odometry/global_slow",' in ekf_rs
-    assert 'params::f64(node, "odometry_slow_rate_hz", 5.0)' in ekf_rs
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
     base = params.split('\nmower_base:\n', 1)[1].split('\n\n', 1)[0]
     assert 'odom_slow_topic: /odom_slow' in base

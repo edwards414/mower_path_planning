@@ -485,3 +485,57 @@ fn recording_fails_closed_on_unknown_or_active_navigation_and_a_missing_lease_se
         rec.stop().await;
     });
 }
+
+/// nav_action_server's lease service, granting every acquire and refusing
+/// every release, as one that lost the lease's owner does.
+fn serve_lock_refusing_release(test: &Scope) {
+    let mut srv = test.service::<MissionOperationLock::Request, MissionOperationLock::Response>("/mission_operation_lock").unwrap();
+    tokio::spawn(async move {
+        while let Some(req) = srv.next().await {
+            let success = req.message.acquire;
+            let _ = req.respond(MissionOperationLock::Response { success, message: if success { String::new() } else { "lease not owned".into() } });
+        }
+    });
+}
+
+/// A change whose lease release the nav server does not confirm is never
+/// acknowledged as a success: the recording's end says its data was saved
+/// but navigation stays blocked, and so does the edit (E9-07: the rule
+/// test_qos_configuration.py checks only on path_record_node.py).
+#[test]
+fn a_change_whose_lease_release_is_unconfirmed_is_no_success() {
+    within("release", |_dir| async move {
+        let (clock, manual) = Clock::manual(T0);
+        let rec = Harness::start(clock.clone()).await;
+        serve_lock_refusing_release(&rec.test);
+        let _nav = rec.nav_active(false);
+        let pose = rec.test.publisher::<Odometry>("/odometry/global", Qos::default()).unwrap();
+        let mut recorded = rec.test.subscribe::<PathMsg>("/recorded_path", Qos::default()).unwrap();
+        initialise(&clock, &manual, &pose, &mut recorded).await;
+        let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
+        assert!(answer.0, "{answer:?}");
+        for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.5)].into_iter().enumerate() {
+            sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
+        }
+        let (success, message) = rec.trigger("/record_zone_end").await;
+        assert!(!success, "{message}");
+        assert!(message.starts_with("成功記錄區域結束點 #1") && message.contains("操作鎖釋放未確認"), "{message}");
+        rec.stop().await;
+    });
+    within("release_edit", |_dir| async move {
+        let (clock, _manual) = Clock::manual(T0);
+        let rec = Harness::start(clock).await;
+        serve_lock_refusing_release(&rec.test);
+        let _nav = rec.nav_active(false);
+        let square = [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0)].map(|(x, y)| Point { x, y, z: 0.0 }).to_vec();
+        let add = EditZone::Request { op: "add".into(), kind: "zone".into(), id: 0, points: square };
+        let answer = once_nav_is_seen(|| async {
+            let response: EditZone::Response = rec.call("/edit_zone", add.clone()).await;
+            (response.success, response.message)
+        })
+        .await;
+        assert!(!answer.0, "{answer:?}");
+        assert!(answer.1.ends_with(mower_rs_common::guard::RELEASE_UNCONFIRMED), "{answer:?}");
+        rec.stop().await;
+    });
+}
