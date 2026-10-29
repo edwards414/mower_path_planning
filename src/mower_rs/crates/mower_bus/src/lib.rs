@@ -42,7 +42,7 @@ pub use erased::{ErasedMsg, ErasedSubscriber, JsonPublisher};
 pub use error::{BusError, RecvError};
 pub use introspect::{ros_type_name, ActionInfo, ServiceInfo, TopicInfo};
 pub use qos::{Durability, Qos, Reliability};
-pub use service::{Client, Request, ResponseFuture, Service};
+pub use service::{Client, JsonClient, Request, ResponseFuture, Service};
 pub use timer::Timer;
 pub use topic::{Publisher, PublisherChanges, Subscriber, SubscriptionChanges};
 
@@ -97,6 +97,12 @@ impl Bus {
     /// Every topic the bus has seen, sorted by name.
     pub fn topics(&self) -> Vec<TopicInfo> {
         self.inner.topics.info()
+    }
+
+    /// Topic `name` as [`Bus::topics`] reports it, without building the
+    /// others; `None` for a name the bus has not seen.
+    pub fn topic(&self, name: &str) -> Option<TopicInfo> {
+        self.inner.topics.topic(name)
     }
 
     /// Every service name the bus has seen, sorted by name.
@@ -428,6 +434,13 @@ impl Scope {
     /// A client of service `name` (README.md, "Services").
     pub fn client<Req: Message, Resp: Message>(&self, name: &str) -> Result<Client<Req, Resp>, BusError> {
         service::client(self, name)
+    }
+
+    /// A client of service `name` that takes and gives JSON (README.md,
+    /// "Erased access"). `UnknownName` until some endpoint has declared the
+    /// name, which fixes its types.
+    pub fn client_json(&self, name: &str) -> Result<JsonClient, BusError> {
+        service::client_json(self, name)
     }
 
     /// Call service `name` with a JSON request, using the server's codec.

@@ -27,5 +27,7 @@ hex = "0.4"
 data-encoding = "2"
 
 [dev-dependencies]
-# paused clock for the throttle tests (hub.rs)
+# the golden corpus through the bus (src/golden.rs)
+mower_bus = { path = "../mower_bus" }
+# paused clock for the throttle tests (entry.rs)
 tokio = { workspace = true, features = ["test-util"] }

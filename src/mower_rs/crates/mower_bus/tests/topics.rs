@@ -489,9 +489,15 @@ fn bus_topics_reports_types_endpoints_history_and_traffic() {
     let local = by_name["/nav/pose"];
     assert_eq!((local.type_name, local.ros_type.as_deref()), (Some(type_name::<Pose>()), None), "not an r2r type");
 
+    // One name alone, as ws_bridge looks at it on each subscribe.
+    for t in &topics {
+        assert_eq!(bus.topic(&t.name).as_ref(), Some(t), "{}", t.name);
+    }
+    assert_eq!(bus.topic("/never/seen"), None);
+
     // the type outlives the endpoints
     drop((odom, _again, _json, _sub, _tap));
-    let o = bus.topics().into_iter().find(|t| t.name == "/odometry/global").unwrap();
+    let o = bus.topic("/odometry/global").unwrap();
     assert_eq!(o.type_name, Some(type_name::<Odometry>()));
     assert!(o.publishers.is_empty() && o.subscribers.is_empty());
     assert!(o.publisher_qos.is_empty() && o.subscriber_qos.is_empty());

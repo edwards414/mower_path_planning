@@ -11,12 +11,18 @@
 //! - **Not listed:** parameter services, which stay on r2r in E2 (the
 //!   adapter's calls to two parameter services stay there too, and are
 //!   listed so marked: `stays_on_r2r`, as are nav's clients of nav2's
-//!   actions and of `/bt_navigator/get_state`, until E9). Nor the endpoints a
-//!   module creates only with a non-production setting, except nav's
-//!   `nav_core` backend (marked `only`), which CI runs.
+//!   actions and of `/bt_navigator/get_state`, until E9). The one exception
+//!   is coverage's `/boustrophedon_coverage/set_parameters`, which the app
+//!   calls through ws_bridge: listed as a server that stays on r2r (E3
+//!   decision 9). Nor the endpoints a module creates only with a
+//!   non-production setting, except nav's `nav_core` backend (marked
+//!   `only`), which CI runs.
 //! - **Actions** are listed like services: nav serves `/nav_action` and
 //!   `/nav_action_follow_path` on the bus, and coverage sends its goals to the
 //!   second (step 5).
+//! - **ws_bridge** (module `bridge`, E3) is what its allow-list reaches
+//!   (mower_bringup/config/ws_bridge.yaml): the test
+//!   `the_bridge_module_is_ws_bridge_yaml_s_allow_list` keeps the two in step.
 
 use r2r::geometry_msgs::msg::{PoseStamped, TwistStamped};
 use r2r::lifecycle_msgs::srv::GetState;
@@ -30,7 +36,7 @@ use r2r::mower_interface::srv::{
 use r2r::nav2_msgs::action::{FollowPath, NavigateToPose};
 use r2r::nav_msgs::msg::{OccupancyGrid, Odometry, Path};
 use r2r::rcl_interfaces::msg::Log;
-use r2r::rcl_interfaces::srv::GetParameters;
+use r2r::rcl_interfaces::srv::{GetParameters, SetParameters};
 use r2r::robot_localization::srv::{FromLL, FromLLArray, SetDatum, ToLL};
 use r2r::sensor_msgs::msg::{BatteryState, Imu, JointState, NavSatFix};
 use r2r::std_msgs::msg::{Bool, Header, String as Text};
@@ -75,9 +81,9 @@ pub fn production_remaps() -> mower_rs_common::Remaps {
     mower_rs_common::Remaps::from_args(&argv).expect("the production rules parse")
 }
 
-/// The typed modules of mower_rsd, in its module table's order. `bridge`
-/// (ws_bridge) and `agent` are outside in E2 (docs/BUS_TOPICS.md 1.2): their
-/// endpoints that modules depend on are in [`OUTSIDE`].
+/// The modules of mower_rsd, in its module table's order. `agent` has no
+/// endpoint of its own (it reaches the graph through ws_bridge's loopback
+/// WebSocket) and is not listed.
 pub static MODULES: &[Module] = &[
     Module {
         id: "base",
@@ -272,6 +278,10 @@ pub static MODULES: &[Module] = &[
                 serves::<ZoneSequence::Service>("/run_zone_sequence"),
                 serves::<Trigger::Service>("/stop_zone_sequence"),
                 calls_action::<Waypoint::Action>("nav_action_follow_path").named("/nav_action_follow_path"),
+                // A parameter service, served on its r2r node like the other
+                // five (E2 decision 2). Listed because the app calls it
+                // through ws_bridge (E3 decision 9).
+                serves::<SetParameters::Service>("/boustrophedon_coverage/set_parameters").stays_on_r2r(),
             ],
         }],
     },
@@ -432,24 +442,99 @@ pub static MODULES: &[Module] = &[
             ],
         }],
     },
+    Module {
+        // ws_bridge, the app's door (E3). Its allow-list, ws_bridge.yaml in
+        // its order: topics_sub's globs expanded to the names that have a
+        // writer here or outside, read as the bus backend reads them (an
+        // erased reader per topic, R TL 10, while a client subscribes);
+        // topics_pub, written with a JSON writer made at the first publish,
+        // R V 10, as the r2r backend's untyped writer was; services, each
+        // called with a JSON client. Its flag is mower_rsd's run-time switch
+        // (`--backend bus`).
+        id: "bridge",
+        instances: &[Instance {
+            node: "mower_ws_bridge",
+            endpoints: &[
+                // topics_sub: '/adapter/*'
+                subscribes::<Text>("/adapter/map_layers/map_grid", R_TL_10),
+                subscribes::<Text>("/adapter/map_layers/free_space_inflated", R_TL_10),
+                subscribes::<Text>("/adapter/map_layers/risk_map_inflated", R_TL_10),
+                subscribes::<Text>("/adapter/map_layers/chennal_map_inflated", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/zones", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/risk_zones", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/channels", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/coverage_path", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/invalid_segments", R_TL_10),
+                subscribes::<Text>("/adapter/marker_layers/connectors", R_TL_10),
+                // also '/*/robot_pose'
+                subscribes::<PoseStamped>("/adapter/robot_pose", R_TL_10),
+                subscribes::<Text>("/adapter/coverage_settings", R_TL_10),
+                subscribes::<Text>("/adapter/zone_summaries", R_TL_10),
+                subscribes::<Text>("/adapter/map_datum", R_TL_10),
+                subscribes::<Text>("/site_list", R_TL_10),
+                // also '/*/online'
+                subscribes::<Bool>("/robot/online", R_TL_10),
+                subscribes::<Text>("/robot/info", R_TL_10),
+                subscribes::<Text>("/robot/telemetry", R_TL_10),
+                subscribes::<Text>("/pid_autotune/status", R_TL_10),
+                subscribes::<BatteryState>("/battery_state", R_TL_10),
+                subscribes::<NavSatFix>("/fix", R_TL_10),
+                // '/gps/fix' has no writer (docs/BUS_TOPICS.md 5.8 #5), nor
+                // has any name of '/*/battery_state'
+                subscribes::<Text>("/gps/status", R_TL_10),
+                subscribes::<Header>("/manual_command_clock", R_TL_10),
+                subscribes::<Text>("/mower_recorder/status", R_TL_10),
+                subscribes::<Text>("/mower_recorder/bags", R_TL_10),
+                subscribes::<Text>("/mower_recorder/command_result", R_TL_10),
+                subscribes::<CoverageProgress>("/coverage_progress", R_TL_10),
+                subscribes::<Text>("/zone_sequence_status", R_TL_10),
+                // topics_pub
+                publishes::<TwistStamped>("/app_joy_cmd", R_V_10),
+                publishes::<Text>("/mower_recorder/command", R_V_10),
+                publishes::<Text>("/mower_base/servo_command", R_V_10),
+                publishes::<Text>("/mower_base/blade_command", R_V_10),
+                // services
+                calls::<Trigger::Service>("/record_zone_start"),
+                calls::<Trigger::Service>("/record_zone_end"),
+                calls::<Trigger::Service>("/risk_zone_start"),
+                calls::<Trigger::Service>("/risk_zone_end"),
+                calls::<Trigger::Service>("/channel_record_start"),
+                calls::<Trigger::Service>("/channel_record_end"),
+                calls::<Trigger::Service>("/record_cancel"),
+                calls::<Trigger::Service>("/save_zone_list"),
+                calls::<Trigger::Service>("/load_zone_list"),
+                calls::<Trigger::Service>("/create_free_space"),
+                calls::<Trigger::Service>("/create_risk_map"),
+                calls::<Trigger::Service>("/create_chennal_map"),
+                calls::<Trigger::Service>("/generate_coverage_path"),
+                calls::<Trigger::Service>("/restore_free_space_coverage"),
+                calls::<ImportImageMask::Service>("/import_image_mask"),
+                calls::<EditZone::Service>("/edit_zone"),
+                calls::<SiteOp::Service>("/site_op"),
+                calls::<ZoneExecPath::Service>("/zone_exec_path"),
+                calls::<ZoneSequence::Service>("/run_zone_sequence"),
+                calls::<Trigger::Service>("/stop_zone_sequence"),
+                calls::<Trigger::Service>("/cancel_nav2"),
+                calls::<Trigger::Service>("/cencel_nav2"),
+                calls::<Trigger::Service>("/check_nav_status"),
+                calls::<GetCoverageProgress::Service>("/coverage_progress_status"),
+                calls::<ResumeCoverage::Service>("/resume_coverage"),
+                calls::<Trigger::Service>("/system/update"),
+                calls::<Trigger::Service>("/system/restart"),
+                calls::<Trigger::Service>("/system/check_update"),
+                calls::<PidAutotune::Service>("/pid_autotune"),
+                calls::<SetParameters::Service>("/boustrophedon_coverage/set_parameters"),
+                calls::<Trigger::Service>("/mower_recorder/start"),
+                calls::<Trigger::Service>("/mower_recorder/stop"),
+            ],
+        }],
+    },
 ];
 
 /// The nodes outside the typed modules that a module's subscription or call
 /// can depend on (docs/BUS_TOPICS.md 5.3, "DDS→bus"), with the step that
 /// removes them. Their QoS is upstream behaviour, unconfirmed unless said.
 pub static OUTSIDE: &[Outside] = &[
-    Outside {
-        // What the app and the Studio publish (ws_bridge.yaml topics_pub):
-        // untyped writers, R V 10, made at the first publish.
-        node: "mower_ws_bridge",
-        until: "E3",
-        endpoints: &[
-            publishes::<TwistStamped>("/app_joy_cmd", R_V_10),
-            publishes::<Text>("/mower_base/servo_command", R_V_10),
-            publishes::<Text>("/mower_base/blade_command", R_V_10),
-            publishes::<Text>("/mower_recorder/command", R_V_10),
-        ],
-    },
     Outside {
         // cmd_vel_out; unconfirmed: KeepLast(1) or SystemDefaults, R V 1
         // either way on rmw_cyclonedds
@@ -485,10 +570,30 @@ pub static OUTSIDE: &[Outside] = &[
         endpoints: &[publishes::<TwistStamped>("/keyboard_cmd_vel", R_V_10)],
     },
     Outside {
-        // "the rear light breathes red"; nothing reads it (docs/BUS_TOPICS.md 5.8 #1)
+        // The Python recorder (recorder_manager_node.py): its status for the
+        // app, latched, and the services the app calls through ws_bridge
+        // (docs/BUS_TOPICS.md 2.8, 3.3).
         node: "recorder_manager",
         until: "E5",
-        endpoints: &[publishes::<Text>("/mower_base/rear_light", R_TL_1)],
+        endpoints: &[
+            publishes::<Text>("/mower_recorder/status", R_TL_1),
+            // "the rear light breathes red"; nothing reads it (docs/BUS_TOPICS.md 5.8 #1)
+            publishes::<Text>("/mower_base/rear_light", R_TL_1),
+            serves::<Trigger::Service>("/mower_recorder/start"),
+            serves::<Trigger::Service>("/mower_recorder/stop"),
+            serves::<Trigger::Service>("/mower_recorder/snapshot"),
+        ],
+    },
+    Outside {
+        // bag_store_node.py: the bag list, latched, and the answers to the
+        // app's commands (docs/BUS_TOPICS.md 2.8).
+        node: "bag_store",
+        until: "E5",
+        endpoints: &[
+            publishes::<Text>("/mower_recorder/bags", R_TL_1),
+            publishes::<Text>("/mower_recorder/command_result", R_V_10),
+            subscribes::<Text>("/mower_recorder/command", R_V_10),
+        ],
     },
 ];
 

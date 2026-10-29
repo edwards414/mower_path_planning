@@ -501,6 +501,110 @@ async fn call_json_fails_like_a_typed_call() {
     assert_eq!(bridge.call_json("/add", request).await, Err(closed("ws_bridge")));
 }
 
+/// What ws_bridge holds per service (E3): a client that follows the server's
+/// presence as a typed one does, and calls through the name's codecs.
+#[tokio::test]
+async fn a_json_client_follows_its_servers_presence_and_calls_through_the_names_codecs() {
+    let bus = Bus::new();
+    let (server, bridge) = (bus.scope("server"), bus.scope("mower_ws_bridge"));
+    // No endpoint has declared the name: its types are not known.
+    assert_eq!(bridge.client_json("/add").unwrap_err(), BusError::UnknownName { name: "/add".into() });
+    assert!(matches!(bridge.client_json("add"), Err(BusError::InvalidName { .. })));
+
+    // A client declares it; no server yet.
+    let _typed = bus.scope("app").client::<AddRequest, AddResponse>("/add").unwrap();
+    let client = bridge.client_json("/add").unwrap();
+    assert_eq!((client.name(), client.request_type()), ("/add", type_name::<AddRequest>()));
+    assert!(!client.is_available());
+    let woken = Woken::new();
+    let mut waiting = Box::pin(client.wait_for_service());
+    assert!(poll_with(&mut waiting, &woken).is_pending());
+    assert_eq!(client.call(json!({"a": 1, "b": 2})).await, Err(unavailable("/add")));
+
+    // A server comes: the wait ends, and calls reach it.
+    let adder = spawn_adder(server.service::<AddRequest, AddResponse>("/add").unwrap());
+    assert!(woken.take(), "the server wakes the wait");
+    assert_eq!(poll_with(&mut waiting, &woken), Poll::Ready(Ok(())));
+    drop(waiting);
+    assert!(client.is_available());
+    assert_eq!(within(client.call(json!({"a": 2, "b": 40}))).await, Ok(json!({"sum": 42})));
+    assert_eq!(within(client.call(json!({"a": -2, "b": 5}))).await, Ok(json!({"sum": 3})));
+    assert_eq!(bus.services()[0].calls, 2);
+
+    // It is a client of the name, for introspection; clones are one client.
+    let clone = client.clone();
+    assert_eq!(bus.services()[0].clients, ["app", "mower_ws_bridge"]);
+    drop(clone);
+    assert_eq!(bus.services()[0].clients, ["app", "mower_ws_bridge"]);
+
+    // The server's scope closes: it is gone for the client too.
+    server.close();
+    adder.await.unwrap();
+    assert!(!client.is_available());
+    assert_eq!(client.call(json!({"a": 1, "b": 2})).await, Err(unavailable("/add")));
+    assert!(client.wait_for_service().now_or_never().is_none(), "waits for the next server");
+    drop(client);
+    assert_eq!(bus.services()[0].clients, ["app"]);
+}
+
+#[tokio::test]
+async fn a_json_client_refuses_bad_json_before_calling_and_fails_like_a_typed_call() {
+    let bus = Bus::new();
+    let (server, bridge) = (bus.scope("server"), bus.scope("mower_ws_bridge"));
+    let mut srv = server.service::<AddRequest, AddResponse>("/add").unwrap();
+    let client = bridge.client_json("/add").unwrap();
+
+    // A request that does not decode never reaches the server.
+    let bad = client.call(json!({"a": "two", "b": 1})).await;
+    assert!(matches!(&bad, Err(BusError::Json { name, error }) if name == "/add" && error.contains("invalid type")), "{bad:?}");
+    assert!(futures::poll!(srv.next()).is_pending());
+    assert_eq!(bus.services()[0].calls, 0);
+
+    // Dropped unanswered: NoResponse.
+    let drop_one = async { drop(srv.next().await) };
+    let (answer, ()) = within(futures::future::join(client.call(json!({"a": 1, "b": 2})), drop_one)).await;
+    assert_eq!(answer, Err(BusError::NoResponse { name: "/add".into() }));
+
+    // The server goes while it holds the call: ServiceUnavailable at once.
+    let mut call = Box::pin(client.call(json!({"a": 1, "b": 2})));
+    let woken = Woken::new();
+    assert!(poll_with(&mut call, &woken).is_pending());
+    let held = srv.next().await.unwrap();
+    server.close();
+    assert!(woken.take(), "the server's close wakes the caller");
+    assert_eq!(poll_with(&mut call, &woken), Poll::Ready(Err(unavailable("/add"))));
+    drop(held);
+}
+
+#[test]
+fn a_json_client_of_a_closed_scope_fails_with_closed() {
+    let bus = Bus::new();
+    let (server, bridge) = (bus.scope("server"), bus.scope("mower_ws_bridge"));
+    let _srv = server.service::<AddRequest, AddResponse>("/add").unwrap();
+    let client = bridge.client_json("/add").unwrap();
+    // a name a client declared once, with no server
+    drop(bus.scope("app").client::<Trigger::Request, Trigger::Response>("/save_map").unwrap());
+    let waits = bridge.client_json("/save_map").unwrap();
+
+    // A call in flight and a wait end when the client's scope closes.
+    let woken = Woken::new();
+    let mut call = Box::pin(client.call(json!({"a": 1, "b": 2})));
+    assert!(poll_with(&mut call, &woken).is_pending());
+    let mut waiting = Box::pin(waits.wait_for_service());
+    assert!(poll_with(&mut waiting, &woken).is_pending());
+    bridge.close();
+    assert!(woken.take());
+    assert_eq!(poll_with(&mut call, &woken), Poll::Ready(Err(closed("mower_ws_bridge"))));
+    assert_eq!(poll_with(&mut waiting, &woken), Poll::Ready(Err(closed("mower_ws_bridge"))));
+
+    // Calls after the close, and new clients, are refused.
+    assert_eq!(client.call(json!({"a": 1, "b": 2})).now_or_never(), Some(Err(closed("mower_ws_bridge"))));
+    assert_eq!(bridge.client_json("/add").unwrap_err(), closed("mower_ws_bridge"));
+    // A client of a closed scope is no live client.
+    let add = bus.services().into_iter().find(|s| s.name == "/add").unwrap();
+    assert!(add.clients.is_empty(), "{:?}", add.clients);
+}
+
 #[test]
 fn introspection_lists_each_names_server_clients_and_calls_sorted_by_name() {
     let bus = Bus::new();

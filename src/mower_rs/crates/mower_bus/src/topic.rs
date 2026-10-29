@@ -84,6 +84,11 @@ impl Registry {
         channels.iter().map(|channel| channel.info()).collect()
     }
 
+    pub(crate) fn topic(&self, name: &str) -> Option<TopicInfo> {
+        let channel = lock(&self.channels).get(name).cloned()?;
+        Some(channel.info())
+    }
+
     fn channel(&self, name: &str) -> Arc<Channel> {
         let mut channels = lock(&self.channels);
         if let Some(channel) = channels.get(name) {

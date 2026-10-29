@@ -772,11 +772,15 @@ fn from_ros_reads_dds_only_while_the_bus_has_a_reader() {
                 }
                 assert!(Instant::now() < deadline, "round {round}: nothing reached the bus reader");
             }
-            // It goes: so does the DDS reader.
+            // It goes: so does the DDS reader. Its absence from the graph
+            // means something only once the graph has shown it, and the
+            // writer learns of it on a path of its own, which can come after
+            // the graph's.
+            eventually("the DDS reader on the graph", || nav2.readers(topic) == 1).await;
             drop(reader);
             eventually("the DDS reader to leave the graph", || nav2.readers(topic) == 0).await;
             assert!(!running.topic(topic).dds_reader);
-            assert_eq!(writer.get_inter_process_subscription_count().unwrap(), 0);
+            eventually("the writer to lose its match", || writer.get_inter_process_subscription_count().unwrap() == 0).await;
         }
         running.stop().await.unwrap();
     });
@@ -801,6 +805,9 @@ fn a_latched_value_heard_before_the_last_bus_reader_went_does_not_reach_the_next
         let status = bus.scope("robot_status");
         let mut first = status.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, first.recv()).await.unwrap().unwrap().data, "t0");
+        // The graph learns of the reader on its own schedule, after t0 may
+        // have come: before it shows the reader, its absence says nothing.
+        eventually("the graph to show the DDS reader", || base.readers(topic) == 1).await;
 
         drop(first);
         eventually("the DDS reader to go with the last bus reader", || base.readers(topic) == 0).await;
@@ -1832,4 +1839,229 @@ fn the_app_s_bytes_are_those_of_a_json_value_not_of_the_typed_message() {
     // NaN is `null` either way, so the app cannot tell it from a missing value
     let fix = serde_json::to_value(nav_sat_fix()).unwrap();
     assert_eq!(fix["altitude"], serde_json::Value::Null);
+}
+
+// ---------------------------------------------------------------------------
+// The golden corpus (E3)
+// ---------------------------------------------------------------------------
+
+#[path = "../../mower_ws_bridge/tests/golden/fixtures.rs"]
+mod fixtures;
+
+/// The corpus's texts, next to its fixtures.
+fn golden_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../mower_ws_bridge/tests/golden")
+}
+
+/// The frame ws_bridge's r2r backend builds around a message's untyped JSON
+/// (its topic entry's `fan_out`).
+fn publish_frame(topic: &str, msg: &serde_json::Value) -> String {
+    serde_json::json!({"op": "publish", "topic": topic, "msg": msg}).to_string()
+}
+
+/// ... and around a service's untyped answer (its client's `call_service`).
+fn service_response_frame(service: &str, values: serde_json::Value, id: &str) -> String {
+    let mut reply = serde_json::json!({"op": "service_response", "service": service, "values": values, "result": true});
+    reply["id"] = serde_json::json!(id);
+    reply.to_string()
+}
+
+/// What the corpus's cases found: r2r's text for each golden file, case by
+/// case, and where r2r's path and the bus's differ.
+#[derive(Default)]
+struct Found {
+    publish: Vec<(String, String)>,
+    service_response: Vec<(String, String)>,
+    request: Vec<(String, String)>,
+    inbound: Vec<(String, String)>,
+    differences: Vec<String>,
+}
+
+impl Found {
+    fn extend(&mut self, other: Found) {
+        self.publish.extend(other.publish);
+        self.service_response.extend(other.service_response);
+        self.request.extend(other.request);
+        self.inbound.extend(other.inbound);
+        self.differences.extend(other.differences);
+    }
+}
+
+/// Runs each case of the corpus through r2r and through the bus: the cases'
+/// names and endpoints are made at once, their checks once the bridge runs.
+struct DdsCorpus<'a> {
+    module: Scope,
+    /// The scope of the bus's JSON calls (ws_bridge's, on the bus).
+    caller: Scope,
+    bridge: &'a mut RosBridge,
+    peer: &'a Peer,
+    cases: Vec<std::pin::Pin<Box<dyn Future<Output = Found>>>>,
+}
+
+fn golden_name(case: &str) -> String {
+    format!("/bridge_test/golden/{case}")
+}
+
+impl fixtures::Corpus for DdsCorpus<'_> {
+    /// bus -> bridge -> DDS, as the parity check above: r2r's untyped reader
+    /// on one side, the bus's erased reader on the other.
+    fn publish<T: fixtures::Msg>(&mut self, case: &str, topic: &str, value: T) {
+        let name = golden_name(case);
+        let ros_type = mower_bus::ros_type_name(std::any::type_name::<T>()).expect("an r2r message type");
+        let publisher = self.module.publisher::<T>(&name, Qos::latched()).unwrap();
+        publisher.publish(&value).unwrap();
+        self.bridge.to_ros::<T>(&name, latched()).unwrap();
+        let mut erased = self.module.subscribe_erased(&name, Qos::latched()).unwrap();
+        let mut untyped = self.peer.with(|n| n.subscribe_untyped(&name, &ros_type, latched())).unwrap();
+        let (case, topic) = (case.to_string(), topic.to_string());
+        self.cases.push(Box::pin(async move {
+            let _publisher = publisher;
+            let from_dds = next(&format!("{case} on DDS"), &mut untyped).await.unwrap();
+            let from_bus = erased.try_recv().expect("retained").to_json().unwrap();
+            let mut found = Found::default();
+            diff(&format!("{case}: r2r untyped vs the bus's erased JSON"), &from_dds, &from_bus, &mut found.differences);
+            let frame = publish_frame(&topic, &from_dds);
+            if frame != publish_frame(&topic, &from_bus) {
+                found.differences.push(format!("{case}: the frames differ"));
+            }
+            found.publish.push((case, frame));
+            found
+        }));
+    }
+
+    /// A DDS client calls through the bridge's service_to_ros, as ws_bridge's
+    /// r2r backend does; the bus calls with `call_json`. The bus server sees
+    /// each request as its client's codec decoded it.
+    fn service<S: fixtures::Srv>(&mut self, case: &str, service: &str, id: &str, args: serde_json::Value, response: S::Response) {
+        let name = golden_name(case);
+        let ros_type = mower_bus::ros_type_name(std::any::type_name::<S::Request>()).expect("an r2r service type");
+        let mut server = self.module.service::<S::Request, S::Response>(&name).unwrap();
+        self.bridge.service_to_ros::<S>(&name).unwrap();
+        let client = self.peer.with(|n| n.create_client_untyped(&name, &ros_type, QosProfile::services_default())).unwrap();
+        let caller = self.caller.clone();
+        let (case, service, id) = (case.to_string(), service.to_string(), id.to_string());
+        self.cases.push(Box::pin(async move {
+            let (got, mut requests) = tokio::sync::mpsc::unbounded_channel();
+            let serving = tokio::spawn(async move {
+                while let Some(request) = server.next().await {
+                    let _ = got.send(request.message.clone());
+                    let _ = request.respond(response.clone());
+                }
+            });
+            let available = r2r::Node::is_available(&client).unwrap();
+            tokio::time::timeout(WAIT, available).await.expect("the bridge's DDS server").unwrap();
+            let call = client.request(args.clone()).unwrap();
+            let from_dds = tokio::time::timeout(WAIT, call).await.expect("r2r's answer").unwrap().unwrap();
+            let by_dds: S::Request = requests.recv().await.unwrap();
+            let from_bus = tokio::time::timeout(WAIT, caller.call_json(&name, args)).await.expect("the bus's answer").unwrap();
+            let by_bus: S::Request = requests.recv().await.unwrap();
+            serving.abort();
+            let mut found = Found::default();
+            if by_dds != by_bus {
+                found.differences.push(format!("{case}: r2r decoded the request as {by_dds:?}, the bus as {by_bus:?}"));
+            }
+            diff(&format!("{case}: r2r's answer vs the bus's"), &from_dds, &from_bus, &mut found.differences);
+            found.request.push((case.clone(), serde_json::to_value(&by_dds).unwrap().to_string()));
+            found.service_response.push((case, service_response_frame(&service, from_dds, &id)));
+            found
+        }));
+    }
+
+    /// DDS -> bridge -> bus from r2r's untyped writer, as ws_bridge's r2r
+    /// backend publishes; the bus's JSON writer on a name of its own.
+    fn inbound<T: fixtures::Msg>(&mut self, case: &str, _topic: &str, frame: serde_json::Value) {
+        let name = golden_name(case);
+        let ros_type = mower_bus::ros_type_name(std::any::type_name::<T>()).expect("an r2r message type");
+        let mut from_dds = self.module.subscribe::<T>(&name, Qos::default()).unwrap();
+        self.bridge.from_ros::<T>(&name, QosProfile::default()).unwrap();
+        let writer = self.peer.with(|n| n.create_publisher_untyped(&name, &ros_type, QosProfile::default())).unwrap();
+        let local = format!("{name}_bus");
+        let mut from_json = self.module.subscribe::<T>(&local, Qos::default()).unwrap();
+        self.module.publisher_json(&local, Qos::default()).unwrap().publish(&frame).unwrap();
+        let by_bus = from_json.try_recv().expect("decoded by the bus");
+        let case = case.to_string();
+        self.cases.push(Box::pin(async move {
+            // Discovery may still be under way: publish until one comes.
+            let deadline = Instant::now() + WAIT;
+            let by_dds = loop {
+                writer.publish(frame.clone()).unwrap();
+                if let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), from_dds.next()).await {
+                    break msg;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for {case} from DDS");
+            };
+            let mut found = Found::default();
+            if by_dds != by_bus {
+                found.differences.push(format!("{case}: r2r decoded the frame as {by_dds:?}, the bus as {by_bus:?}"));
+            }
+            found.inbound.push((case, serde_json::to_value(&*by_dds).unwrap().to_string()));
+            found
+        }));
+    }
+}
+
+/// The golden corpus (mower_ws_bridge/tests/golden/fixtures.rs): every type
+/// the app and the Studio use, through r2r's untyped path, which is what
+/// ws_bridge's r2r backend sends and decodes, and through the bus. The two
+/// must agree, and r2r's texts must be the golden files'. With
+/// `MOWER_GOLDEN=write` the files are written instead (map_grid.frame, a
+/// captured frame, is only compared). mower_ws_bridge's tests check the bus
+/// path against the same files, without DDS.
+#[test]
+fn the_golden_corpus_is_what_r2r_s_untyped_path_and_the_bus_give() {
+    within(async {
+        let bus = Bus::new();
+        let mut bridge = new_bridge("golden_bridge", &bus.scope("bridge"));
+        let peer = Peer::new("golden_ws_bridge");
+        let mut corpus = DdsCorpus {
+            module: bus.scope("golden_module"),
+            caller: bus.scope("mower_ws_bridge"),
+            bridge: &mut bridge,
+            peer: &peer,
+            cases: Vec::new(),
+        };
+        fixtures::corpus(&mut corpus);
+        let cases = std::mem::take(&mut corpus.cases);
+        drop(corpus);
+        let running = start(bridge);
+        let mut found = Found::default();
+        for case in cases {
+            found.extend(case.await);
+        }
+        running.stop().await.unwrap();
+        assert!(found.differences.is_empty(), "r2r's untyped path and the bus differ:\n{}", found.differences.join("\n"));
+
+        // The real map layer is compared with the frame captured from the
+        // door; the rest are the files' lines.
+        let mut problems = Vec::new();
+        found.publish.retain(|(case, text)| match fixtures::own_file(case) {
+            Some(golden) => {
+                if golden != text {
+                    problems.push(format!("{case}: r2r's frame is not the captured one"));
+                }
+                false
+            }
+            None => true,
+        });
+        let write = std::env::var("MOWER_GOLDEN").as_deref() == Ok("write");
+        for (file, texts) in [
+            ("publish.txt", &found.publish),
+            ("service_response.txt", &found.service_response),
+            ("request.txt", &found.request),
+            ("inbound.txt", &found.inbound),
+        ] {
+            let path = golden_dir().join(file);
+            if write {
+                std::fs::write(&path, fixtures::golden_lines(texts)).unwrap();
+            } else {
+                let have = std::fs::read_to_string(&path).unwrap_or_default();
+                problems.extend(fixtures::golden_differences(file, &have, texts));
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "r2r's texts are not the golden ones (MOWER_GOLDEN=write rewrites them; review the diff):\n{}",
+            problems.join("\n")
+        );
+    });
 }

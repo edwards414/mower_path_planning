@@ -391,6 +391,14 @@ subscribe / publish / call_service), the recorder and `mowerctl`.
   error until some typed endpoint has fixed the type.
 - **`scope.call_json(name, json)`** decodes the request with the service's codec, calls, and
   encodes the response.
+- **`scope.client_json(name)`** is the same as a client of its own (`JsonClient`), for one who calls a
+  name again and again (ws_bridge, one per service the app calls):
+  - it is registered as a client, so introspection and mower_bridge's manifest check see its scope
+    as a caller;
+  - `is_available()` and `wait_for_service()` follow the server as a typed client's do, and
+    `call(json)` fails as `call_json` does (`Json`, then `Closed`, `ServiceUnavailable`,
+    `NoResponse`);
+  - it is `UnknownName` until some endpoint has declared the name, which fixes its types.
 - **The JSON layout is serde's layout of the message type.** For r2r types that is what ws_bridge
   sends the app today: its untyped r2r path converts through the same derives. E3 verifies this
   byte for byte against the app contract (`tools/probe_app.py`).
@@ -469,6 +477,9 @@ clock.sleep_blocking(d);              // for dedicated std threads
   - its retained history;
   - how many messages have been published, and when the last one was. That time is a std
     `Instant`, not a reading of the bus clock: a manual clock does not move it.
+- **`bus.topic(name)`** returns the one record of `bus.topics()` for `name` without building the
+  others (ws_bridge looks at a topic's writers on every subscribe), or `None` for a name the bus
+  has not seen.
 - **`bus.services()`** returns the same kind of record for services.
 - **`bus.actions()`** returns, for each action: its three Rust types and its ROS type
   (`mower_interface/action/Waypoint`), its server's and its clients' scope names, the goal requests
