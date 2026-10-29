@@ -57,9 +57,11 @@ which is why the check compares against a recording rather than a fixed list.
 `/oracle/cppN/cmd_vel_guard_input`) and, with `--rust`, `mower_rsd --modules mux` (node `twist_mux`, output
 `/cmd_vel_guard_input`), all on the production twist_mux_topics.yaml, and drives them from one rclpy probe with the
 production writer QoS. Every input carries `<source>#<seq>` in its frame_id, so every output names what it forwarded.
-Three sessions, each with fresh processes: `main` (S01-S14, S16, S17, the random segment), `startup` (S15: the muxes
-start under running inputs) and `generic` (S18: a tie, priority 0, timeout 0 for an input and a lock, a priority-0
-lock).
+Sessions, each with fresh processes: `main` (S01-S14, S16, S17, the random segment), `startup` (S15: the muxes start,
+from the sender's thread, under running inputs; compared from the moment every instance was heard from) and S18's
+rules (a tie, priority 0, timeout 0 for an input and a lock, a priority-0 lock): `generic` on topics of its own
+(`/g_*`, C++ only: the bridge does not carry names the manifest lacks) and `generic_high`, `generic_zerolock`,
+`generic_quiet` on the production topics, one lock each, which a mux in mower_rsd hears.
 
 ```bash
 docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=71 \
@@ -72,8 +74,11 @@ python3 mux_oracle.py vectors <out> ../crates/mower_mux/tests/vectors
 ```
 
 `compare` takes the first C++ copy as the reference. A decision within 3 ms of a timeout, of another handle's
-message, or of the same input's next message (a depth-1 reader keeps only the newer one) depends on delivery and is
-listed, not compared. S16 compares the counts, S17 the first forwarded sequence number (within one).
+message, or of the same input's next message, sent or arriving at the reference (a depth-1 reader keeps only the newer
+one, and a delivery stall bunches what was sent apart), depends on delivery and is listed, not compared. S16 compares
+the counts, S17 the first forwarded sequence number (within one). With the second C++ copy as the noise floor, another
+instance may differ from the reference by twice what that copy does, and its per-message latency p99 by 5 ms more than
+the copy's; p50 stays within 1 ms. Every output must be the input it names, bit for bit.
 
 **The noise floor**, two C++ copies on the same samples (2026-10-27, Docker Desktop on an M4, 10 cores):
 
@@ -88,6 +93,23 @@ listed, not compared. S16 compares the counts, S17 the first forwarded sequence 
   none at the end. The two of a second come from two timers on two clocks (twist_mux's wall timer, the updater's on
   the node clock): their order changes with the clock's slew, and the one that comes first carries the lock priority
   of the previous tick (216 of 1367 statuses), its very first one no handles at all.
+
+**The Rust mux** (2026-10-30, the E4 merge's release mower_rsd on main a37adaf, against two C++ copies):
+`MUX_ORACLE_OK`.
+
+- Every output of all three is the input it names, bit for bit. S01-S15, S17 and the three production-topic S18
+  sessions: the same forwarded sequence for all three and the model; S16 200 of 200 for all three; S17 the same
+  first message.
+- The random segment (8.4 k forwarded): every decision away from a boundary as the model and both copies. One more
+  is set aside by the arrival rule above: `joy#684`, which a 12 ms stall delivered 1.7 ms before the next joy, was
+  forwarded by both copies and not by the mux in mower_rsd. Its reader is the second depth-1 queue on that path
+  (DDS to the bridge, the bus to the mux): when two messages of one input arrive together, it can keep only the
+  newer one, which is the one that goes on. The loaded run of 2026-10-27 lost 5 of 200 more than C++ at S16's
+  200 Hz the same way. Step 6 (the manual guard on the bus) takes the DDS hop out.
+- Latency, send to receipt: the mux in mower_rsd p50 1.73 ms, p99 3.52 ms (the copies 1.10 / 2.86 and 1.21 / 2.98).
+  Per message against the reference: p50 +0.50 ms, p99 +1.54 ms (the second copy +0.14 / +1.02): the bridge's hop.
+- `/diagnostics`: 2.00 a second, word for word, no wrong status. Its statuses always carry the current lock priority
+  (its tick comes first by construction); the copies' carry the previous tick's in 103 and 89 of 1364.
 
 ## Switching and measuring on the robot
 

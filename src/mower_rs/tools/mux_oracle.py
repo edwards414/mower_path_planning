@@ -758,6 +758,19 @@ def cmd_compare(args):
             events = events_of(doc, key_handle, t0, end)
             decided = decisions(model, events, margin)
             ambiguous = {f for f, fw, amb in decided if amb}
+            # the same input's next message arriving at the reference within
+            # the margin of it, however far apart they were sent (a delivery
+            # stall bunches them): a depth-1 reader further on may hold only
+            # the newer one by the time its consumer takes it
+            recv = {o[1]: o[0] for o in doc['out'][ref] if t0 <= o[0] < end}
+            by_handle = {}
+            for e in events:
+                if e[1] == 'input':
+                    by_handle.setdefault(e[2], []).append(e[3])
+            for frames in by_handle.values():
+                for f, g in zip(frames, frames[1:]):
+                    if f in recv and g in recv and abs(recv[g] - recv[f]) <= args.margin:
+                        ambiguous.add(f)
             start_ns = {s[3]: int(round((s[0] - t0) * 1e9)) for s in doc['sent'] if s[2] == 'input'}
             cut = None
             if session == 'startup':
@@ -770,7 +783,7 @@ def cmd_compare(args):
                         failures.append(f'startup {name}: forwarded before the first lock false: {early[:5]}')
                 cut = int(round((max(first_lock + 0.1, max(up.values()) + 0.5) - t0) * 1e9))
             keep = (lambda f: start_ns.get(f, 0) > cut) if cut is not None else (lambda f: True)
-            expected = [f for f, fw, amb in decided if fw and not amb and keep(f)]
+            expected = [f for f, fw, amb in decided if fw and f not in ambiguous and keep(f)]
             row = {name: [o[1] for o in doc['out'][name] if t0 <= o[0] < end] for name in names}
             clean = {name: [f for f in row[name] if f not in ambiguous and keep(f)] for name in names}
             rep = srep['scenarios'][sc] = {'model': len(expected), 'ambiguous': len(ambiguous), 'instances': {}}
