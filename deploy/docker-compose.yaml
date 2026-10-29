@@ -65,6 +65,11 @@ services:
       - rust_guards:=${RUST_GUARDS:-false}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
+      # WS_BRIDGE_BUS: mower_ws_bridge (RUST_BRIDGE) on mower_bus instead of
+      # on an r2r node of its own (docs/ROS_FREE_PLAN.md E3). It is the app's
+      # only door, the in-app update included: WS_BRIDGE_BUS=false in .env is
+      # the roll-back, no new image needed, and it needs SSH to the robot.
+      - ws_bridge_bus:=${WS_BRIDGE_BUS:-false}
       # RUST_BASE replaces the whole ros2_control chain
       # (controller_manager + mower_hardware + diff_controller +
       # joint_state_broadcaster, ~28 % of a core) with one mower_rs

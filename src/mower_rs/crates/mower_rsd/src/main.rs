@@ -61,6 +61,13 @@
 //! start. Whatever the flags, every endpoint an instance makes on the bus is
 //! checked against mower_bridge's manifest, and one that is not in it (and so
 //! not bridged) is reported on stderr.
+//!
+//! **ws_bridge's flag is set here, at start.** Its backend is a module
+//! argument (`--module-args bridge=... --backend bus`, the launch's
+//! `ws_bridge_bus`), so that the app's door can be moved back without a new
+//! image. With the bus backend, `bridge` counts as on the bus for the plan,
+//! which the bus bridge gets in its arguments (`--on-bus bridge`), and for
+//! the manifest check.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -323,12 +330,28 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// The bus bridge's arguments, the ids of `--modules`, when a module of the
-/// set is on the bus; `None` when none is, and then no bridge runs. An error
-/// for a set mower_bridge's policy cannot bridge (a name both ways).
-fn bus_bridge(modules: &[String], remaps: &Remaps) -> Result<Option<Vec<String>>, String> {
-    let plan = mower_bridge::rsd_plan(modules, remaps).map_err(|e| e.to_string())?;
-    Ok((!plan.is_empty()).then(|| modules.to_vec()))
+/// The modules on the bus by how they run in this process rather than by
+/// mower_bridge's on_bus.rs (`mower_bridge::RUNTIME`): ws_bridge when its
+/// module arguments ask for the bus backend. A `--backend` value ws_bridge
+/// refuses counts as r2r here; ws_bridge reports it when it starts.
+fn on_bus_now(args: &Args) -> Vec<&'static str> {
+    let bridge_args: Vec<String> = args.module_args.iter().filter(|(id, _)| id == "bridge").flat_map(|(_, v)| v.clone()).collect();
+    let ws_bus = args.modules.iter().any(|m| m == "bridge")
+        && mower_ws_bridge::backend_of(&bridge_args) == Ok(mower_ws_bridge::Backend::Bus);
+    if ws_bus {
+        vec!["bridge"]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The bus bridge's arguments (`mower_bridge::rsd_args`: the ids of
+/// `--modules` and the run-time flags `on_now`), when a module of the set is
+/// on the bus; `None` when none is, and then no bridge runs. An error for a
+/// set mower_bridge's policy cannot bridge (a name both ways).
+fn bus_bridge(modules: &[String], on_now: &[&str], remaps: &Remaps) -> Result<Option<Vec<String>>, String> {
+    let plan = mower_bridge::rsd_plan_with(modules, on_now, remaps).map_err(|e| e.to_string())?;
+    Ok((!plan.is_empty()).then(|| mower_bridge::rsd_args(modules, on_now)))
 }
 
 /// How a module task ended.
@@ -569,7 +592,8 @@ fn main() -> ExitCode {
         // modules' IO from r2r onto them.
         let bus = Bus::new();
         let clock = Clock::system();
-        let bridged = match bus_bridge(&args.modules, &remaps) {
+        let on_now = on_bus_now(&args);
+        let bridged = match bus_bridge(&args.modules, &on_now, &remaps) {
             Ok(bridged) => bridged,
             Err(e) => {
                 eprintln!("[mower_rsd] {e}");
@@ -607,7 +631,7 @@ fn main() -> ExitCode {
         }
         // An endpoint a module makes on the bus that the manifest does not
         // have is a name nothing bridges: say so, with a bridge or without.
-        let running = mower_bridge::Running::rsd(&args.modules, mower_bridge::on_bus);
+        let running = mower_bridge::Running::rsd(&args.modules, mower_bridge::on_bus_with(&on_now));
         let bridge_scopes = vec![mower_bridge::NODE.to_string()];
         tokio::spawn(mower_bridge::coverage::watch(bus.clone(), running, remaps.clone(), bridge_scopes, |gap| {
             eprintln!("[mower_rsd] bus bridge: {gap}")
@@ -1011,14 +1035,40 @@ mod tests {
         let production: Vec<String> =
             MODULES.iter().map(|m| m.id.to_string()).filter(|id| id != BUS_BRIDGE).collect();
         let remaps = mower_bridge::production_remaps();
-        let bridged = bus_bridge(&production, &remaps).unwrap();
+        let bridged = bus_bridge(&production, &[], &remaps).unwrap();
         assert_eq!(bridged.is_some(), production.iter().any(|id| mower_bridge::on_bus(id)));
         if let Some(ids) = bridged {
             assert_eq!(ids, production);
         }
         // ws_bridge on r2r and the agent have nothing on the bus
-        assert_eq!(bus_bridge(&argv(&["bridge", "agent"]), &remaps), Ok(None));
+        assert_eq!(bus_bridge(&argv(&["bridge", "agent"]), &[], &remaps), Ok(None));
+        // ws_bridge on the bus has: a bridge runs for it, told so
+        assert_eq!(
+            bus_bridge(&argv(&["bridge", "agent"]), &["bridge"], &remaps),
+            Ok(Some(argv(&["bridge", "agent", "--on-bus", "bridge"])))
+        );
         assert!(parse_args(&argv(&["--modules", "status,bus_bridge"])).is_err(), "not for --modules");
+    }
+
+    /// ws_bridge's backend, from its module arguments as robot.launch.py
+    /// writes them: the bus only with `--backend bus`, and only while
+    /// ws_bridge runs here.
+    #[test]
+    fn ws_bridge_is_on_the_bus_with_its_bus_backend() {
+        let policy = "--address 10.77.0.2 --port 9090 --loopback-port 9091 --policy /x/ws_bridge.yaml";
+        let with = |modules: &str, bridge_args: Option<String>| {
+            let mut a = vec!["--modules".to_string(), modules.to_string()];
+            if let Some(b) = bridge_args {
+                a.extend(["--module-args".to_string(), format!("bridge={b}")]);
+            }
+            on_bus_now(&parse_args(&a).unwrap())
+        };
+        assert_eq!(with("status,bridge,agent", Some(policy.to_string())), Vec::<&str>::new());
+        assert_eq!(with("status,bridge,agent", Some(format!("{policy} --backend r2r"))), Vec::<&str>::new());
+        assert_eq!(with("status,bridge,agent", Some(format!("{policy} --backend bus"))), ["bridge"]);
+        // ws_bridge refuses it when it starts; the plan stays E2's
+        assert_eq!(with("status,bridge", Some(format!("{policy} --backend dds"))), Vec::<&str>::new());
+        assert_eq!(with("status,bridge", None), Vec::<&str>::new());
     }
 
     #[test]

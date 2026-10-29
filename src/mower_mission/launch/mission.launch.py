@@ -183,6 +183,13 @@ def generate_launch_description():
                     'rosbridge_auth_proxy + rosbridge_websocket + rosapi.',
     )
 
+    declare_ws_bridge_bus = DeclareLaunchArgument(
+        'ws_bridge_bus',
+        default_value='false',
+        description='The mower_rs WebSocket bridge on mower_bus (--backend '
+                    'bus) instead of on an r2r node of its own.',
+    )
+
     declare_rust_adapter = DeclareLaunchArgument(
         'rust_adapter',
         default_value='false',
@@ -252,6 +259,7 @@ def generate_launch_description():
         launch_arguments={
             'address': rosbridge_address,
             'rust_bridge': LaunchConfiguration('rust_bridge'),
+            'ws_bridge_bus': LaunchConfiguration('ws_bridge_bus'),
             'rust_agent': LaunchConfiguration('rust_agent'),
             'rust_daemon': rust_daemon,
         }.items(),
@@ -611,6 +619,7 @@ def generate_launch_description():
         declare_rust_map,
         declare_rust_agent,
         declare_rust_bridge,
+        declare_ws_bridge_bus,
         declare_rust_base,
         declare_rust_localize,
         declare_auto_coverage,

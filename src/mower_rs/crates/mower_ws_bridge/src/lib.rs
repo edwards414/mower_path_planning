@@ -1,20 +1,30 @@
-//! mower_ws_bridge: the app's WebSocket door as one r2r process.
+//! mower_ws_bridge: the app's WebSocket door.
 //!
 //! Replaces rosbridge_websocket + rosapi + rosbridge_auth_proxy with the
 //! rosbridge v2 subset the clients use (see client.rs), the pairing gate on
 //! the public listener (auth.rs, same X-Mower-* HMAC hand-shake) and an
-//! unauthenticated loopback listener for the on-robot relay agent. One ROS
+//! unauthenticated loopback listener for the on-robot relay agent. One
 //! subscription per topic feeds every client (a message is serialised
 //! once), service clients are kept, and subscribe requests are answered in
 //! parallel instead of one by one, so a phone that subscribes to twenty
 //! topics sees its first heartbeat in milliseconds rather than seconds.
 //!
+//! Two backends (hub.rs), chosen with `--backend`:
+//! - `r2r`, the default: one r2r node of its own, with untyped endpoints.
+//! - `bus` (step E3): mower_bus's erased access in the module's scope; the
+//!   names only DDS has reach it through the bus bridge, which the manifest's
+//!   `bridge` module plans for. Its r2r node stays, with no endpoint, so
+//!   that the graph keeps it (E3 decision 10).
+//!
 //! Usage (rosbridge.launch.py):
 //!   mower_ws_bridge --address 10.77.0.2 --port 9090 --loopback-port 9091
 //!                   --policy ws_bridge.yaml [--state-dir DIR] [--max-size N]
-//!                   [--backend r2r]
+//!                   [--backend r2r|bus]
 
 pub mod auth;
+mod bus_hub;
+#[cfg(test)]
+mod bus_tests;
 mod client;
 mod config;
 mod entry;
@@ -37,6 +47,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::auth::{Identity, NonceCache};
+use crate::bus_hub::BusHub;
 use crate::client::Client;
 use crate::config::Policy;
 use crate::hub::Hub;
@@ -47,15 +58,35 @@ use crate::r2r_hub::R2rHub;
 pub enum Backend {
     /// One r2r node and its spin thread: the bridge as it has always been.
     R2r,
+    /// mower_bus, in the module's scope (step E3).
+    Bus,
 }
 
 impl Backend {
     fn parse(value: &str) -> Result<Backend, String> {
         match value {
             "r2r" => Ok(Backend::R2r),
-            other => Err(format!("--backend takes r2r, not {other:?}")),
+            "bus" => Ok(Backend::Bus),
+            other => Err(format!("--backend takes r2r or bus, not {other:?}")),
         }
     }
+}
+
+/// The backend the module arguments `argv` ask for, as `run` reads them:
+/// r2r unless `--backend bus` comes before the ROS block. For mower_rsd's
+/// policy and the binary's `main`, which decide before `run` does; an error
+/// for a value `run` would refuse.
+pub fn backend_of(argv: &[String]) -> Result<Backend, String> {
+    let mut backend = Backend::R2r;
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--ros-args" => break,
+            "--backend" => backend = Backend::parse(it.next().ok_or("--backend needs a value")?)?,
+            _ => {}
+        }
+    }
+    Ok(backend)
 }
 
 struct Args {
@@ -229,15 +260,48 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shar
 /// `mower_rsd`; the listeners, gate, policy and node name are the same, and
 /// `m.args` carries what the launch file used to pass on the command line.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S] [--backend r2r]"))?;
+    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S] [--backend r2r|bus]"))?;
     let policy = Arc::new(Policy::from_yaml(&std::fs::read_to_string(&args.policy).map_err(|e| format!("{}: {e}", args.policy))?)?);
 
     let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
-    let hub = match args.backend {
-        Backend::R2r => Hub::R2r(R2rHub::start(node)?),
-    };
+    match args.backend {
+        Backend::R2r => {
+            let hub = Hub::R2r(R2rHub::start(node)?);
+            serve(args, policy, hub, logger, m).await
+        }
+        Backend::Bus => {
+            // The node stays for the graph's sake, with no endpoint and no
+            // spin: graph_snapshot and the DDS tools keep seeing it.
+            let hub = Hub::Bus(BusHub::new(m.bus.clone(), m.clock.clone(), bus_hub::manifest_names(&m)?, &logger));
+            let served = serve(args, policy, hub, logger, m).await;
+            drop(node);
+            served
+        }
+    }
+}
 
+/// The listener tasks. With the bus backend they are aborted however
+/// `serve` ends: a fatal bind error of the public listener used to leave the
+/// loopback ones running, holding their ports, so that every restart failed
+/// to bind them. The r2r backend keeps that behaviour until it goes.
+struct Listeners {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    abort_on_drop: bool,
+}
+
+impl Drop for Listeners {
+    fn drop(&mut self) {
+        if self.abort_on_drop {
+            for task in &self.tasks {
+                task.abort();
+            }
+        }
+    }
+}
+
+/// The listeners, the gate and the clients, on `hub`, until the shutdown.
+async fn serve(args: Args, policy: Arc<Policy>, hub: Hub, logger: String, m: ModuleCtx) -> ModuleResult {
     let identity = Identity::load(&args.state_dir)?;
     match &identity {
         Some(id) => r2r::log_info!(&logger, "pairing gate for {}", id.robot_id),
@@ -253,7 +317,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         service_timeout: Duration::from_secs(args.service_timeout_s),
     });
 
-    let mut tasks = Vec::new();
+    let mut tasks = Listeners { tasks: Vec::new(), abort_on_drop: args.backend == Backend::Bus };
     // The same gate on loopback for the relay agent: `address` is the LAN
     // (or VPN) IP, which vanishes with its uplink, while relayed sessions
     // arrive over whichever uplink is left (4G). 0.0.0.0 already covers it.
@@ -261,13 +325,13 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     if lan_address {
         let local_gate = TcpListener::bind(("127.0.0.1", args.port)).await.map_err(|e| format!("bind 127.0.0.1:{}: {e}", args.port))?;
         r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (pairing gate, relay agent)", args.port);
-        tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Some(gate.clone()))));
+        tasks.tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Some(gate.clone()))));
     }
     if let Some(port) = args.loopback_port {
         if !(args.address == "127.0.0.1" && port == args.port) {
             let local = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;
             r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (loopback, no gate)", port);
-            tasks.push(tokio::spawn(serve_listener(local, shared.clone(), None)));
+            tasks.tasks.push(tokio::spawn(serve_listener(local, shared.clone(), None)));
         }
     }
     // A LAN address may not exist yet (booted with the cable out, on 4G):
@@ -295,11 +359,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         }
     };
     r2r::log_info!(&logger, "listening on ws://{}:{} (pairing gate)", args.address, args.port);
-    tasks.push(tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone()))));
+    tasks.tasks.push(tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone()))));
 
     m.shutdown.wait().await;
     r2r::log_info!(&logger, "mower_ws_bridge: shutting down");
-    for t in tasks {
+    for t in std::mem::take(&mut tasks.tasks) {
         t.abort();
     }
     shared.hub.shutdown();
@@ -314,13 +378,29 @@ mod tests {
         parse_args(&s.split_whitespace().map(str::to_string).collect::<Vec<_>>())
     }
 
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_string).collect()
+    }
+
     #[test]
     fn the_backend_is_r2r_unless_told_otherwise() {
         assert_eq!(args("--policy p.yaml").unwrap().backend, Backend::R2r);
         assert_eq!(args("--policy p.yaml --backend r2r").unwrap().backend, Backend::R2r);
-        assert_eq!(args("--policy p.yaml --backend dds").err().as_deref(), Some("--backend takes r2r, not \"dds\""));
+        assert_eq!(args("--policy p.yaml --backend bus").unwrap().backend, Backend::Bus);
+        assert_eq!(args("--policy p.yaml --backend dds").err().as_deref(), Some("--backend takes r2r or bus, not \"dds\""));
         assert!(args("--policy p.yaml --backend").is_err());
         // launch's ROS block ends what the bridge reads
         assert_eq!(args("--policy p.yaml --ros-args --backend nonsense").unwrap().backend, Backend::R2r);
+        // as mower_rsd and main read it, before run does
+        for (line, backend) in [
+            ("--policy p.yaml", Ok(Backend::R2r)),
+            ("--address 10.77.0.2 --port 9090 --policy p.yaml --backend bus", Ok(Backend::Bus)),
+            ("--backend r2r", Ok(Backend::R2r)),
+            ("--policy p.yaml --ros-args --backend bus", Ok(Backend::R2r)),
+            ("--backend dds", Err("--backend takes r2r or bus, not \"dds\"".to_string())),
+            ("--backend", Err("--backend needs a value".to_string())),
+        ] {
+            assert_eq!(backend_of(&argv(line)), backend, "{line}");
+        }
     }
 }

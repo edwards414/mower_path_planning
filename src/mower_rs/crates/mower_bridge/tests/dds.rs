@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use futures::{FutureExt, Stream, StreamExt};
-use mower_bridge::types::{BE_V_1, BE_V_5, R_TL_1, R_V_10};
+use mower_bridge::types::{BE_V_1, BE_V_5, R_TL_1, R_V_1, R_V_10};
 use mower_bridge::{coverage, plan, run_standalone, Running, NODE};
 use mower_bus::{Bus, BusError};
 use mower_bus_ros::RosBridge;
@@ -297,4 +297,137 @@ async fn fake_battery(_ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// ws_bridge's bus backend (E3.1)
+// ---------------------------------------------------------------------------
+
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn ws_send(ws: &mut Socket, frame: serde_json::Value) {
+    use futures::SinkExt;
+    ws.send(tokio_tungstenite::tungstenite::Message::Text(frame.to_string())).await.unwrap();
+}
+
+/// The next text frame.
+async fn ws_recv(ws: &mut Socket) -> String {
+    loop {
+        match next("a frame", ws).await {
+            Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => return text,
+            Ok(tokio_tungstenite::tungstenite::Message::Ping(_) | tokio_tungstenite::tungstenite::Message::Pong(_)) => {}
+            other => panic!("no text frame: {other:?}"),
+        }
+    }
+}
+
+async fn ws_connect(url: &str) -> Socket {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match tokio_tungstenite::connect_async(url).await {
+            Ok((ws, _)) => return ws,
+            Err(e) => assert!(Instant::now() < deadline, "ws_bridge does not listen: {e}"),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// ws_bridge with `--backend bus` as the separate binary runs it (RUST_DAEMON
+/// =false): its own run, on a bus of its own, behind the bridge the policy
+/// plans for it standalone. The DDS peers stand in for the recorder and the
+/// manual guard, still outside the bus.
+#[test]
+fn the_bus_ws_bridge_reaches_the_names_only_dds_has_through_its_bridge() {
+    use r2r::geometry_msgs::msg::TwistStamped;
+    use serde_json::json;
+    within(async {
+        // The recorder has published its latched status before ws_bridge
+        // exists, and serves start (not stop).
+        let recorder = Peer::new("dds_test_recorder_manager");
+        let status = recorder.with(|n| n.create_publisher::<Text>("/mower_recorder/status", R_TL_1.ros())).unwrap();
+        status.publish(&Text { data: "{\"recording\":false}".into() }).unwrap();
+        let mut starts = recorder.with(|n| n.create_service::<Trigger::Service>("/mower_recorder/start", QosProfile::services_default())).unwrap();
+        let serving = tokio::spawn(async move {
+            while let Some(request) = starts.next().await {
+                let _ = request.respond(Trigger::Response { success: true, message: "recording".into() });
+            }
+        });
+        let guard = Peer::new("dds_test_manual_velocity_guard");
+        let mut joy = guard.with(|n| n.subscribe::<TwistStamped>("/app_joy_cmd", R_V_1.ros())).unwrap();
+
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let policy = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../mower_bringup/config/ws_bridge.yaml");
+        let argv = format!("--address 127.0.0.1 --port {port} --loopback-port none --policy {policy} --state-dir /nonexistent/ws_bridge_test --backend bus");
+        let shutdown = Shutdown::new();
+        let m = ModuleCtx::new("mower_ws_bridge", shutdown.clone()).with_args(argv.split_whitespace().map(str::to_string).collect());
+        let door = run_standalone("bridge", context(), m, mower_ws_bridge::run);
+        let check = async {
+            let url = format!("ws://127.0.0.1:{port}");
+            let mut app = ws_connect(&url).await;
+            let frame = |topic: &str, msg: serde_json::Value| json!({"op": "publish", "topic": topic, "msg": msg}).to_string();
+
+            // The latched status reaches the app, which came later than it:
+            // the bridge's DDS reader comes with ws_bridge's bus reader, and
+            // the recorder's writer replays to it.
+            ws_send(&mut app, json!({"op": "subscribe", "topic": "/mower_recorder/status", "type": "std_msgs/msg/String"})).await;
+            let status_frame = frame("/mower_recorder/status", json!({"data": "{\"recording\":false}"}));
+            assert_eq!(ws_recv(&mut app).await, status_frame);
+            // and a later client from ws_bridge's cache
+            let mut studio = ws_connect(&url).await;
+            ws_send(&mut studio, json!({"op": "subscribe", "topic": "/mower_recorder/status"})).await;
+            assert_eq!(ws_recv(&mut studio).await, status_frame);
+            // the reader on DDS is the bridge's, not ws_bridge's own node
+            let readers = recorder.with(|n| n.get_subscriptions_info_by_topic("/mower_recorder/status", false).unwrap());
+            let owners: Vec<(String, String)> = readers.iter().map(|i| (i.node_namespace.clone(), i.node_name.clone())).collect();
+            assert_eq!(owners, [("/mower_bus_bridge".to_string(), "mower_ws_bridge".to_string())]);
+
+            // The joystick reaches the guard on DDS (bus -> to_ros), once the
+            // bridge's writer has matched it.
+            let joystick = json!({"header": {"stamp": {"sec": 3, "nanosec": 4}, "frame_id": "manual-1"},
+                                  "twist": {"linear": {"x": 0.3, "y": 0, "z": 0}, "angular": {"x": 0, "y": 0, "z": -0.5}}});
+            let deadline = Instant::now() + WAIT;
+            let got = loop {
+                ws_send(&mut app, json!({"op": "publish", "topic": "/app_joy_cmd", "msg": joystick})).await;
+                if let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), joy.next()).await {
+                    break msg;
+                }
+                assert!(Instant::now() < deadline, "the joystick never reached DDS");
+            };
+            assert_eq!((got.header.frame_id.as_str(), got.twist.linear.x, got.twist.angular.z), ("manual-1", 0.3, -0.5));
+            let writers = guard.writers("/app_joy_cmd");
+            assert_eq!(writers.iter().map(|(node, _)| node.as_str()).collect::<Vec<_>>(), ["/mower_bus_bridge/mower_ws_bridge"]);
+            assert_eq!(writers[0].1.reliability, ReliabilityPolicy::Reliable);
+
+            // A call reaches the recorder's DDS server (service_from_ros).
+            ws_send(&mut app, json!({"op": "call_service", "id": "call_1", "service": "/mower_recorder/start", "args": {}})).await;
+            let started = json!({"op": "service_response", "id": "call_1", "service": "/mower_recorder/start",
+                                 "values": {"message": "recording", "success": true}, "result": true});
+            assert_eq!(ws_recv(&mut app).await, started.to_string());
+            // With no DDS server there is no bus server either: after 5 s,
+            // unavailable, as the r2r backend's is_available said.
+            let asked = Instant::now();
+            ws_send(&mut app, json!({"op": "call_service", "id": "call_2", "service": "/mower_recorder/stop", "args": {}})).await;
+            let stopped = json!({"op": "service_response", "id": "call_2", "service": "/mower_recorder/stop",
+                                 "values": "/mower_recorder/stop: service unavailable", "result": false});
+            assert_eq!(ws_recv(&mut app).await, stopped.to_string());
+            let waited = asked.elapsed();
+            assert!(waited >= Duration::from_millis(4_900) && waited < Duration::from_secs(8), "after {waited:?}");
+
+            // ws_bridge's own r2r node has no endpoint: no wake topic, no
+            // reader, no writer (E3 decision 10).
+            assert!(guard.writers("/mower_ws_bridge/wake").is_empty());
+            for topic in ["/mower_recorder/status", "/app_joy_cmd"] {
+                let infos = guard.with(|n| {
+                    let mut all = n.get_publishers_info_by_topic(topic, false).unwrap();
+                    all.extend(n.get_subscriptions_info_by_topic(topic, false).unwrap());
+                    all
+                });
+                assert!(!infos.iter().any(|i| i.node_namespace == "/" && i.node_name == "mower_ws_bridge"), "{topic}");
+            }
+            shutdown.trigger();
+        };
+        let (result, ()) = tokio::join!(door, check);
+        result.unwrap();
+        serving.abort();
+    });
 }

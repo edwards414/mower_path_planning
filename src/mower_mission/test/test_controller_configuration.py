@@ -317,6 +317,72 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
         assert "'rust_daemon'" in text, launch.name
 
 
+def test_ws_bridge_bus_is_a_run_time_switch_that_is_off_by_default(monkeypatch):
+    """ws_bridge_bus:=true (WS_BRIDGE_BUS) moves mower_ws_bridge onto
+    mower_bus (--backend bus), and the bus bridge then carries the names only
+    DDS has for it. It is the app's only door, the in-app update included,
+    so it is a launch switch, off unless .env says otherwise, and the
+    roll-back needs no new image. Off, mower_rsd's command line is today's."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mission = MISSION_LAUNCH.read_text(encoding='utf-8')
+    rosbridge = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
+    for text in (robot, mission, rosbridge):
+        assert re.search(r"'ws_bridge_bus',\n\s+default_value='false',", text)
+    block = robot.split("if 'bridge' in modules:", 1)[1].split(
+        "if 'agent' in modules:", 1)[0]
+    assert ("if _truthy(LaunchConfiguration('ws_bridge_bus')"
+            ".perform(context)):") in block
+    assert "bridge_args += ['--backend', 'bus']" in block
+    assert "'ws_bridge_bus': ws_bridge_bus," in robot
+    assert "'ws_bridge_bus': LaunchConfiguration('ws_bridge_bus')," in mission
+    # the separate binary (rust_daemon:=false): r2r unless the switch is on
+    assert "'--backend', PythonExpression([" in rosbridge
+    assert "\"'bus' if '\", ws_bridge_bus" in rosbridge
+    assert 'ws_bridge_bus:=${WS_BRIDGE_BUS:-false}' in \
+        DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    assert re.search(r'^WS_BRIDGE_BUS=false$',
+                     ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+    # the Rust side reads the same argument: mower_rsd for the bus bridge's
+    # plan, the binary for its runner
+    rs = SRC_DIR / 'mower_rs/crates'
+    assert ('mower_ws_bridge::backend_of(&bridge_args) == '
+            'Ok(mower_ws_bridge::Backend::Bus)') in \
+        MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    assert ('mower_bridge::module_main("bridge", "mower_ws_bridge", 4, '
+            'mower_ws_bridge::run)') in \
+        (rs / 'mower_ws_bridge/src/main.rs').read_text(encoding='utf-8')
+    assert '"bus" => Ok(Backend::Bus),' in \
+        (rs / 'mower_ws_bridge/src/lib.rs').read_text(encoding='utf-8')
+
+    # the behavioural half needs ROS launch (not in the python-tests job)
+    pytest.importorskip('launch')
+    pytest.importorskip('launch_ros')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    module = _load_launch_module(ROBOT_LAUNCH)
+    monkeypatch.setattr(module, 'get_package_share_directory',
+                        lambda package: f'/share/{package}')
+    monkeypatch.setattr(module, 'Node', lambda **kwargs: kwargs)
+    configured = {switch: 'false' for _, switch in module._DAEMON_MODULES
+                  if switch}
+    configured.update(rust_daemon='true', rust_bridge='true',
+                      rosbridge_address='10.77.0.2',
+                      rust_daemon_params_file='/cfg/mower_rsd.yaml')
+    today = ('bridge=--address 10.77.0.2 --port 9090 --loopback-port 9091 '
+             '--policy /share/mower_bringup/config/ws_bridge.yaml')
+    for value, extra in (('false', ''), ('0', ''), ('', ''),
+                         ('true', ' --backend bus'), ('on', ' --backend bus')):
+        context = LaunchContext()
+        context.launch_configurations.update(configured, ws_bridge_bus=value)
+        [node] = module._rust_daemon_node(context)
+        arguments = node['arguments']
+        bridge = [arguments[i + 1] for i, a in enumerate(arguments)
+                  if a == '--module-args' and
+                  arguments[i + 1].startswith('bridge=')]
+        assert bridge == [today + extra], repr(value)
+
+
 def test_rust_daemon_recorder_uses_the_launch_directories():
     """With rust_daemon the recorder must save where the separate mower_record
     does (zone_record_dir / sites_dir = the ~/.mower bind mount), not at the

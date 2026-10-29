@@ -12,7 +12,7 @@ use crate::client::service_response_frame;
 use crate::entry::publish_frame;
 
 #[path = "../tests/golden/fixtures.rs"]
-mod fixtures;
+pub(crate) mod fixtures;
 
 /// What the bus gave, case by case, for each golden file.
 #[derive(Default)]

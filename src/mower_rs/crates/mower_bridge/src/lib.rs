@@ -21,9 +21,9 @@ mod run;
 pub mod types;
 
 pub use manifest::{instance, module, production_remaps, MODULES, OUTSIDE, PRODUCTION_REMAPS};
-pub use on_bus::{on_bus, ON_BUS};
+pub use on_bus::{on_bus, on_bus_with, ON_BUS, RUNTIME};
 pub use policy::{plan, Declaration, Plan, PlanError, Running};
-pub use run::{module_main, rsd_plan, run, run_standalone, NODE, STANDALONE_NAMESPACE};
+pub use run::{module_main, rsd_args, rsd_plan, rsd_plan_with, run, run_standalone, NODE, STANDALONE_NAMESPACE};
 
 #[cfg(test)]
 mod tests;
