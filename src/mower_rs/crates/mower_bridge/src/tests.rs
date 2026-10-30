@@ -15,15 +15,17 @@ use crate::types::*;
 use crate::*;
 
 /// What robot.launch.py puts in `--modules` on the robot: every rust_*
-/// switch of E2 on. E4's modules are off by default ([`E4_MODULES`]).
+/// switch of E2 on. E4's and E5's modules are off by default
+/// ([`E4_MODULES`]).
 const PRODUCTION_MODULES: [&str; 15] = [
     "base", "status", "guards", "imu", "gps", "localize", "map", "coverage", "nav", "record", "adapter", "battery",
     "pid_autotune", "bridge", "agent",
 ];
 
-/// E4's modules, behind switches that are off by default, each where
-/// robot.launch.py's `_DAEMON_MODULES` puts it. They are born on the bus.
-const E4_MODULES: [(&str, &str); 2] = [("mux", "guards"), ("static_tf", "gps")];
+/// E4's modules and E5's `bag`, behind switches that are off by default,
+/// each where robot.launch.py's `_DAEMON_MODULES` puts it (after the module
+/// named). They are born on the bus.
+const E4_MODULES: [(&str, &str); 3] = [("mux", "guards"), ("static_tf", "gps"), ("bag", "agent")];
 
 /// [`PRODUCTION_MODULES`] with E4's modules `e4` switched on, in
 /// robot.launch.py's order.
@@ -273,7 +275,9 @@ fn the_readme_counts_the_declarations_of_each_step() {
 /// module (the 13 of E2; ws_bridge joined the manifest in E3), and the
 /// modules serve 45 services besides the parameter services. E4's mux adds
 /// two: `/diagnostics`, and `/nav_cmd_vel`, which only nav's nav_core backend
-/// had; its static_tf one: `/robot_description`.
+/// had; its static_tf one: `/robot_description`. E5's bag module the
+/// recorder's seven (`/fix` and the rear light had endpoints already) and
+/// its three services.
 #[test]
 fn the_manifest_has_bus_topics_md_s_counts() {
     let mut topics = BTreeSet::new();
@@ -287,7 +291,7 @@ fn the_manifest_has_bus_topics_md_s_counts() {
             served.insert(e.name);
         }
     }
-    assert_eq!((topics.len(), served.len()), (81, 45));
+    assert_eq!((topics.len(), served.len()), (88, 48));
 }
 
 /// Steps 5 to 7, for the record: the rest of the order needs no two-way
@@ -433,31 +437,46 @@ fn an_outside_node_is_left_out_while_the_module_that_replaces_it_runs() {
 /// plans: that is the one order the steps must keep (base and pid_autotune
 /// move together, after status).
 ///
-/// E4's modules are born on the bus: each is in the set or not, on the bus
-/// when it is, so the 16384 combinations of the E2 and E3 flags come twice
-/// over per E4 module.
+/// E4's modules and E5's bag are born on the bus: each is in the set or
+/// not, on the bus when it is, so the 16384 combinations of the E2 and E3
+/// flags come twice over per such module.
 #[test]
 fn every_combination_of_flags_plans_but_a_split_led_command() {
     let ids: Vec<&str> = MODULES.iter().map(|m| m.id).filter(|id| !E4_MODULES.iter().any(|(e4, _)| e4 == id)).collect();
     let remaps = production_remaps();
-    let mut planned = 0;
-    for e4_bits in 0u32..(1 << E4_MODULES.len()) {
-        let e4: Vec<&str> =
-            E4_MODULES.iter().enumerate().filter(|(n, _)| e4_bits & (1 << n) != 0).map(|(_, (id, _))| *id).collect();
-        let set = with_e4(&e4);
-        for bits in 0u32..(1 << ids.len()) {
-            let on = |id: &str| e4.contains(&id) || ids.iter().position(|i| *i == id).is_some_and(|n| bits & (1 << n) != 0);
-            let refused = on("base") && on("status") != on("pid_autotune");
-            match plan(&Running::rsd(&set, on), &remaps) {
-                Ok(_) => assert!(!refused, "{e4:?} {bits:#015b}: planned with base on the bus and the LED writers split"),
-                Err(e) => {
-                    assert!(refused, "{e4:?} {bits:#015b}: {e}");
-                    assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{e}");
-                }
-            }
-            planned += 1;
-        }
-    }
+    // one thread per set of E4 modules: 16384 plans each
+    let planned: usize = std::thread::scope(|threads| {
+        let workers: Vec<_> = (0u32..(1 << E4_MODULES.len()))
+            .map(|e4_bits| {
+                let (ids, remaps) = (&ids, &remaps);
+                threads.spawn(move || {
+                    let e4: Vec<&str> = E4_MODULES
+                        .iter()
+                        .enumerate()
+                        .filter(|(n, _)| e4_bits & (1 << n) != 0)
+                        .map(|(_, (id, _))| *id)
+                        .collect();
+                    let set = with_e4(&e4);
+                    let mut planned = 0;
+                    for bits in 0u32..(1 << ids.len()) {
+                        let on =
+                            |id: &str| e4.contains(&id) || ids.iter().position(|i| *i == id).is_some_and(|n| bits & (1 << n) != 0);
+                        let refused = on("base") && on("status") != on("pid_autotune");
+                        match plan(&Running::rsd(&set, on), remaps) {
+                            Ok(_) => assert!(!refused, "{e4:?} {bits:#015b}: planned with base on the bus and the LED writers split"),
+                            Err(e) => {
+                                assert!(refused, "{e4:?} {bits:#015b}: {e}");
+                                assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{e}");
+                            }
+                        }
+                        planned += 1;
+                    }
+                    planned
+                })
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().unwrap()).sum()
+    });
     assert_eq!(planned, 16384 << E4_MODULES.len());
 }
 
@@ -531,6 +550,108 @@ fn rsp_is_left_out_while_static_tf_runs_and_utm_alone_brings_nothing_in() {
     let lines = plan(&Running::rsd(&["static_tf"], |_| true), &production_remaps()).unwrap().lines();
     assert!(lines.contains(&"to_ros /tf_static tf2_msgs/msg/TFMessage R TL 1".to_string()), "{lines:#?}");
     assert!(!lines.iter().any(|l| l.starts_with("from_ros /tf_static")));
+}
+
+/// E5-3a: the bag module (`rust_recorder`) in the production process. Its
+/// three nodes' writers go out (the status and the bag list R TL 1, so that
+/// ws_bridge on r2r picks a latched reader as for the Python recorder), the
+/// app's commands come in from ws_bridge on r2r, and its three services are
+/// served on DDS. Nothing goes: the Python recorder's endpoints, which the
+/// plan had as writers and servers on DDS, leave it (`replaced_by`), and the
+/// status, the fault and `/fix` are in-process. The rear light keeps its one
+/// line: the module's writer joins path_record_node's on the bus and both go
+/// out to mower_base's r2r reader (design D5).
+#[test]
+fn the_bag_module_s_lines_in_the_production_plan() {
+    let before = production_plan(&E2_ON).unwrap();
+    let after = e4_plan(&E2_ON, &["bag"]).unwrap();
+    let (before_lines, after_lines) = (before.lines(), after.lines());
+    let gone: Vec<&String> = before_lines.iter().filter(|l| !after_lines.contains(l)).collect();
+    let new: Vec<&String> = after_lines.iter().filter(|l| !before_lines.contains(l)).collect();
+    assert!(gone.is_empty(), "{gone:#?}");
+    assert_eq!(
+        new,
+        [
+            "to_ros /graph_events std_msgs/msg/String R V 10",
+            "to_ros /graph_snapshot std_msgs/msg/String R V 10",
+            "to_ros /mower_recorder/bags std_msgs/msg/String R TL 1",
+            "from_ros /mower_recorder/command std_msgs/msg/String R V 10",
+            "to_ros /mower_recorder/command_result std_msgs/msg/String R V 10",
+            "to_ros /mower_recorder/fault std_msgs/msg/Bool R V 10",
+            "to_ros /mower_recorder/status std_msgs/msg/String R TL 1",
+            "service_to_ros /mower_recorder/snapshot std_srvs/srv/Trigger",
+            "service_to_ros /mower_recorder/start std_srvs/srv/Trigger",
+            "service_to_ros /mower_recorder/stop std_srvs/srv/Trigger",
+        ]
+    );
+    assert_eq!(after.notes, before.notes);
+    let why = |p: &Plan, name: &str| p.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
+    assert_eq!(why(&before, "/mower_base/rear_light"), "from path_record_node");
+    assert_eq!(why(&after, "/mower_base/rear_light"), "from path_record_node, recorder_manager");
+    assert!(after_lines.contains(&"to_ros /mower_base/rear_light std_msgs/msg/String R TL 1".to_string()));
+    assert_eq!(why(&after, "/mower_recorder/command"), "for bag_store, from mower_ws_bridge (r2r)");
+    // nothing of the Python recorder's is planned for with the module
+    assert!(after.declarations.iter().all(|d| !d.why.contains("(outside)") || !d.name.contains("recorder")), "{:#?}", after.declarations);
+    // and every set with or without it plans as before (every_combination_...)
+}
+
+/// With ws_bridge on the bus as well (E3.2), the app's recorder names are
+/// in-process: of the five names ws_bridge took from the Python recorder on
+/// DDS, none comes in, and they go out instead, for DDS tools and the graph.
+#[test]
+fn with_ws_bridge_on_the_bus_the_recorder_s_names_are_in_process() {
+    let remaps = production_remaps();
+    let e3 = rsd_plan_with(&PRODUCTION_MODULES, &["bridge"], &remaps).unwrap().lines();
+    let both = rsd_plan_with(&with_e4(&["bag"]), &["bridge"], &remaps).unwrap().lines();
+    let gone: Vec<&String> = e3.iter().filter(|l| !both.contains(l)).collect();
+    assert_eq!(
+        gone,
+        [
+            "from_ros /mower_recorder/bags std_msgs/msg/String R TL 10",
+            "from_ros /mower_recorder/command_result std_msgs/msg/String R V 10",
+            "from_ros /mower_recorder/status std_msgs/msg/String R TL 10",
+            "service_from_ros /mower_recorder/start std_srvs/srv/Trigger",
+            "service_from_ros /mower_recorder/stop std_srvs/srv/Trigger",
+        ]
+    );
+    assert!(!both.iter().any(|l| l.starts_with("from_ros /mower_recorder/")), "{both:#?}");
+    assert!(both.contains(&"to_ros /mower_recorder/command std_msgs/msg/String R V 10".to_string()));
+    assert!(both.contains(&"service_to_ros /mower_recorder/start std_srvs/srv/Trigger".to_string()));
+}
+
+/// The Python recorder's two nodes leave the plan while the bag module runs
+/// in the process (its binary included), and only then.
+#[test]
+fn the_python_recorder_is_left_out_while_the_bag_module_runs() {
+    let marked: BTreeSet<(&str, &str)> = OUTSIDE
+        .iter()
+        .flat_map(|o| o.endpoints.iter().filter_map(move |e| e.replaced_by.map(|id| (o.node, id))))
+        .collect();
+    assert!(marked.contains(&("recorder_manager", "bag")) && marked.contains(&("bag_store", "bag")), "{marked:?}");
+    let everything = |o: &&Outside| o.node == "recorder_manager" || o.node == "bag_store";
+    assert!(OUTSIDE.iter().filter(everything).flat_map(|o| o.endpoints).all(|e| e.replaced_by == Some("bag")));
+    // ws_bridge alone reads the Python's status...
+    let ws = Running::standalone("bridge", "mower_ws_bridge").unwrap();
+    let p = plan(&ws, &production_remaps()).unwrap();
+    assert!(p.declarations.iter().any(|d| d.name == "/mower_recorder/status" && d.why.contains("recorder_manager (outside)")));
+    // ...and with the module next to it, the module's
+    let mut both = ws.clone();
+    both.extend(Running::rsd(&["bag"], |_| true));
+    let p = plan(&both, &production_remaps()).unwrap();
+    assert!(!p.declarations.iter().any(|d| d.why.contains("(outside)") && d.name.contains("/mower_recorder/")), "{:#?}", p.declarations);
+    // the binary: every endpoint faces DDS, the status and the fault in-process
+    let alone = plan(&Running::standalone("bag", "bag").unwrap(), &Remaps::default()).unwrap().lines();
+    for line in [
+        "from_ros /fix sensor_msgs/msg/NavSatFix R V 1",
+        "from_ros /mower_recorder/command std_msgs/msg/String R V 10",
+        "to_ros /mower_base/rear_light std_msgs/msg/String R TL 1",
+        "to_ros /mower_recorder/status std_msgs/msg/String R TL 1",
+        "to_ros /mower_recorder/fault std_msgs/msg/Bool R V 10",
+        "service_to_ros /mower_recorder/start std_srvs/srv/Trigger",
+    ] {
+        assert!(alone.iter().any(|l| l == line), "{line} in {alone:#?}");
+    }
+    assert!(!alone.iter().any(|l| l.starts_with("from_ros /mower_recorder/status") || l.starts_with("from_ros /mower_recorder/fault")));
 }
 
 /// Deterministic: the same input gives the same declarations in the same
@@ -959,7 +1080,9 @@ fn ws_bridge_on_the_bus_adds_the_thirteen_names_only_dds_has() {
     // whom each is for, and from where
     let why = |name: &str| on.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
     assert_eq!(why("/pid_autotune/status"), "for mower_ws_bridge, from pid_autotune (r2r)");
-    assert_eq!(why("/mower_recorder/status"), "for mower_ws_bridge, from recorder_manager (outside)");
+    // the bag module (E5) is not in the set: the Python recorder's writer, and
+    // the module's as a writer elsewhere (its binary, rust_daemon:=false)
+    assert_eq!(why("/mower_recorder/status"), "for mower_ws_bridge, from recorder_manager (not here), recorder_manager (outside)");
     assert_eq!(why("/boustrophedon_coverage/set_parameters"), "for mower_ws_bridge, served by boustrophedon_coverage (r2r)");
     assert_eq!(why("/app_joy_cmd"), "from mower_ws_bridge");
 }
@@ -983,9 +1106,9 @@ fn the_run_time_flags_are_ws_bridge_s_alone() {
 }
 
 /// Where each other end of `name` is (`kind` of it), with the flags `on`
-/// and every module running: whether one is an instance on the bus.
-fn on_the_bus(name: &str, kind: Kind, on: &dyn Fn(&str) -> bool) -> bool {
-    MODULES.iter().filter(|m| on(m.id)).flat_map(|m| m.instances).flat_map(|i| i.endpoints).any(|e| {
+/// and the modules `set` running: whether one is an instance on the bus.
+fn on_the_bus(name: &str, kind: Kind, set: &[&str], on: &dyn Fn(&str) -> bool) -> bool {
+    MODULES.iter().filter(|m| on(m.id) && set.contains(&m.id)).flat_map(|m| m.instances).flat_map(|i| i.endpoints).any(|e| {
         e.kind == kind && e.name == name && !e.stays_on_r2r && e.only.is_none()
     })
 }
@@ -1005,9 +1128,9 @@ fn without_ws_bridge_in_the_process_every_name_of_its_allow_list_faces_dds() {
         let has = |direction: &str, name: &str| lines.iter().any(|l| l.starts_with(&format!("{direction} {name} ")));
         for e in bridge.endpoints {
             let faced = match e.kind {
-                Kind::Subscribe => !on_the_bus(e.name, Kind::Publish, on) || has("to_ros", e.name),
-                Kind::Publish => !on_the_bus(e.name, Kind::Subscribe, on) || has("from_ros", e.name),
-                Kind::Call => !on_the_bus(e.name, Kind::Serve, on) || has("service_to_ros", e.name),
+                Kind::Subscribe => !on_the_bus(e.name, Kind::Publish, &without, on) || has("to_ros", e.name),
+                Kind::Publish => !on_the_bus(e.name, Kind::Subscribe, &without, on) || has("from_ros", e.name),
+                Kind::Call => !on_the_bus(e.name, Kind::Serve, &without, on) || has("service_to_ros", e.name),
                 other => panic!("ws_bridge does not {}", other.verb()),
             };
             assert!(faced, "{what}: {} {} has no DDS face", e.kind.verb(), e.name);
@@ -1114,6 +1237,7 @@ fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
         ("battery", vec!["battery_state"]),
         ("pid_autotune", vec!["pid_autotune"]),
         ("bridge", vec!["mower_ws_bridge"]),
+        ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store"]),
     ];
     let got: Vec<(&str, Vec<&str>)> = MODULES.iter().map(|m| (m.id, m.instances.iter().map(|i| i.node).collect())).collect();
     assert_eq!(got, expected);
@@ -1161,7 +1285,8 @@ fn the_manifest_is_consistent() {
             let r2r_type = ["/msg/", "/srv/", "/action/"].iter().any(|kind| ros.contains(kind));
             assert!(r2r_type, "{node} {}: not an r2r type: {ros}", e.name);
             types.entry((e.kind.space(), e.name)).or_default().push(ros);
-            if matches!(e.kind, Kind::Serve | Kind::ServeAction) {
+            // an outside server a module replaces counts as the module's (below)
+            if matches!(e.kind, Kind::Serve | Kind::ServeAction) && e.replaced_by.is_none() {
                 servers.entry((e.kind.space(), e.name)).or_default().push(node);
             }
             assert!(e.only.is_none() || id == "nav", "{node}: only nav's nav_core endpoints are not in production");
@@ -1175,6 +1300,16 @@ fn the_manifest_is_consistent() {
     }
     for ((_, name), nodes) in servers {
         assert_eq!(nodes.len(), 1, "{name} is served by {nodes:?}");
+    }
+    // an outside server a module replaces (E5: the Python recorder's) is
+    // that module's to serve: the two are never in one plan
+    for o in OUTSIDE {
+        for e in o.endpoints.iter().filter(|e| matches!(e.kind, Kind::Serve | Kind::ServeAction)) {
+            let Some(id) = e.replaced_by else { continue };
+            let module = module(id).unwrap_or_else(|| panic!("{} {}: no module {id}", o.node, e.name));
+            let served = module.instances.iter().flat_map(|i| i.endpoints).any(|m| m.kind == e.kind && m.name == e.name);
+            assert!(served, "{} {} is replaced by {id}, which does not serve it", o.node, e.name);
+        }
     }
 }
 
@@ -1265,8 +1400,9 @@ fn names_from_parameters_are_the_parameter_files_values() {
         }
     }
     // robot_status (2), gps (2), the EKFs' inputs (5), the slow copies (2),
-    // nav, record, adapter; the mux's five inputs and its lock (E4)
-    assert_eq!(checked, 20);
+    // nav, record, adapter; the mux's five inputs and its lock (E4); the
+    // recorder's /fix and its fault, written and read (E5)
+    assert_eq!(checked, 23);
     assert_eq!(values[&("robot_status".into(), "heartbeat_source_topic".into())], "/odom_slow", "one subscription with odom_topic");
 }
 

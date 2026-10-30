@@ -64,3 +64,15 @@ fn mux_is_the_rust_mux_switch_with_one_twist_mux_node() {
 fn static_tf_is_the_rust_static_tf_switch_with_one_static_tf_publisher_node() {
     assert_eq!(module("static_tf"), ("rust_static_tf".to_string(), vec!["static_tf_publisher".to_string()]));
 }
+
+/// rust_recorder (E5) swaps the Python recorder for the daemon's bag module,
+/// under the three nodes' names, in record.launch.py's order; not the zone
+/// recorder's rust_record.
+#[test]
+fn bag_is_the_rust_recorder_switch_with_the_recorder_s_three_nodes() {
+    assert_eq!(
+        module("bag"),
+        ("rust_recorder".to_string(), vec!["graph_snapshot".into(), "recorder_manager".into(), "bag_store".into()])
+    );
+    assert_eq!(module("record").0, "rust_record");
+}

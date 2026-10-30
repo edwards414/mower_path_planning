@@ -797,6 +797,69 @@ impl Node {
         Ok(receiver)
     }
 
+    /// mower_rs patch 3 (vendor/r2r/VENDORED.md): [`Node::subscribe_raw`]
+    /// with each message's `rmw_message_info_t` kept (its source and
+    /// received timestamps and the writer's GID, [`RawMessage`]), a queue of
+    /// `capacity` messages instead of the fixed 10, and a counter of the
+    /// messages a full queue dropped ([`RawSubscription::drops`]).
+    ///
+    /// `topic_type` must be in r2r's generated set, as for `subscribe_raw`.
+    /// [`Node::destroy_raw_subscription`] takes it off the graph.
+    pub fn subscribe_raw_with_info(
+        &mut self, topic: &str, topic_type: &str, qos_profile: QosProfile, capacity: usize,
+    ) -> Result<RawSubscription> {
+        if capacity == 0 {
+            return Err(Error::RCL_RET_INVALID_ARGUMENT);
+        }
+        let msg = WrappedNativeMsgUntyped::new_from(topic_type)?;
+        let subscription_handle =
+            create_subscription_helper(self.node_handle.as_mut(), topic, msg.ts, qos_profile)?;
+        let mut msg_buf: rcl_serialized_message_t =
+            unsafe { rcutils_get_zero_initialized_uint8_array() };
+        let ret = unsafe {
+            rcutils_uint8_array_init(
+                &mut msg_buf as *mut rcl_serialized_message_t,
+                0,
+                &rcutils_get_default_allocator(),
+            )
+        };
+        if ret != RCL_RET_OK as i32 {
+            let mut subscription_handle = subscription_handle;
+            unsafe { rcl_subscription_fini(&mut subscription_handle, self.node_handle.as_mut()) };
+            return Err(Error::from_rcl_error(ret));
+        }
+        // A futures channel holds its buffer plus one message per sender.
+        let (sender, receiver) = mpsc::channel::<RawMessage>(capacity - 1);
+        let drops = DropCounter::default();
+        let ws = Box::new(RawInfoSubscriber {
+            rcl_handle: subscription_handle,
+            msg_buf,
+            sender,
+            drops: drops.clone(),
+        });
+        // Boxed: the handle stays where it is while the subscriber lives.
+        let handle: *const rcl_subscription_t = &ws.rcl_handle;
+        self.subscribers.push(ws);
+        Ok(RawSubscription {
+            messages: receiver,
+            handle,
+            drops,
+        })
+    }
+
+    /// mower_rs patch 3: [`Node::destroy_subscription`] for a
+    /// [`RawSubscription`]: it leaves the graph now, its queued messages are
+    /// dropped (and not counted).
+    pub fn destroy_raw_subscription(&mut self, subscription: RawSubscription) {
+        let RawSubscription { messages, handle, .. } = subscription;
+        drop(messages);
+        if let Some(i) = self.subscribers.iter().position(|s| std::ptr::eq(s.handle(), handle)) {
+            let mut subscriber = self.subscribers.remove(i);
+            subscriber.destroy(&mut self.node_handle);
+        }
+        self.drop_wait_set();
+    }
+
     /// Create a ROS service.
     ///
     /// This function returns a `Stream` of `ServiceRequest`:s. Call
@@ -1531,13 +1594,17 @@ impl Node {
                 assert!(!(*n).is_null());
                 let topic_name = unsafe { CStr::from_ptr(*n).to_str().unwrap().to_owned() };
                 assert!(!t.data.is_null());
-                let topic_types = unsafe { std::slice::from_raw_parts(t, t.size) };
+                // mower_rs patch 3: the topic's own type strings. Upstream
+                // took `t.size` string *arrays* from `t` and the first string
+                // of each: a topic with two types got the next topic's first
+                // type, and the last topic read past the array.
+                let topic_types = unsafe { std::slice::from_raw_parts(t.data, t.size) };
                 let topic_types: Vec<String> = unsafe {
                     topic_types
                         .iter()
-                        .map(|t| {
-                            assert!(*(t.data) != std::ptr::null_mut());
-                            CStr::from_ptr(*(t.data)).to_str().unwrap().to_owned()
+                        .map(|s| {
+                            assert!(*s != std::ptr::null_mut());
+                            CStr::from_ptr(*s).to_str().unwrap().to_owned()
                         })
                         .collect()
                 };
@@ -1621,6 +1688,112 @@ impl Node {
             return Err(Error::from_rcl_error(result));
         }
         Ok(topic_info_list)
+    }
+
+    /// mower_rs patch 3 (vendor/r2r/VENDORED.md): every node of the graph as
+    /// `(name, namespace)` (`rcl_get_node_names`, rclpy's
+    /// `get_node_names_and_namespaces`), in rmw's order, duplicates and this
+    /// node included.
+    pub fn get_node_names_and_namespaces(&self) -> Result<Vec<(String, String)>> {
+        let mut names = unsafe { rcutils_get_zero_initialized_string_array() };
+        let mut namespaces = unsafe { rcutils_get_zero_initialized_string_array() };
+        let ret = unsafe {
+            rcl_get_node_names(
+                self.node_handle.as_ref(),
+                rcutils_get_default_allocator(),
+                &mut names,
+                &mut namespaces,
+            )
+        };
+        let strings = |a: &rcutils_string_array_t| -> Vec<String> {
+            if a.data.is_null() {
+                return Vec::new();
+            }
+            unsafe { std::slice::from_raw_parts(a.data, a.size) }
+                .iter()
+                .map(|s| {
+                    if s.is_null() {
+                        String::new()
+                    } else {
+                        unsafe { CStr::from_ptr(*s) }.to_string_lossy().into_owned()
+                    }
+                })
+                .collect()
+        };
+        let result = if ret == RCL_RET_OK as i32 {
+            Ok(strings(&names).into_iter().zip(strings(&namespaces)).collect())
+        } else {
+            Err(Error::from_rcl_error(ret))
+        };
+        unsafe {
+            rcutils_string_array_fini(&mut names);
+            rcutils_string_array_fini(&mut namespaces);
+        }
+        result
+    }
+
+    /// mower_rs patch 3: how many writers the graph shows on `topic_name`
+    /// (`rcl_count_publishers`, rclpy's `count_publishers`): what
+    /// `get_publishers_info_by_topic(..).len()` gives, without building the
+    /// endpoints' info.
+    pub fn count_publishers(&self, topic_name: &str) -> Result<usize> {
+        let topic = CString::new(topic_name).map_err(|_| Error::RCL_RET_INVALID_ARGUMENT)?;
+        let mut count: usize = 0;
+        let ret = unsafe { rcl_count_publishers(self.node_handle.as_ref(), topic.as_ptr(), &mut count) };
+        if ret != RCL_RET_OK as i32 {
+            return Err(Error::from_rcl_error(ret));
+        }
+        Ok(count)
+    }
+
+    /// mower_rs patch 3: how many readers (`rcl_count_subscribers`, rclpy's
+    /// `count_subscribers`).
+    pub fn count_subscribers(&self, topic_name: &str) -> Result<usize> {
+        let topic = CString::new(topic_name).map_err(|_| Error::RCL_RET_INVALID_ARGUMENT)?;
+        let mut count: usize = 0;
+        let ret = unsafe { rcl_count_subscribers(self.node_handle.as_ref(), topic.as_ptr(), &mut count) };
+        if ret != RCL_RET_OK as i32 {
+            return Err(Error::from_rcl_error(ret));
+        }
+        Ok(count)
+    }
+
+    /// mower_rs patch 3: every service of the graph with its types
+    /// (`rcl_get_service_names_and_types`, rclpy's
+    /// `get_service_names_and_types`), in rmw's order (by name), where
+    /// `get_topic_names_and_types` gives a map.
+    pub fn get_service_names_and_types(&self) -> Result<Vec<(String, Vec<String>)>> {
+        let mut snat = unsafe { rmw_get_zero_initialized_names_and_types() };
+        let ret = unsafe {
+            rcl_get_service_names_and_types(
+                self.node_handle.as_ref(),
+                &mut rcutils_get_default_allocator(),
+                &mut snat,
+            )
+        };
+        if ret != RCL_RET_OK as i32 {
+            unsafe { rmw_names_and_types_fini(&mut snat) };
+            return Err(Error::from_rcl_error(ret));
+        }
+        let mut res = Vec::new();
+        if !snat.names.data.is_null() && !snat.types.is_null() {
+            let names = unsafe { std::slice::from_raw_parts(snat.names.data, snat.names.size) };
+            let types = unsafe { std::slice::from_raw_parts(snat.types, snat.names.size) };
+            for (n, t) in names.iter().zip(types) {
+                let name = unsafe { CStr::from_ptr(*n) }.to_string_lossy().into_owned();
+                let service_types: Vec<String> = if t.data.is_null() {
+                    Vec::new()
+                } else {
+                    unsafe { std::slice::from_raw_parts(t.data, t.size) }
+                        .iter()
+                        .map(|s| unsafe { CStr::from_ptr(*s) }.to_string_lossy().into_owned())
+                        .collect()
+                };
+                res.push((name, service_types));
+            }
+        }
+        unsafe { rmw_names_and_types_fini(&mut snat) };
+        Ok(res)
     }
 
     /// Create a ROS wall timer.
@@ -1909,6 +2082,24 @@ pub struct TopicEndpointInfo {
     pub topic_type: String,
     pub endpoint_gid: [u8; RMW_GID_STORAGE_SIZE as usize],
     pub qos_profile: QosProfile,
+    /// mower_rs patch 3 (vendor/r2r/VENDORED.md): the endpoint's type hash
+    /// (Jazzy's `rmw_topic_endpoint_info_t::topic_type_hash`) as rosbag2
+    /// writes it, `RIHS01_<64 lowercase hex>`; empty when the rmw has none
+    /// (version 0).
+    pub topic_type_hash: String,
+}
+
+/// mower_rs patch 3: `rosidl_stringify_type_hash`, and rosbag2's empty
+/// string for an unset hash (version 0).
+fn stringify_type_hash(hash: &rosidl_type_hash_t) -> String {
+    if hash.version == 0 {
+        return String::new();
+    }
+    let mut s = format!("RIHS{:02}_", hash.version);
+    for b in hash.value.iter() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 impl From<rmw_topic_endpoint_info_t> for TopicEndpointInfo {
@@ -1936,6 +2127,8 @@ impl From<rmw_topic_endpoint_info_t> for TopicEndpointInfo {
             topic_type,
             endpoint_gid,
             qos_profile,
+            // mower_rs patch 3
+            topic_type_hash: stringify_type_hash(&info.topic_type_hash),
         }
     }
 }

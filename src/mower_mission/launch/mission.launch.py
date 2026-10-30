@@ -6,8 +6,13 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 # `rust_daemon:=true` moves every enabled mower_rs module into one mower_rsd
@@ -21,6 +26,18 @@ def _rust_binary(flag, rust_daemon):
     return IfCondition(PythonExpression([
         "'", flag, "'.lower() in ", _TRUE,
         " and '", rust_daemon, "'.lower() not in ", _TRUE,
+    ]))
+
+
+def _rust_binary_alone(flag, rust_daemon):
+    """The separate binary of a module whose fallback runs outside this launch
+    (the recorder's: compose's recorder service, which sleeps on the switch
+    alone): switch on and daemon off in robot.launch.py's _truthy spellings,
+    so that exactly one of mower_rsd's module, this binary and the fallback
+    runs, whatever the spelling."""
+    return IfCondition(PythonExpression([
+        "'", flag, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() not in ", _TRUE,
     ]))
 
 
@@ -311,6 +328,53 @@ def generate_launch_description():
         ))
     except Exception:
         pass
+
+    # rust_recorder:=true with rust_daemon:=false (E5): mower_recorder's three
+    # nodes as one process (src/mower_rs/crates/mower_recorder), the values
+    # record.launch.py gives them and mower_rsd.yaml has for the module bag;
+    # compose's recorder service sleeps. Not rust_record (the zone recorder).
+    # It records the default profile from DDS (E5-3b).
+    rust_recorder = LaunchConfiguration('rust_recorder')
+    declare_rust_recorder = DeclareLaunchArgument(
+        'rust_recorder',
+        default_value='false',
+        description='Run the mower_rs (Rust) mower_recorder process '
+                    '(recorder_manager, bag_store, graph_snapshot) instead '
+                    'of the Python recorder, which then sleeps in its own '
+                    'container; with rust_daemon, mower_rsd\'s bag module',
+    )
+    recorder_config = PathJoinSubstitution(
+        [FindPackageShare('mower_recorder'), 'config'])
+    mower_recorder_rs = Node(
+        package='mower_rs',
+        executable='mower_recorder',
+        output='screen',
+        condition=_rust_binary_alone(rust_recorder, rust_daemon),
+        parameters=[{
+            # graph_snapshot
+            'period_s': 2.0,
+            'watch_nodes': ['map_manage', 'boustrophedon_coverage'],
+            'fault_topic': '/mower_recorder/fault',
+            # recorder_manager
+            'robot_id': robot_id,
+            'output_root': output_root,
+            'config_file': PathJoinSubstitution(
+                [recorder_config, 'record_topics.yaml']),
+            'qos_overrides_path': PathJoinSubstitution(
+                [recorder_config, 'qos_overrides.yaml']),
+            'git_repo_dir': git_repo_dir,
+            'autostart': False,
+            'params_dump_nodes': ['/boustrophedon_coverage', '/map_manage'],
+            'gps_topic': gps_fix_topic,
+            'video_api_url': 'http://127.0.0.1:9997',
+            'min_free_mb': 2048,
+            # bag_store
+            'r2_env_file': r2_env_file,
+            'upload_policy': 'wifi_or_dock',
+            'wifi_interfaces': ['wlan0'],
+            'dock_topic': '',
+        }],
+    )
 
     path_record_node = Node(
         package='mower_mission',
@@ -613,6 +677,7 @@ def generate_launch_description():
         declare_rust_status,
         declare_rust_adapter,
         declare_rust_record,
+        declare_rust_recorder,
         declare_rust_nav,
         declare_rust_battery,
         declare_rust_pid_autotune,
@@ -632,6 +697,7 @@ def generate_launch_description():
         odom_throttle,
         global_odom_throttle,
         *recorder_entries,
+        mower_recorder_rs,
         path_record_node,
         mower_record_rs,
         map_manage_node,

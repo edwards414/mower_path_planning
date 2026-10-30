@@ -19,10 +19,13 @@ references are to their own repositories, at the commits named in 1.4.
 - **15 modules, 18 node instances, 17 r2r nodes** run in `mower_rsd` in production. `mower_agent` has no node.
 - **78 topics** have an endpoint in a typed module. The bridge alone adds 5 more. E4's mux module (`rust_mux`, off by
   default) adds `/diagnostics` and a production reader of `/nav_cmd_vel`, its static_tf module
-  (`rust_static_tf`, off by default) `/robot_description`: 81.
+  (`rust_static_tf`, off by default) `/robot_description`: 81. E5's bag module (`rust_recorder`, off by default;
+  E5-3a, branch `feat/e5-3a-bag`) adds the recorder's own seven (`/mower_recorder/{status,bags,command,command_result,
+  fault}`, `/graph_snapshot`, `/graph_events`): 88.
 - **19 topics never leave the process** (5.1). Another **14 have no consumer on the robot** (rviz or the optional data
   collection only).
-- **75 services are served by `mower_rsd`**: 45, plus 30 parameter services on 5 nodes.
+- **75 services are served by `mower_rsd`**: 45, plus 30 parameter services on 5 nodes. With the bag module, 48: its
+  `/mower_recorder/start`, `/stop` and `/snapshot`.
   - 10 of them are called only from inside the process.
   - 27 are reached from the app and the Studio through `mower_ws_bridge`.
 - **Actions:** 2 servers. One action pair is fully in-process (coverage calling `nav_action_follow_path`). 2 action
@@ -254,9 +257,9 @@ Each citation is `alias:line`.
 
 | Topic | Type | Producers | Consumers | Rate | DDS today | E2 |
 |---|---|---|---|---|---|---|
-| `/mower_recorder/status`, `/mower_recorder/bags` | `String`, JSON | `recorder_manager` and `bag_store`, `R TL 1` (recorder_manager:141-142; bag_store:98-99) | app via ws_bridge (app/recorder_provider:86-88, 114-123); `bag_store` reads the status (bag_store:106-107) | status every 2 s (recorder_manager:148); bags unknown | no | DDS only in E2; DDS→bus from E3 until E5 |
+| `/mower_recorder/status`, `/mower_recorder/bags` | `String`, JSON | `recorder_manager` and `bag_store`, `R TL 1` (recorder_manager:141-142; bag_store:98-99) | app via ws_bridge (app/recorder_provider:86-88, 114-123); `bag_store` reads the status (bag_store:106-107) | status every 2 s (recorder_manager:148); bags unknown | no | DDS only in E2; DDS→bus from E3 until E5. With E5-3a's bag module (`rust_recorder`, off) both are written on the bus and go out `R TL 1` |
 | `/mower_recorder/command_result` | `String`, JSON | `bag_store`, `R V 10` (bag_store:100-101) | app (app/recorder_provider:90, 124) | per command | no | same |
-| `/mower_recorder/command` | `String`, JSON | app via ws_bridge (ws_bridge.yaml:31; app/recorder_provider:89, 163) | `bag_store`, `R V 10` (bag_store:103-104) | per button press | no | DDS only in E2; bus→DDS from E3 until E5 |
+| `/mower_recorder/command` | `String`, JSON | app via ws_bridge (ws_bridge.yaml:31; app/recorder_provider:89, 163) | `bag_store`, `R V 10` (bag_store:103-104) | per button press | no | DDS only in E2; bus→DDS from E3 until E5. With the bag module it comes in from DDS for `bag_store`, or is in-process with ws_bridge on the bus |
 | `/mower_ws_bridge/wake` | `std_msgs/Empty` | `mower_ws_bridge`, `R V 1` (mower_ws_bridge/hub:208-213) | itself: it interrupts its own `spin_once` | per WebSocket command | no | an r2r artefact; it goes away in E3 |
 
 None of the following has an endpoint in `mower_rsd`:
@@ -329,8 +332,8 @@ therefore finds nothing.
 
 | Service | Server | Clients | E2 |
 |---|---|---|---|
-| `/mower_recorder/start`, `/mower_recorder/stop` (`Trigger`) | `recorder_manager` (recorder_manager:130-133) | app (app/recorder_provider:91-92, 199) | DDS only in E2; E3 proxies them until E5 |
-| `/mower_recorder/snapshot` (`Trigger`) | `recorder_manager` (recorder_manager:134-136) | none found | E5 |
+| `/mower_recorder/start`, `/mower_recorder/stop` (`Trigger`) | `recorder_manager` (recorder_manager:130-133) | app (app/recorder_provider:91-92, 199) | DDS only in E2; E3 proxies them until E5. The bag module (`rust_recorder`, off; E5-3a: start refused) serves them on the bus, `service_to_ros` |
+| `/mower_recorder/snapshot` (`Trigger`) | `recorder_manager` (recorder_manager:134-136) | none found | E5; served by the bag module as start and stop |
 | `/rosapi/topics` | emulated by ws_bridge: the DDS graph's topics that match `topics_sub` (mower_ws_bridge/client:149-150, 179-185) | app every 5 s (app/robot_fleet_provider:47, 158); probe_app.py:94 | a topic that leaves DDS also leaves this answer, and probe_app.py fails on it (probe_app.py:134-136) |
 | `/rosapi/get_time` | emulated: the wall clock (mower_ws_bridge/client:151-155) | Studio (studio:486); probe_app.py:39 | — |
 

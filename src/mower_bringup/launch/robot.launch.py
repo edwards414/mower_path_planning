@@ -74,6 +74,9 @@ _DAEMON_MODULES = (
     ('pid_autotune', 'rust_pid_autotune'),
     ('bridge', 'rust_bridge'),
     ('agent', 'rust_agent'),
+    # E5: mower_recorder's three nodes (crates/mower_recorder); off by
+    # default, and compose's recorder service sleeps when it is on
+    ('bag', 'rust_recorder'),
 )
 
 # Remappings the separate binaries get from their launch `remappings=`. In one
@@ -240,6 +243,29 @@ def _rust_daemon_node(context):
         # rust_mux:=true: the file the C++ twist_mux reads, keyed by the same
         # node name, so the two muxes have one configuration
         parameters.append(os.path.join(bringup, 'config', 'twist_mux_topics.yaml'))
+    if 'bag' in modules:
+        # rust_recorder:=true (E5): what deploy/docker-compose.yaml's recorder
+        # service passes record.launch.py and record.launch.py its nodes,
+        # from this launch's arguments (compose gives lawan_node the same
+        # robot_id and r2_env_file); the fixed values are mower_rsd.yaml's.
+        # Node-scoped and after the yaml, like the zone recorder's.
+        recorder_config = os.path.join(
+            get_package_share_directory('mower_recorder'), 'config')
+        output_root = LaunchConfiguration('output_root').perform(context)
+        robot_id = LaunchConfiguration('robot_id').perform(context)
+        parameters.append(_node_params_file('recorder_manager', {
+            'robot_id': robot_id,
+            'output_root': output_root,
+            'config_file': os.path.join(recorder_config, 'record_topics.yaml'),
+            'qos_overrides_path': os.path.join(
+                recorder_config, 'qos_overrides.yaml'),
+            'git_repo_dir': LaunchConfiguration('git_repo_dir').perform(context),
+        }))
+        parameters.append(_node_params_file('bag_store', {
+            'output_root': output_root,
+            'robot_id': robot_id,
+            'r2_env_file': LaunchConfiguration('r2_env_file').perform(context),
+        }))
     env = {}
     if 'nav' in modules and _truthy(
             LaunchConfiguration('rust_nav_core').perform(context)):
@@ -328,6 +354,7 @@ def generate_launch_description():
     rust_imu = LaunchConfiguration('rust_imu')
     rust_localize = LaunchConfiguration('rust_localize')
     rust_static_tf = LaunchConfiguration('rust_static_tf')
+    rust_recorder = LaunchConfiguration('rust_recorder')
     rust_bridge = LaunchConfiguration('rust_bridge')
     ws_bridge_bus = LaunchConfiguration('ws_bridge_bus')
     rust_base = LaunchConfiguration('rust_base')
@@ -391,6 +418,9 @@ def generate_launch_description():
             'rust_agent': rust_agent,
             'rust_bridge': rust_bridge,
             'ws_bridge_bus': ws_bridge_bus,
+            # rust_daemon:=false: the recorder's three nodes as their own
+            # mower_recorder process
+            'rust_recorder': rust_recorder,
             # mower_base / mower_localize publish /odom_slow and
             # /odometry/global_slow themselves, so mission.launch.py holds
             # the matching topic_tools throttle down.
@@ -580,6 +610,17 @@ def generate_launch_description():
                         'fixed joints on /tf_static, the wheels on /tf from '
                         '/joint_states, /robot_description; only with '
                         'rust_daemon',
+        ),
+        DeclareLaunchArgument(
+            'rust_recorder',
+            default_value='false',
+            description='mower_rsd module bag (mower_rs mower_recorder, nodes '
+                        'recorder_manager, bag_store and graph_snapshot) '
+                        'instead of the Python recorder of compose\'s recorder '
+                        'service, which then sleeps; with rust_daemon:=false '
+                        'the mower_recorder binary. Not rust_record, the zone '
+                        'path recorder. It records the default profile from '
+                        'DDS (E5-3b); data_collection comes with E5-5',
         ),
         DeclareLaunchArgument(
             'rust_localize',

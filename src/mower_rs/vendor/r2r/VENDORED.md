@@ -78,5 +78,58 @@ Tested in the workspace, on rmw_cyclonedds (CI does not run this crate's own
 tests): `crates/mower_bus_ros/tests/dds.rs`, `r2r_destroys_a_subscription...`,
 `r2r_destroys_a_service...` and `r2r_destroys_an_action_server...`.
 
+### 3. What the recorder needs (2026-10-30, E5-3a)
+
+The Rust recorder (`crates/mower_recorder`, module `bag`) records the names
+whose writers are outside the bus from DDS, as rosbag2 does, and its
+`graph_snapshot` publishes the DDS graph as rclpy sees it. Upstream lacks
+four things for that (design `E5_DESIGN.md` 3.1, 3.3), and reads a topic's
+types wrongly.
+
+* **a. `Node::subscribe_raw_with_info(topic, type, qos, capacity)`**
+  (`src/nodes.rs`, `src/subscribers.rs`): `subscribe_raw` that keeps what
+  `rcl_take_serialized_message` reports in its `rmw_message_info_t` (upstream:
+  `// we dont care for now`). The stream is a `RawSubscription` of
+  `RawMessage { data, source_timestamp, received_timestamp, publisher_gid }`:
+  the CDR as rmw took it (padded to 4, as on the wire and in rosbag2's bags),
+  the writer's and the reader's times in nanoseconds since the epoch
+  (rosbag2's publish and log times), and rmw's `publisher_gid`: one value per
+  writer, which on rmw_cyclonedds is the writer's DDS instance handle in the
+  reader's participant (8 bytes, then zeros; `dds_sample_info_t::
+  publication_handle`), not the GUID `TopicEndpointInfo::endpoint_gid` shows
+  (rmw_fastrtps gives the GUID). The queue holds `capacity`
+  messages (upstream: 10, plus the sender's slot); a message that finds it
+  full is dropped and counted (`RawSubscription::drops()`, a `DropCounter`
+  that can be kept after the stream moved), where upstream logs at debug
+  level. A wakeup takes every message the reader holds, where upstream's
+  subscribers take one (E5-3b: a burst larger than the reader's depth
+  overwrote what a recorder had not taken yet).
+  `Node::destroy_raw_subscription` takes it off the graph at once, as
+  patch 2's `destroy_subscription`.
+* **b. `Node::get_node_names_and_namespaces()`** (`rcl_get_node_names`):
+  `(name, namespace)` for every node of the graph.
+* **c. `Node::get_service_names_and_types()`**
+  (`rcl_get_service_names_and_types`): a `Vec` in rmw's order (by name), where
+  `get_topic_names_and_types` gives a `HashMap`.
+* **`Node::count_publishers` / `count_subscribers`** (`rcl_count_publishers`,
+  `rcl_count_subscribers`): rclpy's counts, which graph_snapshot gives every
+  topic every 2 s, without building each endpoint's info.
+* **d. `TopicEndpointInfo::topic_type_hash`**: Jazzy's
+  `rmw_topic_endpoint_info_t::topic_type_hash` as rosbag2 writes it into a
+  channel's metadata, `RIHS01_<64 lowercase hex>` (`rosidl_stringify_type_hash`),
+  empty for an unset hash (version 0). `TopicEndpointInfo` is exported.
+* **`get_topic_names_and_types` reads a topic's own types.** Upstream took
+  `t.size` string arrays starting at the topic's array and the first string of
+  each: a topic of two types got the next topic's first type as its second,
+  and the last topic read past the array.
+
+Tested in the workspace on rmw_cyclonedds: `crates/mower_recorder/tests/r2r_patch3.rs`
+(a writer in another process and two in this one: the bytes equal to the
+writer's CDR padded to 4, in this participant too, the two times in order and
+in the test's window, one `publisher_gid` per writer; a queue of 3 with 20 messages
+sent: the first three kept, 17 dropped and counted; the node and service
+lists and the counts; a topic of two types; the hashes against E5-1's table,
+read from rosbag2's bags).
+
 To update r2r: copy the new release here, reapply the `mower_rs patch` hunks
 (or drop them if upstream fixed it), update the version and checksum above.

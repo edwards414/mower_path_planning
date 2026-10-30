@@ -2,6 +2,7 @@
 
 import ast
 import json
+import os
 import re
 from pathlib import Path
 
@@ -512,7 +513,7 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
         assert text in lawan, text
     assert '[RUST_NAV_CORE]=false' in switch
     assert ('for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON '
-            'RUST_NAV_CORE RUST_MUX RUST_STATIC_TF; do') in switch
+            'RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER; do') in switch
 
     # the behavioural half needs ROS launch (not in the python-tests job)
     pytest.importorskip('launch')
@@ -651,6 +652,204 @@ def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
             cpp = mux_module._unless_in_daemon(flag, daemon).evaluate(
                 LaunchContext())
             assert cpp is not rust, (flag, daemon)
+
+
+RECORD_LAUNCH = SRC_DIR / 'mower_recorder/launch/record.launch.py'
+
+
+def _compose_service(compose, name):
+    """One service's block of a compose file, as text."""
+    return compose.split(f'\n  {name}:\n', 1)[1].split('\n\n  ', 1)[0]
+
+
+def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
+        tmp_path):
+    """rust_recorder:=true (compose RUST_RECORDER, default false; E5-3):
+    mower_rsd's bag module (crates/mower_recorder: recorder_manager,
+    bag_store, graph_snapshot) instead of the Python recorder, whose
+    container then sleeps, so that /mower_recorder/* has one owner; with
+    rust_daemon:=false the mower_recorder binary. Its parameters are what
+    record.launch.py gives the Python nodes. Off by default everywhere: the
+    module waits for the owner's robot checks (E5-3b), and with the switch off nothing
+    runs that did not before and the recorder service runs what it ran."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mission = MISSION_LAUNCH.read_text(encoding='utf-8')
+    compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    record = RECORD_LAUNCH.read_text(encoding='utf-8')
+
+    # declared off in both launch files, threaded robot -> mission
+    for text in (robot, mission):
+        argument = re.search(
+            r"DeclareLaunchArgument\(\s*'rust_recorder'(.*?)\n\s*\)", text,
+            flags=re.DOTALL)
+        assert argument is not None
+        assert "default_value='false'" in argument.group(1)
+    mission_include = robot.split("'mission.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert "'rust_recorder': rust_recorder," in mission_include
+    # the module, last in the set, its id not the zone recorder's
+    assert "    ('agent', 'rust_agent'),\n" in robot
+    assert "    ('bag', 'rust_recorder'),\n)" in robot
+    assert "('record', 'rust_record')," in robot
+    block = robot.split("if 'bag' in modules:", 1)[1].split('env = {}', 1)[0]
+    assert "_node_params_file('recorder_manager', {" in block
+    assert "_node_params_file('bag_store', {" in block
+    for key in ('robot_id', 'output_root', 'config_file',
+                'qos_overrides_path', 'git_repo_dir', 'r2_env_file'):
+        assert f"'{key}':" in block, key
+    # the module table's bag entry (id, switch, the three nodes, the code
+    # each runs): mower_rsd's tests/module_table.rs and tests/source_rules.rs
+    assert '"crates/mower_recorder"' in MOWER_RS_CARGO.read_text(
+        encoding='utf-8')
+    assert 'mower_recorder' in re.search(
+        r'^set\(MOWER_RS_BINARIES (.*)\)$',
+        MOWER_RS_CMAKE.read_text(encoding='utf-8'), re.M).group(1).split()
+    # the binary: switch on and daemon off, never `name=` (it would rename
+    # all three nodes)
+    node = mission.split('mower_recorder_rs = Node(', 1)[1].split(
+        '\n    )\n', 1)[0]
+    assert "executable='mower_recorder'," in node
+    assert 'condition=_rust_binary_alone(rust_recorder, rust_daemon),' in node
+    assert 'name=' not in node
+    assert 'mower_recorder_rs,' in mission
+
+    # record.launch.py's values: mower_rsd.yaml for the module, the binary's
+    # dict for rust_daemon:=false
+    import yaml
+    sections = yaml.safe_load(MOWER_RSD_PARAMS.read_text(encoding='utf-8'))
+    graph = sections['graph_snapshot']['ros__parameters']
+    manager = sections['recorder_manager']['ros__parameters']
+    store = sections['bag_store']['ros__parameters']
+    watch = ast.literal_eval(
+        re.search(r'watch_nodes = (\[.*?\])', record).group(1))
+    dumps = ast.literal_eval(re.search(
+        r"'params_dump_nodes': (\[.*?\]),", record, re.S).group(1))
+    assert graph == {'period_s': 2.0, 'watch_nodes': watch,
+                     'fault_topic': '/mower_recorder/fault'}
+    assert watch == ['map_manage', 'boustrophedon_coverage']
+    assert manager['params_dump_nodes'] == dumps
+    assert manager['fault_topic'] == '/mower_recorder/fault'
+    assert manager['gps_topic'] == '/fix'
+    assert manager['min_free_mb'] == 2048
+    assert store == {'upload_policy': 'wifi_or_dock',
+                     'wifi_interfaces': ['wlan0'], 'dock_topic': ''}
+    recorder = _compose_service(compose, 'recorder')
+    assert '- autostart:=false' in recorder and manager['autostart'] is False
+    assert f"- video_api_url:={manager['video_api_url']}" in recorder
+    for text in ("'watch_nodes': ['map_manage', 'boustrophedon_coverage'],",
+                 "'params_dump_nodes': ['/boustrophedon_coverage', "
+                 "'/map_manage'],",
+                 "'autostart': False,",
+                 "'video_api_url': 'http://127.0.0.1:9997',",
+                 "'upload_policy': 'wifi_or_dock',"):
+        assert text in node, text
+
+    # compose: lawan_node gets the switch and the recorder's robot id and R2
+    # file; the recorder service runs today's launch unless it is on
+    lawan = compose.split('  mediamtx:', 1)[0]
+    assert '- rust_recorder:=${RUST_RECORDER:-false}' in lawan
+    assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in lawan
+    assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in recorder
+    assert '- r2_env_file:=/home/mower/.mower/r2.env' in lawan
+    assert '- r2_env_file:=/home/mower/.mower/r2.env' in recorder
+    assert '- RUST_RECORDER=${RUST_RECORDER:-false}' in recorder
+    assert re.search(r'^RUST_RECORDER=false$',
+                     ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+    service = yaml.safe_load(compose)['services']['recorder']
+    command = service['command']
+    assert command[:2] == ['bash', '-c'] and command[3] == 'recorder'
+    assert command[4:] == [
+        'ros2', 'launch', 'mower_recorder', 'record.launch.py',
+        'robot_id:=${MOWER_ROBOT_ID:-mower}',
+        'output_root:=/home/mower/.mower/bags', 'autostart:=false',
+        'r2_env_file:=/home/mower/.mower/r2.env',
+        'video_api_url:=http://127.0.0.1:9997'], 'the launch as before'
+    assert service['stop_signal'] == 'SIGINT'
+    assert 'def _truthy(value):\n    return value.strip().lower() in ' \
+        "{'true', '1', 'yes', 'on'}" in robot
+
+    def truthy(value):
+        return value.strip().lower() in {'true', '1', 'yes', 'on'}
+
+    # the script as the container runs it: compose's $$ is a $; it sleeps
+    # exactly when robot.launch.py puts the module in the set
+    import shutil
+    import subprocess
+    script = command[2].replace('$$', '$')
+    assert '${' not in command[2].replace('$${', '')
+    stub = tmp_path / 'bin'
+    stub.mkdir()
+    (stub / 'sleep').write_text('#!/bin/sh\necho SLEPT "$@"\n')
+    (stub / 'sleep').chmod(0o755)
+    bash = shutil.which('bash')
+    spellings = ('true', 'True', ' on', 'ON', 'yes', '1', 'false', 'FALSE',
+                 '0', 'off', 'no', 'maybe', '')
+    for value in spellings:
+        out = subprocess.run(
+            [bash, '-c', script, 'recorder', 'echo', 'LAUNCHED'],
+            env={'PATH': f'{stub}:/usr/bin:/bin', 'RUST_RECORDER': value},
+            capture_output=True, text=True, check=True).stdout.strip()
+        assert out == ('SLEPT infinity' if truthy(value) else 'LAUNCHED'), \
+            repr(value)
+
+    # mower-data-collection.sh: start refuses while it is on, before it
+    # touches anything (the root check comes after)
+    helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
+    assert helper.index('if rust_recorder_on; then') < helper.index(
+        '    need_root\n    if systemctl is-active')
+    (tmp_path / 'dc.yaml').write_text('services: {}\n')
+    for value in spellings + ('"true"', "'on' # the module"):
+        on = truthy(value.split(' #')[0].strip('"\''))
+        if not on and os.geteuid() == 0:
+            # as root, start would go on and really stop the host's services
+            continue
+        env_file = tmp_path / '.env'
+        env_file.write_text(f'IMAGE_TAG=main\nRUST_RECORDER={value}\n')
+        done = subprocess.run(
+            [bash, str(DATA_COLLECTION_HELPER), 'start'],
+            env={'PATH': '/usr/bin:/bin', 'ENV_FILE': str(env_file),
+                 'DC_COMPOSE_FILE': str(tmp_path / 'dc.yaml'),
+                 'MAIN_COMPOSE_FILE': str(tmp_path / 'none.yaml')},
+            capture_output=True, text=True)
+        assert done.returncode == 1, repr(value)
+        if on:
+            assert 'RUST_RECORDER=true' in done.stderr, repr(value)
+            assert 'E5-5' in done.stderr and 'Nothing was changed' in \
+                done.stderr
+        else:
+            assert done.stderr.strip() == 'run with sudo', repr(value)
+
+    # switch.sh writes it every time, passes it, recreates the recorder
+    # container and checks the processes
+    switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
+    passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
+                            re.M | re.S).group(1)
+    assert "'rust_recorder:=${RUST_RECORDER'" in passthrough
+    for text in re.findall(r"'([^']+)'", passthrough):
+        assert text in lawan, text
+    assert '[RUST_RECORDER]=false' in switch
+    assert 'docker compose up -d lawan_node recorder' in switch
+    assert 'rsd bag || echo "no mower_rsd running the bag module"' in switch
+    assert '! rsd bag || echo "mower_rsd runs the bag module"' in switch
+
+    # the behavioural half needs ROS launch (not in the python-tests job)
+    pytest.importorskip('launch')
+    pytest.importorskip('launch_ros')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    robot_module = _load_launch_module(ROBOT_LAUNCH)
+    mission_module = _load_launch_module(MISSION_LAUNCH)
+    assert robot_module._DAEMON_MODULES[-1] == ('bag', 'rust_recorder')
+    # exactly one recorder for every spelling: the module, the binary, or
+    # the recorder service's Python one (which sleeps on the switch alone)
+    for flag in spellings:
+        for daemon in spellings:
+            binary = mission_module._rust_binary_alone(flag, daemon).evaluate(
+                LaunchContext())
+            module = robot_module._truthy(flag) and robot_module._truthy(daemon)
+            python = not truthy(flag)
+            assert [binary, module, python].count(True) == 1, (flag, daemon)
 
 
 def test_production_twist_mux_config_never_meets_the_degenerate_rules():
