@@ -805,6 +805,12 @@ What it was asked to provide:
      `/joy_cmd`. The one in-process reader is nav, which also reads `/joy_cmd`. Moving it earlier only adds bridge hops
      to the joystick path.
    - That path runs on a 0.8 s age budget that 4G already strains (mower_rsd.yaml:82-88).
+   - **Converted, flag off** (2026-10-30, `feat/e2-step7`, on step 6). The manual guard's bus IO adds the session
+     (a fresh `manual-session-v1:<32 hex>` per start) and its command clock on `/manual_command_clock` (R V 1, a
+     frame at once and one per `command_clock_period_s` on the module's clock, as rcl's wall timer), behind its
+     instance flag `manual_velocity_guard` (false). With steps 6 and 7 on and ws_bridge on the bus, the joystick path
+     `/app_joy_cmd` -> manual guard -> `/joy_cmd` (nav in-process, twist_mux on DDS until E4) and the clock to the app
+     cross no bridge; with ws_bridge on r2r, `/app_joy_cmd` comes in from DDS (R V 1, the guard's reader).
 
 **Not in E2:**
 

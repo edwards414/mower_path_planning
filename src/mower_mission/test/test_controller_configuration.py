@@ -931,9 +931,14 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert 'msg.header.stamp = self.stamp();' in bus
     assert 'msg.header.frame_id = "base_footprint".to_string();' in bus
     assert bus.count('publisher.publish(&clocks.twist(0.0, 0.0))') >= 2
-    for name in ('cmd_vel_in', 'cmd_vel_out'):
+    for name in ('cmd_vel_in', 'cmd_vel_out', 'command_clock'):
         assert f'm.resolve_topic("{name}")' in bus, name
     assert 'make_parameter_handler' not in bus
+    # the manual guard's session and command clock on the bus (E2 step 7)
+    assert 'crate::new_session_id()' in bus
+    assert 'Header { stamp: clocks.stamp(), frame_id: session_id.clone() }' in bus
+    assert 'session_matches: session_id.as_deref() == Some(msg.header.frame_id.as_str())' in bus
+    assert 'limits.command_clock_period_s' in bus
 
 
 def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
