@@ -401,6 +401,11 @@ pub struct Endpoint {
     /// runs in the process, robot.launch.py does not start the node, and the
     /// policy leaves the endpoint out.
     pub replaced_by: Option<&'static str>,
+    /// A writer outside the bus whose samples no bus reader needs: on its own
+    /// it brings its name in from DDS no more (navsat's `utm` frame on
+    /// `/tf_static`, once a module of the process writes that name on the
+    /// bus: E4's option A).
+    pub unread_on_bus: bool,
 }
 
 impl Endpoint {
@@ -415,6 +420,7 @@ impl Endpoint {
             silent: false,
             only: None,
             replaced_by: None,
+            unread_on_bus: false,
         }
     }
 
@@ -444,6 +450,11 @@ impl Endpoint {
     /// process.
     pub const fn replaced_by(self, id: &'static str) -> Self {
         Endpoint { replaced_by: Some(id), ..self }
+    }
+
+    /// A writer whose samples no bus reader needs.
+    pub const fn unread_on_bus(self) -> Self {
+        Endpoint { unread_on_bus: true, ..self }
     }
 
     /// A topic's QoS profile.

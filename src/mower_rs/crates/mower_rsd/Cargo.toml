@@ -33,6 +33,7 @@ mower_coverage = { path = "../mower_coverage" }
 mower_agent = { path = "../mower_agent" }
 mower_base = { path = "../mower_base" }
 mower_localize = { path = "../mower_localize" }
+mower_static_tf = { path = "../mower_static_tf" }
 
 [dev-dependencies]
 # paused clock for the supervisor tests (restart delay, stop timeout)

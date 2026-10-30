@@ -41,6 +41,17 @@ def _rust_off(flag):
     ]))
 
 
+def _unless_in_daemon(flag, rust_daemon):
+    """Run the C++ node that a mower_rsd module replaces: unless the switch
+    and the daemon are both on, which is when robot.launch.py puts the module
+    in mower_rsd's set (its _truthy's spellings, so every value starts exactly
+    one of the two). rust_daemon:=false is the C++ node whatever the switch."""
+    return IfCondition(PythonExpression([
+        "not ('", flag, "'.strip().lower() in ", _TRUE,
+        " and '", rust_daemon, "'.strip().lower() in ", _TRUE, ")",
+    ]))
+
+
 def _reject_sim_time_for_real_hardware(context):
     value = LaunchConfiguration('use_sim_time').perform(context).strip().lower()
     if value not in {'0', 'false', 'no', 'off'}:
@@ -102,6 +113,15 @@ def generate_launch_description():
         default_value='false',
         description='Run mower_rs mower_localize instead of the two ekf_node '
                     'processes and navsat_transform_node',
+    )
+
+    # rust_static_tf:=true (with rust_daemon) runs mower_rsd's static_tf
+    # module instead of robot_state_publisher, which then does not start.
+    declare_rust_static_tf = DeclareLaunchArgument(
+        'rust_static_tf',
+        default_value='false',
+        description='robot_state_publisher runs as mower_rsd module '
+                    'static_tf (with rust_daemon), so it does not start here',
     )
 
     declare_rust_imu = DeclareLaunchArgument(
@@ -359,6 +379,8 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
+        condition=_unless_in_daemon(LaunchConfiguration('rust_static_tf'),
+                                    LaunchConfiguration('rust_daemon')),
         parameters=[robot_description, {'use_sim_time': use_sim_time}],
     )
 
@@ -457,6 +479,7 @@ def generate_launch_description():
         declare_rust_base,
         declare_base_params_file,
         declare_rust_localize,
+        declare_rust_static_tf,
         declare_rust_daemon,
         OpaqueFunction(function=_reject_sim_time_for_real_hardware),
         declare_enable_localization,

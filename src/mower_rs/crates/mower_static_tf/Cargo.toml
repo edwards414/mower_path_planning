@@ -1,0 +1,18 @@
+[package]
+name = "mower_static_tf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "robot_state_publisher 3.3.4 as a mower_rsd module: /tf_static, the joints' /tf, /robot_description (docs/ROS_FREE_PLAN.md step E4)"
+
+[dependencies]
+futures.workspace = true
+mower_bus = { path = "../mower_bus" }
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# tests/golden.rs reads the capture; tests/module.rs checks the manifest
+mower_bridge = { path = "../mower_bridge" }
+serde_json.workspace = true

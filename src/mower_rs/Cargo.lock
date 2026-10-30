@@ -932,6 +932,7 @@ dependencies = [
  "mower_pid_autotune",
  "mower_record",
  "mower_rs_common",
+ "mower_static_tf",
  "mower_ws_bridge",
  "r2r",
  "robot_status",
@@ -948,6 +949,19 @@ dependencies = [
  "mower_ubx",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "mower_static_tf"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_bridge",
+ "mower_bus",
+ "mower_rs_common",
+ "r2r",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
