@@ -95,6 +95,10 @@ done
 # no RTC battery: ntpd is the only thing that sets the clock, so it must not
 # be rate-limited to death by the DHCP hook's restarts at boot
 install -D -m 644 "$here/host/ntpsec-mower.conf" /etc/systemd/system/ntpsec.service.d/10-mower.conf
+# Docker auto-starts unless-stopped containers independently of mower.service.
+# Gate the daemon itself so an RTC reset cannot poison either EKF at boot.
+install -m 755 "$here/host/mower-wait-time-sync.py" /opt/mower/host/
+install -D -m 644 "$here/host/docker-time-sync.conf" /etc/systemd/system/docker.service.d/20-mower-time-sync.conf
 systemctl daemon-reload
 systemctl is-failed -q ntpsec.service && systemctl restart ntpsec.service || true
 systemctl enable mower.service >/dev/null
