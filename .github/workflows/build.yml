@@ -333,9 +333,12 @@ jobs:
       # Actions cache past its 10 GB limit, which evicts main's.
       WRITE_CACHE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
+    # Only the digest crosses to `publish`: GitHub drops a job output that
+    # holds a secret's value, and the Docker Hub tags hold the Docker Hub
+    # user (run 41014490719's publish got empty tags and moved nothing).
+    # publish computes the tags itself, from the same metadata.
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      tags: ${{ steps.meta.outputs.tags }}
 
     steps:
       - name: Checkout
@@ -599,7 +602,30 @@ jobs:
     runs-on: ubuntu-latest
     needs: [python-tests, coverage-core-tests, mower-rs-tests, firmware, driver-tests, build]
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image')
+    env:
+      REPOSITORY_LC: ${{ github.repository }}
     steps:
+      - name: Set lower case repo name
+        run: echo "REPOSITORY_LC=${REPOSITORY_LC,,}" >> "$GITHUB_ENV"
+
+      # The same metadata as build's "Docker meta" (keep the two in step);
+      # computed here because the tags cannot come as build's output.
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ env.REPOSITORY_LC }}
+            ${{ vars.DOCKERHUB_REPO != '' && format('docker.io/{0}', vars.DOCKERHUB_REPO) || '' }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # release channel the robots follow (deploy/docker-compose.yaml IMAGE_TAG=stable)
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -623,10 +649,12 @@ jobs:
         shell: bash
         env:
           DIGEST: ${{ needs.build.outputs.digest }}
-          TAGS: ${{ needs.build.outputs.tags }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest from build: '$DIGEST'"; exit 1; }
+          # nothing to move is a failure, not a quiet success
+          [[ -n "${TAGS//[[:space:]]/}" ]] || { echo "no tags to publish"; exit 1; }
           # $1 = file holding one manifest (an optional trailing newline is
           # dropped): exit 1 unless it is $DIGEST and a single image manifest
           check_manifest() {
