@@ -353,7 +353,11 @@ fn a_topic_of_two_types_has_both() {
         let _p2 = b.with(|n| n.create_publisher::<Bool>("/e5p3/types/two", reliable(1)).unwrap());
         let _p3 = a.with(|n| n.create_publisher::<Text>("/e5p3/types/zz_one", reliable(1)).unwrap());
         let types = |name: &str| a.with(|n| n.get_topic_names_and_types().unwrap()).get(name).cloned();
-        eventually("both types", || types("/e5p3/types/two").is_some_and(|t| t.len() == 2)).await;
+        // both topics: discovery can bring zz_one after two's second type
+        eventually("both types", || {
+            types("/e5p3/types/two").is_some_and(|t| t.len() == 2) && types("/e5p3/types/zz_one").is_some()
+        })
+        .await;
         assert_eq!(types("/e5p3/types/two").unwrap(), ["std_msgs/msg/Bool", "std_msgs/msg/String"]);
         assert_eq!(types("/e5p3/types/zz_one").unwrap(), ["std_msgs/msg/String"]);
         // the counts rclpy's graph_snapshot takes, as the endpoints' info has them
