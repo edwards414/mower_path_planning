@@ -1,5 +1,5 @@
 # Builds the oracle harness against the installed robot_localization. Run it
-# inside the mower-jazzy-test:tools container; see run_oracle.sh.
+# inside the oracle image (tools/oracle/Dockerfile); see run_oracle.sh.
 cmake_minimum_required(VERSION 3.16)
 project(mower_localize_oracle CXX)
 set(CMAKE_CXX_STANDARD 17)

@@ -347,9 +347,9 @@ libraries (`tests/oracle/<component>/oracle.cpp`, built against the installed
 `ros-jazzy-nav2-*` 1.3.13 packages):
 
 ```bash
-docker build -t mower-nav2-oracle:jazzy - < tests/oracle/Dockerfile
-docker run -d --name rf-d-oracle -v <repo>:/repo mower-nav2-oracle:jazzy sleep infinity
-docker exec rf-d-oracle bash /repo/src/mower_rs/crates/mower_nav_core/tests/oracle/run_oracle.sh   # all components
+# from the repository root, in the oracle image (tools/oracle/README.md)
+docker buildx build -f tools/oracle/Dockerfile -t mower-oracle:jazzy .
+docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh nav   # all components
 cargo test -p mower_nav_core
 ```
 

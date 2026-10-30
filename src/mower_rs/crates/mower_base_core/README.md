@@ -108,8 +108,17 @@ The per-cycle glue in `ddc_oracle.cpp` / `replay_gen.cpp` is transcribed from
 `diff_drive_controller.cpp` and `mower_system.cpp`.
 
 ```sh
-tests/oracle/generate.sh            # clones ros2_controllers + control_toolbox, rebuilds vectors/
+tests/oracle/generate.sh            # fetches ros2_controllers + control_toolbox, rebuilds vectors/
 ```
+
+or, in the oracle image with the repository's other oracles:
+`docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh base`
+(tools/oracle/README.md).
+
+`generate.sh` fetches the upstream commits the vectors were made from (both
+`jazzy`): ros2_controllers `516a88be02b658effa34c5a39e8bb971cddab930`,
+control_toolbox `71fbf3b6d8b643ef9380e3d4eef6bcb22984ed2b`
+(`ROS2_CONTROLLERS_REV` / `CONTROL_TOOLBOX_REV` override them).
 
 The bootloader vectors have their own script, which needs only `cc` and
 `python3`: `boot_oracle.c` is compiled against the firmware's
@@ -121,10 +130,6 @@ CRC-32 and runs the original `FrameReader` of `firmware/tools/mower_flash.py`
 ```sh
 tests/oracle/boot_generate.sh       # rebuilds vectors/boot_oracle.json and vectors/pop_frame_oracle.json
 ```
-
-Pinned upstream commits at the time of writing: ros2_controllers
-`516a88be02b658effa34c5a39e8bb971cddab930`, control_toolbox
-`71fbf3b6d8b643ef9380e3d4eef6bcb22984ed2b` (both `jazzy`).
 
 ## The record/replay format
 
