@@ -5,6 +5,14 @@
 //! publish, call_service (with `/rosapi/topics` and `/rosapi/get_time`
 //! answered natively) and status replies on errors. Fragments, compression
 //! and actions are not implemented.
+//!
+//! A connection's frames are handled one at a time, in the order they came,
+//! except that a call to a server runs in a task of its own (E3.3, as Python
+//! rosbridge's `call_services_in_new_thread`): a slow call holds up neither
+//! the frames behind it (the joystick, subscribes) nor the client's other
+//! calls, and its reply carries its request's `id`. What a call is checked
+//! for (a service name, the allow-list) and `/rosapi/*` are still answered
+//! in order. At most `MAX_CALLS_IN_FLIGHT` calls of a connection run at once.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,11 +20,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 use crate::config::Policy;
 use crate::entry::TopicEntry;
 use crate::hub::Hub;
+
+/// How many calls of one connection may wait for their servers at once; one
+/// more is answered at once with `<s>: too many calls in flight …`. The app
+/// awaits each call of a flow, but its 1 Hz `/check_nav_status` poll gives
+/// up after 4 s and polls again while the bridge holds a call for up to
+/// 30 s, so a hung server collects about seven of them: 16 leaves room for
+/// the rest.
+pub const MAX_CALLS_IN_FLIGHT: usize = 16;
 
 /// The answer to a `call_service`: `values` and `result: true`, or the
 /// error text as `values` and `result: false`, with the request's `id` if it
@@ -30,6 +46,14 @@ pub fn service_response_frame(service: &str, response: Result<Value, String>, id
         reply["id"] = id;
     }
     reply.to_string()
+}
+
+/// Send the answer to a call, logging an error.
+fn answer(handle: &ClientHandle, logger: &str, peer: &str, service: &str, response: Result<Value, String>, id: Option<Value>) {
+    if let Err(e) = &response {
+        r2r::log_warn!(logger, "{}: call_service {}: {}", peer, service, e);
+    }
+    handle.send(service_response_frame(service, response, id).into());
 }
 
 /// Outgoing side of a client, shared with topic fan-out.
@@ -70,6 +94,8 @@ pub struct Client {
     peer: String,
     subscriptions: HashMap<String, Arc<TopicEntry>>,
     service_timeout: Duration,
+    /// A place for each call of this connection that waits for its server.
+    calls: Arc<Semaphore>,
 }
 
 impl Client {
@@ -82,6 +108,7 @@ impl Client {
             peer,
             subscriptions: HashMap::new(),
             service_timeout,
+            calls: Arc::new(Semaphore::new(MAX_CALLS_IN_FLIGHT)),
         }
     }
 
@@ -169,17 +196,36 @@ impl Client {
                 } else {
                     match self.policy.service_type(&service) {
                         None => Err(format!("service {service} is not allowed")),
-                        Some(t) => self.hub.call_service(&service, t, args, self.service_timeout).await,
+                        Some(t) => return self.spawn_call(service, t.to_string(), args, id),
                     }
                 };
-                if let Err(e) = &response {
-                    r2r::log_warn!(&self.logger, "{}: call_service {}: {}", self.peer, service, e);
-                }
-                self.handle.send(service_response_frame(&service, response, id).into());
+                answer(&self.handle, &self.logger, &self.peer, &service, response, id);
             }
             "set_level" | "auth" | "fragment" => {}
             other => self.status("error", format!("unsupported op {other:?}"), id.as_ref()),
         }
+    }
+
+    /// Call `service` in a task of its own, bounded by the service timeout,
+    /// and answer with the request's `id` whenever its server does; refused
+    /// at once while `MAX_CALLS_IN_FLIGHT` calls of this connection wait.
+    /// A call runs on after its connection has gone, as it did when the
+    /// connection waited for each: a cancel sent just before the link went
+    /// still reaches its server. Its answer then goes nowhere.
+    fn spawn_call(&self, service: String, service_type: String, args: Value, id: Option<Value>) {
+        let Ok(place) = self.calls.clone().try_acquire_owned() else {
+            let refused = format!("{service}: too many calls in flight on this connection (at most {MAX_CALLS_IN_FLIGHT})");
+            return answer(&self.handle, &self.logger, &self.peer, &service, Err(refused), id);
+        };
+        let (hub, handle, logger, peer, timeout) =
+            (self.hub.clone(), self.handle.clone(), self.logger.clone(), self.peer.clone(), self.service_timeout);
+        tokio::spawn(async move {
+            let response = hub.call_service(&service, &service_type, args, timeout).await;
+            // free before the answer is out, so that a client that sends its
+            // next call on this answer finds the place
+            drop(place);
+            answer(&handle, &logger, &peer, &service, response, id);
+        });
     }
 
     /// `rosapi/srv/Topics` limited to the subscribe allow-list.
