@@ -14,6 +14,7 @@ builds and tests with a plain `cargo test -p mower_base_core` on any machine.
 | `diff_drive` | one `diff_drive_controller` update cycle | `ros2_controllers/diff_drive_controller/src/diff_drive_controller.cpp` (jazzy), parameterised from `src/mower_hardware/config/mower_controllers.yaml` |
 | `cycle::BaseCycle` | `mower_hardware::MowerSystem` read/write | `src/mower_hardware/src/mower_system.cpp` |
 | `record` | a `ros2 bag` for the serial link | new |
+| `boot` | the STM32 UART bootloader's side of the framing (for the `mower_flash` flasher) | `firmware/Module/Inc/boot_shared.h`, the sector table and erase rule of `firmware/bootloader/Src/bl_flash.c`, `BlFlash_Crc32` (= zlib's CRC-32) |
 
 ## The shape of it
 
@@ -92,6 +93,7 @@ cargo test -p mower_base_core
 |---|---|---|
 | `tests/protocol_vectors.rs` | `vectors/protocol_oracle.json` | 9 CRC, 39 encode (byte-identical), 17 byte-stream parses, 29 decode (field-identical, incl. every wrong-length rejection) |
 | `tests/diff_drive_vectors.rs` | `vectors/diff_drive_oracle.json` | rolling mean, 90 × 4 speed-limiter calls, 4 × 60 odometry steps, `updateFromVelocity` / `updateOpenLoop`, and a 200-cycle controller run — all to 1e-12; plus the cmd_vel subscription's stamp rules (zero stamp, stale, ageing from the stamp) and the open-loop odometry seed at activation |
+| `tests/boot_vectors.rs` | `vectors/boot_oracle.json`, `vectors/pop_frame_oracle.json` | every `boot_shared.h` constant, sizeof / offsetof and packed byte of the seven payload structs (encode and decode), the sector map and 18 `BlFlash_EraseForImage` decisions, CRC-32 against zlib (incl. 352 KB of erased flash), `mower_flash.py`'s own mirror (its constants, 45 frames it builds, how it decodes the C-packed BL_INFO / BL_ACK, its status names), and `FrameParser` against the original `FrameReader._pop_frame` (80 streams in 418 random reads: the same frames after every read and the same bytes kept), then against a line-for-line copy of it on 3000 random streams |
 | `tests/replay.rs` | `vectors/replay_synthetic.*` | a 300-cycle recording replayed through `BaseCycle` (latch off: the C++ has none): every tx byte identical, odometry to 1e-12 |
 | `tests/safety.rs` | — | what `mower_base` adds, with the production controller parameters: the arm latch (activation under a live command, a stop by zero and by silence, feedback lost after presence vs. never seen, `wheel_override` held by the same rule; against a model of the firmware's command timeout and status batch: the TX-only pull with the stick held, zeros on the re-seat, re-arm only after the board is back *and* a stop edge, the C++ lurch with the latch off, a restart seen in the encoder totals / in COMMAND_VALID / after a real bootloader silence, both leads re-seated together (only the feedback loss, not the board's stale timeout reports; re-armed within three cycles) and only the STM32 TX one (the feedback alone re-arms nothing; pin 8 back 280 ms or 1 s later gets zeros), pin 8 already out at activation (0x03 and 0x02; also a zero, a push and the contact all inside the first 450 ms), nothing at activation, on one or a stale or garbled timeout report or after a stall of the loop, pid_autotune through a flash save, a blade held through a pull not restarting until let go; the release window: the robot's guard zero after a command path loss held and reported once (and, with the window off, the robot's 73 -> 366 permille ramp), a 0.28 s stall of the stream not a release, one zero then silence re-armed 0.52 s later, an override cancel and a blade 0 cut short by the stream), a wall-clock step that changes nothing but the stamps, the log events |
 
@@ -107,6 +109,17 @@ The per-cycle glue in `ddc_oracle.cpp` / `replay_gen.cpp` is transcribed from
 
 ```sh
 tests/oracle/generate.sh            # clones ros2_controllers + control_toolbox, rebuilds vectors/
+```
+
+The bootloader vectors have their own script, which needs only `cc` and
+`python3`: `boot_oracle.c` is compiled against the firmware's
+`boot_shared.h` and the unmodified `bl_flash.c` (`oracle/stub_hal/` stands
+in for the four STM32 HAL calls it makes), and `boot_vectors.py` adds zlib's
+CRC-32 and runs the original `FrameReader` of `firmware/tools/mower_flash.py`
+(no pyserial needed). gcc on Linux and clang on macOS write the same files.
+
+```sh
+tests/oracle/boot_generate.sh       # rebuilds vectors/boot_oracle.json and vectors/pop_frame_oracle.json
 ```
 
 Pinned upstream commits at the time of writing: ros2_controllers
