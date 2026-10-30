@@ -21,6 +21,9 @@ G1 compares a rewrite of each run with the run itself.
 - **Packing:** `scripts/record_pack.py`. `*.mcap` and the large JSON files are stored as `<name>.zst` (zstd level
   19); the tests decompress them. `MANIFEST.txt` gives the size and sha256 of every original file.
 - **Robot id:** `MW-E5FIX` in every run. The run dir name is the start time in UTC (the container's local time).
+- **One flaw:** F3's `calib/extrinsics.yaml` still says `source: placeholder`. The harness meant to mark it
+  measured but edited the comment line instead, so `mower-check-run` FAILs that one item on this run. The
+  bags are not affected.
 
 ## The fixtures
 
