@@ -322,15 +322,15 @@ fn recorder_manager_idle() {
         assert!(bag.serving().is_empty(), "nothing before the first look");
         bag.until_serving().await;
         // record_topics.yaml: 32 topics, the two hidden ones counted
-        assert_eq!(next("the first status", &mut status).await.data, idle_status(32));
+        assert_eq!(next("the first status", &mut status).await.data, idle_status(30));
         assert_eq!(next("the first rear light", &mut rear).await.data, REAR_OFF);
         quiet(&mut status).await;
         bag.advance(manager::STATUS_PERIOD).await;
-        assert_eq!(next("the tick's status", &mut status).await.data, idle_status(32));
+        assert_eq!(next("the tick's status", &mut status).await.data, idle_status(30));
         assert_eq!(next("the tick's rear light", &mut rear).await.data, REAR_OFF);
 
         assert_eq!(call(&bag.feeder, "/mower_recorder/stop").await, (false, "目前沒有在錄製".to_string()));
-        assert_eq!(next("stop's status", &mut status).await.data, idle_status(32), "_stop_recording publishes one");
+        assert_eq!(next("stop's status", &mut status).await.data, idle_status(30), "_stop_recording publishes one");
         assert_eq!(next("stop's rear light", &mut rear).await.data, REAR_OFF);
         assert_eq!(call(&bag.feeder, "/mower_recorder/snapshot").await, (false, "snapshot 觸發失敗".to_string()));
 
@@ -343,7 +343,7 @@ fn recorder_manager_idle() {
         })
         .await;
         bag.advance(manager::STATUS_PERIOD).await;
-        assert_eq!(next("still idle", &mut status).await.data, idle_status(32));
+        assert_eq!(next("still idle", &mut status).await.data, idle_status(30));
         mower_bridge::coverage::assert_in_manifest(bag.m(NODE_MANAGER));
         bag.stop().await;
         std::fs::remove_dir_all(&root).unwrap();
@@ -544,7 +544,8 @@ fn recorder_manager_records_a_run_from_dds() {
         let bag = Bag::start_only("/e53b_rec", &params, false, &[NODE_MANAGER]).await;
         let mut status = bag.feeder.subscribe::<Text>("/mower_recorder/status", Qos::latched().keep_last(100)).unwrap();
         bag.until_serving().await;
-        assert_eq!(next("the idle status", &mut status).await.data, idle_status(4));
+        // four names listed, the hidden one not counted (num_topics, 2026-10-31)
+        assert_eq!(next("the idle status", &mut status).await.data, idle_status(3));
 
         let (ok, reply) = call(&bag.feeder, "/mower_recorder/start").await;
         let run = reply.strip_prefix("開始錄製 run=").unwrap_or_else(|| panic!("{reply}")).to_string();
@@ -575,7 +576,7 @@ fn recorder_manager_records_a_run_from_dds() {
         eventually("the parameter dump", || run_dir.join("params/e53b_dumped.yaml").is_file()).await;
         bag.advance(manager::STATUS_PERIOD).await;
         let tick = next("the tick's status", &mut status).await.data.clone();
-        assert!(tick.contains(r#""recording": true"#) && tick.contains(r#""num_topics": 4"#), "{tick}");
+        assert!(tick.contains(r#""recording": true"#) && tick.contains(r#""num_topics": 3"#), "{tick}");
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(call(&bag.feeder, "/mower_recorder/snapshot").await, (true, "已觸發 snapshot".to_string()));
         assert_eq!(call(&bag.feeder, "/mower_recorder/stop").await, (true, format!("已停止並封存: full, snapshot (run={run})")));
@@ -1031,7 +1032,7 @@ fn the_rear_light_and_the_app_s_endpoints_reach_dds() {
         let latched = QosProfile::default().keep_last(10).transient_local().reliable();
         let mut status = late.with(|n| n.subscribe::<Text>("/mower_recorder/status", latched.clone())).unwrap();
         let mut bags = late.with(|n| n.subscribe::<Text>("/mower_recorder/bags", latched)).unwrap();
-        assert_eq!(tokio::time::timeout(WAIT, status.next()).await.unwrap().unwrap().data, idle_status(32));
+        assert_eq!(tokio::time::timeout(WAIT, status.next()).await.unwrap().unwrap().data, idle_status(30));
         assert!(tokio::time::timeout(WAIT, bags.next()).await.unwrap().unwrap().data.starts_with(r#"{"robot_id": "MW-E53A""#));
         // start and stop over DDS, as ws_bridge on r2r calls them
         for node in NODES {

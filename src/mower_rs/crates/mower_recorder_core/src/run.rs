@@ -56,15 +56,18 @@ pub fn metadata_yaml(meta: &Py) -> String {
     yaml::safe_dump(meta, &YamlOptions { allow_unicode: true, sort_keys: false })
 }
 
-/// `len(topics) + len(camera topics)` when the camera group is on, hidden
-/// names included (owner decision 2026-10-30).
+/// The names the run records: the profile's topics, plus the camera
+/// group's when it is on, without the hidden ones nobody records
+/// (`/navigate_to_pose/_action/*`, design 1.12 #8). Owner decision
+/// 2026-10-31: 30 for the default profile, where the Python recorder said
+/// 32 (it counted the listed names); data_collection stays 19.
 pub fn num_topics(cfg: &Py) -> i64 {
-    let cam = cfg.get("camera_recorder");
-    let cam_n = match cam {
-        Some(c) if truthy(c.get("enabled")) => str_list(c.get("topics")).len(),
+    let recorded = |v: Option<&Py>| str_list(v).iter().filter(|t| !crate::profile::is_hidden(t)).count();
+    let cam_n = match cfg.get("camera_recorder") {
+        Some(c) if truthy(c.get("enabled")) => recorded(c.get("topics")),
         _ => 0,
     };
-    (str_list(cfg.get("topics")).len() + cam_n) as i64
+    (recorded(cfg.get("topics")) + cam_n) as i64
 }
 
 /// `cfg.get('profile') or 'default'`

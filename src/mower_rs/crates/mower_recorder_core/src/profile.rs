@@ -7,7 +7,7 @@
 //! The names a group records are the profile's minus the hidden ones
 //! (`/navigate_to_pose/_action/*`): rosbag2 skips a hidden name without
 //! `--include-hidden-topics`, and so does the Rust recorder (owner decision
-//! 2026-10-30; design 1.12 #8). `num_topics` still counts them.
+//! 2026-10-30; design 1.12 #8), and `num_topics` leaves them out (2026-10-31).
 
 use std::path::{Path, PathBuf};
 
@@ -155,7 +155,7 @@ pub struct GroupSpec {
     pub node_name: &'static str,
     /// `<run>/bag`, `<run>/camera` or `<run>/snapshots`
     pub out_dir: PathBuf,
-    /// The profile's names, as listed (and as `num_topics` counts them).
+    /// The profile's names, as listed (hidden ones included).
     pub topics: Vec<String>,
     /// What is recorded: the hidden names left out.
     pub recorded: Vec<String>,
