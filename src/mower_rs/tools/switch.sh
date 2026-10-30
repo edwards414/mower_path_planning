@@ -37,8 +37,8 @@
 # RUST_RECORDER=true (E5: mower_rsd's bag module, or the mower_recorder
 # binary with RUST_DAEMON=false, instead of the Python recorder, whose
 # container then sleeps): once up, the module must run and no Python
-# recorder_manager may; `up` recreates the recorder container too. E5-3a's
-# module does not record (its start is refused): for tests only until E5-3b.
+# recorder_manager may; `up` recreates the recorder container too. For the
+# owner's supervised recording test (E5-3b) before it becomes the default.
 #
 # RUST_NAV_CORE=true (mower_nav_core instead of nav2) needs RUST_DAEMON=true
 # and RUST_LOCALIZE=true RUST_NAV=true given here, as robot.launch.py does, or

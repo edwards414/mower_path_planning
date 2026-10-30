@@ -101,7 +101,10 @@ types wrongly.
   messages (upstream: 10, plus the sender's slot); a message that finds it
   full is dropped and counted (`RawSubscription::drops()`, a `DropCounter`
   that can be kept after the stream moved), where upstream logs at debug
-  level. `Node::destroy_raw_subscription` takes it off the graph at once, as
+  level. A wakeup takes every message the reader holds, where upstream's
+  subscribers take one (E5-3b: a burst larger than the reader's depth
+  overwrote what a recorder had not taken yet).
+  `Node::destroy_raw_subscription` takes it off the graph at once, as
   patch 2's `destroy_subscription`.
 * **b. `Node::get_node_names_and_namespaces()`** (`rcl_get_node_names`):
   `(name, namespace)` for every node of the graph.

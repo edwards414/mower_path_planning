@@ -619,8 +619,8 @@ def generate_launch_description():
                         'instead of the Python recorder of compose\'s recorder '
                         'service, which then sleeps; with rust_daemon:=false '
                         'the mower_recorder binary. Not rust_record, the zone '
-                        'path recorder. E5-3a: idle only, it does not record '
-                        'yet (its start is refused): keep it off until E5-3b',
+                        'path recorder. It records the default profile from '
+                        'DDS (E5-3b); data_collection comes with E5-5',
         ),
         DeclareLaunchArgument(
             'rust_localize',

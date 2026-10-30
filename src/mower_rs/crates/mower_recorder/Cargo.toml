@@ -3,7 +3,7 @@ name = "mower_recorder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "mower_recorder's three nodes (recorder_manager, bag_store, graph_snapshot) as mower_rsd's module bag, behind rust_recorder (docs/ROS_FREE_PLAN.md step E5; E5-3a: idle, no recording yet)"
+description = "mower_recorder's three nodes (recorder_manager, bag_store, graph_snapshot) as mower_rsd's module bag, behind rust_recorder (docs/ROS_FREE_PLAN.md step E5; E5-3b: the default profile from DDS)"
 
 [lib]
 path = "src/lib.rs"
@@ -18,6 +18,7 @@ futures.workspace = true
 # standalone runner
 mower_bridge = { path = "../mower_bridge" }
 mower_bus = { path = "../mower_bus" }
+mower_mcap = { path = "../mower_mcap" }
 mower_pyfmt = { path = "../mower_pyfmt" }
 mower_recorder_core = { path = "../mower_recorder_core" }
 mower_rs_common = { path = "../mower_rs_common" }
@@ -29,3 +30,6 @@ tokio.workspace = true
 mower_base = { path = "../mower_base" }
 # tests/r2r_patch3.rs: the type hashes rosbag2 wrote (E5-1's table)
 mower_schema = { path = "../mower_schema" }
+# tests/module.rs: the bags read back (mower_mcap's own test reader)
+mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
+zstd = "0.14"

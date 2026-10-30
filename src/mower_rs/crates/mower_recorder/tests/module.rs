@@ -1,4 +1,4 @@
-//! The bag module (E5-3a: idle) as mower_rsd runs it: its three instances on
+//! The bag module as mower_rsd runs it: its three instances on
 //! a bus of their own and a manual clock, each with its r2r node, and, where
 //! DDS matters, mower_rsd's bus bridge for the set next to them.
 //!
@@ -6,7 +6,9 @@
 //!   the stamp), the node diff, the watch rule both ways.
 //! - recorder_manager: the idle status and the rear light at the start and
 //!   every 2 s, the three services' answers, MediaMTX's off-PATCH and its
-//!   retry (a stub API), autostart.
+//!   retry (a stub API), autostart; a run recorded from DDS (E5-3b): the
+//!   groups' nodes while it runs, the names as rosbag2 finds them, the bags,
+//!   the snapshot, run_metadata.yaml and the parameter dump.
 //! - bag_store: the bag list, every command and its answer, the upload of
 //!   `upload_now` and of the 30 s tick to an S3 stub, the R2 delete.
 //! - One owner: a foreign server of `/mower_recorder/start` holds all three
@@ -189,7 +191,7 @@ impl Bag {
             let m = ModuleCtx::new(name, shutdown.clone()).with_bus(bus.scope(name)).with_clock(clock.clone());
             let task = match name {
                 NODE_GRAPH => tokio::spawn(graph::run_node(node, m.clone())),
-                NODE_MANAGER => tokio::spawn(manager::run_node(node, m.clone())),
+                NODE_MANAGER => tokio::spawn(manager::run_node(context(), node, m.clone())),
                 _ => tokio::spawn(store::run_node(node, m.clone())),
             };
             tasks.push(task);
@@ -307,8 +309,8 @@ async fn call(m: &Scope, name: &str) -> (bool, String) {
 // ---------------------------------------------------------------------------
 
 /// The idle node: the status and the rear light as soon as it serves and
-/// every 2 s; the answers of start (E5-3a: refused), stop (a status first)
-/// and snapshot; the fault and `/fix` read; its endpoints in the manifest.
+/// every 2 s; the answers of stop (a status first) and snapshot with nothing
+/// recording; the fault and `/fix` read; its endpoints in the manifest.
 #[test]
 fn recorder_manager_idle() {
     within(async {
@@ -327,8 +329,6 @@ fn recorder_manager_idle() {
         assert_eq!(next("the tick's status", &mut status).await.data, idle_status(32));
         assert_eq!(next("the tick's rear light", &mut rear).await.data, REAR_OFF);
 
-        assert_eq!(call(&bag.feeder, "/mower_recorder/start").await, (false, manager::NOT_YET.to_string()));
-        quiet(&mut status).await;
         assert_eq!(call(&bag.feeder, "/mower_recorder/stop").await, (false, "目前沒有在錄製".to_string()));
         assert_eq!(next("stop's status", &mut status).await.data, idle_status(32), "_stop_recording publishes one");
         assert_eq!(next("stop's rear light", &mut rear).await.data, REAR_OFF);
@@ -461,6 +461,146 @@ fn recorder_manager_turns_mediamtx_s_recording_off_until_it_worked() {
         assert!(api.patches().iter().all(|p| *p == off));
         let headers_ok = api.requests.lock().unwrap().iter().all(|r| r.0 == "PATCH");
         assert!(headers_ok, "PATCHes only: no readiness GET while idle");
+        bag.stop().await;
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
+/// The topics of a node as the graph shows them, by node.
+fn subscribed_by(peer: &Peer, topic: &str) -> Vec<String> {
+    peer.with(|n| n.get_subscriptions_info_by_topic(topic, false).unwrap()).into_iter().map(|e| e.node_name).collect()
+}
+
+fn reliable(depth: usize) -> QosProfile {
+    QosProfile::default().keep_last(depth).reliable()
+}
+
+/// What rmw puts on the wire, and so in the bag: the CDR padded to 4.
+fn on_the_wire(text: &str) -> Vec<u8> {
+    use r2r::WrappedTypesupport;
+    let mut b = Text { data: text.into() }.to_serialized_bytes().unwrap();
+    while b.len() % 4 != 0 {
+        b.push(0);
+    }
+    b
+}
+
+/// Every message of an MCAP file: (topic, log time, publish time, payload
+/// with per-message zstd undone).
+fn messages(path: &Path) -> Vec<(String, u64, u64, Vec<u8>)> {
+    let buf = std::fs::read(path).unwrap();
+    mcap::MessageStream::new(&buf)
+        .unwrap()
+        .map(|m| {
+            let m = m.unwrap();
+            let data = if m.data.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) { zstd::decode_all(&m.data[..]).unwrap() } else { m.data.to_vec() };
+            (m.channel.topic.clone(), m.log_time, m.publish_time, data)
+        })
+        .collect()
+}
+
+/// E5-3b: a run recorded from DDS. The start's reply and status; the groups'
+/// nodes (`mower_full_recorder`, `mower_snapshot_recorder`) on the graph while
+/// it runs and their subscriptions, as rosbag2's (D12); a latched sample
+/// written before the start (the reader adapted to its offer, transient
+/// local); every message's bytes as the writer sent them (per-message zstd
+/// undone), its log time after its publish time; a hidden name and an
+/// unpublished one not recorded; the snapshot group flushed by
+/// `/mower_recorder/snapshot`; run_metadata.yaml and the parameter dump
+/// (`ros2 param dump`'s format, from the node's own parameter services);
+/// the stop's reply, and the nodes gone.
+#[test]
+fn recorder_manager_records_a_run_from_dds() {
+    within(async {
+        let root = scratch("record");
+        let profile = root.join("profile.yaml");
+        std::fs::write(
+            &profile,
+            "topics:\n  - /e53b/text\n  - /e53b/latched\n  - /e53b/nobody\n  - /e53b/_hidden/x\nsnapshot_topics:\n  - /e53b/snap\n",
+        )
+        .unwrap();
+        let mut params = production(&root, None);
+        set(&mut params, NODE_MANAGER, "config_file", s(profile.to_str().unwrap()));
+        set(&mut params, NODE_MANAGER, "params_dump_nodes", P::StringArray(vec!["/e53b_dumped".into()]));
+        let writer = Peer::new("e53b_writer", "");
+        // depth 100: a reliable keep-last writer may drop what its readers
+        // have not acknowledged when a burst outgrows its depth (DDS, for
+        // rosbag2 too), so the burst of 20 below stays under it
+        let text = writer.with(|n| n.create_publisher::<Text>("/e53b/text", reliable(100)).unwrap());
+        let latched = writer.with(|n| n.create_publisher::<Text>("/e53b/latched", reliable(1).transient_local()).unwrap());
+        let snap = writer.with(|n| n.create_publisher::<Text>("/e53b/snap", reliable(100)).unwrap());
+        let hidden = writer.with(|n| n.create_publisher::<Text>("/e53b/_hidden/x", reliable(10)).unwrap());
+        latched.publish(&Text { data: "before the start".into() }).unwrap();
+        // the dumped node, with rclcpp-like parameter services (r2r's handler)
+        let dumped = Peer::new("e53b_dumped", "");
+        let handler = dumped.with(|n| {
+            let mut p = n.params.lock().unwrap();
+            p.insert("a".into(), Parameter::new(P::Integer(1)));
+            p.insert("b.c".into(), Parameter::new(s("x")));
+            drop(p);
+            n.make_parameter_handler().unwrap().0
+        });
+        let handler = tokio::spawn(handler);
+        let bag = Bag::start_only("/e53b_rec", &params, false, &[NODE_MANAGER]).await;
+        let mut status = bag.feeder.subscribe::<Text>("/mower_recorder/status", Qos::latched().keep_last(100)).unwrap();
+        bag.until_serving().await;
+        assert_eq!(next("the idle status", &mut status).await.data, idle_status(4));
+
+        let (ok, reply) = call(&bag.feeder, "/mower_recorder/start").await;
+        let run = reply.strip_prefix("開始錄製 run=").unwrap_or_else(|| panic!("{reply}")).to_string();
+        assert!(ok && run.starts_with("MW-E53A_"), "{reply}");
+        let run_dir = root.join("bags").join(&run);
+        let started = next("the start's status", &mut status).await.data.clone();
+        assert!(started.starts_with(&format!(r#"{{"recording": true, "run_id": "{run}", "start_time": "#)), "{started}");
+        // D12: the groups' nodes, and the names subscribed on them
+        let names = || writer.with(|n| n.get_node_names_and_namespaces().unwrap()).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        eventually("the groups' nodes", || ["mower_full_recorder", "mower_snapshot_recorder"].iter().all(|n| names().contains(&n.to_string()))).await;
+        eventually("the subscriptions", || {
+            subscribed_by(&writer, "/e53b/text") == ["mower_full_recorder"]
+                && subscribed_by(&writer, "/e53b/latched") == ["mower_full_recorder"]
+                && subscribed_by(&writer, "/e53b/snap") == ["mower_snapshot_recorder"]
+        })
+        .await;
+        assert!(subscribed_by(&writer, "/e53b/_hidden/x").is_empty(), "hidden names are not recorded");
+        // the writers have matched their readers (volatile: nothing earlier reaches them)
+        eventually("the matches", || {
+            text.get_inter_process_subscription_count().unwrap() == 1 && snap.get_inter_process_subscription_count().unwrap() == 1
+        })
+        .await;
+        for i in 0..20 {
+            text.publish(&Text { data: format!("#{i}") }).unwrap();
+            snap.publish(&Text { data: format!("snap #{i}") }).unwrap();
+            hidden.publish(&Text { data: "hidden".into() }).unwrap();
+        }
+        eventually("the parameter dump", || run_dir.join("params/e53b_dumped.yaml").is_file()).await;
+        bag.advance(manager::STATUS_PERIOD).await;
+        let tick = next("the tick's status", &mut status).await.data.clone();
+        assert!(tick.contains(r#""recording": true"#) && tick.contains(r#""num_topics": 4"#), "{tick}");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(call(&bag.feeder, "/mower_recorder/snapshot").await, (true, "已觸發 snapshot".to_string()));
+        assert_eq!(call(&bag.feeder, "/mower_recorder/stop").await, (true, format!("已停止並封存: full, snapshot (run={run})")));
+        eventually("the groups' nodes to go", || !names().iter().any(|n| n.starts_with("mower_") && n.ends_with("_recorder"))).await;
+
+        // the bags
+        let full = messages(&run_dir.join("bag/bag_0.mcap"));
+        let of = |t: &str| full.iter().filter(|m| m.0 == t).collect::<Vec<_>>();
+        assert_eq!(of("/e53b/latched").iter().map(|m| m.3.clone()).collect::<Vec<_>>(), [on_the_wire("before the start")]);
+        let texts: Vec<Vec<u8>> = of("/e53b/text").iter().map(|m| m.3.clone()).collect();
+        assert_eq!(texts, (0..20).map(|i| on_the_wire(&format!("#{i}"))).collect::<Vec<_>>());
+        assert!(full.iter().all(|m| m.1 >= m.2), "log time after publish time");
+        assert!(full.iter().all(|m| m.0 == "/e53b/text" || m.0 == "/e53b/latched"), "no hidden, no unpublished name");
+        let snaps = messages(&run_dir.join("snapshots/snapshots_0.mcap"));
+        assert_eq!(snaps.len(), 20, "the snapshot ring flushed once");
+        assert!(run_dir.join("bag/metadata.yaml").is_file() && run_dir.join("snapshots/metadata.yaml").is_file());
+        let meta = std::fs::read_to_string(run_dir.join("run_metadata.yaml")).unwrap();
+        assert!(meta.starts_with(&format!("run_id: {run}\nrobot_id: MW-E53A\nstart_time: ")), "{meta}");
+        assert!(meta.contains("recorded_topics:\n- /e53b/text\n- /e53b/latched\n- /e53b/nobody\n- /e53b/_hidden/x\n"), "{meta}");
+        let dump = std::fs::read_to_string(run_dir.join("params/e53b_dumped.yaml")).unwrap();
+        assert!(dump.starts_with("/e53b_dumped:\n  ros__parameters:\n"), "{dump}");
+        assert!(dump.contains("    a: 1\n") && dump.contains("    b:\n      c: x\n"), "{dump}");
+        let after = next("the stop's status", &mut status).await.data.clone();
+        assert!(after.starts_with(r#"{"recording": false, "run_id": null"#), "{after}");
+        handler.abort();
         bag.stop().await;
         std::fs::remove_dir_all(&root).unwrap();
     });
@@ -897,13 +1037,17 @@ fn the_rear_light_and_the_app_s_endpoints_reach_dds() {
         for node in NODES {
             mower_bridge::coverage::assert_in_manifest(bag.m(node));
         }
-        for (service, answer) in [("/mower_recorder/start", manager::NOT_YET), ("/mower_recorder/stop", "目前沒有在錄製")] {
+        let mut answers = Vec::new();
+        for service in ["/mower_recorder/start", "/mower_recorder/stop"] {
             let client = late.with(|n| n.create_client::<Trigger::Service>(service, QosProfile::services_default())).unwrap();
             let available = r2r::Node::is_available(&client).unwrap();
             tokio::time::timeout(WAIT, available).await.unwrap().unwrap();
             let r = tokio::time::timeout(WAIT, client.request(&Trigger::Request {}).unwrap()).await.unwrap().unwrap();
-            assert_eq!((r.success, r.message.as_str()), (false, answer), "{service}");
+            answers.push((r.success, r.message.clone()));
         }
+        let run = answers[0].1.strip_prefix("開始錄製 run=").unwrap_or_else(|| panic!("{answers:?}")).to_string();
+        assert!(answers[0].0 && run.starts_with("MW-E53A_"), "{answers:?}");
+        assert_eq!(answers[1], (true, format!("已停止並封存: full, snapshot (run={run})")));
         bag.stop().await;
         std::fs::remove_dir_all(&root).unwrap();
     });

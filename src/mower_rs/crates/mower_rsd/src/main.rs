@@ -240,7 +240,7 @@ const MODULES: &[Module] = &[
         // mower_recorder's three nodes (E5, rust_recorder, off by default),
         // as record.launch.py starts them. Born on the bus; with the switch
         // off the Python recorder of compose's recorder service runs, and
-        // E5-3a's module records nothing (its start is refused).
+        // its recording reads DDS (E5-3b).
         id: "bag",
         switch: "rust_recorder",
         instances: &[

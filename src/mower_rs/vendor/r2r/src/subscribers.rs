@@ -358,46 +358,50 @@ impl Subscriber_ for RawSubscriber {
     }
 }
 
-/// mower_rs patch 3: `RawSubscriber`'s take, keeping the message info, and a
-/// full queue counted instead of logged at debug level.
+/// mower_rs patch 3: `RawSubscriber`'s take, keeping the message info, a
+/// full queue counted instead of logged at debug level, and every message
+/// the reader holds taken at one wakeup (rmw's history is the reader's
+/// depth: a recorder that took one per wakeup would let a burst overwrite
+/// what it has not taken yet).
 impl Subscriber_ for RawInfoSubscriber {
     fn handle(&self) -> &rcl_subscription_t {
         &self.rcl_handle
     }
 
     fn handle_incoming(&mut self) -> bool {
-        let mut msg_info = rmw_message_info_t::default();
-        let ret = unsafe {
-            rcl_take_serialized_message(
-                &self.rcl_handle,
-                &mut self.msg_buf as *mut rcl_serialized_message_t,
-                &mut msg_info,
-                std::ptr::null_mut(),
-            )
-        };
-        if ret != RCL_RET_OK as i32 {
-            // RCL_RET_SUBSCRIPTION_TAKE_FAILED: a wakeup with nothing to take
-            return false;
-        }
-        let data = if self.msg_buf.buffer.is_null() {
-            Vec::new()
-        } else {
-            unsafe { std::slice::from_raw_parts(self.msg_buf.buffer, self.msg_buf.buffer_length).to_vec() }
-        };
-        let message = RawMessage {
-            data,
-            source_timestamp: msg_info.source_timestamp,
-            received_timestamp: msg_info.received_timestamp,
-            publisher_gid: msg_info.publisher_gid.data,
-        };
-        if let Err(e) = self.sender.try_send(message) {
-            if e.is_disconnected() {
-                // user dropped the handle to the stream, signal removal.
-                return true;
+        loop {
+            let mut msg_info = rmw_message_info_t::default();
+            let ret = unsafe {
+                rcl_take_serialized_message(
+                    &self.rcl_handle,
+                    &mut self.msg_buf as *mut rcl_serialized_message_t,
+                    &mut msg_info,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ret != RCL_RET_OK as i32 {
+                // RCL_RET_SUBSCRIPTION_TAKE_FAILED: nothing (more) to take
+                return false;
             }
-            self.drops.0.fetch_add(1, Ordering::Relaxed);
+            let data = if self.msg_buf.buffer.is_null() {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(self.msg_buf.buffer, self.msg_buf.buffer_length).to_vec() }
+            };
+            let message = RawMessage {
+                data,
+                source_timestamp: msg_info.source_timestamp,
+                received_timestamp: msg_info.received_timestamp,
+                publisher_gid: msg_info.publisher_gid.data,
+            };
+            if let Err(e) = self.sender.try_send(message) {
+                if e.is_disconnected() {
+                    // user dropped the handle to the stream, signal removal.
+                    return true;
+                }
+                self.drops.0.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        false
     }
 
     fn destroy(&mut self, node: &mut rcl_node_t) {

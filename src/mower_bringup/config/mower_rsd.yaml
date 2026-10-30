@@ -189,8 +189,8 @@ pid_autotune:
 # recorder service sets (autostart false, MediaMTX on loopback). The per-robot
 # ones (robot_id, output_root, r2_env_file, the profile file in
 # mower_recorder's share, git_repo_dir) robot.launch.py adds for these nodes
-# from its arguments. E5-3a: the module is idle only, its start is refused;
-# RUST_RECORDER stays off until E5-3b records.
+# from its arguments. RUST_RECORDER stays off until the owner's robot checks
+# (E5-3b records the default profile from DDS).
 graph_snapshot:
   ros__parameters:
     period_s: 2.0

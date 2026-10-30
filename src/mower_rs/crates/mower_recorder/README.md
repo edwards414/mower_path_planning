@@ -4,19 +4,19 @@ mower_recorder's three rclpy nodes (`src/mower_recorder/mower_recorder/{recorder
 as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST_RECORDER` (step E5 of
 [docs/ROS_FREE_PLAN.md](../../../../docs/ROS_FREE_PLAN.md); not `rust_record` / `RUST_RECORD`, the zone path recorder).
 
-> **E5-3a: idle only. Do not turn `RUST_RECORDER` on before E5-3b.** The module does everything the three nodes do
-> while nothing records, but it records nothing: `/mower_recorder/start` answers `success: false` with
-> `這版的 Rust 錄製器（RUST_RECORDER，E5-3a）還不能錄製，…`. With the switch on, the app's REC button therefore does
-> nothing but show that text. The switch is off by default in `robot.launch.py`, `mission.launch.py`,
-> `deploy/docker-compose.yaml` and `deploy/.env.example`, and `test_controller_configuration.py` keeps it so.
+> **E5-3b: it records** the default profile from DDS, as the Python recorder and its `ros2 bag record` children did.
+> The switch stays off by default (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
+> `deploy/.env.example`; `test_controller_configuration.py` keeps it so) until the owner has run the robot checks
+> (below) and E5-7 makes it the default. data_collection (E5-5) is not in the module yet:
+> `mower-data-collection.sh` refuses to start while it is on.
 
 ## What runs
 
-| Instance | E5-3a | Endpoints (on the bus, to DDS through mower_bridge) |
+| Instance | State | Endpoints (on the bus, to DDS through mower_bridge) |
 |---|---|---|
 | `graph_snapshot` | complete | `/graph_snapshot`, `/graph_events` (R V 10), the fault (`/mower_recorder/fault`, R V 10) |
 | `bag_store` | complete | `/mower_recorder/bags` (R TL 1), `/mower_recorder/command_result` (R V 10); reads `/mower_recorder/command` (R V 10) and `/mower_recorder/status` (R TL 1) |
-| `recorder_manager` | idle only | `/mower_recorder/status` (R TL 1), the rear light `/mower_base/rear_light` (R TL 1); reads `/fix` (R V 1) and the fault; serves `/mower_recorder/start`, `/stop`, `/snapshot` (Trigger) |
+| `recorder_manager` | complete for the default profile (E5-3b) | `/mower_recorder/status` (R TL 1), the rear light `/mower_base/rear_light` (R TL 1); reads `/fix` (R V 1) and the fault; serves `/mower_recorder/start`, `/stop`, `/snapshot` (Trigger). While a run records: the groups' nodes `mower_full_recorder`, `mower_snapshot_recorder` and their DDS subscriptions |
 
 - **graph_snapshot:** every `period_s` (2 s) the DDS graph as rclpy gives it (`get_node_names_and_namespaces`,
   `get_topic_names_and_types` with each topic's writer and reader counts, `get_service_names_and_types`: vendor/r2r
@@ -26,13 +26,22 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
   the commands and their answers (`mower_recorder_core::store`); the R2 upload every 30 s on a thread of its own
   (`upload_policy`), `upload_now` on another, the R2 delete with a local delete (manifest first). R2 settings: `R2_*`
   overridden by `r2_env_file`. `r2_endpoint_url` (empty: R2's) is for tests.
-- **recorder_manager (idle):** the status (`{"recording": false, ..., "num_topics": 32, "profile": "default", ...}`)
-  and the rear light (`{"effect": "off", "source": "bag"}`) at the start and every 2 s; MediaMTX's
-  `PATCH /v3/config/paths/patch/front {"record": false}` at the start and on each tick until it worked; stop answers
-  `目前沒有在錄製` after a status, snapshot `snapshot 觸發失敗`; the fault and `/fix` are read; `autostart` (false in
-  production) is refused after 3 s, in the log.
+- **recorder_manager:** `mower_recorder_core::manager::Manager` (E5-3b, its own tests replay F1 and F3 call for call)
+  behind the node: start, stop and snapshot with the Python's replies; the status and the rear light (`"recording"`
+  while a run goes) at the start and every 2 s, with the disk guard; MediaMTX (`record: false` at the start and its
+  retry, `record: true` into `<run>/video/` and the readiness note); `run_metadata.yaml`; the parameter dump of
+  `params_dump_nodes` through `ListParameters` / `GetParameters` clients on the node (`ros2 param dump`'s format);
+  the fault flushes the snapshot ring; `autostart` (false in production) after 3 s. Each manager call runs on a
+  blocking thread, one at a time. A run still going when the instance stops, or steps back for a foreign
+  recorder, is stopped and finalized.
+- **The sources** (`sources.rs`): a thread per group with the group's node (`mower_full_recorder`,
+  `mower_snapshot_recorder`: D12), discovery every 100 ms as rosbag2's, a name subscribed once it has a writer and one
+  type, with `reader_qos` (the override, else adapted to the offers), the offers and the type hash taken then; every
+  message to the group's `Feed` with rmw's receive and source times (vendor/r2r patch 3, every ready message taken at
+  a wakeup); hidden names never; a name in two groups subscribed once. The writer threads (`bag-full`,
+  `bag-snapshot`, niced) are `mower_recorder_core::recording`'s.
 - **The rear light (design D5)** goes out with path_record_node's through the bridge, to mower_base's r2r reader
-  (R TL 8). A source's "recording" holds the overlay 6 s, so the 2 s refresh is what will keep it on in E5-3b.
+  (R TL 8). A source's "recording" holds the overlay 6 s; the 2 s refresh keeps it on while a run records.
 - **One owner (design 4.2, R6):** each instance looks 2 s after its start and every 10 s for a DDS server of
   `/mower_recorder/start` that is not a bus bridge's (the Python recorder). While there is one it holds none of its
   endpoints, and says so in an ERROR; when it is gone it serves.
@@ -56,14 +65,22 @@ so do it with the robot idle.
 
 ## Tests
 
-- `tests/module.rs` (ROS domain 105, rmw_cyclonedds): the three instances on a manual clock, each of the above, the
-  one-owner check against a fake Python server, the rear light read as mower_base reads it and parsed by its
-  parser, the app's endpoints through the bridge; every endpoint against mower_bridge's manifest.
+- `tests/module.rs` (ROS domain 105, rmw_cyclonedds): the three instances on a manual clock, each of the above, a run
+  recorded from DDS (the groups' nodes and subscriptions, a latched sample from before the start, the payloads byte
+  for byte, no hidden or unpublished name, the snapshot flush, run_metadata.yaml, the parameter dump), the one-owner
+  check against a fake Python server, the rear light read as mower_base reads it and parsed by its parser, the app's
+  endpoints through the bridge; every endpoint against mower_bridge's manifest.
 - `tests/r2r_patch3.rs` (domain 104): vendor/r2r's patch 3 on DDS (VENDORED.md).
 
-## What E5-3b adds
+## What comes after E5-3b
 
-Recording: the groups (`full`, `snapshot`) with `mower_mcap` writers on niced threads, DDS raw sources
-(`subscribe_raw_with_info`, patch 3a), `run_metadata.yaml`, the parameter dump over r2r, the disk guard, MediaMTX's
-`record: true` and readiness, the snapshot ring, the start/stop texts; `/mower_full_recorder` (and the snapshot one)
-as r2r nodes for the length of a run (D12).
+- **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces.
+- **E5-5:** data_collection in the module (the request file, the camera group from DDS, spec 1.6 metadata, calib).
+- **E5-6:** the gstreamer-rs camera; **E5-7:** the default and the removal of the Python recorder.
+
+## Turning it on (the owner, on the robot)
+
+1. R10: one upload of a Rust-recorded run to the real R2 (`upload_now` from the app with `RUST_RECORDER=true` in a
+   test window, or `mower-bag upload` of a copied run), then `mower-bag verify` and the GrassVision worker on it.
+2. A supervised recording test with the switch on (`tools/switch.sh ... RUST_RECORDER=true`): start and stop from
+   the app, the rear light, the bag list and `mower-check-run` on the run, then `switch.sh restore`.

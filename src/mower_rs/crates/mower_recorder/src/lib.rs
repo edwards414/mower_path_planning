@@ -4,10 +4,9 @@
 //! `RUST_RECORDER` (step E5 of docs/ROS_FREE_PLAN.md; design D13: `record` is
 //! the zone path recorder's id, `RUST_RECORD` its switch).
 //!
-//! **E5-3a: idle only.** Everything the three nodes do while nothing records
-//! is here; recording itself comes with E5-3b. Until then `RUST_RECORDER`
-//! stays off (it is by default): with it on, `/mower_recorder/start` answers
-//! `success: false` with [`manager::NOT_YET`].
+//! **E5-3b: it records** the default profile from DDS. `RUST_RECORDER`
+//! stays off (it is by default) until the owner's robot checks; the
+//! data_collection profile comes with E5-5.
 //!
 //! - [`graph`]: `graph_snapshot`, complete: every 2 s the DDS graph as
 //!   `/graph_snapshot` JSON, the node diff on `/graph_events`, the watch rule
@@ -15,10 +14,11 @@
 //! - [`store`]: `bag_store`, complete: `/mower_recorder/bags` every 5 s and
 //!   after each command, `/mower_recorder/command` → `command_result`, the R2
 //!   upload every 30 s on a thread of its own, `upload_now`, delete.
-//! - [`manager`]: `recorder_manager`, idle: `/mower_recorder/status` and the
-//!   rear light every 2 s, MediaMTX's `record: false` at the start and its
-//!   retry, `/fix` and the fault, `start` / `stop` / `snapshot` answered as the
-//!   Python answers them while nothing records.
+//! - [`manager`]: `recorder_manager` around `mower_recorder_core::manager`:
+//!   start, stop, snapshot, the 2 s status and rear light with the disk guard,
+//!   MediaMTX, `run_metadata.yaml`, the parameter dump, the fault.
+//! - [`sources`]: a run's DDS subscriptions, a thread and a node per group
+//!   (`mower_full_recorder`, ...; design D12), found as rosbag2 finds them.
 //! - [`owner`]: one owner of `/mower_recorder/*` (design 4.2, R6): while a
 //!   DDS server of `/mower_recorder/start` that is not a bus bridge's exists
 //!   (the Python recorder), none of the three serves its endpoints, and each
@@ -41,6 +41,7 @@ pub mod graph;
 pub mod manager;
 pub mod owner;
 pub mod params;
+pub mod sources;
 pub mod store;
 
 use std::panic::AssertUnwindSafe;

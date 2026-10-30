@@ -664,13 +664,13 @@ def _compose_service(compose, name):
 
 def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
         tmp_path):
-    """rust_recorder:=true (compose RUST_RECORDER, default false; E5-3a):
+    """rust_recorder:=true (compose RUST_RECORDER, default false; E5-3):
     mower_rsd's bag module (crates/mower_recorder: recorder_manager,
     bag_store, graph_snapshot) instead of the Python recorder, whose
     container then sleeps, so that /mower_recorder/* has one owner; with
     rust_daemon:=false the mower_recorder binary. Its parameters are what
     record.launch.py gives the Python nodes. Off by default everywhere: the
-    module does not record yet (E5-3b), and with the switch off nothing
+    module waits for the owner's robot checks (E5-3b), and with the switch off nothing
     runs that did not before and the recorder service runs what it ran."""
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
     mission = MISSION_LAUNCH.read_text(encoding='utf-8')

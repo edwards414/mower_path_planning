@@ -1114,15 +1114,18 @@ name = "mower_recorder"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mcap",
  "mower_base",
  "mower_bridge",
  "mower_bus",
+ "mower_mcap",
  "mower_pyfmt",
  "mower_recorder_core",
  "mower_rs_common",
  "mower_schema",
  "r2r",
  "tokio",
+ "zstd",
 ]
 
 [[package]]

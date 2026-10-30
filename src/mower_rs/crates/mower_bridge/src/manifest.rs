@@ -585,7 +585,8 @@ pub static MODULES: &[Module] = &[
         // _latched() R TL 1; the /fix reader has depth 1). Born on the bus.
         // While the module runs in the process the Python recorder sleeps
         // (compose's recorder service), and its OUTSIDE entries leave the
-        // plan (`replaced_by`). E5-3a: idle, no recording yet.
+        // plan (`replaced_by`). Its recording (E5-3b) reads DDS on r2r
+        // nodes of its own, not on the bus.
         id: "bag",
         instances: &[
             Instance {

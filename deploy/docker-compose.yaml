@@ -95,8 +95,8 @@ services:
       - rust_static_tf:=${RUST_STATIC_TF:-false}
       # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
       # Python recorder of the recorder service below, which then sleeps.
-      # Not RUST_RECORD, the zone path recorder. E5-3a: the module does not
-      # record yet (its start is refused): keep it false until E5-3b.
+      # Not RUST_RECORD, the zone path recorder. Off until the owner's robot
+      # checks (E5-3b records the default profile; data collection is E5-5).
       - rust_recorder:=${RUST_RECORDER:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
