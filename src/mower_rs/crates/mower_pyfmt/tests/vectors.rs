@@ -36,7 +36,7 @@ fn decode(v: &Value) -> Py {
 
 /// The combo names of the generator's `COMBOS`.
 fn render(combo: &str, v: &Py) -> String {
-    let j = |ensure_ascii, indent, sort_keys| json::dumps(v, &JsonOptions { ensure_ascii, indent, sort_keys });
+    let j = |ensure_ascii, indent, sort_keys| json::dumps(v, &JsonOptions { ensure_ascii, indent, sort_keys }).unwrap();
     let y = |allow_unicode, sort_keys| yaml::safe_dump(v, &YamlOptions { allow_unicode, sort_keys });
     match combo {
         "j" => j(true, None, false),

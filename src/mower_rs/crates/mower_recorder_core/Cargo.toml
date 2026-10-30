@@ -1,0 +1,20 @@
+[package]
+name = "mower_recorder_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Rust recorder's ROS-free core (E5-2): profiles, run layout and metadata, status/bags/command logic, the R2 uploader (SigV4 over ureq), MediaMTX, graph JSON, parameter dumps, camera extrinsics; byte for byte what mower_recorder writes"
+
+[dependencies]
+mower_pyfmt = { path = "../mower_pyfmt" }
+mower_mcap = { path = "../mower_mcap" }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+hmac = "0.12"
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = { workspace = true }
+zstd = "0.14"
