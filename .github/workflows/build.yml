@@ -151,13 +151,12 @@ jobs:
         shell: bash
         # rmw_cyclonedds_cpp: the image ships only Fast DDS, and mower_bus_ros's
         # DDS tests run on the robot's RMW (they select it themselves; every
-        # other test and step keeps the image's default). python3-serial:
-        # firmware/tools/mower_flash.py in the flasher check.
+        # other test and step keeps the image's default).
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
-            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp python3-serial
+            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -229,6 +228,42 @@ jobs:
           cd src/mower_rs
           cargo build --locked -p mower_pid_autotune
           python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
+
+  flasher-tests:
+    # The STM32 firmware flasher: firmware/tools/mower_flash.py and its Rust
+    # port side by side on a fake STM32 (tools/README.md, "Checking the
+    # firmware flasher"). Its own job, in parallel with mower_rs tests, which
+    # it made ~6 min longer. Neither tool needs ROS, but the check holds the
+    # time on the wire to 10 %, and the bare runner gives the Rust binary a
+    # ~33 ms start-up (2 ms in the container) that fails its shortest
+    # scenarios: so it runs in the same image as before.
+    name: Firmware flasher tests
+    runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container: ros:jazzy-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        timeout-minutes: 10
+        # python3-serial: firmware/tools/mower_flash.py; the image's cc
+        # compiles the fake bootloader
+        shell: bash
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3-serial
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        timeout-minutes: 10
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/mower_rs
+          key: flasher
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Firmware flasher on a fake STM32 (black box)
         timeout-minutes: 20
@@ -624,7 +659,7 @@ jobs:
     # first, every tag again afterwards.
     name: Publish runtime tags
     runs-on: ubuntu-latest
-    needs: [python-tests, coverage-core-tests, mower-rs-tests, firmware, driver-tests, build]
+    needs: [python-tests, coverage-core-tests, mower-rs-tests, flasher-tests, firmware, driver-tests, build]
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image')
     env:
       REPOSITORY_LC: ${{ github.repository }}
