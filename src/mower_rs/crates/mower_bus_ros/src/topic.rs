@@ -377,10 +377,12 @@ fn keep_writer<T>(replay: &[Arc<T>], sent: &VecDeque<Weak<T>>, depth: usize) -> 
 
 /// `from_ros`: a DDS reader with the source's QoS while the bus has a reader
 /// of the name, and a bus writer (README.md, "Graph presence"). Volatile,
-/// the bus writer lives as long as the bridge runs. Transient local, it
-/// exists only while the DDS reader does and the graph shows a DDS writer.
+/// the bus writer lives as long as the bridge runs, unless `mirror_writers`.
+/// Transient local, or volatile with `mirror_writers`, it exists only while
+/// the DDS reader does and the graph shows a DDS writer.
 pub(crate) fn from_ros<T: BridgeMessage>(
-    scope: &Scope, node: &mut r2r::Node, name: &str, dds_qos: QosProfile, bus_qos: Qos, env: Env,
+    scope: &Scope, node: &mut r2r::Node, name: &str, dds_qos: QosProfile, bus_qos: Qos, mirror_writers: bool,
+    env: Env,
 ) -> Result<Forwarder, BridgeError> {
     // The name and the type are checked now; the DDS reader comes with a bus
     // reader, once the bridge runs. The watch comes first, so that no reader
@@ -388,10 +390,10 @@ pub(crate) fn from_ros<T: BridgeMessage>(
     let publisher = scope.publisher::<T>(name, bus_qos)?;
     let readers = publisher.subscription_changes();
     let bus_readers = publisher.subscription_count();
-    let latched = bus_qos.is_transient_local();
-    let writer = if latched {
-        // A transient-local bus writer comes with a DDS writer. The watch
-        // lives on, in the bridge's scope.
+    let follows_writers = bus_qos.is_transient_local() || mirror_writers;
+    let writer = if follows_writers {
+        // This bus writer comes with a DDS writer. The watch lives on, in the
+        // bridge's scope.
         drop(publisher);
         None
     } else {
@@ -404,7 +406,7 @@ pub(crate) fn from_ros<T: BridgeMessage>(
         scope: scope.clone(),
         dds_qos,
         bus_qos,
-        latched,
+        follows_writers,
         readers,
         bus_readers,
         dds: None,
@@ -433,6 +435,11 @@ pub(crate) fn from_ros<T: BridgeMessage>(
 ///   comes after the last one went gets the DDS writers' histories through
 ///   the next DDS reader, as a later r2r reader did, not what the bridge
 ///   heard before and might have missed since.
+/// - **Volatile, mirroring the writers** (`from_ros_mirrored`), the bus
+///   writer follows the DDS writers in the same way, with no history to
+///   keep: for a module that counts the writers of a name it reads
+///   (`publisher_count`), as mower_base's arm latch counts those of its
+///   command topics. A plain volatile writer would count all along.
 ///
 /// r2r has no graph event, so the graph is looked at every `PRESENCE_PERIOD`
 /// on the spin thread. The graph learns of a writer after the match, and the
@@ -444,7 +451,9 @@ struct FromRos<T: BridgeMessage> {
     scope: Scope,
     dds_qos: QosProfile,
     bus_qos: Qos,
-    latched: bool,
+    /// The bus writer exists only while the graph shows a DDS writer:
+    /// transient local, or volatile with `mirror_writers`.
+    follows_writers: bool,
     /// The bus's readers of the name, and their count as `readers` last
     /// gave it.
     readers: SubscriptionChanges,
@@ -454,7 +463,7 @@ struct FromRos<T: BridgeMessage> {
     /// When the DDS reader last came or went.
     changed: Option<tokio::time::Instant>,
     writer: Option<Writer<T>>,
-    /// Transient local: a sample came since the last look.
+    /// Following the writers: a sample came since the last look.
     heard: bool,
     /// The bridge's node, `(name, namespace)`: its own endpoints never
     /// count. One direction per name keeps it from writing a name it reads,
@@ -481,7 +490,7 @@ impl<T: BridgeMessage> FromRos<T> {
                     None => false,
                 },
                 () = tokio::time::sleep_until(due), if follow => self.follow().await,
-                _ = look.tick(), if self.latched && self.dds.is_some() => self.look().await,
+                _ = look.tick(), if self.follows_writers && self.dds.is_some() => self.look().await,
                 msg = next_sample(&mut self.dds) => match msg {
                     Some(msg) => self.forward(msg),
                     // Only with the node: the bridge is stopping.
@@ -514,8 +523,8 @@ impl<T: BridgeMessage> FromRos<T> {
             Some(dds) => {
                 self.env.counters.set_dds_reader(false);
                 // Transient local, the bus writer goes with it, and its
-                // history too.
-                if self.latched && self.writer.take().is_some() {
+                // history too; mirroring the writers, it goes as well.
+                if self.follows_writers && self.writer.take().is_some() {
                     self.env.counters.set_bus_writer(false);
                 }
                 // What it has queued has no bus reader to go to. Awaited, so
@@ -716,7 +725,7 @@ mod tests {
                 scope,
                 dds_qos: dds_qos.clone(),
                 bus_qos,
-                latched: true,
+                follows_writers: true,
                 readers,
                 bus_readers: 1,
                 dds: None,

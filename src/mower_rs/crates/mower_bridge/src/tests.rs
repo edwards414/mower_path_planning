@@ -550,7 +550,7 @@ fn the_plan_does_not_depend_on_the_order_of_the_modules() {
 /// adapter's latched sources come in from DDS, and its calls go out.
 #[test]
 fn shadow_compare_s_set_plans_the_adapter_s_inputs_from_dds() {
-    let running = Running::rsd(&["status", "battery", "adapter", "guards"], |id| id != "guards");
+    let running = Running::rsd(&["status", "battery", "adapter", "guards"], all_but("guards"));
     let got = plan(&running, &production_remaps()).unwrap().lines();
     for source in ["/map_grid", "/free_space_inflated", "/risk_map_inflated", "/chennal_map_inflated"] {
         let line = format!("from_ros {source} nav_msgs/msg/OccupancyGrid R TL 1");
@@ -571,6 +571,11 @@ fn shadow_compare_s_set_plans_the_adapter_s_inputs_from_dds() {
     assert!(!got.iter().any(|l| l.contains("get_parameters")), "they stay on r2r");
     // the guards are in the process, on r2r: their topics are theirs
     assert!(!got.iter().any(|l| l.contains("joy_cmd") || l.contains("cmd_vel")), "{got:#?}");
+}
+
+/// Every flag set but those of module `id` and of its instances.
+fn all_but(id: &'static str) -> impl Fn(&str) -> bool {
+    move |flag| flag != id && instance(flag).is_none_or(|(module, _)| module.id != id)
 }
 
 /// A subset of modules: what does not run here is elsewhere, so every input
@@ -1370,4 +1375,176 @@ fn a_module_s_test_checks_its_endpoints_against_the_manifest() {
     );
     let unknown = ModuleCtx::new("joystick", Shutdown::new());
     assert_eq!(coverage::gaps_of(&unknown).len(), 1);
+}
+
+
+/// E2 step 6: mower_base, pid_autotune and the final guard on the bus (their
+/// flags, which stay false until the owner's supervised test), ws_bridge on
+/// r2r and on the bus. The drivetrain edge `/drivetrain_guarded_cmd_vel`, the
+/// side channels and the base's outputs to its in-process readers no longer
+/// come in from DDS; what the three modules write goes out for DDS readers
+/// (robot_state_publisher's `/joint_states`, the recorder, the graph), as
+/// every topic written on the bus does; twist_mux's `/cmd_vel_guard_input`
+/// comes in for the final guard. With ws_bridge on the bus its names of the
+/// three modules leave the plan (E3 design 4), but for the `to_ros` of the
+/// servo and blade commands, which ws_bridge writes on the bus.
+#[test]
+fn step_6_takes_the_drivetrain_edge_into_the_process() {
+    let step6 = |id: &str| ["base", "pid_autotune", "velocity_command_guard"].contains(&id);
+    let shared_gone = [
+        "from_ros /mower_base/firmware_info std_msgs/msg/String R TL 1",
+        "from_ros /mower_base/telemetry std_msgs/msg/String BE V 1",
+        "from_ros /odom nav_msgs/msg/Odometry BE V 10",
+        "from_ros /odom_slow nav_msgs/msg/Odometry R V 10",
+    ];
+    let shared_came = [
+        "from_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1",
+        "to_ros /drivetrain_guarded_cmd_vel geometry_msgs/msg/TwistStamped R V 1",
+        "to_ros /joint_states sensor_msgs/msg/JointState SD",
+        "to_ros /mower_base/firmware_info std_msgs/msg/String R TL 1",
+        "to_ros /mower_base/pid_command std_msgs/msg/String R V 4",
+        "to_ros /mower_base/telemetry std_msgs/msg/String BE V 1",
+        "to_ros /mower_base/wheel_override std_msgs/msg/String BE V 1",
+        "to_ros /odom nav_msgs/msg/Odometry SD",
+        "to_ros /odom_slow nav_msgs/msg/Odometry R V 10",
+        "to_ros /pid_autotune/status std_msgs/msg/String R TL 1",
+        "service_to_ros /pid_autotune mower_interface/srv/PidAutotune",
+    ];
+    // ws_bridge on r2r: its writers of the servo and blade commands are on
+    // DDS, and come in for mower_base, best effort as its reader
+    let ws_r2r_came = [
+        "from_ros /mower_base/blade_command std_msgs/msg/String BE V 1",
+        "from_ros /mower_base/servo_command std_msgs/msg/String BE V 1",
+    ];
+    // ws_bridge on the bus: pid_autotune's status and service are in the
+    // process now
+    let ws_bus_gone = [
+        "from_ros /pid_autotune/status std_msgs/msg/String R TL 10",
+        "service_from_ros /pid_autotune mower_interface/srv/PidAutotune",
+    ];
+    for (what, on_now, gone_extra, came_extra) in [
+        ("ws_bridge on r2r", &[] as &[&str], &[] as &[&str], &ws_r2r_came[..]),
+        ("ws_bridge on the bus", &["bridge"][..], &ws_bus_gone[..], &[][..]),
+    ] {
+        let before = rsd_plan_with(&PRODUCTION_MODULES, on_now, &production_remaps()).unwrap();
+        let flags = |id: &str| on_bus_with(on_now)(id) || step6(id);
+        let after = plan(&Running::rsd(&PRODUCTION_MODULES, flags), &production_remaps()).unwrap();
+        let (before, lines) = (before.lines(), after.lines());
+        let mut gone: Vec<&str> = before.iter().map(String::as_str).filter(|l| !lines.iter().any(|g| g == l)).collect();
+        let mut came: Vec<&str> = lines.iter().map(String::as_str).filter(|l| !before.iter().any(|g| g == l)).collect();
+        let mut want_gone: Vec<&str> = shared_gone.iter().chain(gone_extra).copied().collect();
+        let mut want_came: Vec<&str> = shared_came.iter().chain(came_extra).copied().collect();
+        for v in [&mut gone, &mut came, &mut want_gone, &mut want_came] {
+            v.sort();
+        }
+        assert_eq!(gone, want_gone, "{what}: gone");
+        assert_eq!(came, want_came, "{what}: came");
+        assert_eq!(after.notes, [E2_PRODUCTION_NOTE], "{what}");
+        // in the process, no writer of the base's command topics is mirrored
+        assert!(!lines.iter().any(|l| l.contains("mirrored")), "{what}: {lines:#?}");
+        let why = |name: &str| after.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
+        // twist_mux on DDS: the C++ node, or E4's mux module elsewhere
+        assert_eq!(why("/cmd_vel_guard_input"), "for velocity_command_guard, from twist_mux (not here), twist_mux (outside)");
+        assert_eq!(why("/drivetrain_guarded_cmd_vel"), "from velocity_command_guard");
+    }
+    // with E4's mux in the process (rust_mux), the mux -> final guard edge is in-process too: its output goes out
+    // for DDS readers only
+    let with_mux: Vec<&str> = PRODUCTION_MODULES.iter().copied().chain(["mux"]).collect();
+    let flags = |id: &str| on_bus(id) || step6(id);
+    let lines = plan(&Running::rsd(&with_mux, flags), &production_remaps()).unwrap().lines();
+    let guard_input: Vec<&String> = lines.iter().filter(|l| l.contains(" /cmd_vel_guard_input ")).collect();
+    assert_eq!(guard_input, ["to_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1"]);
+    assert!(lines.iter().any(|l| l == "to_ros /drivetrain_guarded_cmd_vel geometry_msgs/msg/TwistStamped R V 1"));
+}
+
+/// mower_base counts the writers of its two command topics for the arm latch
+/// (BUS_TOPICS.md 5.5 f). Where such a writer is not on the bus here (its
+/// binary alone: robot.launch.py's `rust_daemon:=false`, base_ab.sh; the
+/// Python guards with `rust_guards:=false`), the bridge's bus writer mirrors
+/// the DDS writers, so that the latch sees what it saw on the graph and not a
+/// writer all along. Nothing else is mirrored.
+#[test]
+fn the_base_s_command_writers_come_in_mirrored_when_they_are_on_dds() {
+    let alone = plan(&Running::standalone("base", "mower_base").unwrap(), &production_remaps()).unwrap();
+    let mirrored: Vec<String> = alone.lines().into_iter().filter(|l| l.contains("mirrored")).collect();
+    assert_eq!(
+        mirrored,
+        [
+            "from_ros /drivetrain_guarded_cmd_vel geometry_msgs/msg/TwistStamped R V 1, writers mirrored",
+            "from_ros /mower_base/wheel_override std_msgs/msg/String BE V 1, writers mirrored",
+        ]
+    );
+    // in mower_rsd without the Rust guards
+    let ids: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != "guards").collect();
+    let flags = |id: &str| on_bus(id) || ["base", "pid_autotune"].contains(&id);
+    let p = plan(&Running::rsd(&ids, flags), &production_remaps()).unwrap();
+    let from: Vec<&Declaration> = p.declarations.iter().filter(|d| d.name == "/drivetrain_guarded_cmd_vel").collect();
+    assert_eq!(from.len(), 1);
+    assert!(from[0].direction == mower_bus_ros::Direction::FromRos && from[0].mirror_writers, "{}", from[0]);
+    // every other from_ros of every standalone binary is a plain one
+    for module in MODULES {
+        for instance in module.instances {
+            let p = plan(&Running::standalone(module.id, instance.node).unwrap(), &Remaps::default()).unwrap();
+            for d in p.declarations.iter().filter(|d| d.mirror_writers) {
+                assert_eq!(instance.node, "mower_base", "{d}");
+            }
+        }
+    }
+}
+
+/// What a module of on_bus.rs reads at start to pick its IO
+/// (`instance_on_bus`) is what mower_rsd's plan takes for it, instance by
+/// instance: the module and its bridge agree.
+#[test]
+fn the_flag_a_module_reads_is_the_one_the_plan_has() {
+    for r in Running::rsd(&PRODUCTION_MODULES, on_bus) {
+        assert_eq!(instance_on_bus(&r.node), r.on_bus, "{}", r.node);
+    }
+    assert!(!instance_on_bus("mower_agent") && !instance_on_bus("no_such_node"));
+    // an instance's own flag: the final guard alone
+    let final_guard = |id: &str| id == "velocity_command_guard";
+    let running = Running::rsd(&["guards"], final_guard);
+    let on: Vec<(&str, bool)> = running.iter().map(|r| (r.instance.node, r.on_bus)).collect();
+    assert_eq!(on, [("manual_velocity_guard", false), ("velocity_command_guard", true)]);
+    // an instance's name means nothing for one without a flag of its own
+    assert!(Running::rsd(&["battery"], |id| id == "battery_state").iter().all(|r| !r.on_bus));
+}
+
+/// With mower_base on the bus, both writers of /mower_base/led_command must
+/// be on the bus as well (BUS_TOPICS.md 5.5 d): with the Rust pid_autotune or
+/// robot_status out of the process (`rust_pid_autotune:=false`,
+/// `rust_status:=false`, their rclpy nodes), the plan is refused and
+/// mower_rsd does not start. So once the drivetrain's flags are on, those two
+/// switches have to stay true. The guards can go back to rclpy.
+#[test]
+fn with_the_base_on_the_bus_both_led_writers_must_be_in_the_process() {
+    let flags = |id: &str| on_bus(id) || ["base", "pid_autotune", "velocity_command_guard"].contains(&id);
+    for left_out in ["pid_autotune", "status"] {
+        let ids: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != left_out).collect();
+        let e = plan(&Running::rsd(&ids, flags), &production_remaps()).unwrap_err();
+        assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{left_out}: {e}");
+    }
+    let ids: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != "guards").collect();
+    assert!(plan(&Running::rsd(&ids, flags), &production_remaps()).is_ok());
+}
+
+/// The drivetrain's flags in every combination, with E2's and E3's around
+/// them: each plans but mower_base on the bus with exactly one of
+/// /mower_base/led_command's two writers (robot_status is, so pid_autotune
+/// must be too).
+#[test]
+fn every_combination_of_the_drivetrain_s_flags_plans_but_a_split_led_command() {
+    let drivetrain = ["base", "pid_autotune", "velocity_command_guard", "manual_velocity_guard", "bridge"];
+    for bits in 0u32..(1 << drivetrain.len()) {
+        let set = |id: &str| drivetrain.iter().position(|d| *d == id).is_some_and(|n| bits & (1 << n) != 0);
+        let flags = |id: &str| on_bus(id) || set(id);
+        let refused = set("base") && !set("pid_autotune");
+        match plan(&Running::rsd(&PRODUCTION_MODULES, flags), &production_remaps()) {
+            Ok(_) => assert!(!refused, "{bits:#07b}: planned with the LED writers split"),
+            Err(e) => {
+                assert!(refused, "{bits:#07b}: {e}");
+                assert!(e.problems.len() == 1 && e.problems[0].starts_with("/mower_base/led_command: "), "{e}");
+            }
+        }
+    }
 }

@@ -11,7 +11,14 @@
 //! Clocks: outgoing stamps and stamp checks use the wall clock (the node
 //! clock with use_sim_time:=false, which the production launch enforces);
 //! receipt timeouts use a steady clock.
+//!
+//! IO: r2r, or the in-process bus (`bus.rs`, step E2 of
+//! docs/ROS_FREE_PLAN.md), picked at start by the instance's flag in
+//! mower_bridge's on_bus.rs (`mower_bridge::instance_on_bus`). The final
+//! guard moves in E2 step 6. While its flag is false, nothing of `bus.rs`
+//! runs.
 
+mod bus;
 pub mod core;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,24 +67,59 @@ fn new_session_id() -> std::io::Result<String> {
     Ok(format!("manual-session-v1:{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
 }
 
+/// The safety limits, read once from the node's parameters (no parameter
+/// service: they cannot change at runtime).
+fn read_limits(node: &r2r::Node) -> Result<Limits, String> {
+    Limits::new(
+        params::f64(node, "command_timeout_s", 0.20),
+        params::f64(node, "max_input_age_s", 0.25),
+        params::f64(node, "max_future_skew_s", 0.05),
+        params::f64(node, "max_linear_x_m_s", 0.50),
+        params::f64(node, "max_angular_z_rad_s", 1.00),
+        params::bool(node, "require_command_session", false),
+        params::f64(node, "command_clock_period_s", 0.05),
+    )
+}
+
+fn log_limits(logger: &str, limits: &Limits) {
+    r2r::log_info!(
+        logger,
+        "velocity_command_guard: timeout={}s max_age={}s max_future_skew={}s max_linear_x={}m/s max_angular_z={}rad/s session={}",
+        limits.command_timeout_s,
+        limits.max_input_age_s,
+        limits.max_future_skew_s,
+        limits.max_linear_x,
+        limits.max_angular_z,
+        limits.require_command_session,
+    );
+}
+
 /// One guard instance. `m.node_name` is `velocity_command_guard` (mux ->
 /// ros2_control) or `manual_velocity_guard` (app joystick -> mux); the three
 /// topic names stay relative so the launch remappings — `-r <node>:cmd_vel_in:=…`
 /// whether they come from `launch_ros`'s `remappings=` or from mower_rsd's
 /// argv — resolve per node exactly as before.
+///
+/// Its IO is the bus when its flag says so (on_bus.rs), r2r otherwise.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    if mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name)) {
+        return bus::run_node(node, m).await;
+    }
+    run_r2r(node, m).await
+}
+
+/// [`run`] on the bus whatever the flag says, with `node` made by the
+/// caller (the tests, which set its parameters first).
+pub async fn run_on_bus(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    bus::run_node(node, m).await
+}
+
+/// The guard on r2r, as before E2.
+async fn run_r2r(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
 
-    let limits = Limits::new(
-        params::f64(&node, "command_timeout_s", 0.20),
-        params::f64(&node, "max_input_age_s", 0.25),
-        params::f64(&node, "max_future_skew_s", 0.05),
-        params::f64(&node, "max_linear_x_m_s", 0.50),
-        params::f64(&node, "max_angular_z_rad_s", 1.00),
-        params::bool(&node, "require_command_session", false),
-        params::f64(&node, "command_clock_period_s", 0.05),
-    )?;
+    let limits = read_limits(&node)?;
     let session_id = if limits.require_command_session { Some(new_session_id()?) } else { None };
 
     let publisher = node.create_publisher::<TwistStamped>("cmd_vel_out", QosProfile::default().keep_last(1))?;
@@ -94,16 +136,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     };
     let mut watchdog_timer = node.create_wall_timer(Duration::from_secs_f64(limits.watchdog_period_s()))?;
 
-    r2r::log_info!(
-        &logger,
-        "velocity_command_guard: timeout={}s max_age={}s max_future_skew={}s max_linear_x={}m/s max_angular_z={}rad/s session={}",
-        limits.command_timeout_s,
-        limits.max_input_age_s,
-        limits.max_future_skew_s,
-        limits.max_linear_x,
-        limits.max_angular_z,
-        limits.require_command_session,
-    );
+    log_limits(&logger, &limits);
 
     let guard = Arc::new(Mutex::new(Guard::new(limits)));
     // stop before anything can move, as the Python node did in __init__

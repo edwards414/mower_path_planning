@@ -172,9 +172,15 @@ endpoints lived and died with its node. Nobody outside sees a server or a latche
   A dead writer's latched value (coverage's markers, nav's `/nav_operation_active`) leaves the bus with it, as it left
   the module's own r2r reader, and so does what the bridge heard before the last bus reader went.
 - **`from_ros`, volatile:** the bus writer exists from the declaration until `run` returns, whether or not DDS has a
-  writer. It keeps no history, but it counts in `Subscriber::publisher_count()` all along; no module asks for that
-  count. This is why mower_base, the final guard and pid_autotune move together in E2: mower_base's arm latch asks
-  whether `/drivetrain_guarded_cmd_vel` and `/mower_base/wheel_override` have a publisher.
+  writer. It keeps no history, but it counts in `Subscriber::publisher_count()` all along. This is why mower_base, the
+  final guard and pid_autotune move together in E2: mower_base's arm latch asks whether `/drivetrain_guarded_cmd_vel`
+  and `/mower_base/wheel_override` have a publisher.
+- **`from_ros_mirrored`, volatile:** for a bus reader that does count the writers of its name. The bus writer follows
+  the DDS writers as a transient-local one does ("`from_ros`: presence"): it exists while the DDS reader does and the
+  graph shows a DDS writer (or a sample proves one), looked at every 200 ms, and goes with the last of them, so a
+  bus reader's `publisher_count` is what the graph shows. mower_bridge declares it for mower_base's two command topics
+  where their writer is not on the bus (the base's binary alone, the rclpy guards); with the base, the final guard
+  and pid_autotune in one mower_rsd those names do not cross at all. On a transient-local name it is `from_ros`.
 - **Services:**
   - a `service_to_ros` DDS server exists only while the bus has a server for the name ("Services"). While the module
     is down or in a crash loop, a DDS client's `is_available` waits, as for the module's own r2r server: ws_bridge's
@@ -254,7 +260,7 @@ exists, the forwarder looks every 200 ms, on the spin thread:
     newer ones push them out. DDS gave a late joiner each live writer's history instead. Doing the same would take a
     fresh DDS reader and bus writer at each such change, for the writers' replay, with a gap in between (not done).
     For `/tf_static` the frames are the same after a restart.
-  - Volatile names keep their bus writer: it has no history to go stale.
+  - Volatile names keep their bus writer, unless mirrored (`from_ros_mirrored`): it has no history to go stale.
 
 ## Services
 

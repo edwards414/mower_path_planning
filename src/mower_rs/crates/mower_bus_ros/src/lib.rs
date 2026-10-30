@@ -276,7 +276,19 @@ impl RosBridge {
     /// uses it, the bus writer its [`bus_qos`].
     pub fn from_ros<T: BridgeMessage>(&mut self, name: &str, qos: QosProfile) -> Result<(), BridgeError> {
         self.declare(name, Direction::FromRos, &qos, |bridge, bus_qos, env| {
-            topic::from_ros::<T>(&bridge.scope, &mut bridge.node, name, qos.clone(), bus_qos, env)
+            topic::from_ros::<T>(&bridge.scope, &mut bridge.node, name, qos.clone(), bus_qos, false, env)
+        })
+    }
+
+    /// [`RosBridge::from_ros`], with the bus writer mirroring the DDS
+    /// writers also on a volatile name: it exists only while the DDS reader
+    /// does and the graph shows a DDS writer, as for a transient-local name
+    /// (README.md, "Graph presence"). For a bus reader that counts the
+    /// writers of the name (`Subscriber::publisher_count`): mower_base's arm
+    /// latch. A transient-local name mirrors them either way.
+    pub fn from_ros_mirrored<T: BridgeMessage>(&mut self, name: &str, qos: QosProfile) -> Result<(), BridgeError> {
+        self.declare(name, Direction::FromRos, &qos, |bridge, bus_qos, env| {
+            topic::from_ros::<T>(&bridge.scope, &mut bridge.node, name, qos.clone(), bus_qos, true, env)
         })
     }
 

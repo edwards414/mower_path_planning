@@ -688,6 +688,8 @@ dependencies = [
  "futures",
  "libc",
  "mower_base_core",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde_json",
@@ -892,6 +894,8 @@ name = "mower_pid_autotune"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "serde",
@@ -1877,6 +1881,8 @@ name = "velocity_command_guard"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "mower_bridge",
+ "mower_bus",
  "mower_rs_common",
  "r2r",
  "tokio",
