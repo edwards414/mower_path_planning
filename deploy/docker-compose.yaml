@@ -16,7 +16,8 @@
 #                      bags, firmware_sync.json, host.request); must be owned
 #                      by uid 1000 (the container user)
 #   ROSBRIDGE_ADDRESS  rosbridge listen address (WireGuard/relay IP or LAN IP)
-#   MOWER_FIRMWARE_SYNC=0  keep whatever firmware is on the STM32
+#   MOWER_FIRMWARE_SYNC=0  keep whatever firmware is on the STM32; python /
+#                      rust picks the flasher, 1 the image's default (python)
 #   GPS=false          do not run the u-blox driver (no /fix; navigation
 #                      stays blocked by its health gate)
 #

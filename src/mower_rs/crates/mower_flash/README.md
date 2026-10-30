@@ -2,9 +2,11 @@
 
 The STM32 firmware flasher, a port of `firmware/tools/mower_flash.py` (E6 of
 `docs/ROS_FREE_PLAN.md`). No ROS, no r2r: a library and a binary, in the image
-as `/usr/local/bin/mower_flash`. `utils/firmware-sync` still runs the Python
-tool; switching it (E6-4, `MOWER_FIRMWARE_SYNC=python|rust`) is a separate
-step that needs the owner's OK.
+as `/usr/local/bin/mower_flash`. `utils/firmware-sync` runs it instead of the
+Python tool with `MOWER_FIRMWARE_SYNC=rust` (E6-4; its log then has one more
+line, `[firmware-sync] using mower_flash (rust)`, and its `bundled` line comes
+from `mower_flash manifest`); `1`, the robot's value, is the image's default,
+which stays python until E6-5 flips it after the owner's on-robot tests.
 
 ```
 mower_flash -p /dev/stmcom sync /opt/mower/firmware/mower_robot_firmware.bin --report ~/.mower/firmware_sync.json

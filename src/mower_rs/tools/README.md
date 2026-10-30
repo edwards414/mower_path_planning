@@ -151,8 +151,12 @@ docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=75 \
 
 `utils/firmware-sync` runs `firmware/tools/mower_flash.py sync` at every
 container start and re-flashes the STM32 through its UART bootloader whenever
-the image's firmware differs, which is every OTA. `flash_check.py` is what
-proves a flasher behaves the way that one does, without a board:
+the image's firmware differs, which is every OTA (`MOWER_FIRMWARE_SYNC=rust`
+runs the Rust port `mower_flash` instead; `1` is the image's default, python
+until E6-5; the wrapper's own behaviour per value is held to
+`deploy/test/golden/firmware_sync_wrapper.json` by
+`src/mower_mission/test/test_firmware_sync_wrapper.py`). `flash_check.py` is
+what proves a flasher behaves the way that one does, without a board:
 
 ```bash
 # Linux; mower_flash.py needs pyserial (apt install python3-serial)
@@ -285,9 +289,10 @@ ssh cat@<robot> 'sudo docker rmi docker.io/fxrbindi/mower_path_planning:rosfree-
   `NAV_COMPOSITION`, `RUST_DAEMON`, `RUST_BASE`, `RUST_LOCALIZE` and
   `RUST_NAV_CORE` are always written (the last three `false` unless given), so
   nothing from an earlier call sticks. `RUST_*` / `NAV_*` must be exactly
-  `true` or `false`. Edit `.env` during a test and the next switch refuses
-  rather than silently dropping the edit: make the same edit in
-  `.env.bak-rosfree-test`, which is what `restore` puts back.
+  `true` or `false`, `MOWER_FIRMWARE_SYNC` `0`, `1`, `python` or `rust`. Edit
+  `.env` during a test and the next switch refuses rather than silently
+  dropping the edit: make the same edit in `.env.bak-rosfree-test`, which is
+  what `restore` puts back.
 - It exits 1 (`SWITCH_FAIL: ...`) if the image is not loaded or is not the
   expected build (above), `compose up` fails, the container's launch
   arguments are not the requested ones, or the expected drivers are not what
@@ -341,7 +346,11 @@ source is the same: a ~20 s bootloader flash (motors off) on the switch and
 another on the restore, and a failed flash leaves the STM32 in its bootloader.
 When `git diff <main's sha> <test sha> -- firmware/` is empty, pass
 `MOWER_FIRMWARE_SYNC=0` as above; `restore` then brings back the pre-test value
-and main finds its own build still on the board.
+and main finds its own build still on the board. `MOWER_FIRMWARE_SYNC=python`
+or `rust` picks the flasher for the test instead (E6-4; an image from before
+the switch runs python for both); with `rust` the container log shows
+`[firmware-sync] using mower_flash (rust)` (`sudo docker logs
+mower-lawan_node-1 2>&1 | grep '^\[firmware-sync\]'`).
 
 **Pulling the STM32 cable does not test the restart path.** `/dev/stmcom` is
 the LubanCat's native UART (ttyS3), which reports no I/O error when the cable
