@@ -96,7 +96,8 @@ services:
       # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
       # Python recorder of the recorder service below, which then sleeps.
       # Not RUST_RECORD, the zone path recorder. Off until the owner's robot
-      # checks (E5-3b records the default profile; data collection is E5-5).
+      # checks (E5-3b records the default profile; E5-5 data collection, by
+      # mower-data-collection.sh's request file).
       - rust_recorder:=${RUST_RECORDER:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no

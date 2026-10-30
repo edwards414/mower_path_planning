@@ -606,6 +606,120 @@ fn recorder_manager_records_a_run_from_dds() {
     });
 }
 
+/// E5-5: data_collection by the request file (design 4.7, D7), as
+/// mower-data-collection.sh writes it: the manager takes the profile while
+/// idle and says so in the status; the camera group records the camera
+/// topics from DDS (gscam stays outside); run_metadata.yaml is spec 1.6's,
+/// with the camera block the launch would have passed (the URDF from
+/// robot_state_publisher's latched `/robot_description`), and `calib/` the
+/// calibration's copy; the request's going brings the default back.
+#[test]
+fn recorder_manager_takes_data_collection_from_the_request_file() {
+    within(async {
+        let root = scratch("dc");
+        let golden = repo().join("deploy/test/golden/recorder/F3");
+        let run = golden.join("MW-E5FIX_20261030T080906");
+        let calib = root.join("calib");
+        std::fs::create_dir_all(&calib).unwrap();
+        std::fs::copy(run.join("calib/camera_front.yaml"), calib.join("camera_front.yaml")).unwrap();
+        std::fs::copy(run.join("calib/extrinsics.yaml"), calib.join("extrinsics.yaml")).unwrap();
+        let request = root.join("recorder_profile.json");
+        let pipeline = "videotestsrc is-live=true ! image/jpeg,width=80,height=60,framerate=25/1";
+        std::fs::write(
+            &request,
+            format!(
+                r#"{{"profile": "data_collection", "camera": {{"camera_size": "80x60", "gscam_pipeline": "{pipeline}",
+                    "calib_dir": "{}"}}, "session_file": "{}", "run_info": "{{weather: cloudy}}", "upload_policy": "manual"}}"#,
+                calib.display(),
+                golden.join("session.yaml").display()
+            ),
+        )
+        .unwrap();
+        let mut params = production(&root, None);
+        set(&mut params, NODE_MANAGER, "profile_request_file", s(request.to_str().unwrap()));
+        // robot_state_publisher's URDF, latched
+        let urdf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(repo().join("src/mower_rs/crates/mower_recorder_core/tests/vectors/extrinsics.json")).unwrap(),
+        )
+        .unwrap();
+        let rsp = Peer::new("e55_robot_state_publisher", "");
+        let description = rsp.with(|n| n.create_publisher::<Text>("/robot_description", reliable(1).transient_local()).unwrap());
+        description.publish(&Text { data: urdf["texts"]["real_robot_urdf"].as_str().unwrap().to_string() }).unwrap();
+        let camera = Peer::new("e55_camera_front", "");
+        let image = camera.with(|n| {
+            n.create_publisher::<r2r::sensor_msgs::msg::CompressedImage>("/camera/front/image_raw/compressed", reliable(100)).unwrap()
+        });
+        let info = camera.with(|n| n.create_publisher::<r2r::sensor_msgs::msg::CameraInfo>("/camera/front/camera_info", reliable(100)).unwrap());
+
+        let bag = Bag::start_only("/e55_dc", &params, false, &[NODE_MANAGER]).await;
+        let mut status = bag.feeder.subscribe::<Text>("/mower_recorder/status", Qos::latched().keep_last(100)).unwrap();
+        bag.until_serving().await;
+        let mut seen = String::new();
+        let deadline = Instant::now() + WAIT;
+        while !seen.contains(r#""profile": "data_collection""#) {
+            assert!(Instant::now() < deadline, "no data_collection status: {seen}");
+            seen = next("a status", &mut status).await.data.clone();
+        }
+
+        let (ok, reply) = call(&bag.feeder, "/mower_recorder/start").await;
+        let run_id = reply.strip_prefix("開始錄製 run=").unwrap_or_else(|| panic!("{reply}")).to_string();
+        assert!(ok);
+        let run_dir = root.join("bags").join(&run_id);
+        eventually("the camera group's reader", || subscribed_by(&camera, "/camera/front/image_raw/compressed") == ["mower_camera_recorder"]).await;
+        eventually("the matches", || {
+            image.get_inter_process_subscription_count().unwrap() == 1 && info.get_inter_process_subscription_count().unwrap() == 1
+        })
+        .await;
+        for i in 0..5u32 {
+            let mut m = r2r::sensor_msgs::msg::CompressedImage::default();
+            m.header.frame_id = "camera_front_optical_frame".into();
+            m.header.stamp.sec = 1_793_000_000 + i as i32;
+            m.format = "jpeg".into();
+            m.data = vec![0xff, 0xd8, i as u8, 0xff, 0xd9];
+            image.publish(&m).unwrap();
+            let mut c = r2r::sensor_msgs::msg::CameraInfo::default();
+            c.header = m.header.clone();
+            info.publish(&c).unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let (ok, reply) = call(&bag.feeder, "/mower_recorder/stop").await;
+        assert!(ok && reply == format!("已停止並封存: full, camera (run={run_id})"), "{reply}");
+
+        let images = messages(&run_dir.join("camera/camera_0.mcap"));
+        assert_eq!(images.iter().filter(|m| m.0 == "/camera/front/image_raw/compressed").count(), 5);
+        assert_eq!(images.iter().filter(|m| m.0 == "/camera/front/camera_info").count(), 5);
+        let meta = std::fs::read_to_string(run_dir.join("run_metadata.yaml")).unwrap();
+        assert!(meta.contains("\nprofile: data_collection\ncamera:\n"), "{meta}");
+        for line in [
+            "  device: /dev/video0\n  width: 80\n  height: 60\n  fps_native: 25\n  fps_recorded: 10\n  format: jpeg\n  autofocus: 'off'\n",
+            "  driver: gscam\n",
+            "camera_height_m: 0.585\ncamera_pitch_deg: 17.5\nextrinsics_source: placeholder\n",
+            "weather: cloudy\n",
+        ] {
+            assert!(meta.contains(line), "{line:?} in {meta}");
+        }
+        let golden_derived = std::fs::read_to_string(run.join("calib/extrinsics.yaml")).unwrap();
+        let ours = std::fs::read_to_string(run_dir.join("calib/extrinsics.yaml")).unwrap();
+        let derived = |t: &str| t.split("\nderived:\n").nth(1).map(str::to_string);
+        assert_eq!(derived(&ours), derived(&golden_derived), "the derived block: the URDF's reference");
+        assert!(run_dir.join("calib/camera_front.yaml").is_file());
+
+        // the request gone: the default profile again
+        std::fs::remove_file(&request).unwrap();
+        let deadline = Instant::now() + WAIT;
+        loop {
+            bag.advance(manager::STATUS_PERIOD).await;
+            let latest = next("a status", &mut status).await.data.clone();
+            if latest.contains(r#""profile": "default""#) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the default did not come back: {latest}");
+        }
+        bag.stop().await;
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
 // ---------------------------------------------------------------------------
 // graph_snapshot
 // ---------------------------------------------------------------------------

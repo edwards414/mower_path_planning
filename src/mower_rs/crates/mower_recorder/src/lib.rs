@@ -113,6 +113,20 @@ pub async fn run_all(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 }
 
 /// `os.path.expanduser`: a leading `~` or `~/` is `$HOME`.
+/// (E5-5) data_collection's request file (`mower_recorder_core::dc_request`):
+/// the node's `profile_request_file`, else `$MOWER_STATE_DIR/recorder_profile.json`,
+/// else `~/.mower/recorder_profile.json`.
+pub fn request_file(node: &r2r::Node) -> std::path::PathBuf {
+    let name = mower_recorder_core::dc_request::FILE_NAME;
+    match mower_rs_common::params::string(node, "profile_request_file", "") {
+        p if !p.is_empty() => std::path::PathBuf::from(expanduser(&p)),
+        _ => match std::env::var("MOWER_STATE_DIR") {
+            Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join(name),
+            _ => std::path::PathBuf::from(expanduser("~/.mower")).join(name),
+        },
+    }
+}
+
 pub fn expanduser(path: &str) -> String {
     if path == "~" || path.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {

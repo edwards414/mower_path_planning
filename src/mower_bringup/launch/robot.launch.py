@@ -620,7 +620,8 @@ def generate_launch_description():
                         'service, which then sleeps; with rust_daemon:=false '
                         'the mower_recorder binary. Not rust_record, the zone '
                         'path recorder. It records the default profile from '
-                        'DDS (E5-3b); data_collection comes with E5-5',
+                        'DDS (E5-3b), and data_collection by '
+                        'mower-data-collection.sh\'s request file (E5-5)',
         ),
         DeclareLaunchArgument(
             'rust_localize',

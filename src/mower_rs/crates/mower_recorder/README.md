@@ -7,8 +7,9 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
 > **E5-3b: it records** the default profile from DDS, as the Python recorder and its `ros2 bag record` children did.
 > The switch stays off by default (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
 > `deploy/.env.example`; `test_controller_configuration.py` keeps it so) until the owner has run the robot checks
-> (below) and E5-7 makes it the default. data_collection (E5-5) is not in the module yet:
-> `mower-data-collection.sh` refuses to start while it is on.
+> (below) and E5-7 makes it the default. **E5-5:** data_collection too, by the request file
+> `~/.mower/recorder_profile.json` that `mower-data-collection.sh start` writes (and `stop` deletes); gscam stays
+> outside, in the data-collection compose's camera-only service.
 
 ## What runs
 
@@ -57,7 +58,7 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
 | `deploy/docker-compose.yaml` | lawan_node gets `rust_recorder:=false`; the `recorder` service runs `ros2 launch mower_recorder record.launch.py` as before (a `bash -c` in front that `exec`s it) | the `recorder` service sleeps (`sleep infinity`) |
 | `robot.launch.py` | `bag` is not in `--modules` | `bag` last in `--modules`, with the recorder's parameter files |
 | `mission.launch.py` (`rust_daemon:=false`) | nothing | the `mower_recorder` binary (`mower_bridge::module_main("bag", "bag", ...)`: the three nodes and a bridge, `/mower_bus_bridge/bag`) |
-| `deploy/host/mower-data-collection.sh` | as before | `start` refuses: data collection in the module is E5-5 |
+| `deploy/host/mower-data-collection.sh` | as before | `start` writes the request file and starts only the camera (`data_collection_camera`, front_camera.launch.py); `stop` deletes it (E5-5) |
 | `src/mower_rs/tools/switch.sh` | written false | written true; the processes checked (the module, no Python recorder_manager) |
 
 Roll-back: `RUST_RECORDER=false` in `/opt/mower/.env`, `docker compose up -d`: no new image. It recreates lawan_node,
@@ -69,13 +70,38 @@ so do it with the robot idle.
   recorded from DDS (the groups' nodes and subscriptions, a latched sample from before the start, the payloads byte
   for byte, no hidden or unpublished name, the snapshot flush, run_metadata.yaml, the parameter dump), the one-owner
   check against a fake Python server, the rear light read as mower_base reads it and parsed by its parser, the app's
-  endpoints through the bridge; every endpoint against mower_bridge's manifest.
+  endpoints through the bridge; every endpoint against mower_bridge's manifest. E5-5: the request file (the
+  data_collection status, the camera group from DDS, the camera block and the derived extrinsics of F3's
+  calibration and URDF, the default again once the file is gone). `mower_recorder_core/tests/dc_request_port.rs`:
+  the request file, the pipeline builder, the placeholder as PyYAML wrote it, F3's camera parameters back from its
+  calibration.
 - `tests/r2r_patch3.rs` (domain 104): vendor/r2r's patch 3 on DDS (VENDORED.md).
 
-## What comes after E5-3b
+## data_collection (E5-5)
 
-- **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces.
-- **E5-5:** data_collection in the module (the request file, the camera group from DDS, spec 1.6 metadata, calib).
+- **The request file** (design D7) `~/.mower/recorder_profile.json` (`$MOWER_STATE_DIR`, or the node's
+  `profile_request_file`): `mower-data-collection.sh start` writes it (the profile, the camera's launch arguments as
+  compose passes them to the camera, `session_file`, `upload_policy`), `stop` deletes it.
+  `mower_recorder_core::dc_request` reads it; a key it does not know or another profile is refused (logged once, the
+  profile stays).
+- **recorder_manager** looks at it when it starts serving and on every 2 s tick, and applies a change while no run
+  records: the manager is made again with `data_collection.yaml` (next to `config_file`), the EKF and navsat
+  parameter dumps, and the camera parameters `dc_request::resolve` works out as data_collection.launch.py did:
+  `build_pipeline` (or `gscam_pipeline`), the calibration's intrinsics or the uncalibrated placeholder (written to the
+  temp dir as the launch wrote it), the calibration's extrinsics or the package's placeholder,
+  `camera_extrinsics.compute` on robot_state_publisher's latched `/robot_description` (3 s; else the built-in
+  geometry, said), the session file or the package's template. The launch's warnings are logged as
+  `[data_collection] WARNING: ...`. The status says `"profile": "data_collection"`; the camera group records
+  `/camera/front/image_raw/compressed`, `camera_info` and `/tf_static` from DDS, and the run gets spec 1.6's
+  `run_metadata.yaml` and `calib/` (`dc_metadata`). The file's going brings the default profile back.
+- **bag_store** takes the file's `upload_policy` while it is there (said once), its own otherwise.
+- **The camera** stays gscam (E5-6 replaces it): the data-collection compose's `data_collection_camera`
+  (front_camera.launch.py: gscam and the two static TFs), in the profile `camera_only`, which the helper starts by name.
+
+## What comes after E5-5
+
+- **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces
+  (branch `feat/e5-4-bus-taps`, paused).
 - **E5-6:** the gstreamer-rs camera; **E5-7:** the default and the removal of the Python recorder.
 
 ## Turning it on (the owner, on the robot)

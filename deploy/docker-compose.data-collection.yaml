@@ -19,6 +19,9 @@
 # src/mower_recorder/launch/data_collection.launch.py (gscam and the GStreamer
 # plugins come in through mower_recorder/package.xml).
 #
+# RUST_RECORDER=true (E5-5): the recorder is mower_rsd's bag module in the
+# robot stack, and the helper starts only data_collection_camera below.
+#
 # Robot-local files under MOWER_STATE_DIR (host ~/.mower = /home/mower/.mower):
 #   calib/camera_front.yaml            camera_info_manager intrinsics
 #   calib/extrinsics.yaml              measured extrinsics (see config template)
@@ -59,6 +62,44 @@ services:
       - MOWER_STATE_DIR=/home/mower/.mower
       - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
       # Never flash the STM32 from this container (no /dev/stmcom anyway).
+      - MOWER_FIRMWARE_SYNC=0
+    network_mode: host
+    ipc: host
+    pid: host
+    devices:
+      - ${CAMERA_DEVICE:-/dev/video0}:${CAMERA_DEVICE:-/dev/video0}
+    group_add:
+      - video
+    volumes:
+      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower
+
+  # E5-5: with RUST_RECORDER=true mower_rsd's bag module records (it reads
+  # host/mower-data-collection.sh's request file, recorder_profile.json in
+  # the state dir), and only the camera runs here: gscam and its two static
+  # TFs (front_camera.launch.py), with the same camera arguments. In the
+  # camera_only profile, so that `docker compose up -d` (the Python path,
+  # RUST_RECORDER=false) never starts it; the helper starts it by name.
+  data_collection_camera:
+    image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-stable}
+    pull_policy: missing
+    profiles: [camera_only]
+    restart: "no"
+    stop_signal: SIGINT
+    stop_grace_period: 20s
+    command:
+      - ros2
+      - launch
+      - mower_recorder
+      - front_camera.launch.py
+      - calib_dir:=/home/mower/.mower/calib
+      - camera_device:=${CAMERA_DEVICE:-/dev/video0}
+      - camera_size:=${CAMERA_SIZE:-1280x720}
+      - camera_fps:=${CAMERA_FPS:-25}
+      - record_fps:=${CAMERA_RECORD_FPS:-10}
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
+      - MOWER_STATE_DIR=/home/mower/.mower
+      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
       - MOWER_FIRMWARE_SYNC=0
     network_mode: host
     ipc: host

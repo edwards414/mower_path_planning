@@ -32,9 +32,20 @@
 //!   share), `git_repo_dir` from the launch; `autostart` false,
 //!   `params_dump_nodes`, `gps_topic` `/fix`, `fault_topic`, `video_api_url`
 //!   `http://127.0.0.1:9997`, `min_free_mb` 2048 from mower_rsd.yaml. The
-//!   data_collection parameters are read (`session_file`, `camera_params`,
-//!   ...), but that profile comes with E5-5 (mower-data-collection.sh refuses
-//!   while RUST_RECORDER is on).
+//!   data_collection parameters (`session_file`, `camera_params`, ...) are
+//!   read as the Python's were, for a node started with that profile.
+//! - **data_collection (E5-5, design 4.7 and D7):** the request file
+//!   (`profile_request_file`, default `$MOWER_STATE_DIR/recorder_profile.json`,
+//!   else `~/.mower/recorder_profile.json`), which mower-data-collection.sh
+//!   writes at `start` and deletes at `stop`. It is looked at when the node
+//!   serves and on every tick, and applied while no run records: the
+//!   manager is made again with data_collection.yaml (next to `config_file`),
+//!   the EKF and navsat dumps, and the camera parameters
+//!   `mower_recorder_core::dc_request::resolve` works out of it as
+//!   data_collection.launch.py did (the URDF from robot_state_publisher's
+//!   latched `/robot_description`); the status then says
+//!   `"profile": "data_collection"`. Its deletion brings the default back.
+//!   The camera itself is gscam, in the camera-only compose.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -73,6 +84,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 
 struct Settings {
     cfg: Config,
+    /// E5-5: the request file (`mower_recorder_core::dc_request`)
+    request_file: PathBuf,
+    /// mower_recorder's `config/` (data_collection.yaml, the extrinsics
+    /// placeholder, the session template): `config_file`'s directory
+    share_config: Option<PathBuf>,
     autostart: bool,
     video_api: String,
     video_path: String,
@@ -91,6 +107,13 @@ type Call = mower_bus::Request<Trigger::Request, Trigger::Response>;
 /// What the node holds while it serves.
 struct Active {
     manager: Arc<Mutex<Manager>>,
+    /// what makes a manager again (E5-5: another profile)
+    out: Arc<BusOutputs>,
+    params: Arc<RosParams>,
+    /// the request file's text in force (`None`: the default profile), and
+    /// the last one refused (said once)
+    applied: Option<String>,
+    refused: Option<String>,
     fix: Subscriber<NavSatFix>,
     fault: Subscriber<Bool>,
     start: Trig,
@@ -134,8 +157,14 @@ pub async fn run_node(ctx: r2r::Context, node: r2r::Node, m: ModuleCtx) -> Modul
         extrinsics_file: params::string(&node, "extrinsics_file", ""),
         extrinsics_derived: params::string(&node, "extrinsics_derived", ""),
     };
+    let request_file = crate::request_file(&node);
+    let share_config = (!cfg.config_file.is_empty())
+        .then(|| PathBuf::from(&cfg.config_file).parent().map(|p| p.to_path_buf()))
+        .flatten();
     let s = Settings {
         cfg,
+        request_file,
+        share_config,
         autostart: params::bool(&node, "autostart", true),
         video_api: params::string(&node, "video_api_url", ""),
         video_path: params::string(&node, "video_path", "front"),
@@ -198,7 +227,9 @@ pub async fn run_node(ctx: r2r::Context, node: r2r::Node, m: ModuleCtx) -> Modul
                             with_manager(&a.manager, |mg| mg.stop()).await;
                         }
                     } else if active.is_none() {
-                        active = Some(start(&ctx, &m, &s, &node, &logger).await?);
+                        let mut a = start(&ctx, &m, &s, &node, &logger).await?;
+                        apply_request(&ctx, &s, &node, &logger, &mut a).await;
+                        active = Some(a);
                     }
                 }
                 // a closed scope: the module is being stopped
@@ -209,8 +240,9 @@ pub async fn run_node(ctx: r2r::Context, node: r2r::Node, m: ModuleCtx) -> Modul
                 | Next::StopCall(None)
                 | Next::Snapshot(None) => break,
                 Next::Tick(Ok(())) => {
-                    if let Some(a) = &active {
+                    if let Some(a) = active.as_mut() {
                         with_manager(&a.manager, |mg| mg.tick()).await;
+                        apply_request(&ctx, &s, &node, &logger, a).await;
                     }
                 }
                 Next::Autostart => {
@@ -276,21 +308,156 @@ async fn start(
     } else {
         Some(Box::new(MediaMtx { api_url: s.video_api.clone(), path: s.video_path.clone() }))
     };
-    let hooks = Hooks {
-        clock: Box::new(core::SystemClock),
-        disk: Box::new(core::Statvfs),
-        video,
-        params: Arc::new(RosParams { node: node.clone(), clients: Mutex::new(HashMap::new()) }),
-        sources: Box::new(crate::sources::DdsSources::new(ctx.clone(), logger)),
-        out: Arc::new(BusOutputs { status, rear, logger: logger.to_string() }),
-    };
+    let params = Arc::new(RosParams { node: node.clone(), clients: Mutex::new(HashMap::new()) });
+    let out = Arc::new(BusOutputs { status, rear, logger: logger.to_string() });
+    let hooks = hooks(ctx, logger, video, &params, &out);
     // the timers from the start of serving, before the manager's first status
     let tick = m.bus.wall_timer(&m.clock, STATUS_PERIOD)?;
     let autostart = s.autostart.then(|| Box::pin(m.clock.sleep(AUTOSTART_DELAY)));
     let cfg = s.cfg.clone();
     // MediaMTX's PATCH blocks
     let manager = tokio::task::spawn_blocking(move || Manager::new(cfg, hooks)).await.expect("the manager's start panicked");
-    Ok(Active { manager: Arc::new(Mutex::new(manager)), fix, fault, start, stop, snapshot, tick, autostart })
+    Ok(Active {
+        manager: Arc::new(Mutex::new(manager)),
+        out,
+        params,
+        applied: None,
+        refused: None,
+        fix,
+        fault,
+        start,
+        stop,
+        snapshot,
+        tick,
+        autostart,
+    })
+}
+
+/// What a manager is made with: the node's outputs and parameter clients,
+/// new sources, MediaMTX, the clock and the disk.
+fn hooks(
+    ctx: &r2r::Context, logger: &str, video: Option<Box<dyn core::Video>>, params: &Arc<RosParams>, out: &Arc<BusOutputs>,
+) -> Hooks {
+    Hooks {
+        clock: Box::new(core::SystemClock),
+        disk: Box::new(core::Statvfs),
+        video,
+        params: params.clone(),
+        sources: Box::new(crate::sources::DdsSources::new(ctx.clone(), logger)),
+        out: out.clone(),
+    }
+}
+
+/// How long `/robot_description` is waited for (robot_state_publisher's,
+/// latched).
+pub const URDF_WAIT: Duration = Duration::from_secs(3);
+
+/// robot_state_publisher's `/robot_description` (latched), read on the node:
+/// the URDF the data_collection launch got from xacro.
+fn robot_description(node: &Arc<Mutex<r2r::Node>>) -> Result<String, String> {
+    use futures::{FutureExt, StreamExt};
+    let mut n = lock(node);
+    let qos = QosProfile::default().keep_last(1).reliable().transient_local();
+    let mut sub = n.subscribe::<Text>("/robot_description", qos).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + URDF_WAIT;
+    let mut got = None;
+    while got.is_none() && Instant::now() < deadline {
+        n.spin_once(Duration::from_millis(20));
+        while let Some(Some(msg)) = sub.next().now_or_never() {
+            got = Some(msg.data);
+        }
+    }
+    n.destroy_subscription(sub);
+    got.ok_or_else(|| format!("no /robot_description within {} s", URDF_WAIT.as_secs()))
+}
+
+/// E5-5: the request file as it is now, if it differs from what the
+/// manager runs with and no run records, applied: the manager is made again
+/// with the profile it asks for, or the default when it is gone.
+async fn apply_request(ctx: &r2r::Context, s: &Settings, node: &Arc<Mutex<r2r::Node>>, logger: &str, a: &mut Active) {
+    let now = match std::fs::read_to_string(&s.request_file) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            let why = format!("unreadable: {e}");
+            if a.refused.as_deref() != Some(why.as_str()) {
+                r2r::log_error!(logger, "{}: {why}", s.request_file.display());
+                a.refused = Some(why);
+            }
+            return;
+        }
+    };
+    if now == a.applied || (now.is_some() && now == a.refused) {
+        return;
+    }
+    if with_manager(&a.manager, |mg| mg.recording()).await {
+        // applied once the run has stopped
+        return;
+    }
+    let cfg = match &now {
+        None => {
+            r2r::log_info!(logger, "{} is gone: the default profile", s.request_file.display());
+            s.cfg.clone()
+        }
+        Some(text) => {
+            let resolved = (|| {
+                let req = mower_recorder_core::dc_request::Request::parse(text)?;
+                let share = s.share_config.clone().ok_or("no config_file, so no data_collection.yaml next to it")?;
+                let node = node.clone();
+                Ok::<_, String>((req, share, node))
+            })();
+            let (req, share, node2) = match resolved {
+                Ok(v) => v,
+                Err(e) => {
+                    r2r::log_error!(logger, "{}: {e}; the profile stays as it is", s.request_file.display());
+                    a.refused = now.clone();
+                    return;
+                }
+            };
+            let share2 = share.clone();
+            let r = tokio::task::spawn_blocking(move || {
+                let urdf = robot_description(&node2);
+                mower_recorder_core::dc_request::resolve(&req, &share2, urdf.as_deref().map_err(|e| e.clone()))
+            })
+            .await
+            .expect("the request's resolution panicked");
+            let r = match r {
+                Ok(r) => r,
+                Err(e) => {
+                    r2r::log_error!(logger, "{}: {e}; the profile stays as it is", s.request_file.display());
+                    a.refused = now.clone();
+                    return;
+                }
+            };
+            for note in &r.notes {
+                r2r::log_warn!(logger, "[data_collection] WARNING: {note}");
+            }
+            if let Some((path, body)) = &r.placeholder {
+                if let Err(e) = std::fs::write(path, body) {
+                    r2r::log_error!(logger, "{}: {e}", path.display());
+                }
+            }
+            r2r::log_info!(logger, "{}: profile data_collection, camera: {}", s.request_file.display(), r.pipeline);
+            let mut cfg = s.cfg.clone();
+            cfg.config_file = share.join("data_collection.yaml").to_string_lossy().into_owned();
+            cfg.params_dump_nodes = mower_recorder_core::dc_request::PARAMS_DUMP_NODES.iter().map(|n| n.to_string()).collect();
+            cfg.data_collection = r.dc;
+            cfg
+        }
+    };
+    // data_collection.launch.py gave its recorder_manager no video_api_url:
+    // the camera is gscam's then (mower-camera.service, MediaMTX's source,
+    // is stopped for the run), so no MediaMTX recording either
+    let video: Option<Box<dyn core::Video>> = if s.video_api.is_empty() || now.is_some() {
+        None
+    } else {
+        Some(Box::new(MediaMtx { api_url: s.video_api.clone(), path: s.video_path.clone() }))
+    };
+    let hooks = hooks(ctx, logger, video, &a.params, &a.out);
+    let manager = tokio::task::spawn_blocking(move || Manager::new(cfg, hooks)).await.expect("the manager's start panicked");
+    *lock(&a.manager) = manager;
+    a.applied = now;
+    a.refused = None;
 }
 
 /// The status and the rear light on the bus, the log on the r2r node.

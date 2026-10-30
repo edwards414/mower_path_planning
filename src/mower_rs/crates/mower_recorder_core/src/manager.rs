@@ -138,7 +138,7 @@ pub struct Hooks {
 }
 
 /// The profile-run parameters (data_collection.launch.py; `''` = not used).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DcParams {
     pub session_file: String,
     pub run_info: String,

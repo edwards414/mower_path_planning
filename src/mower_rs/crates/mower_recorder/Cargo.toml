@@ -30,6 +30,8 @@ tokio.workspace = true
 mower_base = { path = "../mower_base" }
 # tests/r2r_patch3.rs: the type hashes rosbag2 wrote (E5-1's table)
 mower_schema = { path = "../mower_schema" }
+# tests/module.rs: the URDF of mower_recorder_core's extrinsics vectors (E5-5)
+serde_json.workspace = true
 # tests/module.rs: the bags read back (mower_mcap's own test reader)
 mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
 zstd = "0.14"

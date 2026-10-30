@@ -25,6 +25,7 @@ REAL_CONTROLLER_LAUNCH = (
 LOCAL_COMPOSE = SRC_DIR.parent / 'docker-compose.yaml'
 DEPLOY_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.yaml'
 DATA_COLLECTION_HELPER = SRC_DIR.parent / 'deploy/host/mower-data-collection.sh'
+DATA_COLLECTION_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.data-collection.yaml'
 DEPLOY_INSTALL = SRC_DIR.parent / 'deploy/install.sh'
 ROBOT_LAUNCH = SRC_DIR / 'mower_bringup/launch/robot.launch.py'
 DOCKERFILE = SRC_DIR.parent / 'Dockerfile'
@@ -792,15 +793,55 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
         assert out == ('SLEPT infinity' if truthy(value) else 'LAUNCHED'), \
             repr(value)
 
-    # mower-data-collection.sh: start refuses while it is on, before it
-    # touches anything (the root check comes after)
+    # mower-data-collection.sh (E5-5): with it on, start writes the bag
+    # module's request file and starts only the camera, stop deletes the
+    # file; the commands and their output are the same either way (here the
+    # root check, first)
     helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
-    assert helper.index('if rust_recorder_on; then') < helper.index(
-        '    need_root\n    if systemctl is-active')
+    start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
+    stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
+    assert start.startswith('    need_root\n')
+    rust, python = start.split('    if rust_recorder_on; then\n', 1)[1].split(
+        '    else\n', 1)
+    assert rust.index('write_request') < rust.index('compose up -d "$svc"')
+    assert 'stack stop recorder' in python and 'stack' not in rust
+    assert stop.index('compose down') < stop.index('rm -f "$request"')
+    assert 'svc=data_collection_camera\n  profile_args=(--profile camera_only)' \
+        in helper
+    dc_compose = yaml.safe_load(DATA_COLLECTION_COMPOSE.read_text(
+        encoding='utf-8'))['services']
+    camera = dc_compose['data_collection_camera']
+    assert camera['profiles'] == ['camera_only']
+    assert camera['command'][:4] == ['ros2', 'launch', 'mower_recorder',
+                                     'front_camera.launch.py']
+    assert 'profiles' not in dc_compose['data_collection']
+    for key in ('environment', 'volumes', 'devices', 'network_mode'):
+        assert camera[key] == dc_compose['data_collection'][key], key
+    # the request file as write_request makes it from the settings (the
+    # helper's functions, sourced): what mower_recorder_core's dc_request
+    # parses, with compose's paths and the camera's arguments
+    funcs = helper[helper.index('setting() {'):helper.index(
+        'if rust_recorder_on; then\n  svc=')]
+    (tmp_path / 'funcs.sh').write_text(funcs)
+    (tmp_path / 'req.env').write_text(
+        f'MOWER_STATE_DIR={tmp_path}\nCAMERA_SIZE="640x480" # a comment\n'
+        'DATA_COLLECTION_UPLOAD_POLICY=manual\n')
+    subprocess.run(
+        [bash, '-c', 'set -euo pipefail; source funcs.sh; write_request'],
+        cwd=tmp_path, env={'PATH': '/usr/bin:/bin', 'CAMERA_FPS': '30',
+                           'env_file': str(tmp_path / 'req.env')},
+        check=True)
+    request = json.loads((tmp_path / 'recorder_profile.json').read_text())
+    assert request == {
+        'profile': 'data_collection',
+        'camera': {'camera_device': '/dev/video0', 'camera_size': '640x480',
+                   'camera_fps': '30', 'record_fps': '10',
+                   'calib_dir': '/home/mower/.mower/calib'},
+        'session_file': '/home/mower/.mower/data_collection_session.yaml',
+        'upload_policy': 'manual'}
     (tmp_path / 'dc.yaml').write_text('services: {}\n')
     for value in spellings + ('"true"', "'on' # the module"):
-        on = truthy(value.split(' #')[0].strip('"\''))
-        if not on and os.geteuid() == 0:
+        if os.geteuid() == 0:
             # as root, start would go on and really stop the host's services
             continue
         env_file = tmp_path / '.env'
@@ -812,12 +853,7 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
                  'MAIN_COMPOSE_FILE': str(tmp_path / 'none.yaml')},
             capture_output=True, text=True)
         assert done.returncode == 1, repr(value)
-        if on:
-            assert 'RUST_RECORDER=true' in done.stderr, repr(value)
-            assert 'E5-5' in done.stderr and 'Nothing was changed' in \
-                done.stderr
-        else:
-            assert done.stderr.strip() == 'run with sudo', repr(value)
+        assert done.stderr.strip() == 'run with sudo', repr(value)
 
     # switch.sh writes it every time, passes it, recreates the recorder
     # container and checks the processes
@@ -1290,7 +1326,8 @@ def test_robot_stack_runs_an_idle_recorder_for_the_app():
     helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
     start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
     stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
-    assert start.index('stack stop recorder') < start.index('compose up -d')
+    assert start.index('stack stop recorder') < start.index(
+        '      compose up -d\n')
     assert 'stack up -d recorder' in stop
     assert stop.index('compose down') < stop.index('stack up -d recorder')
 

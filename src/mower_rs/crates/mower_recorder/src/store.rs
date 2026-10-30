@@ -58,8 +58,12 @@ fn uploading() -> MutexGuard<'static, HashSet<PathBuf>> {
 struct Shared {
     root: PathBuf,
     robot_id: String,
-    policy: Policy,
-    policy_text: String,
+    /// `upload_policy`, or (E5-5) the data_collection request file's while
+    /// it asks for one: (the policy, its text, whether the request's)
+    policy: Mutex<(Policy, String, bool)>,
+    /// the node's own `upload_policy`
+    base_policy: String,
+    request_file: PathBuf,
     wifi: Vec<String>,
     r2: R2Config,
     endpoint: String,
@@ -76,7 +80,35 @@ struct State {
     upload_errors: HashMap<String, String>,
 }
 
+fn lock_policy(m: &Mutex<(Policy, String, bool)>) -> MutexGuard<'_, (Policy, String, bool)> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Shared {
+    /// (E5-5) The data_collection request file's `upload_policy` while it
+    /// asks for one (dc.sh's `DATA_COLLECTION_UPLOAD_POLICY`), the node's own
+    /// otherwise; each change said once.
+    fn request_policy(&self) {
+        let asked = std::fs::read_to_string(&self.request_file)
+            .ok()
+            .and_then(|t| mower_recorder_core::dc_request::Request::parse(&t).ok())
+            .map(|r| r.upload_policy)
+            .filter(|p| !p.is_empty());
+        let (text, from_request) = match asked {
+            Some(p) => (p, true),
+            None => (self.base_policy.clone(), false),
+        };
+        let mut cur = lock_policy(&self.policy);
+        if cur.1 != text || cur.2 != from_request {
+            r2r::log_info!(
+                &self.logger,
+                "upload_policy {text}{}",
+                if from_request { format!(" ({})", self.request_file.display()) } else { String::new() }
+            );
+            *cur = (Policy::parse(&text), text, from_request);
+        }
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -98,7 +130,8 @@ impl Shared {
 
     fn network_ok(&self) -> bool {
         let docked = self.state().docked;
-        core::network_ok(self.policy, docked, &self.wifi)
+        let policy = lock_policy(&self.policy).0;
+        core::network_ok(policy, docked, &self.wifi)
     }
 
     /// `_publish_bags`
@@ -242,6 +275,7 @@ struct Settings {
     root: PathBuf,
     robot_id: String,
     policy: String,
+    request_file: PathBuf,
     wifi: Vec<String>,
     r2: R2Config,
     endpoint: String,
@@ -289,6 +323,7 @@ pub async fn run_node(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         root: PathBuf::from(crate::expanduser(&params::string(&node, "output_root", "~/mower_bags"))),
         robot_id: params::string(&node, "robot_id", "mower"),
         policy: params::string(&node, "upload_policy", "wifi_or_dock"),
+        request_file: crate::request_file(&node),
         wifi: crate::params::strings(&node, "wifi_interfaces", &["wlan0"]),
         r2,
         endpoint: params::string(&node, "r2_endpoint_url", ""),
@@ -355,6 +390,7 @@ pub async fn run_node(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
             }
             Next::Scan(Ok(())) => {
                 if let Some(a) = &active {
+                    a.shared.request_policy();
                     a.shared.publish_bags();
                 }
             }
@@ -387,8 +423,9 @@ fn start(m: &ModuleCtx, s: &Settings, logger: &str) -> Result<Active, Box<dyn st
     let shared = Arc::new(Shared {
         root: s.root.clone(),
         robot_id: s.robot_id.clone(),
-        policy: Policy::parse(&s.policy),
-        policy_text: s.policy.clone(),
+        policy: Mutex::new((Policy::parse(&s.policy), s.policy.clone(), false)),
+        base_policy: s.policy.clone(),
+        request_file: s.request_file.clone(),
         wifi: s.wifi.clone(),
         r2: s.r2.clone(),
         endpoint: s.endpoint.clone(),
@@ -401,7 +438,7 @@ fn start(m: &ModuleCtx, s: &Settings, logger: &str) -> Result<Active, Box<dyn st
         logger,
         "bag_store up: root={} policy={} r2={}",
         s.root.display(),
-        shared.policy_text,
+        lock_policy(&shared.policy).1,
         if shared.r2.configured() { "configured" } else { "NOT configured" }
     );
     shared.publish_bags();
