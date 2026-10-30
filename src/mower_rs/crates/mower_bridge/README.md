@@ -50,12 +50,14 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
     `/free_space_inflated` and `/risk_map_inflated` were (BUS_TOPICS.md 5.8 #2) until step 5 dropped them.
   - `only`: not in production. nav's `nav_core` backend (robot.launch.py `rust_nav_core:=true`, CI's
     `nav_core_check.py`), with `/tf` and `/tf_static` for `nav_core.pose_source: tf`.
+  - `replaced_by`: an outside node's endpoint that a module of `mower_rsd` takes the place of (E4). While that module
+    runs in the process, robot.launch.py does not start the node, and the policy leaves the endpoint out.
 - **Outside** (BUS_TOPICS.md 5.3, "DDS→bus"), each with the step that removes it: twist_mux's `/cmd_vel_guard_input`
   (E4), robot_state_publisher's `/tf_static` and `/tf` (E4), nav2's `/rosout`, `/bt_navigator/get_state` and two
   actions (E9), the two teleop nodes (off by default), and the Python recorder (E5): `recorder_manager`'s status, its
   `/mower_recorder/start`, `/stop` and `/snapshot` and its `/mower_base/rear_light`, and `bag_store`'s bag list and
   command answers. Their QoS is upstream behaviour, unconfirmed (BUS_TOPICS.md 1.3), except the recorder's, which its
-  code sets.
+  code sets, and twist_mux's and robot_state_publisher's, which were measured for E4.
 - **ws_bridge** (`bridge`): every name of its allow-list (`mower_bringup/config/ws_bridge.yaml`), `topics_sub`'s globs
   expanded to the names a module or a node outside writes (28, read `R TL 10`), `topics_pub` (4, written `R V 10`) and
   the services (32, called). `the_bridge_module_is_ws_bridge_yaml_s_allow_list` keeps the two in step, the yaml's

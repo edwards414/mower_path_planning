@@ -952,6 +952,7 @@ fn the_manifest_is_consistent() {
                 servers.entry((e.kind.space(), e.name)).or_default().push(node);
             }
             assert!(e.only.is_none() || id == "nav", "{node}: only nav's nav_core endpoints are not in production");
+            assert!(e.replaced_by.is_none() || id == "outside", "{node} {}: only an outside node is replaced", e.name);
             assert!(!e.silent || e.kind == Kind::Publish, "{node} {}", e.name);
         }
     }

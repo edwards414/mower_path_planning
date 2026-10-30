@@ -533,17 +533,19 @@ pub static MODULES: &[Module] = &[
 
 /// The nodes outside the typed modules that a module's subscription or call
 /// can depend on (docs/BUS_TOPICS.md 5.3, "DDS→bus"), with the step that
-/// removes them. Their QoS is upstream behaviour, unconfirmed unless said.
+/// removes them. Their QoS is upstream behaviour, unconfirmed unless said
+/// measured (twist_mux and robot_state_publisher were, in the runtime image,
+/// for E4: tools/mux_oracle.py, tools/rsp_capture.py).
 pub static OUTSIDE: &[Outside] = &[
     Outside {
-        // cmd_vel_out; unconfirmed: KeepLast(1) or SystemDefaults, R V 1
-        // either way on rmw_cyclonedds
+        // cmd_vel_out, rclcpp::QoS(KeepLast(1)): R V 1, measured
         node: "twist_mux",
         until: "E4",
         endpoints: &[publishes::<TwistStamped>("/cmd_vel_guard_input", R_V_1)],
     },
     Outside {
-        // tf2_ros' StaticBroadcasterQoS and DynamicBroadcasterQoS
+        // tf2_ros' StaticBroadcasterQoS and DynamicBroadcasterQoS, R TL 1 and
+        // R V 100, measured
         node: "robot_state_publisher",
         until: "E4",
         endpoints: &[publishes::<TFMessage>("/tf_static", R_TL_1), publishes::<TFMessage>("/tf", R_V_100)],

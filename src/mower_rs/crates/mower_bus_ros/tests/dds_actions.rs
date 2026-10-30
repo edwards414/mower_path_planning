@@ -443,7 +443,7 @@ fn action_to_ros_serves_on_dds_only_while_the_bus_has_a_server() {
         // It fails: its scope closes, and the DDS server goes too.
         nav.close();
         eventually("the DDS server to leave the graph", || !shown(&tool, name)).await;
-        assert!(!running.action(name).dds_server);
+        eventually("the bridge to record its DDS server gone", || !running.action(name).dds_server).await;
         assert!(!found_within_a_second(&client).await);
 
         // Started again: it serves again.
@@ -523,7 +523,7 @@ fn the_dds_server_stays_while_goals_of_a_dropped_bus_server_run() {
         bus_goal.succeed(result(true)).unwrap();
         assert_eq!(wait("the result", result_future).await.unwrap(), (r2r::GoalStatus::Succeeded, result(true)));
         eventually("the DDS server to go once the goal has ended", || !shown(&tool, name)).await;
-        assert!(!running.action(name).dds_server);
+        eventually("the bridge to record its DDS server gone", || !running.action(name).dds_server).await;
         running.stop().await.unwrap();
     });
 }
@@ -614,7 +614,7 @@ fn action_from_ros_carries_a_bus_goal_to_the_dds_server_and_its_feedback_and_res
         let running = start(bridge);
         let client = bus.scope("boustrophedon_coverage").action_client::<WaypointAction>(name).unwrap();
         eventually("the bridge's bus server, which comes with the DDS one", || client.is_available()).await;
-        assert!(running.action(name).bus_server);
+        eventually("the bridge to record its bus server", || running.action(name).bus_server).await;
 
         let (handle, result_future, feedbacks) = send_once_served(&client, "a").await.unwrap();
         assert_eq!(handle.get_status(), Ok(GoalStatus::Executing));
@@ -668,14 +668,14 @@ fn action_from_ros_serves_on_the_bus_only_while_the_graph_shows_a_dds_server() {
         let nav2 = Peer::new("presence_nav2");
         let _server = serve_on_dds(&nav2, name, Duration::ZERO);
         wait("the bus server", client.wait_for_server()).await.unwrap();
-        assert!(running.action(name).bus_server);
+        eventually("the bridge to record its bus server", || running.action(name).bus_server).await;
         let (_handle, result_future, _f) = send_once_served(&client, "a").await.unwrap();
         assert_eq!(wait("the result", result_future).await, Ok((GoalStatus::Succeeded, result(true))));
 
         // It goes with its process: the bus server goes too.
         drop(nav2);
         eventually("the bus server to go", || !client.is_available()).await;
-        assert!(!running.action(name).bus_server);
+        eventually("the bridge to record its bus server gone", || !running.action(name).bus_server).await;
         let refused = client.send_goal_request(goal("b"));
         assert!(matches!(refused, Err(BusError::ServiceUnavailable { .. })), "{refused:?}");
         running.stop().await.unwrap();
