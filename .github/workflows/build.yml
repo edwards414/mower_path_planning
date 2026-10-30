@@ -232,22 +232,30 @@ jobs:
   flasher-tests:
     # The STM32 firmware flasher: firmware/tools/mower_flash.py and its Rust
     # port side by side on a fake STM32 (tools/README.md, "Checking the
-    # firmware flasher"). Neither needs ROS, so it runs on the runner next to
-    # mower_rs tests rather than inside that job, which it made ~6 min longer.
+    # firmware flasher"). Its own job, in parallel with mower_rs tests, which
+    # it made ~6 min longer. Neither tool needs ROS, but the check holds the
+    # time on the wire to 10 %, and the bare runner gives the Rust binary a
+    # ~33 ms start-up (2 ms in the container) that fails its shortest
+    # scenarios: so it runs in the same image as before.
     name: Firmware flasher tests
     runs-on: ubuntu-latest
     if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container: ros:jazzy-ros-base
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
         timeout-minutes: 10
-        # python3-serial: firmware/tools/mower_flash.py; the fake bootloader
-        # is compiled with the runner's cc
+        # python3-serial: firmware/tools/mower_flash.py; the image's cc
+        # compiles the fake bootloader
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-serial
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl python3-serial
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo
         timeout-minutes: 10
