@@ -304,13 +304,17 @@ fn clock_for(statuses: &[String], metadata_start: &str) -> (VecDeque<LocalTime>,
 }
 
 /// Our statuses against the recorded ones, `bag_bytes` taken from theirs.
+/// The Python counted the default profile's two hidden names in
+/// `num_topics` (32); the module counts what it records (30, owner decision
+/// 2026-10-31); data_collection's 19 is the same on both.
 fn assert_statuses(ours: &[String], theirs: &[String]) {
     assert_eq!(ours.len(), theirs.len());
     for (i, (o, t)) in ours.iter().zip(theirs).enumerate() {
         let mut v = json::loads(o).unwrap();
         let tv = json::loads(t).unwrap();
         profile::dict_set(&mut v, "bag_bytes", tv.get("bag_bytes").unwrap().clone());
-        assert_eq!(json::dumps(&v, &json::JsonOptions::unicode()).unwrap(), *t, "status #{i}: ours {o}");
+        let t = t.replace(r#""num_topics": 32"#, r#""num_topics": 30"#);
+        assert_eq!(json::dumps(&v, &json::JsonOptions::unicode()).unwrap(), t, "status #{i}: ours {o}");
     }
 }
 
@@ -650,7 +654,7 @@ fn synthetic(tmp: &Path, config_file: &str) -> Synthetic {
 }
 
 fn idle(stop_reason: &str) -> String {
-    format!(r#"{{"recording": false, "run_id": null, "start_time": null, "elapsed_s": 0.0, "bag_bytes": 0, "num_topics": 32, "profile": "default", "video": false, "stop_reason": {stop_reason}}}"#)
+    format!(r#"{{"recording": false, "run_id": null, "start_time": null, "elapsed_s": 0.0, "bag_bytes": 0, "num_topics": 30, "profile": "default", "video": false, "stop_reason": {stop_reason}}}"#)
 }
 
 fn last(v: &Mutex<Vec<String>>) -> String {

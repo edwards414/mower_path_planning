@@ -96,7 +96,8 @@ fn the_always_on_profile_is_unchanged() {
     assert_eq!(specs[0].recorded.len(), 30);
     assert!(!specs[0].recorded.iter().any(|t| t.contains("/_action/")));
     assert_eq!(specs[1].bag.as_ref().unwrap().snapshot_cache_size, Some(256 << 20));
-    assert_eq!(run::num_topics(&cfg), 32);
+    // the recorded names: the Python recorder said 32 (owner decision 2026-10-31)
+    assert_eq!(run::num_topics(&cfg), 30);
 }
 
 #[test]
@@ -179,7 +180,8 @@ fn status_and_rear_light_as_the_recorder_sent_them() {
                     video: v.get("video") == Some(&Py::Bool(true)),
                     stop_reason: None,
                 };
-                assert_eq!(st.to_json(), data);
+                // the Python counted the two hidden names it never recorded
+                assert_eq!(st.to_json(), data.replace(r#""num_topics": 32"#, r#""num_topics": 30"#));
                 n += 1;
             }
             "/mower_base/rear_light" => {
