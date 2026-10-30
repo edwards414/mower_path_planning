@@ -162,6 +162,7 @@ struct Shared {
 async fn serve_listener(listener: TcpListener, shared: Arc<Shared>, gate: Option<Arc<Gate>>) {
     loop {
         let Ok((stream, peer)) = listener.accept().await else { continue };
+        no_delay(&stream);
         let shared = shared.clone();
         let gate = gate.clone();
         tokio::spawn(async move {
@@ -174,6 +175,13 @@ async fn serve_listener(listener: TcpListener, shared: Arc<Shared>, gate: Option
             }
         });
     }
+}
+
+/// Frames go out at once instead of waiting for the peer's delayed ACK: they
+/// are small and latency-bound (the joystick at 10 Hz, the command clock at
+/// 20 Hz), and on 4G that wait is a round trip.
+fn no_delay(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
 }
 
 async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, gate: Option<Arc<Gate>>) -> Result<(), String> {
@@ -380,6 +388,20 @@ mod tests {
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn accepted_connections_send_without_delay() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_io().build().unwrap();
+        rt.block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let _client = TcpStream::connect(addr).await.unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            assert!(!stream.nodelay().unwrap(), "the default this undoes");
+            no_delay(&stream);
+            assert!(stream.nodelay().unwrap());
+        });
     }
 
     #[test]
