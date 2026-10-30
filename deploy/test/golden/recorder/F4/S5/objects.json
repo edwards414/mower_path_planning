@@ -1,0 +1,110 @@
+[
+ {
+  "content_type": "application/json",
+  "etag": "\"d755beace8d86ddf795a94b9aceb46c6\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/_manifest.json",
+  "metadata": {},
+  "sha256": "7b6a8b34b444d87f2d890c5e758e15547c557c96742f22f6f2c2ad3a126af75a",
+  "size": 3943
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"4f5a031aaeca244cbb9a81b97039ce67\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/bag/bag_0.mcap",
+  "metadata": {
+   "sha256": "c63ebbd566d7453b6bd5cd52fe43f56b35ea7f496dd38238c27b4629525eeb27"
+  },
+  "sha256": "c63ebbd566d7453b6bd5cd52fe43f56b35ea7f496dd38238c27b4629525eeb27",
+  "size": 750996
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"71c843952870663afe37f946b81232a2\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/bag/metadata.yaml",
+  "metadata": {
+   "sha256": "7c3b57247fa350629503e021ca9b0689f76af3b5c1ad0fc123966191937d83ab"
+  },
+  "sha256": "7c3b57247fa350629503e021ca9b0689f76af3b5c1ad0fc123966191937d83ab",
+  "size": 27907
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"78465bfa0870d2c8854ac0652e9ad9d2\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/calib/camera_front.yaml",
+  "metadata": {
+   "sha256": "7b8c47f08b6d46423058c4a2f3a208594a73a1d7b0d7ac7ae71c32e34f848304"
+  },
+  "sha256": "7b8c47f08b6d46423058c4a2f3a208594a73a1d7b0d7ac7ae71c32e34f848304",
+  "size": 586
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"f385a0dc4ebdd8805f6a2b851f65929b\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/calib/extrinsics.yaml",
+  "metadata": {
+   "sha256": "7b8fe4c74894c147bbe79aea108477eca77a548eb652ed956d92d6298c892c34"
+  },
+  "sha256": "7b8fe4c74894c147bbe79aea108477eca77a548eb652ed956d92d6298c892c34",
+  "size": 1956
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"1e628158d784365ef6c0c43dbda21175\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/camera/camera_0.mcap",
+  "metadata": {
+   "sha256": "05fb51af8ff8f994a8c82fe7991bb26540ac20601effff2eb1717a18560df427"
+  },
+  "sha256": "05fb51af8ff8f994a8c82fe7991bb26540ac20601effff2eb1717a18560df427",
+  "size": 494478
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"3bd6d6c1f5c2e93e873a20bb7b8688f6\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/camera/metadata.yaml",
+  "metadata": {
+   "sha256": "101427f9cfc16c343deaef477c2ac9ee02a9ff821ef098b34d57114415025a85"
+  },
+  "sha256": "101427f9cfc16c343deaef477c2ac9ee02a9ff821ef098b34d57114415025a85",
+  "size": 4244
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"b59f9fe0b823f6372f43c5953f4f5a13\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/params/ekf_filter_node_map.yaml",
+  "metadata": {
+   "sha256": "092e640f566bb7826e392b55e50f77d59ec37aef189a8f365095fbf32a731e3e"
+  },
+  "sha256": "092e640f566bb7826e392b55e50f77d59ec37aef189a8f365095fbf32a731e3e",
+  "size": 4579
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"9322525e529d33e741b87d6f9525e94a\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/params/ekf_filter_node_odom.yaml",
+  "metadata": {
+   "sha256": "90ef25876d380e0723665a454589fab3536d3ac193ada280a1561c327722d1b0"
+  },
+  "sha256": "90ef25876d380e0723665a454589fab3536d3ac193ada280a1561c327722d1b0",
+  "size": 4104
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"ad048b6896f961fa892b772a46ede75e\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/params/navsat_transform.yaml",
+  "metadata": {
+   "sha256": "e814fc4ab7411d4a5a01951a899cc3ab8ade45e335deadb8e2c3f80fbbd6bdc7"
+  },
+  "sha256": "e814fc4ab7411d4a5a01951a899cc3ab8ade45e335deadb8e2c3f80fbbd6bdc7",
+  "size": 507
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"c19008ae1d87efa24658d0b43c7f86e9\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T080906/run_metadata.yaml",
+  "metadata": {
+   "sha256": "84606bee26a196e13763dd09d7503eb32be9a86265acac7276cee518f32e22cd"
+  },
+  "sha256": "84606bee26a196e13763dd09d7503eb32be9a86265acac7276cee518f32e22cd",
+  "size": 1446
+ }
+]

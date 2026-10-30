@@ -1,0 +1,1074 @@
+{
+ "generator": "tests/oracle/sigv4_gen.py",
+ "boto3": "1.34.46",
+ "timestamp": "20261030T081851Z",
+ "access_key": "AKIDE5TEST0000000000",
+ "secret_key": "e5-test-secret-key/0000000000000000000000",
+ "region": "auto",
+ "vectors": [
+  {
+   "method": "PUT",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml",
+   "headers": [
+    [
+     "x-amz-meta-sha256",
+     "abababababababababababababababababababababababababababababababab"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "E+t7qLVxO5ApDW4XqTBMdA=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "d3ee33a837c92eb3298ee5f26b11b4619b77e25eb31aa346d611f6919a099c8f"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256, Signature=30b95cb6e60c3fdadd0b6e60ab6050cfdc48860813b83d3c31e36cc885a632a0"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "fc82b930-c43a-4c18-a197-6ac693215134"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "33"
+    ]
+   ],
+   "body_len": 33,
+   "body_sha256": "d3ee33a837c92eb3298ee5f26b11b4619b77e25eb31aa346d611f6919a099c8f",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml\n\ncontent-md5:E+t7qLVxO5ApDW4XqTBMdA==\nhost:127.0.0.1:9000\nx-amz-content-sha256:d3ee33a837c92eb3298ee5f26b11b4619b77e25eb31aa346d611f6919a099c8f\nx-amz-date:20261030T081851Z\nx-amz-meta-sha256:abababababababababababababababababababababababababababababababab\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256\nd3ee33a837c92eb3298ee5f26b11b4619b77e25eb31aa346d611f6919a099c8f",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\neb0569de981b56804b5f0fe4803c08b15bfc2caf152211a647edb2b956f3825d",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "upload_file small",
+   "index": 0
+  },
+  {
+   "method": "POST",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploads",
+   "headers": [
+    [
+     "x-amz-meta-sha256",
+     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256, Signature=a178a0da10fde5836cabed5d8e03b7443a42c845ffa118208cab886aecd82a78"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "eb706278-b894-4c79-ac0a-85b5673742f6"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "POST\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\nuploads=\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\nx-amz-meta-sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n03ed67db4a99564418dd6f8dc458b2e01a69d6d4d5d09345d6d6df05974ca5b7",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "upload_file big",
+   "index": 0
+  },
+  {
+   "method": "PUT",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1&partNumber=1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "DJ1bf8f0+NrsXEdK27b1Jw=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "2dbe1287867b7ff3f9c3ea45f3ddb8099b8aa5df3e2fc14bd14e91085db68b06"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date, Signature=6dea64b1dffbf66ab0342c70432f6427c745bff5ce17e77f40831b7eb786eccb"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "e1c53730-d723-44f5-8a97-a2eb6ecec605"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "8388608"
+    ]
+   ],
+   "body_len": 8388608,
+   "body_sha256": "2dbe1287867b7ff3f9c3ea45f3ddb8099b8aa5df3e2fc14bd14e91085db68b06",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\npartNumber=1&uploadId=e5-upload-id%2F1\ncontent-md5:DJ1bf8f0+NrsXEdK27b1Jw==\nhost:127.0.0.1:9000\nx-amz-content-sha256:2dbe1287867b7ff3f9c3ea45f3ddb8099b8aa5df3e2fc14bd14e91085db68b06\nx-amz-date:20261030T081851Z\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date\n2dbe1287867b7ff3f9c3ea45f3ddb8099b8aa5df3e2fc14bd14e91085db68b06",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n0a172f8dc7bee4104df0c9f42afdea1710faf6a6e694c537b50df8c2d906d6d8",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "upload_file big",
+   "index": 1
+  },
+  {
+   "method": "PUT",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1&partNumber=2",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "478naFKMwpEaVY2gh+kMXA=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "76d473983da9b195a465246a0209fb2396b9d2caf34ec765a3ea2cacc37807f2"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date, Signature=db3edf20d0678c0ce98ede93821bec17a889fd6d2edb70e2c20b4e6525428307"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "41ab6c55-5873-4553-b634-b6d2be8eb866"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "1048576"
+    ]
+   ],
+   "body_len": 1048576,
+   "body_sha256": "76d473983da9b195a465246a0209fb2396b9d2caf34ec765a3ea2cacc37807f2",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\npartNumber=2&uploadId=e5-upload-id%2F1\ncontent-md5:478naFKMwpEaVY2gh+kMXA==\nhost:127.0.0.1:9000\nx-amz-content-sha256:76d473983da9b195a465246a0209fb2396b9d2caf34ec765a3ea2cacc37807f2\nx-amz-date:20261030T081851Z\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date\n76d473983da9b195a465246a0209fb2396b9d2caf34ec765a3ea2cacc37807f2",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n66e115fd987e741c324413fd3d740243f31fdc115ff084ff9badc26c43dda1f1",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "upload_file big",
+   "index": 2
+  },
+  {
+   "method": "POST",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=60ec56936ecdd2420cc592a1de03798fe23c24ac3f19090f722ac6ccbf21c121"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "d38bf139-5bbd-4052-bfb7-1a13c5b85352"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "271"
+    ]
+   ],
+   "body_len": 271,
+   "body_sha256": "e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb",
+   "body": "<CompleteMultipartUpload xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Part><ETag>\"0c9d5b7fc7f4f8daec5c474adbb6f527\"</ETag><PartNumber>1</PartNumber></Part><Part><ETag>\"e3bf2768528cc2911a558da087e90c5c\"</ETag><PartNumber>2</PartNumber></Part></CompleteMultipartUpload>",
+   "canonical_request": "POST\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\nuploadId=e5-upload-id%2F1\nhost:127.0.0.1:9000\nx-amz-content-sha256:e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n9bed620fe79c56ea33700a9956a051685989dde0169fc39901bb89fe731c9b5c",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "upload_file big",
+   "index": 3
+  },
+  {
+   "method": "PUT",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "GmXZkeYR5lLhBtZ02iftmQ=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3981c1047e2e90c20cbda0f3c13978f5e876dc7da345beaca02a52982c17467"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;content-type;host;x-amz-content-sha256;x-amz-date, Signature=dc6acd3d8fa22cbf2f699551614d8830da9839771fafe65daae6d4ca28f17e43"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "ad859cbf-5f96-416b-ae08-b29d1f2bc2d3"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "20"
+    ]
+   ],
+   "body_len": 20,
+   "body_sha256": "e3981c1047e2e90c20cbda0f3c13978f5e876dc7da345beaca02a52982c17467",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\ncontent-md5:GmXZkeYR5lLhBtZ02iftmQ==\ncontent-type:application/json\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3981c1047e2e90c20cbda0f3c13978f5e876dc7da345beaca02a52982c17467\nx-amz-date:20261030T081851Z\n\ncontent-md5;content-type;host;x-amz-content-sha256;x-amz-date\ne3981c1047e2e90c20cbda0f3c13978f5e876dc7da345beaca02a52982c17467",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nd967b5de5dbc252e8fe0553259764a748db61c18fabddcb4c16d66eeda3d8a82",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "put_object manifest",
+   "index": 0
+  },
+  {
+   "method": "HEAD",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/r/bag/bag_0.mcap",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=4b3f2de8211ab4ddb3fe796410cf6ddae6383eb7cb94bec87db2ece13bb6556f"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "18a476d1-9eb8-4092-8e38-6c5026d934e5"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "HEAD\n/mower-bags/bags/MW-E5FIX/r/bag/bag_0.mcap\n\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\ned00ccbe5fc9f1728cd7040e587ba99ce99c829fc44c9e658c17aba0a97d0b11",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "head_object",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=467ec5be972d8d35809d7619f3b7d4be41a1258c97641d41fbe92aff16729a59"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "17c3680d-bdd2-4106-9905-3d5cfaedd30e"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n1b5d72434019f048b96edffd437b5aa3c904f002fdcf59adb1d5229e7a54af64",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "get_object",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "http://127.0.0.1:9000/mower-bags?list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F&encoding-type=url",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=330a135b1009a57f3f5ab154551cdf825e8a3577c13ab4e0ea02e70ae3df5e2e"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "3ccc771a-2093-4448-8ef1-cafb53fc2191"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags\nencoding-type=url&list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n9c0d28f0b9c61c6318e9849746b5432ede283baef5a69bffc825d63de879556d",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "list_objects_v2",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "http://127.0.0.1:9000/mower-bags?list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F&continuation-token=1%2Fa%2Bb%3Dc&encoding-type=url",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=defacee80722283d39c70d713cde4a899c6814a33283959c855743b5fe90c059"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "77bfd24a-05e8-4186-9e33-5d8f6164ce4a"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags\ncontinuation-token=1%2Fa%2Bb%3Dc&encoding-type=url&list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n5c98bc0ce0c2761196874fa96b746fd3876a3f861744fd60f166cc9c580a231d",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "list_objects_v2 token",
+   "index": 0
+  },
+  {
+   "method": "DELETE",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=be532538ea824593260e170bb5fc77dae1a0ffea92370228cf2537c441c19444"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "6c33aa67-2ad6-433f-8d6b-563ffe981b96"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "DELETE\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n805c58dad6b21e7c0239b50857c7693492e86f94868fb088ca127ee559c7fb19",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "delete_object",
+   "index": 0
+  },
+  {
+   "method": "DELETE",
+   "url": "http://127.0.0.1:9000/mower-bags/bags/MW-E5FIX/r/video/x.mp4?uploadId=e5-upload-id%2F1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a9132b018b20303d56f8b8f2c6af86c6bb6ce0f6496ff42497e36939798704b6"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "a3b153d6-2d84-4df6-85a3-ef0f788b9671"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "DELETE\n/mower-bags/bags/MW-E5FIX/r/video/x.mp4\nuploadId=e5-upload-id%2F1\nhost:127.0.0.1:9000\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\naf7e772bda82933c696abbfd2c3b5d9a20f03a6052dd2bd128bb30dfad9d9a8d",
+   "endpoint": "http://127.0.0.1:9000",
+   "step": "abort",
+   "index": 0
+  },
+  {
+   "method": "PUT",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml",
+   "headers": [
+    [
+     "x-amz-meta-sha256",
+     "abababababababababababababababababababababababababababababababab"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "E+t7qLVxO5ApDW4XqTBMdA=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "UNSIGNED-PAYLOAD"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256, Signature=cdce8070635c62e2ef7691fc2e333009247fc8ecb14db27a5957104cd3bf2fe8"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "215f14ac-56a6-4d99-8030-ddc8e73bec26"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "33"
+    ]
+   ],
+   "body_len": 33,
+   "body_sha256": "d3ee33a837c92eb3298ee5f26b11b4619b77e25eb31aa346d611f6919a099c8f",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml\n\ncontent-md5:E+t7qLVxO5ApDW4XqTBMdA==\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:20261030T081851Z\nx-amz-meta-sha256:abababababababababababababababababababababababababababababababab\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256\nUNSIGNED-PAYLOAD",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nc91bcc9df43408b17d754e6408caa9d2c38ad773e9d8756d9e7a1a9480026069",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "upload_file small",
+   "index": 0
+  },
+  {
+   "method": "POST",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploads",
+   "headers": [
+    [
+     "x-amz-meta-sha256",
+     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256, Signature=057daa84ca87f0d700bf71466dcab42171d7b916bd3aeb3be87acabb597eee6c"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "d4250898-22dd-4dff-b35a-2604f7880fbc"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "POST\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\nuploads=\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\nx-amz-meta-sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nd9181a546a2bd08f802b0ffdca54488b59fc66f8fce34eb3a1fae7fdd0dab60d",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "upload_file big",
+   "index": 0
+  },
+  {
+   "method": "PUT",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1&partNumber=1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "DJ1bf8f0+NrsXEdK27b1Jw=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "UNSIGNED-PAYLOAD"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date, Signature=8f68a10cbe0b24c52bf59c4c5b93b251f30c8b980597ab41717370daed34f07e"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "24835a47-a16b-4295-864e-dcbca5ca1eaf"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "8388608"
+    ]
+   ],
+   "body_len": 8388608,
+   "body_sha256": "2dbe1287867b7ff3f9c3ea45f3ddb8099b8aa5df3e2fc14bd14e91085db68b06",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\npartNumber=1&uploadId=e5-upload-id%2F1\ncontent-md5:DJ1bf8f0+NrsXEdK27b1Jw==\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:20261030T081851Z\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date\nUNSIGNED-PAYLOAD",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n38982b2f4dc82a4b3bb0b87d38c2b37a9a6e691706ff81248a778750c1203c25",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "upload_file big",
+   "index": 1
+  },
+  {
+   "method": "PUT",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1&partNumber=2",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "478naFKMwpEaVY2gh+kMXA=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "UNSIGNED-PAYLOAD"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;host;x-amz-content-sha256;x-amz-date, Signature=1b604a8597dfe5bc63b5477a7a9781afc373390413948119c74eaecf33b02e2a"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "8e3ff0d6-524c-4a93-99c3-6bccfe67294a"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "1048576"
+    ]
+   ],
+   "body_len": 1048576,
+   "body_sha256": "76d473983da9b195a465246a0209fb2396b9d2caf34ec765a3ea2cacc37807f2",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\npartNumber=2&uploadId=e5-upload-id%2F1\ncontent-md5:478naFKMwpEaVY2gh+kMXA==\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:20261030T081851Z\n\ncontent-md5;host;x-amz-content-sha256;x-amz-date\nUNSIGNED-PAYLOAD",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nc59eff4cb9c90dc905fc16d2149a4f3ddd7616439d73d805f81efc4f457f5bae",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "upload_file big",
+   "index": 2
+  },
+  {
+   "method": "POST",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4?uploadId=e5-upload-id%2F1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=864ad720ea7e3f2d109e7d9d0b0ab783cefe806836b98cf5adb1ea3da285825b"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "1b9cb5e5-26ad-4f41-95e6-48c472070cf1"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "271"
+    ]
+   ],
+   "body_len": 271,
+   "body_sha256": "e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb",
+   "body": "<CompleteMultipartUpload xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Part><ETag>\"0c9d5b7fc7f4f8daec5c474adbb6f527\"</ETag><PartNumber>1</PartNumber></Part><Part><ETag>\"e3bf2768528cc2911a558da087e90c5c\"</ETag><PartNumber>2</PartNumber></Part></CompleteMultipartUpload>",
+   "canonical_request": "POST\n/mower-bags/bags/MW-E5FIX/run%201/video/front%20%C3%BC%2B~.mp4\nuploadId=e5-upload-id%2F1\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne0305b59dc20a82a139785557296ac669e0927c171fb771f37e35d2f10f327bb",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nd5f7ba24def6c663460dc45c1b6cc1adeb0d9bb57ef520e727bc721ab5e74633",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "upload_file big",
+   "index": 3
+  },
+  {
+   "method": "PUT",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "Content-MD5",
+     "GmXZkeYR5lLhBtZ02iftmQ=="
+    ],
+    [
+     "Expect",
+     "100-continue"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "UNSIGNED-PAYLOAD"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=content-md5;content-type;host;x-amz-content-sha256;x-amz-date, Signature=6df922c6c2eadd22ad8f93d1798e40fc2daaf9b56bcaae9014ff9f30d9f28b8f"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "970f4b38-9ec7-4e7d-be8f-3ddb098b0809"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "20"
+    ]
+   ],
+   "body_len": 20,
+   "body_sha256": "e3981c1047e2e90c20cbda0f3c13978f5e876dc7da345beaca02a52982c17467",
+   "body": null,
+   "canonical_request": "PUT\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\ncontent-md5:GmXZkeYR5lLhBtZ02iftmQ==\ncontent-type:application/json\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:20261030T081851Z\n\ncontent-md5;content-type;host;x-amz-content-sha256;x-amz-date\nUNSIGNED-PAYLOAD",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n6efa7fa41dde308cb563cee11cef56457ed9b1820f93ede96e2926750a4f0d4c",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "put_object manifest",
+   "index": 0
+  },
+  {
+   "method": "HEAD",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/r/bag/bag_0.mcap",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=110c7976dc518bcb8ee3a8ddca1c71385fe9bcd25802a4230e5afa5c3de480af"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "4f211d9b-9d0c-4b0c-8cbb-fa0be5b923f4"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "HEAD\n/mower-bags/bags/MW-E5FIX/r/bag/bag_0.mcap\n\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n582f800e480e9d3b362d2d54c822b2fa4923a4df48c497561f7e851b2a473281",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "head_object",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=155b2a878d4be98ebf4c754df95be4505a1f57c9cd50288f6388837bd7b06db2"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "d2dbcf81-b6aa-4a73-9dab-5bcd7fa8f683"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nce79e28da02c3ecc7b7ca8ef849d5ca78c548a9dbc405e416f180c3580347f56",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "get_object",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags?list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F&encoding-type=url",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=2e6fbf1fb8ab9c2b38adb1f1912aad1be88389e98c061136d9275d2316548422"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "60b4a89c-6d06-4905-988d-7a1e14d01901"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags\nencoding-type=url&list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n0497367e8b2adeeb772b6c6e8e171f3438e8b05d03a5d5999b7708179c2eb69c",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "list_objects_v2",
+   "index": 0
+  },
+  {
+   "method": "GET",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags?list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F&continuation-token=1%2Fa%2Bb%3Dc&encoding-type=url",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=e6bc4d7ed493913e064f7a002f2fef9af68341a7731c6b89073b96224166e66d"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "e2383241-8e1f-41ae-889c-5bebd89c18bb"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "GET\n/mower-bags\ncontinuation-token=1%2Fa%2Bb%3Dc&encoding-type=url&list-type=2&prefix=bags%2FMW-E5FIX%2Fr%2F\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n43bc73ae792db5f76f8f74b6502f05dc4effbe95b4a5dee26934d833cbc03a23",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "list_objects_v2 token",
+   "index": 0
+  },
+  {
+   "method": "DELETE",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/r/_manifest.json",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=d920beba0a64c055ed2355107ca76dd70a0d251eea4366b11d07c27e9dcfb60c"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "05aef5f3-70ca-4386-95de-584388d98ee8"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "DELETE\n/mower-bags/bags/MW-E5FIX/r/_manifest.json\n\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\nde2bb65023e5257b24585af77c707d27ba22caa0801f0c00d3e87819e731df5e",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "delete_object",
+   "index": 0
+  },
+  {
+   "method": "DELETE",
+   "url": "https://e5account0000000000000000000000.r2.cloudflarestorage.com/mower-bags/bags/MW-E5FIX/r/video/x.mp4?uploadId=e5-upload-id%2F1",
+   "headers": [
+    [
+     "User-Agent",
+     "Boto3/1.34.46 md/Botocore#1.34.46 ua/2.0 os/linux#6.12.54-linuxkit md/arch#aarch64 lang/python#3.12.3 md/pyimpl#CPython cfg/retry-mode#legacy Botocore/1.34.46"
+    ],
+    [
+     "X-Amz-Date",
+     "20261030T081851Z"
+    ],
+    [
+     "X-Amz-Content-SHA256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "Authorization",
+     "AWS4-HMAC-SHA256 Credential=AKIDE5TEST0000000000/20261030/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=28bdf04fd212301b47af238cc0d8acab7029871585e6833e08edb4323cfc5f72"
+    ],
+    [
+     "amz-sdk-invocation-id",
+     "0945ebea-29c1-4c21-8dfb-f868360d015b"
+    ],
+    [
+     "amz-sdk-request",
+     "attempt=1"
+    ],
+    [
+     "Content-Length",
+     "0"
+    ]
+   ],
+   "body_len": 0,
+   "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body": null,
+   "canonical_request": "DELETE\n/mower-bags/bags/MW-E5FIX/r/video/x.mp4\nuploadId=e5-upload-id%2F1\nhost:e5account0000000000000000000000.r2.cloudflarestorage.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261030T081851Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "string_to_sign": "AWS4-HMAC-SHA256\n20261030T081851Z\n20261030/auto/s3/aws4_request\n36c761928cb090fce44ac2330101896cb768fc2dced9ae1957eb2325a3cac755",
+   "endpoint": "https://e5account0000000000000000000000.r2.cloudflarestorage.com",
+   "step": "abort",
+   "index": 0
+  }
+ ]
+}

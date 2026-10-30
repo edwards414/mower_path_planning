@@ -1,0 +1,189 @@
+{
+  "schema": "mower.run_manifest/v1",
+  "robot_id": "MW-E5FIX",
+  "run_id": "MW-E5FIX_20261030T081851",
+  "profile": "default",
+  "started_at": "2026-10-30T08:18:51+00:00",
+  "ended_at": "2026-10-30T08:20:51+00:00",
+  "ros_distro": "jazzy",
+  "git_sha": "unknown",
+  "files": [
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/bag_0.mcap",
+      "size": 3313681,
+      "sha256": "1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/metadata.yaml",
+      "size": 34542,
+      "sha256": "052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/params/boustrophedon_coverage.yaml",
+      "size": 440,
+      "sha256": "8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/params/map_manage.yaml",
+      "size": 160,
+      "sha256": "5c21c1cc7f41eb38970578914c4421f8f8a88ab694f68a7e30cb55c6961f144c"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml",
+      "size": 1073,
+      "sha256": "e180740a6204395915777d1e1bae3b7f04b65cacdd9e0934ae637aa13b6b3b6e"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/metadata.yaml",
+      "size": 3003,
+      "sha256": "fa7e9769c149a0511b1248b4dfbbdf6f0c8b6f97ccae8b93c424f4f3b4bc0f16"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/snapshots_0.mcap",
+      "size": 4294595,
+      "sha256": "a4980241345ce936f4103ad9ff6ea2b791e568201aa4b3e0a15b5f5f9eb097c0"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/snapshots_1.mcap",
+      "size": 12156,
+      "sha256": "b6748dab41572b386fd733c5e814b0159a9376e24843800c3d7aa00bbd4ec728"
+    },
+    {
+      "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/video/front_2026-10-30_08-18-51-000000.mp4",
+      "size": 20971520,
+      "sha256": "2c0e8a37e997500a45a91323386b58979ad071e6947011e9f12db9cf2c164bcf"
+    }
+  ],
+  "topics": {
+    "/adapter/coverage_settings": {
+      "type": "std_msgs/msg/String",
+      "count": 121
+    },
+    "/adapter/map_datum": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/map_layers/chennal_map_inflated": {
+      "type": "std_msgs/msg/String",
+      "count": 0
+    },
+    "/adapter/map_layers/free_space_inflated": {
+      "type": "std_msgs/msg/String",
+      "count": 0
+    },
+    "/adapter/map_layers/map_grid": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/map_layers/risk_map_inflated": {
+      "type": "std_msgs/msg/String",
+      "count": 0
+    },
+    "/adapter/marker_layers/channels": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/marker_layers/connectors": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/marker_layers/coverage_path": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/marker_layers/invalid_segments": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/marker_layers/risk_zones": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/marker_layers/zones": {
+      "type": "std_msgs/msg/String",
+      "count": 1
+    },
+    "/adapter/robot_pose": {
+      "type": "geometry_msgs/msg/PoseStamped",
+      "count": 519
+    },
+    "/adapter/zone_summaries": {
+      "type": "std_msgs/msg/String",
+      "count": 239
+    },
+    "/aon_battery_state": {
+      "type": "sensor_msgs/msg/BatteryState",
+      "count": 116
+    },
+    "/battery_state": {
+      "type": "sensor_msgs/msg/BatteryState",
+      "count": 114
+    },
+    "/diagnostics": {
+      "type": "diagnostic_msgs/msg/DiagnosticArray",
+      "count": 361
+    },
+    "/fix": {
+      "type": "sensor_msgs/msg/NavSatFix",
+      "count": 478
+    },
+    "/free_space_inflated": {
+      "type": "nav_msgs/msg/OccupancyGrid",
+      "count": 0
+    },
+    "/global_costmap/costmap": {
+      "type": "nav_msgs/msg/OccupancyGrid",
+      "count": 26
+    },
+    "/graph_events": {
+      "type": "std_msgs/msg/String",
+      "count": 8
+    },
+    "/graph_snapshot": {
+      "type": "std_msgs/msg/String",
+      "count": 60
+    },
+    "/imu/data": {
+      "type": "sensor_msgs/msg/Imu",
+      "count": 1187
+    },
+    "/local_costmap/costmap": {
+      "type": "nav_msgs/msg/OccupancyGrid",
+      "count": 31
+    },
+    "/mower_base/telemetry": {
+      "type": "std_msgs/msg/String",
+      "count": 1740
+    },
+    "/odom": {
+      "type": "nav_msgs/msg/Odometry",
+      "count": 2979
+    },
+    "/plan": {
+      "type": "nav_msgs/msg/Path",
+      "count": 0
+    },
+    "/risk_map_inflated": {
+      "type": "nav_msgs/msg/OccupancyGrid",
+      "count": 0
+    },
+    "/robot/online": {
+      "type": "std_msgs/msg/Bool",
+      "count": 236
+    },
+    "/rosout": {
+      "type": "rcl_interfaces/msg/Log",
+      "count": 69
+    },
+    "/tf": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "count": 6266
+    },
+    "/tf_static": {
+      "type": "tf2_msgs/msg/TFMessage",
+      "count": 2
+    }
+  },
+  "camera": null,
+  "camera_height_m": null
+}

@@ -33,7 +33,7 @@ speed limits, the `BaseCycle` hardware state machine, serial record/replay).
 It has no `r2r` dependency, so `cargo test -p mower_base_core` runs anywhere;
 see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 
-Four more libraries, none used by a binary yet, are the ground work for the
+Five more libraries, none used by a binary yet, are the ground work for the
 Rust recorder that will replace `mower_recorder` (E5); each is tested against
 what the Python recorder and rosbag2 wrote in `deploy/test/golden/recorder`:
 
@@ -45,8 +45,13 @@ what the Python recorder and rosbag2 wrote in `deploy/test/golden/recorder`:
 - `mower_mcap`: the MCAP bags `ros2 bag record` writes (rosbag2 0.26.11,
   libmcap 1.3.1), byte for byte: chunks, zstd, splits, snapshot mode, the
   `rosbag2` metadata records and `metadata.yaml`;
-- `mower_pyfmt`: Python's `json.dumps` and PyYAML's `safe_dump`, byte for
-  byte, for the recorder's JSON messages and YAML files.
+- `mower_pyfmt`: Python's `json.dumps`/`json.loads` and PyYAML's
+  `safe_dump`/`safe_load` (YAML 1.1), byte for byte, for the recorder's JSON
+  messages and YAML files;
+- `mower_recorder_core`: everything of `mower_recorder` that is not a node:
+  profiles, run metadata, status/bags/commands, the R2 uploader (SigV4 by
+  hand over ureq, held to botocore's signatures and to the Python uploader
+  against moto), MediaMTX, graph JSON, parameter dumps, camera extrinsics.
 
 They have no `r2r` dependency (`mower_cdr`'s oracle test uses it).
 

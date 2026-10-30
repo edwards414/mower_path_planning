@@ -15,6 +15,9 @@
 
 use crate::{repr, Py};
 
+/// `yaml.safe_load` (`load.rs`).
+pub use crate::load::{safe_load, YamlError};
+
 /// The `safe_dump` keywords the recorder varies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct YamlOptions {
@@ -53,7 +56,7 @@ pub fn dump(value: &Py, opts: &YamlOptions) -> String {
 
 /// The tags a plain scalar can resolve to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tag {
+pub(crate) enum Tag {
     Str,
     Bool,
     Int,
@@ -90,7 +93,7 @@ impl Tag {
 /// the whole text" is the same test. (Python's `$` also matches before a final
 /// `\n`; such a text has a line break and is never plain, so it cannot change
 /// the output.)
-fn resolve(value: &str) -> Tag {
+pub(crate) fn resolve(value: &str) -> Tag {
     let s: Vec<char> = value.chars().collect();
     if is_bool(value) {
         Tag::Bool
@@ -342,6 +345,8 @@ fn represent(v: &Py, sort_keys: bool) -> Node {
         Py::Int(i) => scalar(i.to_string(), Tag::Int),
         Py::Float(f) => scalar(represent_float(*f), Tag::Float),
         Py::Str(s) => scalar(s.clone(), Tag::Str),
+        // represent_date: isoformat(); represent_datetime: isoformat(' ')
+        Py::Date { .. } | Py::DateTime { .. } => scalar(v.isoformat().unwrap(), Tag::Timestamp),
         Py::List(items) => Node::Seq(items.iter().map(|x| represent(x, sort_keys)).collect()),
         Py::Dict(items) => {
             let mut refs: Vec<&(String, Py)> = items.iter().collect();

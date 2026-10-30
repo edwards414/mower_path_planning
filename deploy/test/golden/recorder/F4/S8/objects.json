@@ -1,0 +1,100 @@
+[
+ {
+  "content_type": "application/json",
+  "etag": "\"90ed675d31e919545525a7609518559f\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/_manifest.json",
+  "metadata": {},
+  "sha256": "d0699984fc4927ca9347ac0f22e0ed405abfb95908d5e764363841b118ef897c",
+  "size": 5177
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"c452d4dfe7bb0f52c94bdd1b5d9d607d\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/bag_0.mcap",
+  "metadata": {
+   "sha256": "1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4"
+  },
+  "sha256": "1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4",
+  "size": 3313681
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"f31b146d0eace35083dbc70ffd8e5558\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/metadata.yaml",
+  "metadata": {
+   "sha256": "052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044"
+  },
+  "sha256": "052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044",
+  "size": 34542
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"fbd0a1413b6cef3ccfd1b28d5097df81\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/params/boustrophedon_coverage.yaml",
+  "metadata": {
+   "sha256": "8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0"
+  },
+  "sha256": "8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0",
+  "size": 440
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"f41788f5c86c056d8593b0eb59a3cf8d\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/params/map_manage.yaml",
+  "metadata": {
+   "sha256": "5c21c1cc7f41eb38970578914c4421f8f8a88ab694f68a7e30cb55c6961f144c"
+  },
+  "sha256": "5c21c1cc7f41eb38970578914c4421f8f8a88ab694f68a7e30cb55c6961f144c",
+  "size": 160
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"2fe29ae4928eaa56dd3457ab421ce20a\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/run_metadata.yaml",
+  "metadata": {
+   "sha256": "e180740a6204395915777d1e1bae3b7f04b65cacdd9e0934ae637aa13b6b3b6e"
+  },
+  "sha256": "e180740a6204395915777d1e1bae3b7f04b65cacdd9e0934ae637aa13b6b3b6e",
+  "size": 1073
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"8d18424dacb706d90e21c41d5e172e3a\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/metadata.yaml",
+  "metadata": {
+   "sha256": "fa7e9769c149a0511b1248b4dfbbdf6f0c8b6f97ccae8b93c424f4f3b4bc0f16"
+  },
+  "sha256": "fa7e9769c149a0511b1248b4dfbbdf6f0c8b6f97ccae8b93c424f4f3b4bc0f16",
+  "size": 3003
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"81c9904200ada0f45595e0ff83b97b00\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/snapshots_0.mcap",
+  "metadata": {
+   "sha256": "a4980241345ce936f4103ad9ff6ea2b791e568201aa4b3e0a15b5f5f9eb097c0"
+  },
+  "sha256": "a4980241345ce936f4103ad9ff6ea2b791e568201aa4b3e0a15b5f5f9eb097c0",
+  "size": 4294595
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"b6e1069aea1a6ca9bcadc927da3fb66d\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/snapshots/snapshots_1.mcap",
+  "metadata": {
+   "sha256": "b6748dab41572b386fd733c5e814b0159a9376e24843800c3d7aa00bbd4ec728"
+  },
+  "sha256": "b6748dab41572b386fd733c5e814b0159a9376e24843800c3d7aa00bbd4ec728",
+  "size": 12156
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"6fbdb786b51be012b16236469e823d02-3\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/video/front_2026-10-30_08-18-51-000000.mp4",
+  "metadata": {
+   "sha256": "2c0e8a37e997500a45a91323386b58979ad071e6947011e9f12db9cf2c164bcf"
+  },
+  "sha256": "2c0e8a37e997500a45a91323386b58979ad071e6947011e9f12db9cf2c164bcf",
+  "size": 20971520
+ }
+]

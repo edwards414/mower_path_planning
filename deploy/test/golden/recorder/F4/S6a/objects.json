@@ -1,0 +1,22 @@
+[
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"c452d4dfe7bb0f52c94bdd1b5d9d607d\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/bag_0.mcap",
+  "metadata": {
+   "sha256": "1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4"
+  },
+  "sha256": "1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4",
+  "size": 3313681
+ },
+ {
+  "content_type": "binary/octet-stream",
+  "etag": "\"f31b146d0eace35083dbc70ffd8e5558\"",
+  "key": "bags/MW-E5FIX/MW-E5FIX_20261030T081851/bag/metadata.yaml",
+  "metadata": {
+   "sha256": "052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044"
+  },
+  "sha256": "052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044",
+  "size": 34542
+ }
+]

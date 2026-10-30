@@ -33,6 +33,36 @@ G1 compares a rewrite of each run with the run itself.
 | `F2` | default, `max_bag_size_mb: 1`, `max_bag_duration_s: 10` (`record_topics_split.yaml`), 45 s | five files split by duration; the snapshot group never triggered |
 | `F2S` | default, `max_bag_size_mb: 1` only, 100 s | the size split: two files |
 | `F3` | `data_collection.launch.py`, 30 s, fake camera (`videotestsrc` 80x60 at 25 fps → `jpegenc` → `videorate` to 10 fps through gscam), a calib dir | `zstd_fast` chunk compression; the uncompressed camera group; gscam's and the static TF publishers' QoS; spec 1.6 metadata |
+| `F4` | (E5-2) the R2 upload of F1 and F3 against moto, see below | |
+
+`F4` (E5-2) is not a recording but the R2 upload of these runs: `~/work/e2-verify/run.sh upload A <run>`
+(`scripts/upload_run.sh`, `upload_py.py`). The image's own `run_manifest.upload_run` and boto3 1.34.46 talk to
+moto 5.1 behind a logging proxy (`s3_proxy.py`, which can fail a request on purpose).
+
+- **The runs:** `R1` is F1's run plus a deterministic 20 MiB video segment (so one file goes multipart), `R1b` is a
+  second copy, and `R3` is F3's run. Every file has a fixed mtime (`runs.sha256` lists their contents).
+- **The scenarios:**
+  - `S1`: the upload;
+  - `S2`: again, with nothing to do;
+  - `S3`: verify;
+  - `S4`: delete;
+  - `S5`: the data_collection run;
+  - `S6a`/`S6b`: the 3rd PUT failing all five attempts, then the resume;
+  - `S7`: an object deleted behind the uploader's back;
+  - `S8`: a file changed after the upload.
+- **The files:**
+  - `results.json`;
+  - `s3.jsonl.zst`, every request and answer, with markers;
+  - per scenario the run's `upload_state.json` (`.upload_state.json`), `uploaded` (`.uploaded`) and `_manifest.json`,
+    and `objects.json`, the bucket: keys, sizes, ETags, metadata, body sha256.
+- **What they show:**
+  - `upload_file` sends `Content-MD5` and `x-amz-meta-sha256` with every PutObject and UploadPart. It splits files of
+    8 MiB and more into 8 MiB parts, several in flight.
+  - The manifest goes with `Content-Type: application/json`.
+  - Listing uses `encoding-type=url`.
+  - Retries follow the legacy mode: 5 attempts with randomized back-off.
+  - botocore signs every header but `User-Agent`/`Expect`, and the payload unless the request is HTTPS with
+    `Content-MD5` (then `UNSIGNED-PAYLOAD`).
 
 Next to each run dir:
 
