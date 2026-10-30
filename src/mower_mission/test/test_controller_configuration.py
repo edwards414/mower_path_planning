@@ -1317,10 +1317,88 @@ def test_nav2_clock_is_controlled_only_by_the_launch_argument():
 
 def test_runtime_container_sets_non_root_home():
     source = DOCKERFILE.read_text(encoding='utf-8')
-    runtime = source.split('FROM ros:${ROS_DISTRO}-ros-core AS runtime', 1)[1]
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
     # runtime is the last stage: the GPS driver ships inside it
     assert '\nFROM ' not in runtime
     assert 'ENV HOME=/home/${USER_NAME}' in runtime
+
+
+def test_image_bases_are_pinned_and_the_install_tree_is_stored_once():
+    """A floating base tag ships whatever upstream rebuilt last (and a new
+    ~150 MB base layer to every robot); a `chown -R` of the workspace after
+    the COPY stored the install tree twice in every update."""
+    source = DOCKERFILE.read_text(encoding='utf-8')
+    pins = dict(re.findall(r'^ARG (\w+_IMAGE)=(\S+)$', source, re.M))
+    assert set(pins) == {'ROS_BASE_IMAGE', 'ROS_CORE_IMAGE',
+                         'FIRMWARE_BUILD_IMAGE', 'MANIFESTS_IMAGE'}
+    for name, image in pins.items():
+        assert re.fullmatch(r'docker\.io/library/[\w.-]+:[\w.-]+@sha256:[0-9a-f]{64}',
+                            image), name
+    # every stage starts from one of them or from an earlier stage
+    stages = re.findall(r'^FROM (?:--platform=\S+ )?(\S+) AS (\S+)$', source, re.M)
+    assert len(stages) == len(re.findall(r'^FROM ', source, re.M))
+    seen = set()
+    for base, stage in stages:
+        assert base in seen or base.strip('${}') in pins, (stage, base)
+        seen.add(stage)
+
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
+    # instructions only, one per line
+    runtime = re.sub(r'^\s*#.*\n', '', runtime, flags=re.M).replace('\\\n', ' ')
+    assert not re.search(r'chown -R [^\n]*\$\{WORKSPACE\}', runtime)
+    copies = re.findall(r'^COPY (.*)$', runtime, re.M)
+    install = [c for c in copies if '${WORKSPACE}/install' in c]
+    assert len(install) == 2, install
+    for copy in install:
+        assert '--link --from=builder --chown=${USER_ID}:${GROUP_ID}' in copy
+    assert '--exclude=mower_rs' in install[0]
+    assert install[1].split()[-1] == '${WORKSPACE}/install/mower_rs'
+    # the user exists before the tree is copied in
+    assert runtime.index('useradd') < runtime.index(install[0])
+
+
+def test_runtime_apt_layer_is_pinned_and_reused_across_commits():
+    """The build identity changes every commit and is part of the cache key
+    of everything after it: above the apt layer it made every build
+    reinstall all 711 packages at whatever versions apt resolved that day.
+    The layer installs the locked versions (the robot's) and fails on any
+    other."""
+    source = DOCKERFILE.read_text(encoding='utf-8')
+    runtime = source.split('FROM ${ROS_CORE_IMAGE} AS runtime', 1)[1]
+    runtime = re.sub(r'^\s*#.*\n', '', runtime, flags=re.M).replace('\\\n', ' ')
+    instructions = re.findall(r'^(\w+) (.*)$', runtime, re.M)
+    identity = [i for i, (op, rest) in enumerate(instructions)
+                if op in ('ARG', 'ENV') and 'MOWER_GIT_SHA' in rest]
+    assert len(identity) == 2, identity
+    # nothing that builds a layer comes after it
+    assert all(op in ('ARG', 'ENV', 'USER', 'ENTRYPOINT', 'CMD')
+               for op, _ in instructions[identity[0]:]), instructions[identity[0]:]
+
+    [apt] = [rest for op, rest in instructions
+             if op == 'RUN' and 'apt-get install' in rest]
+    assert '--mount=type=bind,source=deploy/image/apt,target=/tmp/apt-lock' in apt
+    assert 'Pin-Priority: 1001' in apt
+    assert 'export APT_CONFIG=' in apt
+    assert "dpkg-query -W -f '${binary:Package} ${Version}\\n' | LC_ALL=C sort" in apt
+    assert "sed '/^#/d' /tmp/apt-lock/runtime-apt.lock | diff -u - /tmp/installed.txt" in apt
+    # an unbraced `|| true` at the end would swallow every failure before it
+    assert not re.search(r'\|\| true\s*$', apt.strip())
+    # the firmware toolchain layer is not invalidated by the identity either
+    firmware = source.split('AS firmware', 1)[1].split('\nFROM ', 1)[0]
+    assert firmware.index('apt-get install') < firmware.index('ARG MOWER_GIT_SHA')
+
+    lock = (SRC_DIR.parent / 'deploy/image/apt/runtime-apt.lock').read_text(
+        encoding='utf-8')
+    entries = [line.split(' ') for line in lock.splitlines()
+               if line and not line.startswith('#')]
+    assert all(len(entry) == 2 for entry in entries)
+    names = [name for name, _ in entries]
+    assert names == sorted(names) and len(set(names)) == len(names)
+    versions = dict(entries)
+    # the versions nav2_no_map_params.yaml and the oracles were tuned on
+    assert versions['ros-jazzy-nav2-controller'].startswith('1.3.13-')
+    assert versions['ros-jazzy-robot-localization'].startswith('3.8.3-')
+    assert versions['ros-jazzy-rmw-cyclonedds-cpp'].startswith('2.2.4-')
 
 
 def test_gps_driver_runs_inside_the_runtime_container():

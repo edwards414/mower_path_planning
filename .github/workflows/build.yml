@@ -14,6 +14,8 @@ on:
       - 'src/**'
       - 'utils/**'
       - 'firmware/**'
+      # image inputs outside src/ (the runtime apt pins)
+      - 'deploy/image/**'
       - 'docker-compose.yaml'
   # A PR runs whenever it touches a file a job reads: besides the image inputs
   # above, the Python tests read deploy/ (compose, .env.example, host scripts,
@@ -532,6 +534,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            # v0.6.0 as well as 0.6.0: deploy/README.md and mower-update.sh
+            # document `--tag v0.6.0`. Listed after {{version}}, so the
+            # version output (MOWER_IMAGE, /robot/info) stays 0.6.0.
+            type=semver,pattern=v{{version}}
             # release channel the robots follow (deploy/docker-compose.yaml IMAGE_TAG=stable)
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
@@ -631,6 +637,19 @@ jobs:
             }
           skip-extraction: ${{ env.WRITE_CACHE != 'true' || steps.build-cache.outputs.cache-hit == 'true' }}
 
+      # The layers a robot on this tag has now, to report below which ones an
+      # update would download (empty for a new tag).
+      - name: Layers of the current image
+        if: env.PUSH == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
+          docker buildx imagetools inspect --raw "$tag" > "$RUNNER_TEMP/layers-before.json" 2>/dev/null \
+            || echo '{"layers": []}' > "$RUNNER_TEMP/layers-before.json"
+
       - name: Build and push
         id: build
         # a cold build (no cache at all) is ~25 min; this only catches a hang
@@ -667,6 +686,61 @@ jobs:
           provenance: false
           tags: ${{ env.PUSH == 'true' && steps.staging.outputs.tags || steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # Every layer of the new image and its size, into the job summary: the
+      # compressed size a robot downloads for a pushed image (and whether the
+      # image it runs now already has that layer), the unpacked size for a
+      # PR's loaded one.
+      - name: Image layer sizes
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          PUSHED: ${{ env.PUSH }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
+          if [ "$PUSHED" = true ]; then
+            ref="${tag%:*}@${DIGEST}"
+            docker buildx imagetools inspect --raw "$ref" > "$RUNNER_TEMP/layers.json"
+            docker buildx imagetools inspect "$ref" --format '{{json .Image}}' > "$RUNNER_TEMP/config.json"
+          else
+            docker image inspect "$tag" --format '{{json .}}' > "$RUNNER_TEMP/config.json"
+            docker history --no-trunc --format '{{json .}}' "$tag" > "$RUNNER_TEMP/history.jsonl"
+          fi
+          python3 - "$PUSHED" "$tag" "$RUNNER_TEMP" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, os, sys
+          pushed, tag, tmp = sys.argv[1] == 'true', sys.argv[2], sys.argv[3]
+          load = lambda name: json.load(open(os.path.join(tmp, name)))
+          def short(text):
+              text = ' '.join(text.replace('|', '/').split())
+              return text if len(text) <= 90 else text[:87] + '...'
+          if pushed:
+              layers = load('layers.json')['layers']
+              config = load('config.json')
+              steps = [h.get('created_by', '') for h in config.get('history', [])
+                       if not h.get('empty_layer')]
+              before = {l['digest'] for l in load('layers-before.json').get('layers', [])}
+              new = sum(l['size'] for l in layers if l['digest'] not in before)
+              print(f'### {tag}: {len(layers)} layers, '
+                    f'{sum(l["size"] for l in layers) / 1e6:.1f} MB compressed\n')
+              print(f'A robot on the previous `{tag.rsplit(":", 1)[1]}` downloads '
+                    f'**{new / 1e6:.1f} MB** ({len(before)} layers before).\n')
+              print('| # | MB | new | instruction |\n|---:|---:|:---:|---|')
+              for i, layer in enumerate(layers):
+                  step = steps[i] if i < len(steps) else ''
+                  print(f'| {i} | {layer["size"] / 1e6:.2f} | '
+                        f'{"" if layer["digest"] in before else "yes"} | {short(step)} |')
+          else:
+              rows = [json.loads(line) for line in open(os.path.join(tmp, 'history.jsonl'))][::-1]
+              rows = [r for r in rows if r['Size'] not in ('0B', '0')]
+              print(f'### {tag} (not pushed): {len(rows)} layers, unpacked sizes\n')
+              print('| # | size | instruction |\n|---:|---:|---|')
+              for i, r in enumerate(rows):
+                  print(f'| {i} | {r["Size"]} | {short(r["CreatedBy"])} |')
+          PY
 
       # A PR smoke-tests the image it loaded; a PR labeled push-image pulls
       # the staging tag it just pushed (its pr-N tag moves only in publish).
@@ -773,6 +847,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            # v0.6.0 as well as 0.6.0, as build's (deploy/README.md and
+            # mower-update.sh document `--tag v0.6.0`)
+            type=semver,pattern=v{{version}}
             # release channel the robots follow (deploy/docker-compose.yaml IMAGE_TAG=stable)
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
