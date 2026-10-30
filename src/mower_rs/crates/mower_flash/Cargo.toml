@@ -1,0 +1,21 @@
+[package]
+name = "mower_flash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The STM32 firmware flasher: a port of firmware/tools/mower_flash.py, frame for frame (E6)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mower_flash"
+path = "src/main.rs"
+
+[dependencies]
+mower_base_core = { path = "../mower_base_core" }
+serialport = { version = "4", default-features = false }
+libc = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true

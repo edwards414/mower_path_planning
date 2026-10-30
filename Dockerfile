@@ -273,6 +273,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /u
 # The command-line tool (src/mower_rs/crates/mowerctl) on the PATH, for
 # `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
 RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
+# The Rust port of mower_flash.py (src/mower_rs/crates/mower_flash), next to
+# it; firmware-sync still runs the Python one (E6-4 adds the switch).
+RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash /usr/local/bin/mower_flash
 
 RUN if getent group ${GROUP_ID} > /dev/null; then \
         existing_group="$(getent group ${GROUP_ID} | cut -d: -f1)"; \

@@ -231,16 +231,19 @@ jobs:
           python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
 
       - name: Firmware flasher on a fake STM32 (black box)
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
-        # firmware/tools/mower_flash.py against the unmodified bootloader source
-        # (bl_protocol.c) on a pty: the 57 quick scenarios (images up to 16 KB,
-        # about 3 min; tools/README.md, "Checking the firmware flasher"), held
-        # to the scenario table and to the G1 goldens
+        # firmware/tools/mower_flash.py and its Rust port (crates/mower_flash)
+        # side by side against the unmodified bootloader source (bl_protocol.c)
+        # on a pty: the 57 quick scenarios (images up to 16 KB, about 6 min;
+        # tools/README.md, "Checking the firmware flasher"). Every frame, the
+        # flash, the report, stdout, the exit code and the time on the wire
+        # compared, and both held to the scenario table and the G1 goldens
         run: |
           cd src/mower_rs
+          cargo build --locked -p mower_flash
           python3 tools/flash_check.py check --impl "python=python3 ../../firmware/tools/mower_flash.py" \
-            --golden ../../deploy/test/golden/firmware_sync
+            --impl rust=target/debug/mower_flash --golden ../../deploy/test/golden/firmware_sync
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`
@@ -581,6 +584,13 @@ jobs:
             test -s /opt/mower/firmware/mower_robot_firmware.bin
             test -s /opt/mower/firmware/mower_robot_firmware.json
             python3 /opt/mower/firmware/mower_flash.py --help >/dev/null
+            # its Rust port, which firmware-sync does not run yet (crates/mower_flash)
+            test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash"
+            test "$(command -v mower_flash)" = /usr/local/bin/mower_flash
+            mower_flash --help >/dev/null
+            m=/opt/mower/firmware/mower_robot_firmware.json
+            # the "version sha8" in the log line of firmware-sync, as its python3 -c prints it
+            test "$(mower_flash manifest "$m")" = "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d[\"version\"],d[\"git_sha\"][:8])" "$m")"
             test -x /usr/local/bin/firmware-sync
             test -x /usr/local/bin/mower-host-request
             # the slimmed image (docs/IMAGE_SIZE.md) must still load everything
