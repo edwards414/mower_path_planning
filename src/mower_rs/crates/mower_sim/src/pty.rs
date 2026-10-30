@@ -63,13 +63,17 @@ impl Pty {
             let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
             libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
-        // SAFETY: ttyname returns a pointer to static storage or null.
+        // ttyname_r, not ttyname: ttyname's buffer is shared by every thread,
+        // so two ptys opened at once (tests run in parallel) could each be
+        // handed the other's name and link the other's slave.
+        let mut buf = [0 as libc::c_char; 128];
+        // SAFETY: ttyname_r writes a NUL-terminated name into the buffer it is given.
         let name = unsafe {
-            let p = libc::ttyname(slave.as_raw_fd());
-            if p.is_null() {
-                return Err(format!("ttyname: {}", std::io::Error::last_os_error()));
+            let r = libc::ttyname_r(slave.as_raw_fd(), buf.as_mut_ptr(), buf.len());
+            if r != 0 {
+                return Err(format!("ttyname_r: {}", std::io::Error::from_raw_os_error(r)));
             }
-            CStr::from_ptr(p).to_string_lossy().into_owned()
+            CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
         };
         if let Some((uid, gid)) = owner {
             // SAFETY: fchown on a descriptor we own.
@@ -155,6 +159,36 @@ mod tests {
         assert_eq!(pty.read(&mut buf), 0);
         drop(pty);
         assert!(std::fs::symlink_metadata(&link).is_err(), "the link goes with the pty");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Ptys opened on many threads at once each link their own slave: the
+    /// link's device is the slave descriptor's (ttyname's shared buffer could
+    /// hand one thread another's name).
+    #[test]
+    fn ptys_opened_at_once_each_link_their_own_slave() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("mower_sim_pty_many_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let threads: Vec<_> = (0..16)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for i in 0..20 {
+                        let link = dir.join(format!("dev{t}_{i}"));
+                        let pty = Pty::open(&link, None).unwrap();
+                        // SAFETY: fstat into a struct we own, on a descriptor the pty owns.
+                        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+                        assert_eq!(unsafe { libc::fstat(pty._slave.as_raw_fd(), &mut st) }, 0);
+                        let linked = std::fs::metadata(&link).unwrap().rdev();
+                        assert_eq!(linked, st.st_rdev as u64, "{} links another pty", link.display());
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
