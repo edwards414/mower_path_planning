@@ -30,7 +30,9 @@ endif()
 # process on a single r2r Context (docs/ROS_FREE_PLAN.md Phase A5). Both are
 # installed: the launch files pick between them with rust_daemon. mowerctl is
 # the command-line tool (crates/mowerctl): no launch file or service runs it.
-set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl)
+# mower_flash is the STM32 flasher (crates/mower_flash, a port of
+# firmware/tools/mower_flash.py); utils/firmware-sync does not call it yet.
+set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl mower_flash)
 
 add_custom_target(mower_rs_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env

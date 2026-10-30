@@ -776,6 +776,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_flash"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mower_base_core",
+ "serde_json",
+ "serialport",
+]
+
+[[package]]
 name = "mower_gps"
 version = "0.1.0"
 dependencies = [
