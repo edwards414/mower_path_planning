@@ -1,0 +1,23 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "",
+   "stderr": "KeyError: 'version'",
+   "report_written": false,
+   "host": [],
+   "replies": [],
+   "events": [],
+   "host_signature": "",
+   "host_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "5ba2fec39178f938b7f3b34912394c8f310cbec835dba388580914651b034743",
+ "overruns": 0,
+ "scenario": "S20c",
+ "title": "the manifest has no version"
+}

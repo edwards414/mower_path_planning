@@ -1,0 +1,36 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "",
+   "stderr": "error: run failed: NO_VALID_APP (value=0x00000000)",
+   "report_written": false,
+   "host": [
+    [
+     "14",
+     1,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "91",
+     1,
+     "140600000000",
+     null
+    ]
+   ],
+   "events": [],
+   "host_signature": "14",
+   "host_sha256": "53c3ee24441f2e66e1be97c207ea83fda907824e58bd726e3911e554d3a137b4",
+   "replies_sha256": "27c61b7910c0bcd4889954213bbd5591aef690feaf0de9dcc4440c602678da9c",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "d9cb14ab670124671ecfd5480d066e3172cfc5c13951b7e95a49dc062ab32ead",
+ "overruns": 0,
+ "scenario": "C07",
+ "title": "run with no valid app"
+}

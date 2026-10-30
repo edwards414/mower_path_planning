@@ -51,18 +51,49 @@ runs frame by frame.
 `t` is seconds since the log was opened (`time.monotonic()` based), so two
 runs line up once shifted to their first 0x01.
 
+`--bootloader-lib LIB` makes it the whole board, UART bootloader included,
+for the firmware flasher (`firmware/tools/mower_flash.py`, the Rust
+`mower_flash`); `tools/flash_check.py` builds LIB and drives the scenarios:
+
+    ./fake_base.py --pty-link /tmp/stmcom --log /tmp/fake.jsonl \\
+        --bootloader-lib bl_sim.so --flash-file flash.bin --catalog builds/ \\
+        [--faults '{"drop_reply": [{"cmd": 18, "offset": 1024}]}']
+
+LIB is the *unmodified* `firmware/bootloader/Src/bl_protocol.c` compiled
+with `tools/bl_sim/sim_flash.c` (the 512 KB flash behind `bl_flash.h`, kept
+in `--flash-file` across runs like the chip keeps it across power cycles).
+The board boots like `bl_main.c`: the bootloader first, which stays when the
+RAM mailbox holds the boot request or the app's vector table is invalid,
+otherwise waits 500 ms for a PING and jumps. Received bytes go to
+`BlProtocol_FeedByte` one by one; erases, writes and CRCs take the STM32's
+time, the reply leaves when they are done, and bytes arriving meanwhile are
+lost the way the UART's overrun loses them (logged as `overrun`; a
+stop-and-wait host never causes one). The app that runs after the jump is
+whatever the flash holds: the build of `--catalog` (fw_manifest.py
+manifests, optionally with a `"fake"` object: `no_0x87`, `unversioned`,
+`ignore_enter`, `no_enter_ack`) whose size and CRC-32 match the app region;
+it streams the status frames, answers 0x06 with that build's 0x87 and
+reboots into the bootloader on a 0x0F with the magic (0x8F, mailbox, reset).
+No match: a broken app, silent and deaf. Faults (`--faults`, JSON): see
+`FakeStm32.__init__`. Events go to the same log with `"dir": "ev"`.
+
 Nothing here is used on the robot; it exists only for the test.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import fcntl
 import json
 import os
+import random
+import signal
 import struct
 import sys
 import time
 import tty
+import zlib
 
 SOF0 = 0xA5
 SOF1 = 0x5A
@@ -465,6 +496,478 @@ class FakeBase:
         os.close(self.fd)
 
 
+# -- the UART bootloader (--bootloader-lib) ----------------------------------
+
+ENTER_BOOTLOADER = 0x0F
+ENTER_BOOTLOADER_ACK = 0x8F
+BL_PING = 0x10
+BL_WRITE = 0x12
+BL_INFO = 0x90
+BL_ACK = 0x91
+BOOT_REQUEST_MAGIC = 0xB007B007
+FLASH_BASE = 0x08000000
+APP_OFFSET = 0x8000  # BOOT_APP_START_ADDRESS - BOOT_FLASH_BASE_ADDRESS
+APP_MAX_SIZE = 0x58000
+FLASH_SIZE = 512 * 1024
+GRACE_S = 0.5  # BOOT_GRACE_PERIOD_MS
+SECTOR_SIZES = [16384, 16384, 16384, 16384, 65536, 131072, 131072, 131072]
+SIM_EVENTS = {1: "erase", 2: "erase_fail", 3: "write", 4: "write_fail", 5: "crc", 6: "flip",
+              7: "violation"}
+BYTE_S = 10 / 115200  # one 8N1 character at 115200
+TIOCEXCL, TIOCNXCL, TIOCGEXCL = 0x540C, 0x540D, 0x80045440
+
+# How long the STM32F411 is busy (datasheet typical, x32 programming): a
+# sector erase by size, one word programmed, one byte of the bit-by-bit CRC
+# at the bootloader's 16 MHz.
+ERASE_S = {16384: 0.25, 65536: 0.55, 131072: 1.0}
+WORD_S = 16e-6
+CRC_BYTE_S = 4e-6
+
+_TX_FN = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint16)
+_EV_FN = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_uint32, ctypes.c_uint32)
+
+
+def load_catalog(directory: str):
+    """The builds the fake recognises in its app region, by size and CRC-32."""
+    builds = []
+    for name in sorted(os.listdir(directory)) if directory else []:
+        if name.endswith(".json"):
+            with open(os.path.join(directory, name)) as f:
+                m = json.load(f)
+            m.setdefault("fake", {})
+            m["_name"] = name
+            builds.append(m)
+    return builds
+
+
+class FakeStm32(FakeBase):
+    """The board with its bootloader: see the module docstring."""
+
+    APP_BOOT_S = 0.1  # reset to the app's first frame
+    RESET_S = 0.005  # 0x8F sent -> NVIC_SystemReset -> bootloader running
+
+    def __init__(self, port: str, log_path: str, max_rpm: float, counts_per_rev: float,
+                 pty_link: str, lib_path: str, flash_file: str, catalog_dir: str,
+                 faults: dict, host_pid_file: str = "") -> None:
+        """`faults` (all optional):
+
+        - `dead`: no board on the port; nothing sent, everything dropped
+        - `erase_error`: BL_ERASE fails (FLASH_ERROR) before erasing anything
+        - `write_error`: OFFSET whose BL_WRITE fails (FLASH_ERROR)
+        - `flip`: [OFFSET, BIT], a bit that flips right after that write
+        - `drop_reply` / `corrupt_reply` / `bad_len_reply` / `delay_reply`:
+          lists of `{"cmd": C, "offset": O, "times": N[, "s": S]}`; a reply to
+          command C (0x10 for the BL_INFO answering a PING; `offset` matches a
+          BL_ACK's value, i.e. a write's offset) is not sent / sent with a
+          broken CRC / sent one byte short with a good CRC / sent S seconds
+          late, the first N times (1)
+        - `bytewise`: S, bootloader replies leave one byte every S seconds
+        - `noise`: SEED, junk (never 0xA5) before every bootloader reply
+        - `power_off_at_write`: N, the board loses power while the Nth
+          BL_WRITE is being acknowledged: the flash file is saved and the
+          fake exits with 3 (the pty hangs up)
+        - `kill_host_at_write`: N, SIGKILL to the pid in `host_pid_file`
+          when the Nth BL_WRITE has been taken (a `docker kill` of the
+          flasher); the tty's TIOCEXCL is cleared afterwards, as the last
+          close of a real UART does, unless `keep_excl` (this pty's slave
+          stays open here, so a flasher that set TIOCEXCL leaves it set)
+        """
+        super().__init__(port, log_path, max_rpm, counts_per_rev, pty_link)
+        lib = ctypes.CDLL(lib_path)
+        lib.sim_flash.restype = ctypes.POINTER(ctypes.c_uint8)
+        lib.sim_flash_size.restype = ctypes.c_uint32
+        lib.sim_session.restype = ctypes.c_int
+        lib.sim_boot.argtypes = [ctypes.c_int]
+        lib.BlProtocol_FeedByte.argtypes = [ctypes.c_uint8]
+        lib.sim_fault_erase.argtypes = [ctypes.c_int]
+        lib.sim_fault_write.argtypes = [ctypes.c_uint32]
+        lib.sim_fault_flip.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        assert lib.sim_flash_size() == FLASH_SIZE
+        self.lib = lib
+        self._tx_cb = _TX_FN(self._bl_tx)
+        self._ev_cb = _EV_FN(self._bl_event)
+        lib.sim_set_callbacks(self._tx_cb, self._ev_cb)
+        self.flash_file = flash_file
+        data = b"\xFF" * FLASH_SIZE
+        if flash_file and os.path.exists(flash_file):
+            with open(flash_file, "rb") as f:
+                data = f.read()
+            if len(data) != FLASH_SIZE:
+                raise SystemExit(f"{flash_file}: {len(data)} bytes, want {FLASH_SIZE}")
+        ctypes.memmove(lib.sim_flash(), data, FLASH_SIZE)
+        self.catalog = load_catalog(catalog_dir)
+        self.faults = faults
+        if faults.get("erase_error"):
+            lib.sim_fault_erase(1)
+        if "write_error" in faults:
+            lib.sim_fault_write(int(faults["write_error"]))
+        if "flip" in faults:
+            lib.sim_fault_flip(int(faults["flip"][0]), int(faults["flip"][1]))
+        self.reply_rules = []
+        for kind in ("drop_reply", "corrupt_reply", "bad_len_reply", "delay_reply"):
+            for rule in faults.get(kind, []):
+                self.reply_rules.append(dict(rule, kind=kind, left=int(rule.get("times", 1))))
+        self.noise = random.Random(faults["noise"]) if "noise" in faults else None
+        self.host_pid_file = host_pid_file
+        self.mode = "off"
+        self.build = None
+        self.mailbox = 0
+        self.boot_at = 0.0
+        self.due = None  # (when, what): "reset" | "jump" | "app"
+        self.rx_log = Parser()
+        self.tx_queue: list = []  # (when, bytes)
+        self.busy_until = 0.0
+        self.busy_s = 0.0  # accumulated during one BlProtocol_FeedByte
+        self.busy_bytes = 0
+        self.held_byte = None
+        self.writes_seen = 0
+        self.overruns = 0
+        self.after_feed: list = []
+        self.feed_now = 0.0
+        self.ready_logged = False
+        self.host_excl = None
+        self.stop = False
+        signal.signal(signal.SIGTERM, self._on_signal)
+        signal.signal(signal.SIGINT, self._on_signal)
+
+    # -- plumbing ----------------------------------------------------------
+    def _on_signal(self, *_):
+        self.stop = True
+
+    def _event(self, name: str, **fields) -> None:
+        fields["ev"] = name
+        self._log("ev", 0, 0, b"", fields)
+
+    def flash_bytes(self) -> bytes:
+        return ctypes.string_at(self.lib.sim_flash(), FLASH_SIZE)
+
+    def save_flash(self) -> None:
+        if not self.flash_file:
+            return
+        tmp = self.flash_file + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(self.flash_bytes())
+        os.replace(tmp, self.flash_file)
+
+    def _write(self, data: bytes) -> None:
+        try:
+            os.write(self.fd, data)
+        except BlockingIOError:
+            pass  # nobody has the port open: the bytes are lost, like on a UART
+
+    def _set_mode(self, mode: str, now: float, **fields) -> None:
+        self.mode = mode
+        self._event("state", state=mode, **fields)
+        ready = mode in ("app", "broken", "dead") or (mode == "bl" and self.lib.sim_session() & 0x04)
+        if ready and not self.ready_logged:
+            self.ready_logged = True
+            self._event("ready", state=mode)
+
+    # -- the bootloader ----------------------------------------------------
+    def _bl_event(self, kind: int, a: int, b: int) -> None:
+        name = SIM_EVENTS.get(kind, str(kind))
+        if name == "erase":
+            self.busy_s += sum(ERASE_S[SECTOR_SIZES[s]] for s in range(a, a + b))
+            self._event("erase", first=a, count=b)
+        elif name == "write":
+            self.busy_s += WORD_S * (b // 4)
+            self._event("write", offset=a, len=b)
+        elif name == "crc":
+            self.busy_s += CRC_BYTE_S * b
+            self._event("crc", address=a, len=b)
+        else:
+            self._event(name, a=a, b=b)
+
+    def _reply_rule(self, ftype: int, payload: bytes):
+        cmd = BL_PING if ftype == BL_INFO else (payload[0] if ftype == BL_ACK and payload else None)
+        for rule in self.reply_rules:
+            if rule["left"] <= 0 or rule["cmd"] != cmd:
+                continue
+            if "offset" in rule and (len(payload) < 6 or struct.unpack_from("<I", payload, 2)[0] != rule["offset"]):
+                continue
+            rule["left"] -= 1
+            return rule
+        return None
+
+    def _bl_tx(self, data, length: int) -> None:
+        frame = bytes(data[:length])
+        ftype, seq, payload = frame[3], frame[4], frame[6:-2]
+        # the reply leaves once the flash operation and its own transmission are done
+        self.busy_s += BYTE_S * length
+        when = self.feed_now + self.busy_s
+        rule = self._reply_rule(ftype, payload)
+        fields = {}
+        if rule is not None:
+            fields["fault"] = rule["kind"]
+            if rule["kind"] == "drop_reply":
+                self._log("tx", ftype, seq, payload, {"fault": "drop_reply", "sent": False})
+                return
+            if rule["kind"] == "corrupt_reply":
+                frame = frame[:-1] + bytes([frame[-1] ^ 0xFF])
+            elif rule["kind"] == "delay_reply":
+                when += float(rule.get("s", 1.0))
+            else:
+                frame = build(ftype, seq, payload[:-1])
+                payload = payload[:-1]
+        self._log("tx", ftype, seq, payload, fields)
+        if self.noise is not None:
+            junk = bytes(self.noise.choice([b for b in range(256) if b != SOF0])
+                         for _ in range(self.noise.randrange(1, 9)))
+            self._queue(when, junk)
+        gap = float(self.faults.get("bytewise", 0.0))
+        if gap > 0:
+            for i, b in enumerate(frame):
+                self._queue(when + i * gap, bytes([b]))
+        else:
+            self._queue(when, frame)
+
+    def _queue(self, when: float, data: bytes) -> None:
+        """In time order, so a delayed reply does not hold the others back."""
+        i = len(self.tx_queue)
+        while i > 0 and self.tx_queue[i - 1][0] > when:
+            i -= 1
+        self.tx_queue.insert(i, (when, data))
+
+    def bl_boot(self, now: float) -> None:
+        requested = self.mailbox == BOOT_REQUEST_MAGIC  # take_boot_request()
+        self.mailbox = 0
+        self.lib.sim_boot(1 if requested else 0)
+        self.boot_at = now
+        self.build = None
+        self.parser = Parser()
+        flags = self.lib.sim_session()
+        self._set_mode("bl", now, entered_by_request=bool(flags & 0x01), app_valid=bool(flags & 0x02),
+                       stay=bool(flags & 0x04))
+
+    def _feed(self, byte: int, now: float) -> None:
+        self.busy_s = 0.0
+        self.feed_now = now
+        self.lib.BlProtocol_FeedByte(byte)
+        if self.busy_s > 0:
+            self.busy_until = now + self.busy_s
+
+    def bl_rx(self, data: bytes, now: float) -> None:
+        for b in data:
+            if now < self.busy_until:
+                # USART1 holds one byte in DR; the next sets ORE, and
+                # uart_poll() then reads DR away: two or more are all lost
+                self.busy_bytes += 1
+                self.held_byte = b if self.busy_bytes == 1 else None
+                continue
+            self._flush_busy(now)
+            self._feed(b, now)
+        # power loss / host kill once the bootloader has taken the frame
+        actions, self.after_feed = self.after_feed, []
+        for action in actions:
+            action()
+
+    def _flush_busy(self, now: float) -> None:
+        if self.busy_bytes == 1 and self.held_byte is not None:
+            held, self.held_byte, self.busy_bytes = self.held_byte, None, 0
+            self._feed(held, now)
+        elif self.busy_bytes > 1:
+            self.overruns += 1
+            self._event("overrun", dropped=self.busy_bytes)
+            self.busy_bytes, self.held_byte = 0, None
+
+    def bl_tick(self, now: float) -> None:
+        if now >= self.busy_until:
+            self._flush_busy(now)
+        flags = self.lib.sim_session()
+        if self.due is not None:
+            return
+        if flags & 0x08:  # run_app: jump once the RUN_APP ack is out
+            self.due = (max([now] + [w for w, _ in self.tx_queue]) + BYTE_S, "jump")
+        elif not flags & 0x04 and now - self.boot_at >= GRACE_S:
+            self.due = (now, "jump")
+
+    # -- the application ---------------------------------------------------
+    def app_start(self, now: float) -> None:
+        region = self.flash_bytes()[APP_OFFSET:APP_OFFSET + APP_MAX_SIZE]
+        self.build = None
+        for b in self.catalog:
+            size = int(b["size"])
+            if 0 < size <= APP_MAX_SIZE and zlib.crc32(region[:size]) & 0xFFFFFFFF == int(b["crc32"], 16):
+                self.build = b
+                break
+        self.parser = Parser()
+        if self.build is None:
+            self._set_mode("broken", now)
+            return
+        self.left = Wheel(self.left.counts_per_rev, self.left.max_rpm)
+        self.right = Wheel(self.right.counts_per_rev, self.right.max_rpm)
+        self.cmd_permille = (0, 0)
+        self.last_command_at = None
+        self.next_status = now
+        self.next_slow = now
+        self.last_step = now
+        self._set_mode("app", now, build=self.build["_name"])
+        # MotorTask sends the first 0x87 right away (last_info_tick - PERIOD)
+        self.send_firmware_info()
+
+    def send_firmware_info(self) -> None:
+        if self.mode != "app" or self.build is None or self.build["fake"].get("no_0x87"):
+            return
+        b = self.build
+        major, minor, patch = (int(x) for x in b["semver"])
+        flags = (0x01 if b.get("dirty") else 0) | (0x02 if b["fake"].get("unversioned") else 0)
+        payload = struct.pack("<BBBBIIBBH", major, minor, patch, VERSION, int(b["git_sha32"]),
+                              int(b["build_unix"]), flags, 0, 0)
+        self._send(FIRMWARE_INFO, payload, {"build": b["_name"]})
+
+    def app_frame(self, frame_type: int, seq: int, payload: bytes, now: float) -> None:
+        if frame_type != ENTER_BOOTLOADER:
+            self.on_frame(frame_type, seq, payload, now)
+            return
+        self._log("rx", frame_type, seq, payload, {"mode": "app"})
+        fake = self.build["fake"]
+        if len(payload) != 8 or struct.unpack("<I", payload[:4])[0] != BOOT_REQUEST_MAGIC:
+            return
+        if fake.get("ignore_enter"):
+            self._event("ignored_enter")
+            return
+        if not fake.get("no_enter_ack"):
+            # enter_bootloader(rx_seq): the 0x8F carries the 0x0F's seq
+            self._send(ENTER_BOOTLOADER_ACK, bytes(4), {"to_seq": seq})
+        self.mailbox = BOOT_REQUEST_MAGIC
+        self._set_mode("resetting", now)
+        self.due = (now + self.RESET_S, "reset")
+
+    def _send(self, frame_type: int, payload: bytes, fields=None) -> None:
+        if frame_type == ENTER_BOOTLOADER_ACK and fields and "to_seq" in fields:
+            seq = fields["to_seq"]
+            self._write(build(frame_type, seq, payload))
+            self._log("tx", frame_type, seq, payload, {})
+            return
+        super()._send(frame_type, payload, fields)
+
+    def app_tick(self, now: float) -> None:
+        if self.last_command_at is not None and now - self.last_command_at > self.command_timeout_s:
+            self.left.command(0)
+            self.right.command(0)
+        if now >= self.next_status:
+            dt = now - self.last_step
+            self.last_step = now
+            self.left.step(dt)
+            self.right.step(dt)
+            self.send_wheel_feedback()
+            self.send_motor_status(now)
+            self.next_status += self.STATUS_PERIOD_S
+            if self.next_status < now:
+                self.next_status = now + self.STATUS_PERIOD_S
+        if now >= self.next_slow:
+            self.send_power_status()
+            self.send_charger_status()
+            self.send_blade_status(now)
+            self.send_servo_status()
+            self.send_led_status()
+            self.send_pid_status()
+            self.send_firmware_info()
+            self.next_slow = now + 1.0
+
+    # -- host-side hooks ---------------------------------------------------
+    def _host_frame(self, frame_type: int, now: float) -> None:
+        if getattr(self, "_slave", None) is not None:
+            # whether the host holds the tty exclusively (TIOCEXCL)
+            try:
+                excl = bool(struct.unpack("i", fcntl.ioctl(self._slave, TIOCGEXCL, b"\0" * 4))[0])
+            except OSError:
+                excl = None
+            if excl != self.host_excl:
+                self.host_excl = excl
+                self._event("host_exclusive", exclusive=excl)
+        if frame_type != BL_WRITE or self.mode != "bl":
+            return
+        self.writes_seen += 1
+        n = self.writes_seen
+        if self.faults.get("power_off_at_write") == n:
+            self.after_feed.append(self._power_off)
+        if self.faults.get("kill_host_at_write") == n:
+            self.after_feed.append(self._kill_host)
+
+    def _power_off(self) -> None:
+        self._event("power_off", writes=self.writes_seen)
+        self.save_flash()
+        self.log.close()
+        os._exit(3)
+
+    def _kill_host(self) -> None:
+        with open(self.host_pid_file) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGKILL)
+        self._event("host_killed", pid=pid, writes=self.writes_seen)
+        if getattr(self, "_slave", None) is not None and not self.faults.get("keep_excl"):
+            try:
+                fcntl.ioctl(self._slave, TIOCNXCL)
+            except OSError:
+                pass
+
+    # -- main loop ---------------------------------------------------------
+    def run(self, duration: float) -> None:
+        now = time.monotonic()
+        end = now + duration
+        if self.faults.get("dead"):
+            self._set_mode("dead", now)
+        else:
+            self.bl_boot(now)  # power-on: the mailbox holds no request
+        while not self.stop and time.monotonic() < end:
+            try:
+                data = os.read(self.fd, 4096)
+            except (BlockingIOError, OSError):
+                data = b""
+            now = time.monotonic()
+            frames = self.rx_log.feed(data) if data else []
+            for frame_type, seq, payload in frames:
+                self._host_frame(frame_type, now)
+            if self.mode == "bl":
+                for frame_type, seq, payload in frames:
+                    self._log("rx", frame_type, seq, payload, {"mode": "bl"})
+                self.bl_rx(data, now)
+            elif self.mode == "app":
+                for frame_type, seq, payload in self.parser.feed(data):
+                    if self.mode == "app":
+                        self.app_frame(frame_type, seq, payload, now)
+                    else:
+                        self._log("rx", frame_type, seq, payload, {"mode": self.mode})
+            else:
+                for frame_type, seq, payload in frames:
+                    self._log("rx", frame_type, seq, payload, {"mode": self.mode})
+            while self.tx_queue and self.tx_queue[0][0] <= now:
+                self._write(self.tx_queue.pop(0)[1])
+            if self.due is not None and now >= self.due[0]:
+                what = self.due[1]
+                self.due = None
+                if what == "reset":
+                    self._event("reset")
+                    self.bl_boot(now)
+                elif what == "jump":
+                    self._event("jump")
+                    self._set_mode("starting", now)
+                    self.due = (now + self.APP_BOOT_S, "app")
+                elif what == "app":
+                    self.app_start(now)
+            if self.mode == "bl":
+                self.bl_tick(now)
+            elif self.mode == "app":
+                self.app_tick(now)
+            time.sleep(0.001)
+        # what the host wrote just before it exited is still in the pty:
+        # log it, so the transcript does not depend on how fast it exits
+        while True:
+            try:
+                data = os.read(self.fd, 4096)
+            except (BlockingIOError, OSError):
+                break
+            if not data:
+                break
+            for frame_type, seq, payload in self.rx_log.feed(data):
+                self._log("rx", frame_type, seq, payload, {"mode": self.mode, "at_stop": True})
+        self._event("stop", overruns=self.overruns)
+        self.save_flash()
+        self.log.close()
+        os.close(self.fd)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", help="pty the driver is NOT using")
@@ -480,9 +983,25 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--max-rpm", type=float, default=58.0)
     ap.add_argument("--counts-per-rev", type=float, default=8896.0)
+    ap.add_argument("--bootloader-lib", default="",
+                    help="the whole board with its UART bootloader: bl_protocol.c + bl_sim/sim_flash.c "
+                         "compiled into a shared library (tools/flash_check.py builds it)")
+    ap.add_argument("--flash-file", default="",
+                    help="with --bootloader-lib: the 512 KB flash, read at start and written at exit")
+    ap.add_argument("--catalog", default="",
+                    help="with --bootloader-lib: directory of fw_manifest.py manifests the app can be")
+    ap.add_argument("--faults", default="{}",
+                    help="with --bootloader-lib: JSON object of faults (FakeStm32.__init__)")
+    ap.add_argument("--host-pid-file", default="",
+                    help="with --bootloader-lib: pid of the flasher, for the kill_host_at_write fault")
     args = ap.parse_args()
     if not args.port and not args.pty_link:
         ap.error("one of --port / --pty-link is required")
+    if args.bootloader_lib:
+        FakeStm32(args.port, args.log, args.max_rpm, args.counts_per_rev, args.pty_link,
+                  args.bootloader_lib, args.flash_file, args.catalog, json.loads(args.faults),
+                  args.host_pid_file).run(args.seconds)
+        return 0
     FakeBase(args.port, args.log, args.max_rpm, args.counts_per_rev,
              args.pty_link, args.mute_file, args.deaf_file,
              args.flash_stall_s).run(args.seconds)

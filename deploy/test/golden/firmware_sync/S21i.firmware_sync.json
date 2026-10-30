@@ -1,0 +1,47 @@
+{
+  "time": 0,
+  "bundled": {
+    "version": "0.6.0-e6",
+    "semver": [
+      0,
+      6,
+      0
+    ],
+    "git_sha": "e6e6e6e6aa11bb22cc33dd44ee55ff6677889900",
+    "git_sha32": 3873892070,
+    "build_unix": 1793000000,
+    "dirty": false,
+    "crc32": "f307a14b",
+    "size": 360448
+  },
+  "running_before": {
+    "semver": [
+      0,
+      5,
+      9
+    ],
+    "version": "0.5.9",
+    "protocol_version": 1,
+    "git_sha32": 19114957,
+    "git_sha": "0123abcd",
+    "build_unix": 1790000000,
+    "dirty": false,
+    "unversioned": false
+  },
+  "running_after": {
+    "semver": [
+      0,
+      6,
+      0
+    ],
+    "version": "0.6.0",
+    "protocol_version": 1,
+    "git_sha32": 3873892070,
+    "git_sha": "e6e6e6e6",
+    "build_unix": 1793000000,
+    "dirty": false,
+    "unversioned": false
+  },
+  "action": "flashed",
+  "error": null
+}

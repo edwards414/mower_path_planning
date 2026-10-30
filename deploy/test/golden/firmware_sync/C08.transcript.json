@@ -1,0 +1,164 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "application is running, asking it to reboot into the bootloader\n  no ack from app (continuing anyway)\n",
+   "stderr": "error: bootloader did not answer. Is the port right, is the bootloader flashed at 0x08000000, and is nothing else using the port?",
+   "report_written": false,
+   "host": [
+    [
+     "10",
+     1,
+     ""
+    ],
+    [
+     "0f",
+     2,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "10",
+     5,
+     ""
+    ],
+    [
+     "10",
+     6,
+     ""
+    ],
+    [
+     "10",
+     7,
+     ""
+    ],
+    [
+     "10",
+     8,
+     ""
+    ],
+    [
+     "10",
+     9,
+     ""
+    ],
+    [
+     "10",
+     10,
+     ""
+    ],
+    [
+     "10",
+     11,
+     ""
+    ],
+    [
+     "10",
+     12,
+     ""
+    ],
+    [
+     "10",
+     13,
+     ""
+    ],
+    [
+     "10",
+     14,
+     ""
+    ],
+    [
+     "10",
+     15,
+     ""
+    ],
+    [
+     "10",
+     16,
+     ""
+    ],
+    [
+     "10",
+     17,
+     ""
+    ],
+    [
+     "10",
+     18,
+     ""
+    ],
+    [
+     "10",
+     19,
+     ""
+    ],
+    [
+     "10",
+     20,
+     ""
+    ],
+    [
+     "10",
+     21,
+     ""
+    ],
+    [
+     "10",
+     22,
+     ""
+    ],
+    [
+     "10",
+     23,
+     ""
+    ],
+    [
+     "10",
+     24,
+     ""
+    ],
+    [
+     "10",
+     25,
+     ""
+    ],
+    [
+     "10",
+     26,
+     ""
+    ],
+    [
+     "10",
+     27,
+     ""
+    ]
+   ],
+   "replies": [],
+   "events": [
+    [
+     "ignored_enter",
+     {}
+    ]
+   ],
+   "host_signature": "10 0f 10x25",
+   "host_sha256": "e4cd00b9764cf68fec1c595b0cf850bd2f7628fb4a2f9bf187ffe34527231d68",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "af53475e9e315bbb2171a97a0f9e063af5f3203137c263a652d254b9b190ce9f",
+ "overruns": 0,
+ "scenario": "C08",
+ "title": "info with an app that ignores 0x0F"
+}

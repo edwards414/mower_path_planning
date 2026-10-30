@@ -1,0 +1,168 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n  retry write @0x400\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00080000"
+    ],
+    [
+     "13",
+     23,
+     "0008000009fbe5e5"
+    ],
+    [
+     "14",
+     24,
+     ""
+    ],
+    [
+     "06",
+     25,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     13,
+     "120000040000",
+     "drop_reply"
+    ],
+    [
+     "91",
+     23,
+     "130009fbe5e5",
+     null
+    ],
+    [
+     "91",
+     24,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x17 13 14 06",
+   "host_sha256": "565d6c303c4066ac745d4695d19e754a3add02dcc4a73b815c4d17634c52eb33",
+   "replies_sha256": "532f9ed8857cbd2efb87af92e561eb10570d667bc86dea6b666f026a4d3dac33",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x400",
+     128
+    ],
+    [
+     "0x400",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "8530b689",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "S11",
+ "title": "the ack of the write @0x400 is lost once"
+}

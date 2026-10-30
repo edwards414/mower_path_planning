@@ -1,0 +1,119 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "application is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstaying in bootloader (use `run` to start the app)\n",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "10",
+     1,
+     ""
+    ],
+    [
+     "0f",
+     2,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "11",
+     4,
+     "00080000"
+    ],
+    [
+     "13",
+     21,
+     "0008000009fbe5e5"
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     2,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     4,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     21,
+     "130009fbe5e5",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ]
+   ],
+   "host_signature": "10 0f 10 11 12x16 13",
+   "host_sha256": "4e4be34521afd51b6690a7b1364317b5324a54738b045afad52bbefeb96e613d",
+   "replies_sha256": "fe1f8cc427e39f68a36e868db41b8472efc11c64971be03a05f66ad5dc3a3ff5",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "a3845376",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "C09",
+ "title": "flash --no-run"
+}

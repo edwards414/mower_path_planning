@@ -1,0 +1,77 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\n",
+   "stderr": "struct.error: unpack requires a buffer of 16 bytes",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "008000080080050080000103000000",
+     "bad_len_reply"
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10",
+   "host_sha256": "162011620026da01e814a2cf939f7a39b643d8549dcc3adeeb7c4a6d1f0d6fba",
+   "replies_sha256": "74e35c65a3dea92633116a14f0d2c633a4db70cd168921f61443e2df4f85bc0a",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "5ba2fec39178f938b7f3b34912394c8f310cbec835dba388580914651b034743",
+ "overruns": 0,
+ "scenario": "S22b",
+ "title": "a BL_INFO one byte short"
+}

@@ -1,0 +1,232 @@
+{
+ "steps": [
+  {
+   "rc": -9,
+   "stdout": "",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00080000"
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000080000",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "host_killed",
+     {
+      "writes": 6
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x6",
+   "host_sha256": "2d6cc1fa9b83efb7d08e0a0c18b9f8b09600f0d55c08b140c0b06cef33b1370b",
+   "replies_sha256": "80e8798fba4daef6e299bb08c5244dde57398c469f33c3f3340f709394f9543a",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x300",
+     128
+    ]
+   ],
+   "write_data_crc32": "f31c3659",
+   "write_acks_ok": 6
+  },
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: none (board is in the bootloader (no valid app?))\nflashing: board is in the bootloader (no valid app?)\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=False by_request=True erased=True\nerasing for 2048 bytes ...\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "11",
+     4,
+     "00080000"
+    ],
+    [
+     "13",
+     21,
+     "0008000009fbe5e5"
+    ],
+    [
+     "14",
+     22,
+     ""
+    ],
+    [
+     "06",
+     23,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "90",
+     2,
+     "00800008008005008000010600000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010600000000",
+     null
+    ],
+    [
+     "91",
+     4,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     21,
+     "130009fbe5e5",
+     null
+    ],
+    [
+     "91",
+     22,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10x2 11 12x16 13 14 06",
+   "host_sha256": "1a1b9111a31db045ac7c28eb39bd646a7f6c93a05c67031cd554e27ce55a269b",
+   "replies_sha256": "56afdeee384d4ff97e715c0b8edd5fc0f94cb87760a0aab7f933170cc453746c",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "a3845376",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "S18",
+ "title": "the flasher is killed at the 6th write; the next sync recovers"
+}

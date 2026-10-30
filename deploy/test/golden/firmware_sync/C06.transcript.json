@@ -1,0 +1,111 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "application is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\n",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "10",
+     1,
+     ""
+    ],
+    [
+     "0f",
+     2,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     3,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     2,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010300000000",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ]
+   ],
+   "host_signature": "10 0f 10",
+   "host_sha256": "0abbb38f77592c368cd912f5523a0567aa6b2413c253b5be99b5acac63bff750",
+   "replies_sha256": "542f42541e065e2934f53e7dbdc914b32d02aff3a66c4a336ef3368e96296193",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  },
+  {
+   "rc": 0,
+   "stdout": "application started\n",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "14",
+     1,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "91",
+     1,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ]
+   ],
+   "host_signature": "14",
+   "host_sha256": "53c3ee24441f2e66e1be97c207ea83fda907824e58bd726e3911e554d3a137b4",
+   "replies_sha256": "91d6510d0bd17cbcf64fa4ca940e95df673b40d983d83e62b492861c4540aa1c",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "5ba2fec39178f938b7f3b34912394c8f310cbec835dba388580914651b034743",
+ "overruns": 0,
+ "scenario": "C06",
+ "title": "enter, then run"
+}

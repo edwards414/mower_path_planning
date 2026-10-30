@@ -1,0 +1,129 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n  retry write @0x400\n  retry write @0x400\nflash failed: no ack for command 0x12\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00080000"
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     13,
+     "120000040000",
+     "drop_reply"
+    ],
+    [
+     "91",
+     14,
+     "120000040000",
+     "drop_reply"
+    ],
+    [
+     "91",
+     15,
+     "120000040000",
+     "drop_reply"
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x10",
+   "host_sha256": "379eace9e6bb5651cb875806428ce12ff806c59a847bc36dcf19810649c78e78",
+   "replies_sha256": "c91c181fed1a8b06bd8ade06211f0e769f7bfced6753405b7ec14a1dfd88d892",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x400",
+     128
+    ],
+    [
+     "0x400",
+     "0x400",
+     0
+    ],
+    [
+     "0x400",
+     "0x400",
+     0
+    ]
+   ],
+   "write_data_crc32": "328613cd",
+   "write_acks_ok": 7
+  }
+ ],
+ "flash_sha256": "7a4b99d0534578807bd8f9de27dd8dd9e47c291f1927fc715ec31243c4504b26",
+ "overruns": 0,
+ "scenario": "S12",
+ "title": "... three times"
+}

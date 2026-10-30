@@ -1,0 +1,90 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "application is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n",
+   "stderr": "error: erase failed: FLASH_ERROR (value=0x00000000)",
+   "report_written": false,
+   "host": [
+    [
+     "10",
+     1,
+     ""
+    ],
+    [
+     "0f",
+     2,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "11",
+     4,
+     "00080000"
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     2,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     4,
+     "110200000000",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase_fail",
+     {
+      "a": 2,
+      "b": 1
+     }
+    ]
+   ],
+   "host_signature": "10 0f 10 11",
+   "host_sha256": "d66805249ec04d126b1ea4863291b24c8ed386c72bef14ff593051a7caf1a960",
+   "replies_sha256": "5a6401796c90c52082b9ce5759d7448784693fcf6e6659dd49f85f38e83337ad",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "5ba2fec39178f938b7f3b34912394c8f310cbec835dba388580914651b034743",
+ "overruns": 0,
+ "scenario": "C11",
+ "title": "flash, BL_ERASE fails"
+}

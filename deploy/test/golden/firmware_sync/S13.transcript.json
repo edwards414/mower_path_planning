@@ -1,0 +1,114 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\nflash failed: write @0x80 failed: FLASH_ERROR (value=0x00000080)\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00080000"
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     6,
+     "120280000000",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "write_fail",
+     {
+      "a": 128,
+      "b": 128
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12",
+   "host_sha256": "b510f1dd20291897138de741183e704336eeb623fdafe6fc04de204775d269b6",
+   "replies_sha256": "ec0cf6bdbe09d8fca7c6b6ac36cc82275df38cdfc215af16aeb550503f3dd703",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x80",
+     0
+    ]
+   ],
+   "write_data_crc32": "d8fc032e",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "d9cb14ab670124671ecfd5480d066e3172cfc5c13951b7e95a49dc062ab32ead",
+ "overruns": 0,
+ "scenario": "S13",
+ "title": "the write @0x80 fails (FLASH_ERROR)"
+}

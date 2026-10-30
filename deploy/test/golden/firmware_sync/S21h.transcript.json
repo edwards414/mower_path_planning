@@ -1,0 +1,157 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 245760 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 245760 bytes ...\n\r    1%  4096/245760 bytes\r    3%  8192/245760 bytes\r    5%  12288/245760 bytes\r    6%  16384/245760 bytes\r    8%  20480/245760 bytes\r   10%  24576/245760 bytes\r   11%  28672/245760 bytes\r   13%  32768/245760 bytes\r   15%  36864/245760 bytes\r   16%  40960/245760 bytes\r   18%  45056/245760 bytes\r   20%  49152/245760 bytes\r   21%  53248/245760 bytes\r   23%  57344/245760 bytes\r   25%  61440/245760 bytes\r   26%  65536/245760 bytes\r   28%  69632/245760 bytes\r   30%  73728/245760 bytes\r   31%  77824/245760 bytes\r   33%  81920/245760 bytes\r   35%  86016/245760 bytes\r   36%  90112/245760 bytes\r   38%  94208/245760 bytes\r   40%  98304/245760 bytes\r   41%  102400/245760 bytes\r   43%  106496/245760 bytes\r   45%  110592/245760 bytes\r   46%  114688/245760 bytes\r   48%  118784/245760 bytes\r   50%  122880/245760 bytes\r   51%  126976/245760 bytes\r   53%  131072/245760 bytes\r   55%  135168/245760 bytes\r   56%  139264/245760 bytes\r   58%  143360/245760 bytes\r   60%  147456/245760 bytes\r   61%  151552/245760 bytes\r   63%  155648/245760 bytes\r   65%  159744/245760 bytes\r   66%  163840/245760 bytes\r   68%  167936/245760 bytes\r   70%  172032/245760 bytes\r   71%  176128/245760 bytes\r   73%  180224/245760 bytes\r   75%  184320/245760 bytes\r   76%  188416/245760 bytes\r   78%  192512/245760 bytes\r   80%  196608/245760 bytes\r   81%  200704/245760 bytes\r   83%  204800/245760 bytes\r   85%  208896/245760 bytes\r   86%  212992/245760 bytes\r   88%  217088/245760 bytes\r   90%  221184/245760 bytes\r   91%  225280/245760 bytes\r   93%  229376/245760 bytes\r   95%  233472/245760 bytes\r   96%  237568/245760 bytes\r   98%  241664/245760 bytes\r  100%  245760/245760 bytes\n  written in X s\nverifying ...\n  crc32 0xAC058BC9 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00c00300"
+    ],
+    [
+     "13",
+     134,
+     "00c00300c98b05ac"
+    ],
+    [
+     "14",
+     135,
+     ""
+    ],
+    [
+     "06",
+     136,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000c00300",
+     null
+    ],
+    [
+     "91",
+     134,
+     "1300c98b05ac",
+     null
+    ],
+    [
+     "91",
+     135,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 5
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 245760
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x1920 13 14 06",
+   "host_sha256": "234909fddbefbdf31dce5ee2ec51b105477d14cdf2420a90b033564f9bfa6914",
+   "replies_sha256": "fab72ea08faada2eb15899af73b390d96b23b33e19b9b5644b4197c433dd130c",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x3bf80",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "43071a03",
+   "write_acks_ok": 1920
+  }
+ ],
+ "flash_sha256": "15a35177e0f9133099b998d36cc6a1c3c61864405266141a8cc4f166e5735cd3",
+ "overruns": 0,
+ "scenario": "S21h",
+ "title": "a 245760-byte image"
+}

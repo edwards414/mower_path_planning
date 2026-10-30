@@ -1,0 +1,169 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.6 sha=dea0f0a0 built=2026-08-17 20:53:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  no ack from app (continuing anyway)\nflash failed: bootloader did not answer. Is the port right, is the bootloader flashed at 0x08000000, and is nothing else using the port?\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "10",
+     5,
+     ""
+    ],
+    [
+     "10",
+     6,
+     ""
+    ],
+    [
+     "10",
+     7,
+     ""
+    ],
+    [
+     "10",
+     8,
+     ""
+    ],
+    [
+     "10",
+     9,
+     ""
+    ],
+    [
+     "10",
+     10,
+     ""
+    ],
+    [
+     "10",
+     11,
+     ""
+    ],
+    [
+     "10",
+     12,
+     ""
+    ],
+    [
+     "10",
+     13,
+     ""
+    ],
+    [
+     "10",
+     14,
+     ""
+    ],
+    [
+     "10",
+     15,
+     ""
+    ],
+    [
+     "10",
+     16,
+     ""
+    ],
+    [
+     "10",
+     17,
+     ""
+    ],
+    [
+     "10",
+     18,
+     ""
+    ],
+    [
+     "10",
+     19,
+     ""
+    ],
+    [
+     "10",
+     20,
+     ""
+    ],
+    [
+     "10",
+     21,
+     ""
+    ],
+    [
+     "10",
+     22,
+     ""
+    ],
+    [
+     "10",
+     23,
+     ""
+    ],
+    [
+     "10",
+     24,
+     ""
+    ],
+    [
+     "10",
+     25,
+     ""
+    ],
+    [
+     "10",
+     26,
+     ""
+    ],
+    [
+     "10",
+     27,
+     ""
+    ],
+    [
+     "10",
+     28,
+     ""
+    ]
+   ],
+   "replies": [],
+   "events": [
+    [
+     "ignored_enter",
+     {}
+    ]
+   ],
+   "host_signature": "06 10 0f 10x25",
+   "host_sha256": "9e9ccf64060b59594a8235dc2e56db7a0de949043a90ed43d2ac813d1b15fe8a",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "af53475e9e315bbb2171a97a0f9e063af5f3203137c263a652d254b9b190ce9f",
+ "overruns": 0,
+ "scenario": "S09",
+ "title": "the app ignores 0x0F"
+}
