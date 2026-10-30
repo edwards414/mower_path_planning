@@ -1,0 +1,948 @@
+{
+ "constants": {
+  "BOOT_FLASH_BASE_ADDRESS": 134217728,
+  "BOOT_BOOTLOADER_SIZE": 32768,
+  "BOOT_APP_START_ADDRESS": 134250496,
+  "BOOT_APP_END_ADDRESS": 134610944,
+  "BOOT_APP_MAX_SIZE": 360448,
+  "BOOT_APP_FIRST_SECTOR": 2,
+  "BOOT_APP_LAST_SECTOR": 6,
+  "BOOT_APP_VECTOR_OFFSET": 32768,
+  "BOOT_RAM_BASE_ADDRESS": 536870912,
+  "BOOT_RAM_SIZE": 131072,
+  "BOOT_SHARED_RAM_ADDRESS": 536870912,
+  "BOOT_SHARED_RAM_SIZE": 32,
+  "BOOT_REQUEST_MAGIC": 2953293831,
+  "BOOT_VERSION": 1,
+  "BOOT_GRACE_PERIOD_MS": 500,
+  "BOOT_WRITE_CHUNK_MAX": 128,
+  "BOOT_FRAME_TYPE_ENTER_BOOTLOADER": 15,
+  "BOOT_FRAME_TYPE_ENTER_BOOTLOADER_ACK": 143,
+  "BOOT_FRAME_TYPE_BL_PING": 16,
+  "BOOT_FRAME_TYPE_BL_ERASE": 17,
+  "BOOT_FRAME_TYPE_BL_WRITE": 18,
+  "BOOT_FRAME_TYPE_BL_VERIFY": 19,
+  "BOOT_FRAME_TYPE_BL_RUN_APP": 20,
+  "BOOT_FRAME_TYPE_BL_INFO": 144,
+  "BOOT_FRAME_TYPE_BL_ACK": 145,
+  "BOOT_INFO_FLAG_APP_VALID": 1,
+  "BOOT_INFO_FLAG_ENTERED_BY_REQUEST": 2,
+  "BOOT_INFO_FLAG_ERASED": 4,
+  "BOOT_STATUS_OK": 0,
+  "BOOT_STATUS_BAD_ARGUMENT": 1,
+  "BOOT_STATUS_FLASH_ERROR": 2,
+  "BOOT_STATUS_CRC_MISMATCH": 3,
+  "BOOT_STATUS_OUT_OF_RANGE": 4,
+  "BOOT_STATUS_NOT_ERASED": 5,
+  "BOOT_STATUS_NO_VALID_APP": 6
+ },
+ "sizes": {
+  "boot_enter_payload_t": 8,
+  "boot_enter_ack_payload_t": 4,
+  "boot_info_payload_t": 16,
+  "boot_erase_payload_t": 4,
+  "boot_write_header_t": 4,
+  "boot_verify_payload_t": 8,
+  "boot_ack_payload_t": 6
+ },
+ "offsets": {
+  "boot_enter_payload_t.magic": 0,
+  "boot_enter_payload_t.reserved": 4,
+  "boot_enter_ack_payload_t.status": 0,
+  "boot_enter_ack_payload_t.reserved": 1,
+  "boot_info_payload_t.app_start_address": 0,
+  "boot_info_payload_t.app_max_size": 4,
+  "boot_info_payload_t.write_chunk_max": 8,
+  "boot_info_payload_t.bootloader_version": 10,
+  "boot_info_payload_t.flags": 11,
+  "boot_info_payload_t.reserved": 12,
+  "boot_erase_payload_t.image_size": 0,
+  "boot_write_header_t.offset": 0,
+  "boot_verify_payload_t.image_size": 0,
+  "boot_verify_payload_t.crc32": 4,
+  "boot_ack_payload_t.command": 0,
+  "boot_ack_payload_t.status": 1,
+  "boot_ack_payload_t.value": 2
+ },
+ "packed": [
+  {
+   "struct": "boot_enter_payload_t",
+   "fields": {
+    "magic": 2953293831,
+    "reserved": 0
+   },
+   "bytes": "07b007b000000000"
+  },
+  {
+   "struct": "boot_enter_payload_t",
+   "fields": {
+    "magic": 305419896,
+    "reserved": 2596069104
+   },
+   "bytes": "78563412f0debc9a"
+  },
+  {
+   "struct": "boot_enter_ack_payload_t",
+   "fields": {
+    "status": 0,
+    "reserved": [
+     0,
+     0,
+     0
+    ]
+   },
+   "bytes": "00000000"
+  },
+  {
+   "struct": "boot_enter_ack_payload_t",
+   "fields": {
+    "status": 6,
+    "reserved": [
+     1,
+     2,
+     3
+    ]
+   },
+   "bytes": "06010203"
+  },
+  {
+   "struct": "boot_info_payload_t",
+   "fields": {
+    "app_start_address": 134250496,
+    "app_max_size": 360448,
+    "write_chunk_max": 128,
+    "bootloader_version": 1,
+    "flags": 5,
+    "reserved": 0
+   },
+   "bytes": "00800008008005008000010500000000"
+  },
+  {
+   "struct": "boot_info_payload_t",
+   "fields": {
+    "app_start_address": 4294967295,
+    "app_max_size": 1,
+    "write_chunk_max": 48879,
+    "bootloader_version": 255,
+    "flags": 255,
+    "reserved": 2779077210
+   },
+   "bytes": "ffffffff01000000efbeffff5a5aa5a5"
+  },
+  {
+   "struct": "boot_info_payload_t",
+   "fields": {
+    "app_start_address": 0,
+    "app_max_size": 0,
+    "write_chunk_max": 0,
+    "bootloader_version": 0,
+    "flags": 2,
+    "reserved": 0
+   },
+   "bytes": "00000000000000000000000200000000"
+  },
+  {
+   "struct": "boot_erase_payload_t",
+   "fields": {
+    "image_size": 1
+   },
+   "bytes": "01000000"
+  },
+  {
+   "struct": "boot_erase_payload_t",
+   "fields": {
+    "image_size": 360448
+   },
+   "bytes": "00800500"
+  },
+  {
+   "struct": "boot_erase_payload_t",
+   "fields": {
+    "image_size": 4294967295
+   },
+   "bytes": "ffffffff"
+  },
+  {
+   "struct": "boot_write_header_t",
+   "fields": {
+    "offset": 0
+   },
+   "bytes": "00000000"
+  },
+  {
+   "struct": "boot_write_header_t",
+   "fields": {
+    "offset": 128
+   },
+   "bytes": "80000000"
+  },
+  {
+   "struct": "boot_write_header_t",
+   "fields": {
+    "offset": 360320
+   },
+   "bytes": "807f0500"
+  },
+  {
+   "struct": "boot_verify_payload_t",
+   "fields": {
+    "image_size": 46440,
+    "crc32": 24704806
+   },
+   "bytes": "68b5000026f77801"
+  },
+  {
+   "struct": "boot_verify_payload_t",
+   "fields": {
+    "image_size": 1,
+    "crc32": 4294967295
+   },
+   "bytes": "01000000ffffffff"
+  },
+  {
+   "struct": "boot_ack_payload_t",
+   "fields": {
+    "command": 18,
+    "status": 0,
+    "value": 128
+   },
+   "bytes": "120080000000"
+  },
+  {
+   "struct": "boot_ack_payload_t",
+   "fields": {
+    "command": 19,
+    "status": 3,
+    "value": 3735928559
+   },
+   "bytes": "1303efbeadde"
+  },
+  {
+   "struct": "boot_ack_payload_t",
+   "fields": {
+    "command": 20,
+    "status": 0,
+    "value": 134250496
+   },
+   "bytes": "140000800008"
+  },
+  {
+   "struct": "boot_ack_payload_t",
+   "fields": {
+    "command": 17,
+    "status": 4,
+    "value": 360448
+   },
+   "bytes": "110400800500"
+  }
+ ],
+ "sectors": [
+  {
+   "start": 134217728,
+   "size": 16384
+  },
+  {
+   "start": 134234112,
+   "size": 16384
+  },
+  {
+   "start": 134250496,
+   "size": 16384
+  },
+  {
+   "start": 134266880,
+   "size": 16384
+  },
+  {
+   "start": 134283264,
+   "size": 65536
+  },
+  {
+   "start": 134348800,
+   "size": 131072
+  },
+  {
+   "start": 134479872,
+   "size": 131072
+  },
+  {
+   "start": 134610944,
+   "size": 131072
+  }
+ ],
+ "erase": [
+  {
+   "image_size": 0,
+   "ok": false,
+   "calls": 0,
+   "first": 0,
+   "count": 0
+  },
+  {
+   "image_size": 1,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 1
+  },
+  {
+   "image_size": 4,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 1
+  },
+  {
+   "image_size": 16383,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 1
+  },
+  {
+   "image_size": 16384,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 1
+  },
+  {
+   "image_size": 16385,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 2
+  },
+  {
+   "image_size": 32768,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 2
+  },
+  {
+   "image_size": 32769,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 3
+  },
+  {
+   "image_size": 49152,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 3
+  },
+  {
+   "image_size": 98304,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 3
+  },
+  {
+   "image_size": 98305,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 4
+  },
+  {
+   "image_size": 229376,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 4
+  },
+  {
+   "image_size": 229377,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 5
+  },
+  {
+   "image_size": 360444,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 5
+  },
+  {
+   "image_size": 360448,
+   "ok": true,
+   "calls": 1,
+   "first": 2,
+   "count": 5
+  },
+  {
+   "image_size": 360449,
+   "ok": false,
+   "calls": 0,
+   "first": 0,
+   "count": 0
+  },
+  {
+   "image_size": 2147483647,
+   "ok": false,
+   "calls": 0,
+   "first": 0,
+   "count": 0
+  },
+  {
+   "image_size": 4294967295,
+   "ok": false,
+   "calls": 0,
+   "first": 0,
+   "count": 0
+  }
+ ],
+ "crc32": [
+  {
+   "data": "",
+   "crc": 0
+  },
+  {
+   "data": "00",
+   "crc": 3523407757
+  },
+  {
+   "data": "ff",
+   "crc": 4278190080
+  },
+  {
+   "data": "313233343536373839",
+   "crc": 3421780262
+  },
+  {
+   "data": "0000000000000000000000000000000000000000000000000000000000000000",
+   "crc": 420107693
+  },
+  {
+   "data": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "crc": 4285311755
+  },
+  {
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+   "crc": 688229491
+  },
+  {
+   "data": "70aad213868a3fad93d3484b522a0c9148b3e1d5a52e1cf7acc9fd5e7b9bc04e5f02ea255c87f467422b33f67c25fec9fd184e782f2bd4be24356bde8971a0318b828a671687b4492914bdf1ea4da80715c095b9d92db8a34362c15f22652a9498d35895ba7afd9094873c5d7ead13a29140e641a44c81592d18ca1217be977f337d443320385444ff71cbef9b656e8a170d19537f412f2288927a957616f7edeebab87d54dbaa50d5f4b306234404651e8a1705189c2a81caba184994b2fefe51c8f593369439783c69135a980113ef51e5d9e1bf2b21d67a520881bbd90f1e0bd634e23193cb640a717266bf9c6e4578f8ee18a5e8fdc6225e7d7754c52f5badb40190a9ee639ceb0b31d11a7be858406a243784ab4df8a804f810a66a490c110223a756cd525c1dfb1e23a62963d3348d46e44eb44553a1b0723da862b51333c89376c10ded47b95fdaab2cc096e407f613bd804f32659177eadc83f8053a4727175af1c569844652f9002f35fd4392e5ac544fb9ac48ae175f9e9fd6313d5e8a41b28711c8e5c7dda9b21559980c835799f07b4eb94d4923810e80b0233d6fd9ca564f664cd21f153b0f3470d1d4ab7e518a764b50d3917832373ccc46b2f3265dd07c8bd3b406680fefb926b28a6ffa16f0f030805161bf734df7ce32655fb8760e42d8b7c2657c4c8d1a730e6f24c9dc0ec2ba7fc2a764cc6ffebd9ec65a8bbc01f9554513ccbac4c884d7afe64ad05011868b099a50e9707d0160fce50ac759b739ab49e94ed24dc7ddf5207b54b234886c4a528d868d5de013842ebb27bff9ee8a500f5c83e43dc453da92679172d0b3ea84657d50e1747e577cd501c15a7e7acdc78575eba3ab360fa62e71165aa02b196def4a5ab7b663815e453a3df8759f356c5b593c98f5d882a3ee102b3b1b2e29400b5114664741b78a08463e5eaf8a345ee0d748baac20bb1ee483a163a1a84013a82bdc4ee73257ab43f9d824e56a784028ccbbe8d00c7ca2e0cabdfbdc9b276deca93f3786dca7161f3e5b8202f70f6ff5981895f6851b049cfa6bd2b304de7e6b51ce7bbea2230a91e605c8736a74685bb82757f93654fa87e634119f03e8c37ab29048995bde1e6529c4fffa32357d12457ffdcf64e46e43ee2c49e9263ebb7a79998c4a74ad4346d4c0c8b723d6e208ef325da4e8a42097866b2b36214cecb70ea870d55697874c616ed7d1dca19d904c3597e63018de4159aee072eb444ecc27463c41974bea2761c0f8a616793c634a8200283472f47279ac105d987629ff3e7bdb70df1cc90b602294b6dcdb999635b3961c3cc0c7b770e7fc7ac5f7cf24b9d34ccf1db4168d3756717266472baca274d89fd6c6ad275bd28152a8212ac5ea28613d697439f13aac238133999c1016",
+   "crc": 1385238153
+  },
+  {
+   "data": "47cf3a3eda27be9b5d83aebfac083f539c0e8cb8b777257d854c4dbb5aa9ed24165a0b7508158c1af3b2b89fc36b95a09ac9a76cb56514c71d3b45d61974c0e39e65143dfa2d9d8d285052fedb7f939d496357850933766427388f8ce9f94b9248ad428fb34a25fae3d9c93b8f8fa1a5b6e801ed5bfd755e31ecd27e4fbc65a8afd320131ac452962cee70116585b5a017ed912bef37f2254c6b70f25c07ead031f761c592a48910f5e63a8031b34f02582ea9422cd1bde6a1ade7994a0b92998809ac482eb3f20b75249c8b68527b5dc32f2f6b9cc3cac7977cb949b1488195ea51004c12b151554f76a72e170ac2a182c04790915ce27dede3a15a1a49976450135272807c26ce0179c77f779c7be67f47ecd017b943775c575522248dd5e02cd1b87a12f257963468a83cc082a6aa1bf1c249346aed30affed20ebc8272d4c9173146ccd2d81060af25ef174927991e3846bd8a901a6c3b60190139e7487291eb39c1002afcb0138bc6e4f704cbb94b653623354e256a322b8defdefd1629033ef352ab334bd4e6b476404d71f1f7412e5abb2842a86042993adeb3e03cbbd777a49b3b53998ddc79baaeb3fd28022ca7b2807adec761c95331a4050273c06c0ed86468fdc1a9bc4808dbe5b7edeaf14cc0b2d4f2d8e605cfb3364c0bae59ccc1dd14ee085dfe9235d81c40cc65079ba49c47ceadb67941eeb0efb8c54a0fb455e39ae1649d8fd72d8ab7d51c2d6caad8e989895960a719b3936a1c294ad032c4571d3463efffe2a3f79629e6cd94939ef4db5434a2ce14a1e729c0659e55630fcae0d6f537637f6c68e4a7ce05b0e5b07bbcb14cd4e14885bc7daa81b79f01fd02164a431e3353fab286120b405934e1be46aede94e08a8dba5e63d5845e09a91da18b552861c6a364ee5ee52dea6501303a5d7b9891fc5ab9ba7a343d7fbe8ec2b058fa09249220ef600cec2cc1619744f6f10b541fd20c9149b63c0d022c7b2451e68c3b4854af6be4f8a6b04648d1e4e9f1d484b7d6d8dc0e4c5738bb2ba2136bfe6e11d91c7c40e3f61635cd83c1842c2ddfed4cecef9cb8319a16a2bdea16cd1a1ffb5d36df4d5ed3db29282aac831fc631bf9fcbb7692aaf611c0bcbe3c1e32d04d1ebc18f345c5255a2c7b054348095117e425bafc6cdb115539373696612af367ef1fd6ee87911f9182831a1f1baa818e56235915e3700b53a68efd991da8d3c24a6ea3bad1e4621f1f73a6f45487305701861c5c0182bdfe5de3c79fc0a5b76ab9a09905cdecc5a3c7d3ff872ed47596af62411ac3ebd5f77031390474ba27946fa4dcd1e0f1e24afb0d10d6921e2c0e0dc895e469da525220a50e5d226415ebcaf3375ef6b8581680efd07cd15b6a93891a27a839edbbeae7d23b66547e179d406229f5326997cd0d9a61ab1ce0b64d5affaec71d00dbccb357e2cf8ea2de877892a2cb575af0e01d8ca97eb6f6adf30d8d445e0155be9f4c093edd17d3a2bc9738672eb8396b373bd076320e25aff019cafeb2473abce1a880e688bc4d6bfde096ccabd585c4aa803c56525617a4c5511a332cc53fd10de096674bda0cca8bfb47eb033e99707d8b0e6c2002341e2d4db00adb5be0947ea7993231f6cab57e885d44e581e41facbc63d94e39a10bc13a1300e6f01c1fa36e125e19a6fc6b3f71922cf94189e810d0d8c97156f61a574a1c1f935ac2324a8c61799115350ad4423aacf3139f61d78b18b9ae7dc5cb7088c4fafc2b8b4c22708a1a3c7efcebbb2f6f4e1e495bfca3c946232b5f1df340782df77e9c43230fad0b541b6be3d8654b9aaa5c2cda547bce3ad9bf7c9e892b8e47d168ef9ea9617abd8dc90495d099e7fdb83b262135fdfac89bc9b280e4b2a65f5d21fb276d66afd4fc55659a015dc4543c940ea33ed15a7185aec72c4d11394f0b93de50e29ef66c6848a11f95b1581c58cc58f934296246977ad7ded0b81c4f04e90729471f7995cef17b3e6933256811e0e7cbf56520945d512198d48d40cd24d9020a5dd476437b88fad98ed857bd2415455a58cea3a885c4b535fe464baf9efcf7eb1a1f7df79005b7275cecb0c3ea771e5b6bfafa5f5800636d218fbcc1fbc9fcca807912c99ba03fdbfae4d8339539ca772e83985a48e083fb51423fcd489953678f2f81cecc4e463d610b3ab013793d0d903fe0d0072093781a42c083bdc15db723a386431230b28d09297b7cf4cd1fcc6113f95f632cfbd54d563e3a2064c0bd0faf1c63eeb64b7a092c9b427421f16a0b53fd260fce1d941d107eca9ee2199008d8d745a23b12a9b3c3ca8800da9134164e45c556c478aa3b02a7fffe18c2cb56017fff32207d00d269f328b790ae37a1ddb18a3716e5e68eb54e93122f9a3a73fecdb61dfd6be9028ded48ed8610dfb83b31522643d6f285e9c6c93c2b1f135111ac63c81662ebe3bc845efbe940fe52769bba569a43edee7016f4278ac05e35405d0c5fa06536c9c52f3b1605d349a3f3c8ed82ace1a364e0bac807fafa5becbb620453e708b7984b81a75d632802123837bd4b26d49fbad3ac12e66a44d03d1da7f19d8455d9e13bf8e771e3dd2032f1ea9a9c9b69bfcb407f73aa67389f6dce5ea1797d408025a698819fdfea565f1c6ee7a4ba1d5018bb376d5d31dbb112cd21229eb97b613138be98561843994e468d2d9015b98d6ee893bbce02cad00502dd21280419aeacfa33685e3e6f86422108adbf5041c0273c957f3e55ba7128b974d830a18490e47869cb40891fdde87b0e85a973f26c1df59ec8a4e409562fc1843c9b0a4955cdb3f0e83b8c781fa9422775c60ec156f64793903d74cd52df3d66bdc52fc71e90e3f5faa01f20dfef1da923b1c2c1e6cedb5e1d3b2196bde35c4aab9ef369c85a682d500a3b1282b9cdd4d30fc585b90f42b0a3572479a92c0b7ab4608b83c5f5db41c54fd9ccb9ef5318dd834e7c94d2bb4187555427a4cf9cc48585b539a623a51741d0ace1e462ff7397fbd50082910f97fc8cb4e67ee0a9073aa2281e0c8f5be18aec27f7e027dbc26977e90562105d7e2cfbea3731048ebaa679c42b35871879ac7f6537399793d4b0498cd0b972af356017e5e3cd64a394275d8fba8e496556869ee992f58c752abbd805b984f9588da3ad605aac877848151126f80ead4e87f612f7a6738ab6f247774ab0a21b9a4d5f823cd97626d7eb5c369be1cadee1f361fbc2c79bda8b3a54cac13cf5c02d947691ba4e830bdccd45c98a557e74c7594e19818bf7259b2951fade5d6216382a77e6f464119511afb3db01ff7b98314fb2d0b71175d30eecad0a7f9b306cb5813fc71135b3fdad8c8a7e2837444547cdf24db475bff5f39fe87b8d4da71d5a61ac2119ddac0acc6d8eb570ff653d905f24f534f7c9a802132a394867fbbcc02a6e486b4ff4e7a9a06cc9d3443f3fb5f09ad8fa367467fd8c1513cbebc7c6ca8f9a3f995d0957a1b8842aa34762bb812bcba7b9090d1bcfe5e1b9e77e97c2304732bff35b3c03eb32535ebad58560ee85d1c931e3d9fd006dd46b1a0b1da5d84a160c4c7591e6427ed78bb409034b7dc8912b1adb394ce25f580afe1fc3278f12ee5136ec73462aa42796043070e7f15c21838a4872bff52179aa8b9a1b9f09b9c303976df36d89c3f0ca1e4010e4d2afc23b74131d1ff74ffe3bb2e9479cc7efa2ffef2b240e95ecf0eb6e568ee2a21df2cad48dda73a48e9430cfd085c190c41e352859b8687317933f2a2a4d94a799ebc36413c620068ff66933683d397da02f392620049798341bde9ffb3f3c5100eadcaa203dc7b890bf4ff4522bc3ffcb0773537502f469cb432e9684438de32914f02a8f891c453f1e3701fe727e0eff4c1164574f940f9b0d548571f0ac3ac9bed8f2f47239314fdd658800ae1df5ed162c697b007c842987f6b2fc9234d1ba017d1dfba80e07dc20d8b83faabcbacd8e832f7f3df07c4d0d3941f19ece5663f25c79a9fc4d91ac3522af445391b2b81db878d97f8ba059bfbba7f2697ea5f1809f86bd435198a41403dcc2d0cd16d29ce64a7b1ba11fc23372f50fffd7228ac98c3ce747677142e944f97a9913bcc22ad4ef836e5b9e65a911b3b98cef7d2912f095ca077292662fdd4961e41158c23665b3db660d9baa196ec28deac8e879547359c1b5060dd53ce5ac801bfcdaf18692ba6645d182c791da4c35f463254497e8e1da9f583535c23f9c1890a967b306385255b0d720df88647de3574210cbad155719ca59c0091a4dc79c73500d594bb11357c14cc2c62916ef898fe3a4b61e3904f7f99cb576aafad95f38eabc912e8bc17c870aa1c167308d6483b7a90e3bd67c0ed0b398ab9d553844bfdd457e831aea57e07367632605791a92647ee1f4a1d94798f8020b01dc8f68aef881cef4740b0d062b8690bc581766a110990c78fe2c34d584919289c4430cad5be74d27befe30c19d638dc568dfa70180ff5a3c70c987f604fe11a678b09ec484c7d426235f1db9facb1cc08f326fe91a06cf3f658615238a6a3d4a0299343ebc32b593f55e3e97c9f5a6916b84fdfcff194e8c232ec0ae2d43670bcc3810662df73555a47bcae33bde1ddbffccc23d8933140b7eb1a5487ffc16c571952bd533f7223a87f9bc152e50b5748c3133a13782be965fbe726431c32088f91ca5b44d7b92ddace96d23c9dc75f7ad787b90e1c436904b5cb0c5822575d31d8dd2e4265c6ae7946a1545b9259a994a013e96a370c928c93f38c72255c0376bc3eddeaecacc3df4dc2ce045fbdc97a012d11ffe029edf8fdb927e99336c1ee5f2dbff1aa23ccb578559585be28d9153f3a41b4920aee185ea088d2ada154cb432eeb417d2fcd0b6f618a361bc4b5e1201e469154b1082f2fae874ee3bf723f8cbbef552ece801531bd787a18aaf68e1445ca6960e225b58d08671322c188f637d3e9476b4c37b483821572e6a5ed3c2bebf24393185951bff879dc6cbbfa409b9c5975d3d50a1f0022d503139449e818003d4c8528b059bae8234c7012ef07054a2e88877de26e4d84990a0b2cb27c59eb838609bcddd7b07dbb95f5b5e5ff7f9ca191f447c0e938dc16a86deb41ebfbc62c0f2293ec548149b86cd7ac02e9647334f00bf5fee8e7e5af6ec35cf520f67c8f276c9ae3782f23f87037b677bbac48204c06f26e96363a5441e5e95f62f4ea412e305e4c5e24a6b56bd7685e9cf918c71958f55805eb771b6d3cef26cfe708dc74cd03a804bc0db6d892ad725056dcf69e0adbc293d408c909dbafb74afee439c4c39df5c16d330570a86048242be63f5d79ee0b6a7f99e4d73fbb1988aefa3761ff15689e0ed8601b30492c2f3e06be03edad8ed89aa6dd893a1bd42bd389c9b5eec1922133438576df318b426e7c541320499536644524ac28596a1fa39223426bf27f63ac2347a773493beb2da33d08f553c5a061b3e698386fb60a5cde40ed8251648b912bb09a33b3d1fe97de387a8bd59fe07e08f60393f9dad508459039e1485f82a1d3e5c48619c732ae215f330a2937d547840e43a851b5b2c165eb982d3a54412d550b75fdf3f8f165af3d608b540b70917d78826bd86ebd62a567b7ea6af15b8651354850e27c3f07b0a2ed1f40214edfaa848dde01e41aaa1a2cd162c57be68c55ab95ee479e4ab8df7dd131da9d28e5652b74b6fabe33ee2ca1b1e9e1c74266938aecfcc509f5c462f9fb04a8de5e9b7b998ed3af675577c55ea61484ba5378d0fb4d1d7aae45a318069252a88f47ec15f5ac743e4738",
+   "crc": 2441741233
+  },
+  {
+   "data": "a55a0112010884000000",
+   "crc": 4001060474
+  }
+ ],
+ "crc32_fill": [
+  {
+   "fill": 255,
+   "len": 16384,
+   "crc": 1762342867
+  },
+  {
+   "fill": 255,
+   "len": 360448,
+   "crc": 2822750921
+  },
+  {
+   "fill": 0,
+   "len": 65536,
+   "crc": 3617033963
+  },
+  {
+   "fill": 90,
+   "len": 46440,
+   "crc": 775432955
+  }
+ ],
+ "python": {
+  "constants": {
+   "SOF0": 165,
+   "SOF1": 90,
+   "VERSION": 1,
+   "T_ENTER_BOOTLOADER": 15,
+   "T_ENTER_BOOTLOADER_ACK": 143,
+   "T_BL_PING": 16,
+   "T_BL_ERASE": 17,
+   "T_BL_WRITE": 18,
+   "T_BL_VERIFY": 19,
+   "T_BL_RUN_APP": 20,
+   "T_BL_INFO": 144,
+   "T_BL_ACK": 145,
+   "T_INFO_REQUEST": 6,
+   "T_FIRMWARE_INFO": 135,
+   "BOOT_REQUEST_MAGIC": 2953293831,
+   "APP_START_ADDRESS": 134250496,
+   "APP_MAX_SIZE": 360448,
+   "WRITE_CHUNK_MAX": 128,
+   "INFO_FLAG_APP_VALID": 1,
+   "INFO_FLAG_ENTERED_BY_REQUEST": 2,
+   "INFO_FLAG_ERASED": 4
+  },
+  "host_frames": [
+   {
+    "fn": "ping",
+    "args": [
+     1
+    ],
+    "bytes": "a55a011001002682"
+   },
+   {
+    "fn": "run_app",
+    "args": [
+     1
+    ],
+    "bytes": "a55a01140100e65e"
+   },
+   {
+    "fn": "enter_bootloader",
+    "args": [
+     1
+    ],
+    "bytes": "a55a010f010807b007b0000000001699"
+   },
+   {
+    "fn": "info_request",
+    "args": [
+     1
+    ],
+    "bytes": "a55a01060100e573"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     1,
+     4
+    ],
+    "bytes": "a55a0111010404000000a0ff"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     1,
+     4,
+     24704806
+    ],
+    "bytes": "a55a011301080400000026f778015804"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     1,
+     46440
+    ],
+    "bytes": "a55a0111010468b500004ffc"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     1,
+     46440,
+     24704806
+    ],
+    "bytes": "a55a0113010868b5000026f778018413"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     1,
+     360448
+    ],
+    "bytes": "a55a0111010400800500fef1"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     1,
+     360448,
+     24704806
+    ],
+    "bytes": "a55a011301080080050026f77801cde3"
+   },
+   {
+    "fn": "write",
+    "args": [
+     1,
+     0,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b7279"
+    ],
+    "bytes": "a55a011201840000000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b72795b69"
+   },
+   {
+    "fn": "write",
+    "args": [
+     1,
+     128,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a011201848000000080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9c056"
+   },
+   {
+    "fn": "write",
+    "args": [
+     1,
+     360320,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a01120184807f050080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f994f9"
+   },
+   {
+    "fn": "write",
+    "args": [
+     1,
+     46336,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1"
+    ],
+    "bytes": "a55a0112016c00b5000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad18e1f"
+   },
+   {
+    "fn": "write",
+    "args": [
+     1,
+     0,
+     "00070e15"
+    ],
+    "bytes": "a55a011201080000000000070e15b3d0"
+   },
+   {
+    "fn": "ping",
+    "args": [
+     127
+    ],
+    "bytes": "a55a01107f0070a9"
+   },
+   {
+    "fn": "run_app",
+    "args": [
+     127
+    ],
+    "bytes": "a55a01147f00b075"
+   },
+   {
+    "fn": "enter_bootloader",
+    "args": [
+     127
+    ],
+    "bytes": "a55a010f7f0807b007b000000000637f"
+   },
+   {
+    "fn": "info_request",
+    "args": [
+     127
+    ],
+    "bytes": "a55a01067f00b358"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     127,
+     4
+    ],
+    "bytes": "a55a01117f04040000009f3a"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     127,
+     4,
+     24704806
+    ],
+    "bytes": "a55a01137f080400000026f778012de2"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     127,
+     46440
+    ],
+    "bytes": "a55a01117f0468b500007039"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     127,
+     46440,
+     24704806
+    ],
+    "bytes": "a55a01137f0868b5000026f77801f1f5"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     127,
+     360448
+    ],
+    "bytes": "a55a01117f0400800500c134"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     127,
+     360448,
+     24704806
+    ],
+    "bytes": "a55a01137f080080050026f77801b805"
+   },
+   {
+    "fn": "write",
+    "args": [
+     127,
+     0,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b7279"
+    ],
+    "bytes": "a55a01127f840000000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b72792b01"
+   },
+   {
+    "fn": "write",
+    "args": [
+     127,
+     128,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a01127f848000000080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9b03e"
+   },
+   {
+    "fn": "write",
+    "args": [
+     127,
+     360320,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a01127f84807f050080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9e491"
+   },
+   {
+    "fn": "write",
+    "args": [
+     127,
+     46336,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1"
+    ],
+    "bytes": "a55a01127f6c00b5000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad125f6"
+   },
+   {
+    "fn": "write",
+    "args": [
+     127,
+     0,
+     "00070e15"
+    ],
+    "bytes": "a55a01127f080000000000070e15c636"
+   },
+   {
+    "fn": "ping",
+    "args": [
+     255
+    ],
+    "bytes": "a55a0110ff00e8b2"
+   },
+   {
+    "fn": "run_app",
+    "args": [
+     255
+    ],
+    "bytes": "a55a0114ff00286e"
+   },
+   {
+    "fn": "enter_bootloader",
+    "args": [
+     255
+    ],
+    "bytes": "a55a010fff0807b007b000000000579b"
+   },
+   {
+    "fn": "info_request",
+    "args": [
+     255
+    ],
+    "bytes": "a55a0106ff002b43"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     255,
+     4
+    ],
+    "bytes": "a55a0111ff0404000000bfee"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     255,
+     4,
+     24704806
+    ],
+    "bytes": "a55a0113ff080400000026f778011906"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     255,
+     46440
+    ],
+    "bytes": "a55a0111ff0468b5000050ed"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     255,
+     46440,
+     24704806
+    ],
+    "bytes": "a55a0113ff0868b5000026f77801c511"
+   },
+   {
+    "fn": "erase",
+    "args": [
+     255,
+     360448
+    ],
+    "bytes": "a55a0111ff0400800500e1e0"
+   },
+   {
+    "fn": "verify",
+    "args": [
+     255,
+     360448,
+     24704806
+    ],
+    "bytes": "a55a0113ff080080050026f778018ce1"
+   },
+   {
+    "fn": "write",
+    "args": [
+     255,
+     0,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b7279"
+    ],
+    "bytes": "a55a0112ff840000000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b7279c939"
+   },
+   {
+    "fn": "write",
+    "args": [
+     255,
+     128,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a0112ff848000000080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f95206"
+   },
+   {
+    "fn": "write",
+    "args": [
+     255,
+     360320,
+     "80878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    ],
+    "bytes": "a55a0112ff84807f050080878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f906a9"
+   },
+   {
+    "fn": "write",
+    "args": [
+     255,
+     46336,
+     "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1"
+    ],
+    "bytes": "a55a0112ff6c00b5000000070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d71b"
+   },
+   {
+    "fn": "write",
+    "args": [
+     255,
+     0,
+     "00070e15"
+    ],
+    "bytes": "a55a0112ff080000000000070e15f2d2"
+   }
+  ],
+  "parse_info": [
+   {
+    "bytes": "00800008008005008000010500000000",
+    "parse_info": {
+     "app_start": 134250496,
+     "app_max_size": 360448,
+     "write_chunk_max": 128,
+     "version": 1,
+     "flags": 5,
+     "app_valid": true,
+     "entered_by_request": false,
+     "erased": true
+    }
+   },
+   {
+    "bytes": "ffffffff01000000efbeffff5a5aa5a5",
+    "parse_info": {
+     "app_start": 4294967295,
+     "app_max_size": 1,
+     "write_chunk_max": 48879,
+     "version": 255,
+     "flags": 255,
+     "app_valid": true,
+     "entered_by_request": true,
+     "erased": true
+    }
+   },
+   {
+    "bytes": "00000000000000000000000200000000",
+    "parse_info": {
+     "app_start": 0,
+     "app_max_size": 0,
+     "write_chunk_max": 0,
+     "version": 0,
+     "flags": 2,
+     "app_valid": false,
+     "entered_by_request": true,
+     "erased": false
+    }
+   }
+  ],
+  "ack_unpack": [
+   {
+    "bytes": "120080000000",
+    "unpack": [
+     18,
+     0,
+     128
+    ]
+   },
+   {
+    "bytes": "1303efbeadde",
+    "unpack": [
+     19,
+     3,
+     3735928559
+    ]
+   },
+   {
+    "bytes": "140000800008",
+    "unpack": [
+     20,
+     0,
+     134250496
+    ]
+   },
+   {
+    "bytes": "110400800500",
+    "unpack": [
+     17,
+     4,
+     360448
+    ]
+   }
+  ],
+  "status_names": {
+   "0": "OK",
+   "1": "BAD_ARGUMENT",
+   "2": "FLASH_ERROR",
+   "3": "CRC_MISMATCH",
+   "4": "OUT_OF_RANGE",
+   "5": "NOT_ERASED",
+   "6": "NO_VALID_APP"
+  }
+ }
+}

@@ -19,6 +19,10 @@
 //!   a capture taken from the running `ros2_control` stack.
 //! * [`telemetry`] — the `/mower_base/telemetry` JSON, byte-for-byte the
 //!   `snprintf` in `MowerSystem::telemetry_json`.
+//! * [`boot`] — the UART bootloader's side of the same framing
+//!   (`firmware/Module/Inc/boot_shared.h`, `firmware/bootloader/`): flash
+//!   layout, frame types, packed payloads and the image CRC-32, for the
+//!   `mower_flash` firmware flasher.
 //!
 //! Time is an `i64` nanosecond count; `rclcpp::Time` is the same thing, and
 //! `seconds()` is `ns as f64 / 1e9` in both. There are two clocks and they
@@ -28,6 +32,7 @@
 //! the header stamps of published messages and for ageing an incoming
 //! cmd_vel by its own `header.stamp` ([`diff_drive::receive_command`]).
 
+pub mod boot;
 pub mod cycle;
 pub mod diff_drive;
 pub mod limiter;
