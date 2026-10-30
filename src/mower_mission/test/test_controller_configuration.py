@@ -74,6 +74,9 @@ VELOCITY_GUARD_RS = (
 VELOCITY_GUARD_RS_MAIN = (
     SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/lib.rs'
 )
+VELOCITY_GUARD_RS_BUS = (
+    SRC_DIR / 'mower_rs/crates/velocity_command_guard/src/bus.rs'
+)
 NAV_SERVER_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_nav/src/lib.rs'
 BATTERY_RS_MAIN = SRC_DIR / 'mower_rs/crates/mower_battery/src/lib.rs'
 BATTERY_RS_ESTIMATOR = (
@@ -919,6 +922,18 @@ def test_rust_velocity_guard_keeps_the_same_rules_and_wiring():
     assert 'msg.header.stamp = stamp_now()' in main
     assert 'publisher.publish(&twist(0.0, 0.0))' in main
     assert 'make_parameter_handler' not in main  # limits are immutable
+    # the bus IO (E2 step 6, picked by the instance's flag): the same limits,
+    # the same robot restamp, a zero first and a zero last, names resolved
+    # through the node's remap rules
+    bus = VELOCITY_GUARD_RS_BUS.read_text(encoding='utf-8')
+    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in main
+    assert 'crate::read_limits(&node)' in bus
+    assert 'msg.header.stamp = self.stamp();' in bus
+    assert 'msg.header.frame_id = "base_footprint".to_string();' in bus
+    assert bus.count('publisher.publish(&clocks.twist(0.0, 0.0))') >= 2
+    for name in ('cmd_vel_in', 'cmd_vel_out'):
+        assert f'm.resolve_topic("{name}")' in bus, name
+    assert 'make_parameter_handler' not in bus
 
 
 def test_rust_nav_server_keeps_the_same_safety_rules_and_wiring():
@@ -1008,6 +1023,9 @@ def test_rust_pid_autotune_keeps_the_same_maths_and_wiring():
     assert mission_launch.count("name='pid_autotune'") == 2
     assert 'r2r::Node::create(ctx, &m.node_name, &m.namespace)' in main
     assert 'create_service::<PidAutotune::Service>("/pid_autotune"' in main
+    # and on the bus (E2 step 6, picked by the module's flag): the same name
+    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in main
+    assert 'm.resolve_service("/pid_autotune")' in main
     # every declared parameter with the same default
     for name, default in re.findall(r"^\s+p\('(\w+)', ([^)]+)\)", py_node, re.M):
         rust_default = default.replace("'", '"').replace('[', '&[').replace('300.0', '300.0')
@@ -1821,6 +1839,9 @@ def test_rust_base_reproduces_the_launched_controller_parameters():
             expected = float(_scalar(REAL_CONTROLLER, f'{prefix}.{key}'))
             assert f'{key}: {expected}' in block, f'{prefix}.{key}'
     # the input topic and the two side channels the app and the auto-tune use
+    # (on r2r, or on the bus by the module's flag, E2 step 6, the same names)
+    assert 'mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name))' in source
+    assert 'm.resolve_topic(&cmd_vel_topic)' in source
     assert '"/drivetrain_guarded_cmd_vel"' in source
     assert '"/mower_base/telemetry"' in source
     assert '"/mower_base/firmware_info"' in source

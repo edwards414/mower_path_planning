@@ -41,6 +41,19 @@
 //! CPU on XR-02 while idle (perf, 2026-10-25): every 20 Hz frame woke this
 //! node's spin loop for nothing. Staleness is judged by the frame's arrival
 //! time.
+//!
+//! IO
+//! --
+//! r2r, or the in-process bus (step E2 of docs/ROS_FREE_PLAN.md, step 6),
+//! picked at start by the module's flag in mower_bridge's on_bus.rs
+//! (`mower_bridge::instance_on_bus`). Everything but the endpoints is the
+//! same either way: the parameters (read from the r2r node, which stays for
+//! them, the /rosout logs and the ROS graph), the session, its timing on
+//! tokio's clock and `Instant`, the status JSON, the requests to the base.
+//! On the bus every name is resolved as rcl resolves it on the node
+//! (`ModuleCtx::resolve_topic` / `resolve_service`) and every endpoint has
+//! the QoS it has on r2r; the telemetry reader is made by the "start" call
+//! and goes at the first frame after the session, and the node is not spun.
 
 mod tuning;
 
@@ -48,7 +61,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
+use mower_bus::Qos;
 use mower_rs_common::{params, round_to, unix_time_s, ModuleCtx, ModuleResult};
 use r2r::mower_interface::srv::{MissionOperationLock, PidAutotune};
 use r2r::std_msgs::msg::{Bool, String as StringMsg};
@@ -265,6 +279,48 @@ struct Settings {
     led_normal_rgb: Vec<i64>,
 }
 
+// ----------------------------------------------------------------------- IO
+
+/// One of the node's writers, on r2r or on the bus.
+enum Writer {
+    R2r(Mutex<r2r::Publisher<StringMsg>>),
+    Bus(mower_bus::Publisher<StringMsg>),
+}
+
+impl Writer {
+    /// Publish `data`; as before, a failed publish is not reported.
+    fn publish(&self, data: String) {
+        let msg = StringMsg { data };
+        match self {
+            Writer::R2r(publisher) => {
+                let _ = publisher.lock().unwrap().publish(&msg);
+            }
+            Writer::Bus(publisher) => {
+                let _ = publisher.publish_owned(msg);
+            }
+        }
+    }
+}
+
+/// The mission operation lock's client.
+enum LockClient {
+    R2r(r2r::Client<MissionOperationLock::Service>),
+    Bus(mower_bus::Client<MissionOperationLock::Request, MissionOperationLock::Response>),
+}
+
+/// Where a session's `/mower_base/telemetry` reader is made (module doc).
+enum TelemetryIn {
+    /// On r2r, by the spin thread, which owns the node: it is sent the
+    /// session's generation.
+    R2r(mpsc::Sender<u64>),
+    /// On the bus, on the module's scope, by the "start" call itself.
+    Bus { scope: mower_bus::Scope, topic: String },
+}
+
+/// The telemetry reader's profile, mower_base's writer's: best effort, keep
+/// last 1.
+const TELEMETRY_QOS: Qos = Qos::default().keep_last(1).best_effort();
+
 // --------------------------------------------------------------------- node
 
 struct Telemetry {
@@ -286,22 +342,22 @@ struct Ctx {
     decision: Mutex<Option<String>>,
     started_mono: Mutex<Instant>,
     lock_owner: String,
-    status_pub: Mutex<r2r::Publisher<StringMsg>>,
-    pid_pub: Mutex<r2r::Publisher<StringMsg>>,
-    override_pub: Mutex<r2r::Publisher<StringMsg>>,
-    led_pub: Option<Mutex<r2r::Publisher<StringMsg>>>,
-    lock_client: r2r::Client<MissionOperationLock::Service>,
+    status_pub: Writer,
+    pid_pub: Writer,
+    override_pub: Writer,
+    led_pub: Option<Writer>,
+    lock_client: LockClient,
     // telemetry subscription (module doc): every "start" bumps the generation
-    // and sends it to the spin thread, which owns the node and subscribes
+    // and has a reader made for it (`subscribe_telemetry`)
     telemetry_gen: AtomicU64,
-    subscribe_telemetry: mpsc::Sender<u64>,
+    telemetry_in: TelemetryIn,
 }
 
 impl Ctx {
     // ------------------------------------------------------------- status
     fn publish_status(&self) {
         let data = serde_json::to_string(&*self.status.lock().unwrap()).unwrap_or_default();
-        let _ = self.status_pub.lock().unwrap().publish(&StringMsg { data });
+        self.status_pub.publish(data);
     }
 
     fn set(&self, state: Option<&str>, progress: Option<f64>, message: Option<&str>) {
@@ -416,7 +472,7 @@ impl Ctx {
     fn send_pid(&self, gains: &WheelGains, closed_loop: bool, persist: bool) -> Option<Value> {
         let seq0 = self.tel.lock().unwrap().latest.as_ref().and_then(|(t, _)| obj(t, "pid").and_then(|p| p.get("last_rx_seq")).cloned());
         let req = PidRequest { left: &gains.left, right: &gains.right, persist: persist as i64, closed_loop: closed_loop as i64 };
-        let _ = self.pid_pub.lock().unwrap().publish(&StringMsg { data: serde_json::to_string(&req).unwrap_or_default() });
+        self.pid_pub.publish(serde_json::to_string(&req).unwrap_or_default());
         seq0
     }
 
@@ -482,7 +538,7 @@ impl Ctx {
 
     fn override_wheels(&self, left: i64, right: i64, ttl_ms: i64) {
         let req = OverrideRequest { left_permille: left, right_permille: right, ttl_ms };
-        let _ = self.override_pub.lock().unwrap().publish(&StringMsg { data: serde_json::to_string(&req).unwrap_or_default() });
+        self.override_pub.publish(serde_json::to_string(&req).unwrap_or_default());
     }
 
     /// Keep both wheels at `permille` for `seconds`, watching the base.
@@ -538,15 +594,24 @@ impl Ctx {
             let (r, g, b) = rgb(&self.settings.led_normal_rgb);
             LedRequest { mode: 1, r, g, b, period_ms: 0 }
         };
-        let _ = led.lock().unwrap().publish(&StringMsg { data: serde_json::to_string(&req).unwrap_or_default() });
+        led.publish(serde_json::to_string(&req).unwrap_or_default());
     }
 
     /// Mission mutation lease from nav_action_server; refused while navigation or
     /// manual motion is active. Missing service = development bench, carry on.
     async fn lock(&self, acquire: bool) -> Result<(), RunError> {
-        let available = match r2r::Node::is_available(&self.lock_client) {
-            Ok(f) => tokio::time::timeout(Duration::from_secs(1), f).await.is_ok(),
-            Err(_) => false,
+        // up to 1 s for the service to show up, then 3 s for the answer, on
+        // either IO; the bus says at once what r2r's futures say at the next
+        // spin
+        let available = match &self.lock_client {
+            LockClient::R2r(client) => match r2r::Node::is_available(client) {
+                Ok(f) => tokio::time::timeout(Duration::from_secs(1), f).await.is_ok(),
+                Err(_) => false,
+            },
+            LockClient::Bus(client) => {
+                client.is_available()
+                    || tokio::time::timeout(Duration::from_secs(1), client.wait_for_service()).await.is_ok_and(|r| r.is_ok())
+            }
         };
         if !available {
             if acquire {
@@ -555,13 +620,24 @@ impl Ctx {
             return Ok(());
         }
         let req = MissionOperationLock::Request { owner: self.lock_owner.clone(), operation: "pid auto-tune".to_string(), acquire };
-        let fut = match self.lock_client.request(&req) {
-            Ok(f) => f,
-            Err(_) => return precondition("mission operation lock did not answer"),
+        let answer = match &self.lock_client {
+            LockClient::R2r(client) => match client.request(&req) {
+                Ok(fut) => match tokio::time::timeout(Duration::from_secs(3), fut).await {
+                    Ok(Ok(r)) => Some(r),
+                    _ => None,
+                },
+                Err(_) => None,
+            },
+            LockClient::Bus(client) => match client.request(&req) {
+                Ok(fut) => match tokio::time::timeout(Duration::from_secs(3), fut).await {
+                    Ok(Ok(r)) => Some(r),
+                    _ => None,
+                },
+                Err(_) => None,
+            },
         };
-        let res = match tokio::time::timeout(Duration::from_secs(3), fut).await {
-            Ok(Ok(r)) => r,
-            _ => return precondition("mission operation lock did not answer"),
+        let Some(res) = answer else {
+            return precondition("mission operation lock did not answer");
         };
         if acquire && !res.success {
             return precondition(format!("robot is busy: {}", res.message));
@@ -796,54 +872,64 @@ fn uuid_hex() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The `pid_autotune` node. Runs either as the `mower_pid_autotune` binary or as one
-/// module of `mower_rsd`; the node name, namespace, parameters and every
-/// topic / service / action name are the same either way.
-pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let _ = anchor();
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
-    let logger = node.logger().to_string();
+/// The node's topic and service names, from its parameters.
+struct Names {
+    telemetry_topic: String,
+    pid_topic: String,
+    override_topic: String,
+    led_topic: String,
+    status_topic: String,
+    nav_active_topic: String,
+    lock_service: String,
+}
 
-    let telemetry_topic = params::string(&node, "telemetry_topic", "/mower_base/telemetry");
-    let pid_topic = params::string(&node, "pid_topic", "/mower_base/pid_command");
-    let override_topic = params::string(&node, "override_topic", "/mower_base/wheel_override");
-    let led_topic = params::string(&node, "led_topic", "/mower_base/led_command");
-    let status_topic = params::string(&node, "status_topic", "/pid_autotune/status");
-    let nav_active_topic = params::string(&node, "nav_active_topic", "/nav_operation_active");
-    let lock_service = params::string(&node, "lock_service", "/mission_operation_lock");
+/// The names and the settings, read once from the node's parameters.
+fn read_config(node: &r2r::Node) -> (Names, Settings) {
+    let names = Names {
+        telemetry_topic: params::string(node, "telemetry_topic", "/mower_base/telemetry"),
+        pid_topic: params::string(node, "pid_topic", "/mower_base/pid_command"),
+        override_topic: params::string(node, "override_topic", "/mower_base/wheel_override"),
+        led_topic: params::string(node, "led_topic", "/mower_base/led_command"),
+        status_topic: params::string(node, "status_topic", "/pid_autotune/status"),
+        nav_active_topic: params::string(node, "nav_active_topic", "/nav_operation_active"),
+        lock_service: params::string(node, "lock_service", "/mission_operation_lock"),
+    };
     let settings = Settings {
         // open-loop identification: two forward steps so static friction at
         // standstill does not end up in the model
-        step_low_permille: params::i64(&node, "step_low_permille", 400),
-        step_high_permille: params::i64(&node, "step_high_permille", 700),
-        hold_s: params::f64(&node, "hold_s", 2.5),
+        step_low_permille: params::i64(node, "step_low_permille", 400),
+        step_high_permille: params::i64(node, "step_high_permille", 700),
+        hold_s: params::f64(node, "hold_s", 2.5),
         // closed-loop check with the new gains
-        verify_permille: params::i64(&node, "verify_permille", 500),
-        verify_hold_s: params::f64(&node, "verify_hold_s", 3.0),
-        tau_c_factor: params::f64(&node, "tau_c_factor", 1.0), // SIMC closed-loop time constant = factor * tau (>= dead time)
-        max_overshoot_pct: params::f64(&node, "max_overshoot_pct", 25.0),
-        max_settle_s: params::f64(&node, "max_settle_s", 1.5),
-        max_ss_error_rpm: params::f64(&node, "max_ss_error_rpm", 1.5),
-        telemetry_timeout_s: params::f64(&node, "telemetry_timeout_s", 0.5), // abort if the base goes quiet for this long
-        review_timeout_s: params::f64(&node, "review_timeout_s", 300.0), // no apply/discard within this = discard
-        led_busy_rgb: params::i64_array(&node, "led_busy_rgb", &[255, 180, 0]),
-        led_busy_period_ms: params::i64(&node, "led_busy_period_ms", 1600),
-        led_normal_rgb: params::i64_array(&node, "led_normal_rgb", &[110, 110, 110]),
+        verify_permille: params::i64(node, "verify_permille", 500),
+        verify_hold_s: params::f64(node, "verify_hold_s", 3.0),
+        tau_c_factor: params::f64(node, "tau_c_factor", 1.0), // SIMC closed-loop time constant = factor * tau (>= dead time)
+        max_overshoot_pct: params::f64(node, "max_overshoot_pct", 25.0),
+        max_settle_s: params::f64(node, "max_settle_s", 1.5),
+        max_ss_error_rpm: params::f64(node, "max_ss_error_rpm", 1.5),
+        telemetry_timeout_s: params::f64(node, "telemetry_timeout_s", 0.5), // abort if the base goes quiet for this long
+        review_timeout_s: params::f64(node, "review_timeout_s", 300.0), // no apply/discard within this = discard
+        led_busy_rgb: params::i64_array(node, "led_busy_rgb", &[255, 180, 0]),
+        led_busy_period_ms: params::i64(node, "led_busy_period_ms", 1600),
+        led_normal_rgb: params::i64_array(node, "led_normal_rgb", &[110, 110, 110]),
     };
+    (names, settings)
+}
 
-    let latched = QosProfile::default().keep_last(1).reliable().transient_local();
-    let best_effort = QosProfile::default().keep_last(1).best_effort();
+/// The node's endpoints, made on r2r or on the bus.
+struct Io {
+    status_pub: Writer,
+    pid_pub: Writer,
+    override_pub: Writer,
+    led_pub: Option<Writer>,
+    lock_client: LockClient,
+    telemetry_in: TelemetryIn,
+}
 
-    let status_pub = node.create_publisher::<StringMsg>(&status_topic, latched.clone())?;
-    let pid_pub = node.create_publisher::<StringMsg>(&pid_topic, QosProfile::default().keep_last(4))?;
-    let override_pub = node.create_publisher::<StringMsg>(&override_topic, best_effort.clone())?;
-    let led_pub = if led_topic.is_empty() { None } else { Some(Mutex::new(node.create_publisher::<StringMsg>(&led_topic, latched)?)) };
-    let lock_client = node.create_client::<MissionOperationLock::Service>(&lock_service, QosProfile::services_default())?;
+fn new_ctx(node: &r2r::Node, settings: Settings, io: Io) -> Result<Arc<Ctx>, r2r::Error> {
     let lock_owner = format!("{}:{}", node.fully_qualified_name()?, uuid_hex());
-    let (subscribe_tx, subscribe_rx) = mpsc::channel();
-
-    let ctx = Arc::new(Ctx {
-        logger: logger.clone(),
+    Ok(Arc::new(Ctx {
+        logger: node.logger().to_string(),
         settings,
         status: Mutex::new(Status::blank("idle", "ready")),
         tel: Mutex::new(Telemetry { latest: None, seq: None, recording: None }),
@@ -855,14 +941,135 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         decision: Mutex::new(None),
         started_mono: Mutex::new(Instant::now()),
         lock_owner,
-        status_pub: Mutex::new(status_pub),
-        pid_pub: Mutex::new(pid_pub),
-        override_pub: Mutex::new(override_pub),
-        led_pub,
-        lock_client,
+        status_pub: io.status_pub,
+        pid_pub: io.pid_pub,
+        override_pub: io.override_pub,
+        led_pub: io.led_pub,
+        lock_client: io.lock_client,
         telemetry_gen: AtomicU64::new(0),
-        subscribe_telemetry: subscribe_tx,
+        telemetry_in: io.telemetry_in,
+    }))
+}
+
+impl Ctx {
+    /// One call of `/pid_autotune`: its `(success, message)`.
+    fn call(self: &Arc<Self>, op: &str) -> (bool, String) {
+        let raw = op;
+        let op = raw.trim().to_lowercase();
+        match op.as_str() {
+            "start" => {
+                if self.active.load(Ordering::Acquire) {
+                    (false, format!("auto-tune already running ({})", self.status.lock().unwrap().state))
+                } else {
+                    self.abort.store(false, Ordering::Relaxed);
+                    *self.decision.lock().unwrap() = None;
+                    self.tel.lock().unwrap().latest = None;
+                    self.active.store(true, Ordering::Release);
+                    let generation = self.telemetry_gen.fetch_add(1, Ordering::AcqRel) + 1;
+                    self.subscribe_telemetry(generation);
+                    tokio::spawn(self.clone().run());
+                    (true, "auto-tune started".to_string())
+                }
+            }
+            "abort" => {
+                if !self.active.load(Ordering::Acquire) {
+                    (false, "nothing to abort".to_string())
+                } else {
+                    self.abort.store(true, Ordering::Relaxed);
+                    (true, "aborting".to_string())
+                }
+            }
+            "apply" | "discard" => {
+                if !self.active.load(Ordering::Acquire) || self.status.lock().unwrap().state != "review" {
+                    (false, "no tuned gains waiting for review".to_string())
+                } else {
+                    *self.decision.lock().unwrap() = Some(op.clone());
+                    (true, op.clone())
+                }
+            }
+            _ => (false, format!("unknown op {} (start|abort|apply|discard)", python_repr(raw))),
+        }
+    }
+
+    /// A reader of the base telemetry for session `generation`: on r2r the
+    /// spin thread makes it (`subscribe_telemetry` below), on the bus this
+    /// call does.
+    fn subscribe_telemetry(self: &Arc<Self>, generation: u64) {
+        match &self.telemetry_in {
+            TelemetryIn::R2r(spin) => {
+                let _ = spin.send(generation);
+            }
+            TelemetryIn::Bus { scope, topic } => match scope.subscribe::<StringMsg>(topic, TELEMETRY_QOS) {
+                Ok(reader) => {
+                    tokio::spawn(forward_telemetry(self.clone(), reader, generation));
+                }
+                Err(e) => r2r::log_error!(&self.logger, "could not subscribe to {}: {}", topic, e),
+            },
+        }
+    }
+}
+
+/// The 5 Hz progress while a session is active.
+fn spawn_progress(ctx: &Arc<Ctx>) {
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(200));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            if ctx.active.load(Ordering::Acquire) {
+                ctx.publish_status();
+            }
+        }
     });
+}
+
+/// The `pid_autotune` node. Runs either as the `mower_pid_autotune` binary or as one
+/// module of `mower_rsd`; the node name, namespace, parameters and every
+/// topic / service / action name are the same either way.
+///
+/// Its IO is the bus when its flag says so (on_bus.rs), r2r otherwise.
+pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
+    let _ = anchor();
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    if mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name)) {
+        return run_bus(node, m).await;
+    }
+    run_r2r(node, m).await
+}
+
+/// [`run`] on the bus whatever the flag says, with `node` made by the
+/// caller (the tests, which set its parameters first).
+pub async fn run_on_bus(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    let _ = anchor();
+    run_bus(node, m).await
+}
+
+/// The node on r2r, as before E2.
+async fn run_r2r(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    let logger = node.logger().to_string();
+    let (names, settings) = read_config(&node);
+    let Names { telemetry_topic, pid_topic, override_topic, led_topic, status_topic, nav_active_topic, lock_service } = names;
+
+    let latched = QosProfile::default().keep_last(1).reliable().transient_local();
+    let best_effort = QosProfile::default().keep_last(1).best_effort();
+
+    let status_pub = node.create_publisher::<StringMsg>(&status_topic, latched.clone())?;
+    let pid_pub = node.create_publisher::<StringMsg>(&pid_topic, QosProfile::default().keep_last(4))?;
+    let override_pub = node.create_publisher::<StringMsg>(&override_topic, best_effort.clone())?;
+    let led_pub = if led_topic.is_empty() { None } else { Some(Writer::R2r(Mutex::new(node.create_publisher::<StringMsg>(&led_topic, latched)?))) };
+    let lock_client = node.create_client::<MissionOperationLock::Service>(&lock_service, QosProfile::services_default())?;
+    let (subscribe_tx, subscribe_rx) = mpsc::channel();
+
+    let io = Io {
+        status_pub: Writer::R2r(Mutex::new(status_pub)),
+        pid_pub: Writer::R2r(Mutex::new(pid_pub)),
+        override_pub: Writer::R2r(Mutex::new(override_pub)),
+        led_pub,
+        lock_client: LockClient::R2r(lock_client),
+        telemetry_in: TelemetryIn::R2r(subscribe_tx),
+    };
+    let ctx = new_ctx(&node, settings, io)?;
 
     // ---- inputs ------------------------------------------------------------
     {
@@ -882,59 +1089,14 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         let ctx = ctx.clone();
         tokio::spawn(async move {
             while let Some(req) = stream.next().await {
-                let op = req.message.op.trim().to_lowercase();
-                let (success, message) = match op.as_str() {
-                    "start" => {
-                        if ctx.active.load(Ordering::Acquire) {
-                            (false, format!("auto-tune already running ({})", ctx.status.lock().unwrap().state))
-                        } else {
-                            ctx.abort.store(false, Ordering::Relaxed);
-                            *ctx.decision.lock().unwrap() = None;
-                            ctx.tel.lock().unwrap().latest = None;
-                            ctx.active.store(true, Ordering::Release);
-                            let generation = ctx.telemetry_gen.fetch_add(1, Ordering::AcqRel) + 1;
-                            let _ = ctx.subscribe_telemetry.send(generation);
-                            tokio::spawn(ctx.clone().run());
-                            (true, "auto-tune started".to_string())
-                        }
-                    }
-                    "abort" => {
-                        if !ctx.active.load(Ordering::Acquire) {
-                            (false, "nothing to abort".to_string())
-                        } else {
-                            ctx.abort.store(true, Ordering::Relaxed);
-                            (true, "aborting".to_string())
-                        }
-                    }
-                    "apply" | "discard" => {
-                        if !ctx.active.load(Ordering::Acquire) || ctx.status.lock().unwrap().state != "review" {
-                            (false, "no tuned gains waiting for review".to_string())
-                        } else {
-                            *ctx.decision.lock().unwrap() = Some(op.clone());
-                            (true, op.clone())
-                        }
-                    }
-                    _ => (false, format!("unknown op {} (start|abort|apply|discard)", python_repr(&req.message.op))),
-                };
+                let (success, message) = ctx.call(&req.message.op);
                 let _ = req.respond(PidAutotune::Response { success, message });
             }
         });
     }
 
     // ---- 5 Hz progress while a session is active --------------------------
-    {
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_millis(200));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tick.tick().await;
-                if ctx.active.load(Ordering::Acquire) {
-                    ctx.publish_status();
-                }
-            }
-        });
-    }
+    spawn_progress(&ctx);
 
     ctx.publish_status();
     r2r::log_info!(&logger, "pid_autotune ready: service /pid_autotune, status on {}", status_topic);
@@ -961,28 +1123,101 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     Ok(())
 }
 
+/// The node on the bus (E2 step 6): the same endpoints with the same QoS on
+/// the module's scope, under the names rcl gives them on the node. The node
+/// has none left, so it is not spun; it lives for the parameters, the log
+/// and the graph until the module returns.
+async fn run_bus(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    let logger = node.logger().to_string();
+    let (names, settings) = read_config(&node);
+
+    let latched = Qos::latched();
+    let status_pub = m.bus.publisher::<StringMsg>(&m.resolve_topic(&names.status_topic)?, latched)?;
+    let pid_pub = m.bus.publisher::<StringMsg>(&m.resolve_topic(&names.pid_topic)?, Qos::default().keep_last(4))?;
+    let override_pub = m.bus.publisher::<StringMsg>(&m.resolve_topic(&names.override_topic)?, Qos::default().keep_last(1).best_effort())?;
+    let led_pub = if names.led_topic.is_empty() {
+        None
+    } else {
+        Some(Writer::Bus(m.bus.publisher::<StringMsg>(&m.resolve_topic(&names.led_topic)?, latched)?))
+    };
+    let lock_client = m.bus.client::<MissionOperationLock::Request, MissionOperationLock::Response>(&m.resolve_service(&names.lock_service)?)?;
+    let telemetry_topic = m.resolve_topic(&names.telemetry_topic)?;
+
+    let io = Io {
+        status_pub: Writer::Bus(status_pub),
+        pid_pub: Writer::Bus(pid_pub),
+        override_pub: Writer::Bus(override_pub),
+        led_pub,
+        lock_client: LockClient::Bus(lock_client),
+        telemetry_in: TelemetryIn::Bus { scope: m.bus.clone(), topic: telemetry_topic },
+    };
+    let ctx = new_ctx(&node, settings, io)?;
+
+    // ---- inputs ------------------------------------------------------------
+    {
+        let mut reader = m.bus.subscribe::<Bool>(&m.resolve_topic(&names.nav_active_topic)?, Qos::default())?;
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = reader.recv().await {
+                ctx.nav_active.store(msg.data, Ordering::Relaxed);
+            }
+        });
+    }
+    // /mower_base/telemetry: per session, see subscribe_telemetry
+
+    // ---- service ----------------------------------------------------------
+    {
+        let mut service = m.bus.service::<PidAutotune::Request, PidAutotune::Response>(&m.resolve_service("/pid_autotune")?)?;
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            while let Some(req) = service.recv().await {
+                let (success, message) = ctx.call(&req.message.op);
+                let _ = req.respond(PidAutotune::Response { success, message });
+            }
+        });
+    }
+
+    // ---- 5 Hz progress while a session is active --------------------------
+    spawn_progress(&ctx);
+
+    ctx.publish_status();
+    r2r::log_info!(&logger, "pid_autotune ready: service /pid_autotune, status on {}", names.status_topic);
+
+    // ---- run until SIGINT / SIGTERM -----------------------------------------
+    m.shutdown.wait().await;
+    drop(node);
+    Ok(())
+}
+
 /// Subscribes to the base telemetry for session `generation`, on the spin
 /// thread that owns the node. The forwarder stops at the first frame after its
 /// session ended (or a newer one started); r2r destroys the subscription on
 /// the frame after that. If subscribing fails, the session's precheck reports
 /// that there is no telemetry.
 fn subscribe_telemetry(node: &mut r2r::Node, ctx: &Arc<Ctx>, topic: &str, qos: &QosProfile, generation: u64, rt: &tokio::runtime::Handle) {
-    let mut stream = match node.subscribe::<StringMsg>(topic, qos.clone()) {
+    let stream = match node.subscribe::<StringMsg>(topic, qos.clone()) {
         Ok(stream) => stream,
         Err(e) => {
             r2r::log_error!(&ctx.logger, "could not subscribe to {}: {}", topic, e);
             return;
         }
     };
-    let ctx = ctx.clone();
-    rt.spawn(async move {
-        while let Some(msg) = stream.next().await {
-            if ctx.telemetry_gen.load(Ordering::Acquire) != generation || !ctx.active.load(Ordering::Acquire) {
-                break;
-            }
-            ctx.on_telemetry(&msg.data);
+    rt.spawn(forward_telemetry(ctx.clone(), stream, generation));
+}
+
+/// A session's telemetry, frame by frame, from an r2r stream or a bus
+/// reader, until the first frame after the session ended (or a newer one
+/// started). Dropping the reader ends the subscription: on the bus at once,
+/// on r2r at the frame after.
+async fn forward_telemetry<M: std::borrow::Borrow<StringMsg>>(
+    ctx: Arc<Ctx>, mut frames: impl Stream<Item = M> + Unpin, generation: u64,
+) {
+    while let Some(msg) = frames.next().await {
+        if ctx.telemetry_gen.load(Ordering::Acquire) != generation || !ctx.active.load(Ordering::Acquire) {
+            break;
         }
-    });
+        ctx.on_telemetry(&msg.borrow().data);
+    }
 }
 
 /// Python `repr()` of a str for the "unknown op" message.

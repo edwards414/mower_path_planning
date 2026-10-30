@@ -890,6 +890,54 @@ fn a_from_ros_bus_writer_counts_as_a_publisher_while_the_bridge_runs() {
     });
 }
 
+/// `from_ros_mirrored` (README.md, "Graph presence"): on a volatile name its
+/// bus writer exists only while the graph shows a DDS writer, as mower_base's
+/// arm latch saw the DDS writers of its command topics on r2r. A sample comes
+/// through as soon as its writer is matched, and none is lost to the writer
+/// coming late; a reader that comes after the writer went counts none.
+#[test]
+fn a_mirrored_from_ros_bus_writer_counts_only_while_dds_shows_a_writer() {
+    within(async {
+        let topic = "/bridge_test/mirrored_cmd_vel";
+        let bus = Bus::new();
+        let base = bus.scope("mower_base");
+        let mut sub = base.subscribe::<Text>(topic, Qos::default().keep_last(1)).unwrap();
+        let mut bridge = new_bridge("mirrored_bridge", &bus.scope("bridge"));
+        bridge.from_ros_mirrored::<Text>(topic, QosProfile::default().keep_last(1)).unwrap();
+        assert_eq!(sub.publisher_count(), 0, "no DDS writer, no bus writer");
+        let running = start(bridge);
+        eventually("the DDS reader", || running.topic(topic).dds_reader).await;
+        eventually("the bridge to look at the graph", || running.topic(topic).resyncs >= 2).await;
+        assert_eq!(sub.publisher_count(), 0, "still no DDS writer");
+
+        // the final guard on DDS: its writer is counted once the graph shows it
+        let guard = Peer::new("mirrored_guard");
+        let publisher = guard.with(|n| n.create_publisher::<Text>(topic, QosProfile::default().keep_last(1))).unwrap();
+        eventually("the bus writer", || sub.publisher_count() == 1).await;
+        // and what it publishes comes through
+        let mut sent = 0;
+        let got = loop {
+            sent += 1;
+            publisher.publish(&text(format!("zero {sent}"))).unwrap();
+            if let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(200), sub.recv()).await {
+                break msg;
+            }
+            assert!(sent < 50, "nothing came through");
+        };
+        assert!(got.data.starts_with("zero "), "{}", got.data);
+
+        // the guard goes: within a look or two, so does the bus writer
+        drop(publisher);
+        drop(guard);
+        eventually("the bus writer to go", || sub.publisher_count() == 0).await;
+        assert!(!running.topic(topic).bus_writer);
+        let late = base.subscribe::<Text>(topic, Qos::default().keep_last(1)).unwrap();
+        assert_eq!(late.publisher_count(), 0);
+        running.stop().await.unwrap();
+        assert_eq!(sub.publisher_count(), 0);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // One direction per name
 // ---------------------------------------------------------------------------

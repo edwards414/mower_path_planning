@@ -28,8 +28,10 @@ pub struct Running {
 
 impl Running {
     /// mower_rsd: every instance of the modules in `--modules`, on the bus as
-    /// `on_bus` says. An id the manifest does not have (`agent`) has no
-    /// endpoint to plan for.
+    /// `on_bus` says of its module's id, or of its node name for an instance
+    /// with a flag of its own (on_bus.rs's `INSTANCES`: the guards move one
+    /// at a time). An id the manifest does not have (`agent`) has no endpoint
+    /// to plan for.
     pub fn rsd<S: AsRef<str>>(ids: &[S], on_bus: impl Fn(&str) -> bool) -> Vec<Running> {
         let mut running: Vec<Running> = Vec::new();
         for id in ids {
@@ -41,7 +43,8 @@ impl Running {
                 module,
                 instance,
                 node: instance.node.to_string(),
-                on_bus: on_bus(module.id),
+                on_bus: on_bus(module.id)
+                    || (crate::INSTANCES.iter().any(|&(node, _)| node == instance.node) && on_bus(instance.node)),
             }));
         }
         running
@@ -83,6 +86,10 @@ pub struct Declaration {
     pub iface: Iface,
     /// Whom it is for, for the log.
     pub why: String,
+    /// `from_ros` for a bus reader that counts the name's writers
+    /// (`Endpoint::counts_writers`): the bridge's bus writer mirrors the DDS
+    /// writers (`from_ros_mirrored`). False for every other declaration.
+    pub mirror_writers: bool,
 }
 
 impl Declaration {
@@ -90,7 +97,7 @@ impl Declaration {
     pub fn declare(&self, bridge: &mut RosBridge) -> Result<(), BridgeError> {
         match (&self.iface, self.direction) {
             (Iface::Topic(t, qos), Direction::ToRos) => t.declare_to_ros(bridge, &self.name, *qos),
-            (Iface::Topic(t, qos), Direction::FromRos) => t.declare_from_ros(bridge, &self.name, *qos),
+            (Iface::Topic(t, qos), Direction::FromRos) => t.declare_from_ros(bridge, &self.name, *qos, self.mirror_writers),
             (Iface::Service(s), Direction::ServiceToRos) => s.declare_to_ros(bridge, &self.name),
             (Iface::Service(s), Direction::ServiceFromRos) => s.declare_from_ros(bridge, &self.name),
             (Iface::Action(a), Direction::ActionToRos) => a.declare_to_ros(bridge, &self.name),
@@ -100,11 +107,13 @@ impl Declaration {
     }
 }
 
-/// `to_ros /battery_state sensor_msgs/msg/BatteryState R V 10`
+/// `to_ros /battery_state sensor_msgs/msg/BatteryState R V 10`, and
+/// `from_ros ... R V 1, writers mirrored` for one that mirrors the writers.
 impl fmt::Display for Declaration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mirrored = if self.mirror_writers { ", writers mirrored" } else { "" };
         match &self.iface {
-            Iface::Topic(t, qos) => write!(f, "{} {} {} {qos}", self.direction, self.name, t.ros_type()),
+            Iface::Topic(t, qos) => write!(f, "{} {} {} {qos}{mirrored}", self.direction, self.name, t.ros_type()),
             Iface::Service(s) => write!(f, "{} {} {}", self.direction, self.name, s.ros_type()),
             Iface::Action(a) => write!(f, "{} {} {}", self.direction, self.name, a.ros_type()),
         }
@@ -397,6 +406,7 @@ fn topic_directions(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Topic(msg_type, to_ros_profile(name, &bus_writers)?),
             why: format!("from {}", owners(&bus_writers)),
+            mirror_writers: false,
         });
     }
     if from_ros {
@@ -406,6 +416,7 @@ fn topic_directions(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Topic(msg_type, from_ros_profile(name, &dds_writers, &bus_readers)?),
             why: format!("for {}, from {sources}", owners(&bus_readers)),
+            mirror_writers: bus_readers.iter().any(|e| e.endpoint.counts_writers),
         });
     }
     Ok(outcome)
@@ -504,6 +515,7 @@ fn service_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Service(srv_type),
             why: format!("served by {}", owners(&bus_servers)),
+            mirror_writers: false,
         });
     }
     if from_ros {
@@ -513,6 +525,7 @@ fn service_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Service(srv_type),
             why: format!("for {}, served by {server}", owners(&bus_callers)),
+            mirror_writers: false,
         });
     }
     Ok(outcome)
@@ -552,6 +565,7 @@ fn action_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Action(act_type),
             why: format!("served by {}", owners(&bus_servers)),
+            mirror_writers: false,
         });
     }
     if from_ros {
@@ -561,6 +575,7 @@ fn action_outcome(name: &str, ends: &[&End]) -> Result<Outcome, String> {
             name: name.to_string(),
             iface: Iface::Action(act_type),
             why: format!("for {}, served by {server}", owners(&bus_clients)),
+            mirror_writers: false,
         });
     }
     Ok(outcome)

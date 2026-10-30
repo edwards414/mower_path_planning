@@ -122,11 +122,17 @@ pub struct MsgType {
     rust: fn() -> &'static str,
     to_ros: fn(&mut RosBridge, &str, QosProfile) -> Result<(), BridgeError>,
     from_ros: fn(&mut RosBridge, &str, QosProfile) -> Result<(), BridgeError>,
+    from_ros_mirrored: fn(&mut RosBridge, &str, QosProfile) -> Result<(), BridgeError>,
 }
 
 impl MsgType {
     pub const fn of<T: BridgeMessage>() -> Self {
-        MsgType { rust: std::any::type_name::<T>, to_ros: to_ros::<T>, from_ros: from_ros::<T> }
+        MsgType {
+            rust: std::any::type_name::<T>,
+            to_ros: to_ros::<T>,
+            from_ros: from_ros::<T>,
+            from_ros_mirrored: from_ros_mirrored::<T>,
+        }
     }
 
     /// `std::any::type_name`, which bus introspection reports.
@@ -144,9 +150,16 @@ impl MsgType {
         (self.to_ros)(bridge, name, qos.ros())
     }
 
-    /// `bridge.from_ros::<T>(name, qos)`.
-    pub(crate) fn declare_from_ros(self, bridge: &mut RosBridge, name: &str, qos: Profile) -> Result<(), BridgeError> {
-        (self.from_ros)(bridge, name, qos.ros())
+    /// `bridge.from_ros::<T>(name, qos)`, or `from_ros_mirrored` when the
+    /// bus writer has to mirror the DDS writers (`mirror_writers`).
+    pub(crate) fn declare_from_ros(
+        self, bridge: &mut RosBridge, name: &str, qos: Profile, mirror_writers: bool,
+    ) -> Result<(), BridgeError> {
+        if mirror_writers {
+            (self.from_ros_mirrored)(bridge, name, qos.ros())
+        } else {
+            (self.from_ros)(bridge, name, qos.ros())
+        }
     }
 }
 
@@ -156,6 +169,10 @@ fn to_ros<T: BridgeMessage>(bridge: &mut RosBridge, name: &str, qos: QosProfile)
 
 fn from_ros<T: BridgeMessage>(bridge: &mut RosBridge, name: &str, qos: QosProfile) -> Result<(), BridgeError> {
     bridge.from_ros::<T>(name, qos)
+}
+
+fn from_ros_mirrored<T: BridgeMessage>(bridge: &mut RosBridge, name: &str, qos: QosProfile) -> Result<(), BridgeError> {
+    bridge.from_ros_mirrored::<T>(name, qos)
 }
 
 impl PartialEq for MsgType {
@@ -409,6 +426,12 @@ pub struct Endpoint {
     /// `/tf_static`, once a module of the process writes that name on the
     /// bus: E4's option A).
     pub unread_on_bus: bool,
+    /// A reader whose module counts the writers of its name
+    /// (`publisher_count`): mower_base's arm latch, on its two command
+    /// topics. Coming in from DDS, the bridge's bus writer then mirrors the
+    /// DDS writers (`from_ros_mirrored`), where a volatile one would count
+    /// all along (README.md, "The policy").
+    pub counts_writers: bool,
 }
 
 impl Endpoint {
@@ -424,6 +447,7 @@ impl Endpoint {
             only: None,
             replaced_by: None,
             unread_on_bus: false,
+            counts_writers: false,
         }
     }
 
@@ -458,6 +482,11 @@ impl Endpoint {
     /// A writer whose samples no bus reader needs.
     pub const fn unread_on_bus(self) -> Self {
         Endpoint { unread_on_bus: true, ..self }
+    }
+
+    /// A reader whose module counts the name's writers.
+    pub const fn counts_writers(self) -> Self {
+        Endpoint { counts_writers: true, ..self }
     }
 
     /// A topic's QoS profile.

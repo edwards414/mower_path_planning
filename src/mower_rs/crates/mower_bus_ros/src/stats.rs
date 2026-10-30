@@ -112,9 +112,10 @@ pub struct EntryStats {
     /// "Values r2r cannot convert"). Such a call is `unanswered` too.
     pub invalid: u64,
     /// `from_ros`: whether the bridge's bus writer exists now. Transient
-    /// local: while the DDS reader exists and the graph shows a DDS writer,
-    /// or a sample shows one the graph does not yet; its looks at the graph
-    /// count in `resyncs`. Volatile: from the declaration on.
+    /// local, or mirroring the writers (`from_ros_mirrored`): while the DDS
+    /// reader exists and the graph shows a DDS writer, or a sample shows one
+    /// the graph does not yet; its looks at the graph count in `resyncs`.
+    /// Volatile: from the declaration on.
     pub bus_writer: bool,
     /// `from_ros`: whether the bridge's DDS reader exists now, which it does
     /// while the bus has a reader of the name.

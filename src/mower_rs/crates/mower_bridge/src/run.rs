@@ -137,6 +137,28 @@ where
     mower_rs_common::module_main(node_name, worker_threads, move |ctx, m| run_standalone(id, ctx, m, run))
 }
 
+/// The body of the `main.rs` of a module whose flag may still be false (the
+/// drivetrain, E2 steps 6 and 7, merged with their flags off): with its
+/// instance on the bus ([`crate::instance_on_bus`] of the node rcl names the
+/// binary's, after launch's `-r __node:=`), [`module_main`]; otherwise
+/// [`mower_rs_common::module_main`], the module alone on r2r with no bridge,
+/// as before E2. The module's `run` reads the same flag to pick its IO.
+pub fn module_main_by_flag<F, Fut>(
+    id: &'static str, node_name: &str, worker_threads: usize, run: F,
+) -> std::process::ExitCode
+where
+    F: FnOnce(r2r::Context, ModuleCtx) -> Fut,
+    Fut: Future<Output = ModuleResult>,
+{
+    mower_rs_common::module_main(node_name, worker_threads, move |ctx, m| async move {
+        if crate::instance_on_bus(&m.remaps.node_name(&m.node_name)) {
+            run_standalone(id, ctx, m, run).await
+        } else {
+            run(ctx, m).await
+        }
+    })
+}
+
 /// Module `id` as its own process. Its instances (the one rcl names after
 /// `m.node_name`, or all of them for a binary named after the module) run on
 /// a bus of their own, and a bridge, node `<node>` in [`STANDALONE_NAMESPACE`],

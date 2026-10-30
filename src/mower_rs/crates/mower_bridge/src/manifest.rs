@@ -96,6 +96,7 @@ pub static MODULES: &[Module] = &[
             node: "mower_base",
             // The C++ chain's profiles (mower_base/src/lib.rs, "QoS"). Every
             // topic is a parameter whose production value is its default.
+            // The arm latch counts the writers of the two command topics.
             endpoints: &[
                 publishes::<Odometry>("/odom", SD).param("odom_topic"),
                 // topic_tools' QoS for the slow copy: R V 10 (throttled_odom_qos)
@@ -105,10 +106,10 @@ pub static MODULES: &[Module] = &[
                 publishes::<TFMessage>("/tf", SD).param("tf_topic").silent(),
                 publishes::<Text>("/mower_base/telemetry", BE_V_1).param("telemetry_topic"),
                 publishes::<Text>("/mower_base/firmware_info", R_TL_1).param("firmware_info_topic"),
-                subscribes::<TwistStamped>("/drivetrain_guarded_cmd_vel", SD).param("cmd_vel_topic"),
+                subscribes::<TwistStamped>("/drivetrain_guarded_cmd_vel", SD).param("cmd_vel_topic").counts_writers(),
                 subscribes::<Text>("/mower_base/led_command", R_TL_1).param("led_topic"),
                 subscribes::<Text>("/mower_base/pid_command", R_V_4).param("pid_topic"),
-                subscribes::<Text>("/mower_base/wheel_override", BE_V_1).param("override_topic"),
+                subscribes::<Text>("/mower_base/wheel_override", BE_V_1).param("override_topic").counts_writers(),
                 subscribes::<Text>("/mower_base/servo_command", BE_V_1).param("servo_topic"),
                 subscribes::<Text>("/mower_base/blade_command", BE_V_1).param("blade_topic"),
                 // The recorders' rear light (docs/BUS_TOPICS.md 5.8 #1). It stays on

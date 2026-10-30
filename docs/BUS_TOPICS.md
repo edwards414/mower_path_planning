@@ -778,6 +778,28 @@ What it was asked to provide:
      dead-man does not cross a bridge.
    - Check with base_compare.py and base_ab.sh, slow_copy_check.py and autotune_telemetry_check.py (updated), then a
      supervised drive.
+   - **Converted, flags off** (2026-10-30, `feat/e2-step6`). The three modules have their bus IO next to their r2r IO
+     and pick one at start by their own flag (mower_bridge's `on_bus.rs`: `base`, `pid_autotune`, and the final
+     guard's instance flag `velocity_command_guard`; `instance_on_bus`). The flags stay false: with them off the plan
+     is E2's line for line and nothing of the bus IO runs. The owner switches them on with E3.2, after a supervised
+     test. What the bus IO keeps of r2r, and where it differs:
+     - every name through `m.resolve_topic` / `m.resolve_service`, every QoS as before, SystemDefaults written as
+       CycloneDDS reads it (R V 1); the base's cycle, clocks, telemetry and logs, pid_autotune's session, its timing
+       and its status JSON, and the guard's rules (`core.rs`) are the same code;
+     - the guard reads its clocks from `m.clock` (in production the system clock and CLOCK_MONOTONIC), and stops its
+       command and watchdog tasks before its last zero, so nothing it still had in hand can follow that zero;
+     - the arm latch counts the bus's writers of `/drivetrain_guarded_cmd_vel` and `/mower_base/wheel_override`
+       (`publisher_changes`) instead of the DDS graph's. In mower_rsd those are the final guard and pid_autotune
+       themselves, so a guard restart shows as before (its writer goes and comes back); where such a writer is on
+       DDS (the base's binary alone, base_ab.sh, the rclpy guards) the bridge's `from_ros_mirrored` bus writer exists
+       only while DDS shows one (5.5 f);
+     - a DDS writer of a name that is now in-process (`/drivetrain_guarded_cmd_vel`, `/mower_base/wheel_override`,
+       `/odom_slow`, ...) no longer reaches the module that reads it, as for every pair of steps 1-5;
+     - pid_autotune's telemetry reader goes at the first frame after its session, where r2r dropped it one frame
+       later, and its lock call learns at once what r2r learnt at the next spin;
+     - with mower_base on the bus, `rust_status:=false` or `rust_pid_autotune:=false` (their rclpy nodes) refuse the
+       plan (two `/mower_base/led_command` writers, one on each side, 5.5 d): mower_rsd does not start. Those two
+       switches must stay true once the flags are on.
 7. **`manual_velocity_guard`, last, or as part of E4.**
    - Every edge but one leaves the process until E3 and E4: ws_bridge for `/app_joy_cmd` and the clock, twist_mux for
      `/joy_cmd`. The one in-process reader is nav, which also reads `/joy_cmd`. Moving it earlier only adds bridge hops

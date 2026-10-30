@@ -16,7 +16,8 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
-  1-5); base, pid_autotune and the guards stay on r2r until they move after E3. ws_bridge is in the manifest (step E3),
+  1-5). base, pid_autotune and the final guard (step 6) have their bus IO next to their r2r IO, with their flags off:
+  they run on r2r until the owner switches the drivetrain over ("The flags"). ws_bridge is in the manifest (step E3),
   on r2r. E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default, are born on the bus and replace
   the outside twist_mux and robot_state_publisher when they run.
 
@@ -90,8 +91,18 @@ they depend on.
 ## The flags
 
 `src/on_bus.rs` has one flag per module. Moving a module is flipping its flag, in the commit that merges its
-conversion. A flag says "this module's code uses the bus"; the module itself does not read it.
+conversion. A flag says "this module's code uses the bus"; a module of steps 1-5 does not read it.
 
+- **The drivetrain reads its own** (E2 steps 6 and 7: mower_base, pid_autotune, the guards). Those conversions merge
+  with their flags false: each module keeps its r2r IO next to the bus IO and picks one at start by
+  `instance_on_bus(<its node>)`, and its `main.rs` runs `module_main_by_flag`, which puts the bridge next to it only
+  when it is on the bus. The plan reads the same flags, so module and bridge agree
+  (`the_flag_a_module_reads_is_the_one_the_plan_has`). With the flags false nothing of the bus IO runs, and the plan
+  is E2's line for line. The owner flips them after a supervised test.
+- **Instances:** `INSTANCES` holds flags of single instances, by node name, for a module whose instances move in
+  different steps: the final guard (`velocity_command_guard`) in step 6, the manual guard in step 7. An instance is on
+  the bus when its module's flag (`guards`) or its own is set. `Running::rsd` asks its `on_bus` for the module's id,
+  and for the node name of an instance listed there.
 - **Set at run time:** `RUNTIME` lists the modules whose flag mower_rsd sets when it starts, from how it runs them:
   ws_bridge, whose backend is a module argument (`--backend bus`, robot.launch.py's `ws_bridge_bus`). It is the app's
   only door, the in-app update's included, so it moves back without a new image. Its flag in `ON_BUS` stays false,
@@ -169,6 +180,23 @@ each with its flag; every other instance is elsewhere, on DDS.
   servo and blade commands and `/mower_recorder/command` (`R V 10`); `service_from_ros` of `/pid_autotune`,
   `/boustrophedon_coverage/set_parameters` and the recorder's start and stop. With ws_bridge on r2r, or not in
   mower_rsd, the plan is E2's line for line.
+- **E2 step 6** (base, pid_autotune, the final guard; `step_6_takes_the_drivetrain_edge_into_the_process`):
+  - in from DDS no longer: the base's `/odom`, `/odom_slow`, `/mower_base/telemetry`, `/mower_base/firmware_info` (for
+    the modules on the bus), and with ws_bridge on the bus its `/pid_autotune/status` and `/pid_autotune`;
+  - out to DDS now, as every topic written on the bus: `/odom` (SD), `/odom_slow`, `/joint_states` (SD, for
+    robot_state_publisher), the telemetry (BE V 1), the firmware info (R TL 1), `/mower_base/pid_command`,
+    `/mower_base/wheel_override`, `/drivetrain_guarded_cmd_vel`, `/pid_autotune/status`, and `service_to_ros
+    /pid_autotune`;
+  - in from DDS now: twist_mux's `/cmd_vel_guard_input` (R V 1) for the final guard, and with ws_bridge on r2r its
+    servo and blade commands (BE V 1, as the base reads them).
+  - **Writers mirrored:** mower_base's arm latch counts the writers of `/drivetrain_guarded_cmd_vel` and
+    `/mower_base/wheel_override` (manifest `counts_writers`; BUS_TOPICS.md 5.5 f). When one of those comes in from DDS
+    (the base's binary alone, base_ab.sh, the rclpy guards), its `from_ros` is `from_ros_mirrored`: the bus writer
+    exists only while DDS shows a writer, as the latch saw the graph on r2r (mower_bus_ros README, "Graph presence").
+    The plan's line says `, writers mirrored`. In mower_rsd with all three on the bus no such name crosses.
+  - **The LED writers:** with mower_base on the bus, both `/mower_base/led_command` writers must be too
+    (`with_the_base_on_the_bus_both_led_writers_must_be_in_the_process`): `rust_status:=false` or
+    `rust_pid_autotune:=false` then refuse the plan, and mower_rsd does not start.
 - **E2 steps 6 and 7 after it** take the guards' and pid_autotune's names into the process. What stays for ws_bridge
   is the recorder's six (until E5), `set_parameters` (until the parameter services move), and the `to_ros` of the
   three command topics: ws_bridge writes them on the bus, and every topic written on the bus gets its DDS face.
@@ -245,7 +273,12 @@ say so.
    the module's. The bridge's DDS endpoints come and go with the module's bus ones (mower_bus_ros README, "Graph
    presence"), so counts on DDS stay what they were, up to its 200 ms dwell: `autotune_telemetry_check.py` still finds
    no subscriber while pid_autotune is idle (BUS_TOPICS.md 5.5 f). A bus endpoint of the bridge that exists all along
-   (a `to_ros` reader, a volatile `from_ros` writer) changes a count on the bus.
+   (a `to_ros` reader, a volatile `from_ros` writer) changes a count on the bus; a reader whose module counts its
+   writers is marked `counts_writers`, and its `from_ros` mirrors them.
+
+**With the flag off at merge** (the drivetrain, steps 6 and 7): keep the r2r IO, add the bus IO beside it, pick one
+in `run` by `instance_on_bus`, give the tests a `run_on_bus` that takes the node, and use `module_main_by_flag` in
+`main.rs`; steps 3 and 4 then become the owner's flip.
 
 ## Tests
 

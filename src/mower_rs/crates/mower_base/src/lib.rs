@@ -75,14 +75,34 @@
 //! dead-man is let go. It re-arms only once the feedback is back and the
 //! board shows it receiving again — at start-up too, once the board has
 //! sent its first 0x81.
+//!
+//! IO
+//! --
+//! r2r, or the in-process bus (step E2 of docs/ROS_FREE_PLAN.md, step 6),
+//! picked at start by the module's flag in mower_bridge's on_bus.rs
+//! (`mower_bridge::instance_on_bus`). Only the endpoints differ: the same
+//! names (resolved as rcl resolves them on the node,
+//! `ModuleCtx::resolve_topic`), the same QoS (SystemDefaults written out as
+//! the robot's CycloneDDS reads it, R V 1), the same callbacks, cycle,
+//! clocks and logs. The arm latch's publisher check reads the bus's writers
+//! of the two command topics (`Subscriber::publisher_changes`) instead of the
+//! DDS graph: with the final guard and pid_autotune on the bus too they are
+//! those modules themselves, and a writer outside comes in through the
+//! bridge's `from_ros_mirrored`, which exists only while DDS shows one. On
+//! the bus the node keeps the parameters, the log, the graph and, until E5,
+//! the rear light's reader (path_record_node writes it on the bus,
+//! mower_recorder on DDS), which it is spun for.
 
 pub mod requests;
 
+use std::borrow::Borrow;
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures::StreamExt;
+use futures::{Stream as MessageStream, StreamExt};
+use mower_bus::{PublisherChanges, Qos};
 use mower_base_core::cycle::{
     BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, RearLightSources,
     ResetSignature, StopEdge, Stream,
@@ -92,7 +112,7 @@ use mower_base_core::diff_drive::{
 };
 use mower_base_core::protocol::PidConfig;
 use mower_base_core::TimeNs;
-use mower_rs_common::throttle::SlowCopy;
+use mower_rs_common::throttle::{BusSlowCopy, SlowCopy};
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::builtin_interfaces::msg::Time;
 use r2r::geometry_msgs::msg::{TransformStamped, TwistStamped};
@@ -172,6 +192,35 @@ impl GraphSeen {
     /// than this, and `publisher_settle_s` covers the rest.
     const POLL: Duration = Duration::from_millis(100);
 
+    /// The bus's writers instead of the graph's (module doc, "IO"): each
+    /// flag follows its reader's writer count from now on, until the
+    /// module's scope closes.
+    fn follow_bus(self: &Arc<Self>, cmd_vel: PublisherChanges, cmd_vel_now: usize, wheel_override: Option<(PublisherChanges, usize)>) {
+        self.cmd_vel.store(cmd_vel_now > 0, Ordering::Relaxed);
+        let (mut wheel_override, override_now) = match wheel_override {
+            Some((changes, now)) => (Some(changes), now),
+            None => (None, 0),
+        };
+        self.wheel_override.store(override_now > 0, Ordering::Relaxed);
+        let seen = self.clone();
+        let mut cmd_vel = Some(cmd_vel);
+        tokio::spawn(async move {
+            // Each stream ends when the module's scope closes.
+            while cmd_vel.is_some() || wheel_override.is_some() {
+                tokio::select! {
+                    n = next_count(&mut cmd_vel) => match n {
+                        Some(n) => seen.cmd_vel.store(n > 0, Ordering::Relaxed),
+                        None => cmd_vel = None,
+                    },
+                    n = next_count(&mut wheel_override) => match n {
+                        Some(n) => seen.wheel_override.store(n > 0, Ordering::Relaxed),
+                        None => wheel_override = None,
+                    },
+                }
+            }
+        });
+    }
+
     fn poll(&self, node: &r2r::Node, cmd_vel_topic: &str, override_topic: &str) {
         let has_publisher = |topic: &str| {
             !topic.is_empty()
@@ -182,6 +231,14 @@ impl GraphSeen {
         };
         self.cmd_vel.store(has_publisher(cmd_vel_topic), Ordering::Relaxed);
         self.wheel_override.store(has_publisher(override_topic), Ordering::Relaxed);
+    }
+}
+
+/// The next writer count of `changes`; never while there is no stream.
+async fn next_count(changes: &mut Option<PublisherChanges>) -> Option<usize> {
+    match changes {
+        Some(changes) => changes.next().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -219,16 +276,62 @@ struct Settings {
     shutdown_command: String,
 }
 
+/// One of the node's writers, on r2r or on the bus.
+enum Out<T: r2r::WrappedTypesupport + mower_bus::Message> {
+    R2r(r2r::Publisher<T>),
+    Bus(mower_bus::Publisher<T>),
+}
+
+/// Why a publish failed, as the transport says it (the logs print it).
+enum PublishError {
+    R2r(r2r::Error),
+    Bus(mower_bus::BusError),
+}
+
+impl fmt::Debug for PublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PublishError::R2r(e) => e.fmt(f),
+            PublishError::Bus(e) => e.fmt(f),
+        }
+    }
+}
+
+impl<T: r2r::WrappedTypesupport + mower_bus::Message> Out<T> {
+    fn publish(&self, msg: &T) -> Result<(), PublishError> {
+        match self {
+            Out::R2r(publisher) => publisher.publish(msg).map_err(PublishError::R2r),
+            Out::Bus(publisher) => publisher.publish(msg).map_err(PublishError::Bus),
+        }
+    }
+}
+
+/// The slow copy of `/odom` (`odom_throttle`'s), on r2r or on the bus.
+enum SlowOut {
+    R2r(SlowCopy<Odometry>),
+    Bus(BusSlowCopy<Odometry>),
+}
+
+impl SlowOut {
+    fn offer(&mut self, msg: &Odometry) {
+        match self {
+            SlowOut::R2r(slow) => slow.offer(msg),
+            SlowOut::Bus(slow) => slow.offer(msg),
+        }
+    }
+}
+
 /// Publishers the serial thread owns. r2r publishers are `Send`, and
 /// publishing is one `rcl_publish` with no executor involved, so the cycle
-/// publishes straight from its own thread like `mower_imu` does.
+/// publishes straight from its own thread like `mower_imu` does; a bus
+/// publish never waits either.
 struct Publishers {
-    odom: r2r::Publisher<Odometry>,
-    odom_slow: Option<SlowCopy<Odometry>>,
-    joint_states: r2r::Publisher<JointState>,
-    tf: r2r::Publisher<TFMessage>,
-    telemetry: Option<r2r::Publisher<StringMsg>>,
-    firmware_info: Option<r2r::Publisher<StringMsg>>,
+    odom: Out<Odometry>,
+    odom_slow: Option<SlowOut>,
+    joint_states: Out<JointState>,
+    tf: Out<TFMessage>,
+    telemetry: Option<Out<StringMsg>>,
+    firmware_info: Option<Out<StringMsg>>,
 }
 
 struct Driver {
@@ -811,14 +914,26 @@ fn covariance6(node: &r2r::Node, name: &str, default: [f64; 6]) -> [f64; 6] {
     out
 }
 
+/// The base driver. Its IO is the bus when its flag says so (on_bus.rs),
+/// r2r otherwise (module doc, "IO").
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     run_node(node, m).await
 }
 
 /// [`run`] with `node` made by the caller (the tests, which set its
-/// parameters first).
-pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+/// parameters first): on the bus or on r2r, as the flag says.
+pub async fn run_node(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    let on_bus = mower_bridge::instance_on_bus(&m.remaps.node_name(&m.node_name));
+    run_io(node, m, on_bus).await
+}
+
+/// [`run_node`] on the bus whatever the flag says.
+pub async fn run_on_bus(node: r2r::Node, m: ModuleCtx) -> ModuleResult {
+    run_io(node, m, true).await
+}
+
+async fn run_io(mut node: r2r::Node, m: ModuleCtx, on_bus: bool) -> ModuleResult {
     let logger = node.logger().to_string();
 
     let d = production_diff_drive();
@@ -955,203 +1070,143 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     // is what an earlier Fast DDS container run read off the graph and this
     // node once hard-coded. tools/base_compare.py checks the resolved QoS of
     // both chains under the robot's RMW.
+    //
+    // On the bus the same profiles, SystemDefaults spelled out as the robot's
+    // rmw_cyclonedds_cpp resolves it (`Qos::system_default()`, R V 1), and
+    // every name as rcl resolves it on this node.
     let system_default = QosProfile::system_default();
     let latched = QosProfile::default().keep_last(1).transient_local().reliable();
     let best_effort_1 = QosProfile::default().keep_last(1).best_effort();
+    let bus_best_effort_1 = Qos::default().keep_last(1).best_effort();
+    let telemetry_on = !(telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0);
 
-    let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
-    let odom_slow = SlowCopy::<Odometry>::create(
-        &mut node,
-        &odom_slow_topic,
-        odom_slow_rate_hz,
-        &throttled_odom_qos(),
-    );
-    let joint_pub =
-        node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
-    let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
-    let telemetry_pub = if telemetry_topic.is_empty() || settings.telemetry_rate_hz <= 0.0 {
-        None
+    let pubs = if on_bus {
+        Publishers {
+            odom: Out::Bus(m.bus.publisher::<Odometry>(&m.resolve_topic(&odom_topic)?, Qos::system_default())?),
+            odom_slow: BusSlowCopy::<Odometry>::create(
+                &m,
+                &logger,
+                &odom_slow_topic,
+                odom_slow_rate_hz,
+                Qos::default().keep_last(1).reliable().volatile(),
+            )
+            .map(SlowOut::Bus),
+            joint_states: Out::Bus(
+                m.bus.publisher::<JointState>(&m.resolve_topic(&joint_states_topic)?, Qos::system_default())?,
+            ),
+            tf: Out::Bus(m.bus.publisher::<TFMessage>(&m.resolve_topic(&tf_topic)?, Qos::system_default())?),
+            telemetry: if telemetry_on {
+                Some(Out::Bus(m.bus.publisher::<StringMsg>(&m.resolve_topic(&telemetry_topic)?, bus_best_effort_1)?))
+            } else {
+                None
+            },
+            firmware_info: if firmware_info_topic.is_empty() {
+                None
+            } else {
+                Some(Out::Bus(m.bus.publisher::<StringMsg>(&m.resolve_topic(&firmware_info_topic)?, Qos::latched())?))
+            },
+        }
     } else {
-        Some(node.create_publisher::<StringMsg>(&telemetry_topic, best_effort_1.clone())?)
-    };
-    let firmware_pub = if firmware_info_topic.is_empty() {
-        None
-    } else {
-        Some(node.create_publisher::<StringMsg>(&firmware_info_topic, latched.clone())?)
+        let odom_pub = node.create_publisher::<Odometry>(&odom_topic, system_default.clone())?;
+        let odom_slow = SlowCopy::<Odometry>::create(
+            &mut node,
+            &odom_slow_topic,
+            odom_slow_rate_hz,
+            &throttled_odom_qos(),
+        );
+        let joint_pub =
+            node.create_publisher::<JointState>(&joint_states_topic, system_default.clone())?;
+        let tf_pub = node.create_publisher::<TFMessage>(&tf_topic, system_default.clone())?;
+        let telemetry_pub = if !telemetry_on {
+            None
+        } else {
+            Some(node.create_publisher::<StringMsg>(&telemetry_topic, best_effort_1.clone())?)
+        };
+        let firmware_pub = if firmware_info_topic.is_empty() {
+            None
+        } else {
+            Some(node.create_publisher::<StringMsg>(&firmware_info_topic, latched.clone())?)
+        };
+        Publishers {
+            odom: Out::R2r(odom_pub),
+            odom_slow: odom_slow.map(SlowOut::R2r),
+            joint_states: Out::R2r(joint_pub),
+            tf: Out::R2r(tf_pub),
+            telemetry: telemetry_pub.map(Out::R2r),
+            firmware_info: firmware_pub.map(Out::R2r),
+        }
     };
 
     let slots: Shared = Arc::new(Mutex::new(Slots::default()));
 
     // ---- subscriptions ---------------------------------------------------
     let clocks: Arc<dyn Clocks> = Arc::new(SystemClocks);
-    let mut cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
-    {
-        let slots = slots.clone();
-        let logger = logger.clone();
-        let clocks = clocks.clone();
-        let cmd_vel_timeout = diff_drive.cmd_vel_timeout;
-        tokio::spawn(async move {
-            let mut warned_zero_stamp = false;
-            while let Some(msg) = cmd_vel.next().await {
-                match accept_cmd_vel(&msg, &*clocks, cmd_vel_timeout) {
-                    Received::Accepted { command, zero_stamp } => {
-                        if zero_stamp && !warned_zero_stamp {
-                            warned_zero_stamp = true;
-                            r2r::log_warn!(
-                                &logger,
-                                "Received TwistStamped with zero timestamp, setting it to \
-                                 current time, this message will only be shown once"
-                            );
-                        }
-                        // Only the newest command survives to the next cycle:
-                        // the C++ controller reads one realtime box, not a queue.
-                        slots.lock().expect("slots").cmd_vel = Some(command);
-                    }
-                    Received::Stale { stamp_ns, age_s } => r2r::log_warn!(
-                        &logger,
-                        "Ignoring the received message (timestamp {:.10}) because it is older \
-                         than the current time by {:.10} seconds, which exceeds the allowed \
-                         timeout ({:.4})",
-                        mower_base_core::seconds(stamp_ns),
-                        age_s,
-                        cmd_vel_timeout
-                    ),
-                }
-            }
-        });
+    let graph = Arc::new(GraphSeen::default());
+    let cmd_vel_timeout = diff_drive.cmd_vel_timeout;
+    if on_bus {
+        // Each reader's writer count, watched from before it is read.
+        let cmd_vel = m.bus.subscribe::<TwistStamped>(&m.resolve_topic(&cmd_vel_topic)?, Qos::system_default())?;
+        let cmd_vel_writers = (cmd_vel.publisher_changes(), cmd_vel.publisher_count());
+        forward_cmd_vel(cmd_vel, slots.clone(), logger.clone(), clocks.clone(), cmd_vel_timeout);
+        if !led_topic.is_empty() {
+            let sub = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&led_topic)?, Qos::latched())?;
+            forward_led(sub, slots.clone(), logger.clone());
+        }
+        if !pid_topic.is_empty() {
+            let sub = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&pid_topic)?, Qos::default().keep_last(4))?;
+            forward_pid(sub, slots.clone(), logger.clone());
+        }
+        let mut override_writers = None;
+        if !override_topic.is_empty() {
+            let sub = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&override_topic)?, bus_best_effort_1)?;
+            override_writers = Some((sub.publisher_changes(), sub.publisher_count()));
+            forward_override(sub, slots.clone(), logger.clone());
+        }
+        if !servo_topic.is_empty() {
+            let sub = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&servo_topic)?, bus_best_effort_1)?;
+            forward_servo(sub, slots.clone(), logger.clone());
+        }
+        if !blade_topic.is_empty() {
+            let sub = m.bus.subscribe::<StringMsg>(&m.resolve_topic(&blade_topic)?, bus_best_effort_1)?;
+            forward_blade(sub, slots.clone(), logger.clone());
+        }
+        graph.follow_bus(cmd_vel_writers.0, cmd_vel_writers.1, override_writers);
+    } else {
+        let cmd_vel = node.subscribe::<TwistStamped>(&cmd_vel_topic, system_default.clone())?;
+        forward_cmd_vel(cmd_vel, slots.clone(), logger.clone(), clocks.clone(), cmd_vel_timeout);
+        if !led_topic.is_empty() {
+            let sub = node.subscribe::<StringMsg>(&led_topic, latched.clone())?;
+            forward_led(sub, slots.clone(), logger.clone());
+        }
+        if !pid_topic.is_empty() {
+            let sub = node.subscribe::<StringMsg>(&pid_topic, QosProfile::default().keep_last(4))?;
+            forward_pid(sub, slots.clone(), logger.clone());
+        }
+        if !override_topic.is_empty() {
+            let sub = node.subscribe::<StringMsg>(&override_topic, best_effort_1.clone())?;
+            forward_override(sub, slots.clone(), logger.clone());
+        }
+        if !servo_topic.is_empty() {
+            let sub = node.subscribe::<StringMsg>(&servo_topic, best_effort_1.clone())?;
+            forward_servo(sub, slots.clone(), logger.clone());
+        }
+        if !blade_topic.is_empty() {
+            let sub = node.subscribe::<StringMsg>(&blade_topic, best_effort_1.clone())?;
+            forward_blade(sub, slots.clone(), logger.clone());
+        }
     }
-    if !led_topic.is_empty() {
-        let mut sub = node.subscribe::<StringMsg>(&led_topic, latched.clone())?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        tokio::spawn(async move {
-            let mut serial: u8 = 0;
-            while let Some(msg) = sub.next().await {
-                serial = serial.wrapping_add(1);
-                match requests::led(&msg.data, serial) {
-                    Some(req) => {
-                        r2r::log_info!(
-                            &logger,
-                            "light request: mode {} rgb({},{},{}) period {} ms",
-                            req.mode,
-                            req.r,
-                            req.g,
-                            req.b,
-                            req.period_ms
-                        );
-                        slots.lock().expect("slots").led = Some(req);
-                    }
-                    None => r2r::log_warn!(
-                        &logger,
-                        "ignoring light request without a valid mode: {}",
-                        msg.data
-                    ),
-                }
-            }
-        });
-    }
-    if !pid_topic.is_empty() {
-        let mut sub = node.subscribe::<StringMsg>(&pid_topic, QosProfile::default().keep_last(4))?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
-                match requests::pid(&msg.data) {
-                    Some(cfg) => {
-                        r2r::log_info!(
-                            &logger,
-                            "pid request: L {:.3}/{:.3}/{:.3} R {:.3}/{:.3}/{:.3} persist={} closed_loop={}",
-                            cfg.left_kp, cfg.left_ki, cfg.left_kd,
-                            cfg.right_kp, cfg.right_ki, cfg.right_kd,
-                            cfg.persist_to_flash as u8, cfg.closed_loop_enabled as u8
-                        );
-                        slots.lock().expect("slots").pid = Some(cfg);
-                    }
-                    None => r2r::log_warn!(
-                        &logger,
-                        "ignoring pid request without left/right kp: {}",
-                        msg.data
-                    ),
-                }
-            }
-        });
-    }
-    if !override_topic.is_empty() {
-        let mut sub = node.subscribe::<StringMsg>(&override_topic, best_effort_1.clone())?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
-                let req = requests::wheel_override(&msg.data).unwrap_or_else(|cancel| {
-                    r2r::log_warn!(
-                        &logger,
-                        "wheel override request is not JSON, cancelling: {}",
-                        msg.data
-                    );
-                    cancel
-                });
-                slots.lock().expect("slots").wheel_override = Some(req);
-            }
-        });
-    }
-    if !servo_topic.is_empty() {
-        let mut sub = node.subscribe::<StringMsg>(&servo_topic, best_effort_1.clone())?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
-                match requests::servo(&msg.data) {
-                    Some(req) => slots.lock().expect("slots").servo = Some(req),
-                    None => r2r::log_warn!(
-                        &logger,
-                        "ignoring servo request without pulse_us: {}",
-                        msg.data
-                    ),
-                }
-            }
-        });
-    }
-    if !rear_light_topic.is_empty() {
-        // QoS(8).transient_local().reliable(), as mower_hardware: the
-        // recorders' latched values reach a restarted driver
-        let mut sub = node.subscribe::<StringMsg>(
+    // The rear light stays on the r2r node on either IO, until E5 (mower_bridge's
+    // manifest, stays_on_r2r): path_record_node writes it on the bus,
+    // mower_recorder on DDS, and one r2r reader hears both. QoS(8)
+    // transient_local reliable, as mower_hardware: the recorders' latched
+    // values reach a restarted driver.
+    let rear_light_on = !rear_light_topic.is_empty();
+    if rear_light_on {
+        let sub = node.subscribe::<StringMsg>(
             &rear_light_topic,
             QosProfile::default().keep_last(8).transient_local().reliable(),
         )?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        let clocks = clocks.clone();
-        let timeout_ns = (rear_light_timeout_s * 1e9) as i64;
-        tokio::spawn(async move {
-            let mut sources = RearLightSources::default();
-            while let Some(msg) = sub.next().await {
-                match requests::rear_light(&msg.data) {
-                    Some((source, recording)) => {
-                        let until = sources.update(&source, recording, clocks.control_ns(), timeout_ns);
-                        slots.lock().expect("slots").rear_light = Some(until);
-                    }
-                    None => r2r::log_warn!(
-                        &logger,
-                        "ignoring rear light request without a known effect: {}",
-                        msg.data
-                    ),
-                }
-            }
-        });
-    }
-    if !blade_topic.is_empty() {
-        let mut sub = node.subscribe::<StringMsg>(&blade_topic, best_effort_1.clone())?;
-        let slots = slots.clone();
-        let logger = logger.clone();
-        tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
-                let req = requests::blade(&msg.data).unwrap_or_else(|stop| {
-                    r2r::log_warn!(&logger, "blade request is not JSON, stopping: {}", msg.data);
-                    stop
-                });
-                slots.lock().expect("slots").blade = Some(req);
-            }
-        });
+        forward_rear_light(sub, slots.clone(), logger.clone(), clocks.clone(), (rear_light_timeout_s * 1e9) as i64);
     }
 
     // ---- message templates (everything constant, filled once) ------------
@@ -1191,7 +1246,7 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         odom_topic,
         if diff_drive.open_loop { "open" } else { "closed" },
         diff_drive.enable_odom_tf,
-        if odom_slow.is_some() {
+        if pubs.odom_slow.is_some() {
             format!("{odom_slow_topic} at {odom_slow_rate_hz} Hz")
         } else {
             "off".to_string()
@@ -1199,18 +1254,10 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     );
 
     let stop = Arc::new(AtomicBool::new(false));
-    let graph = Arc::new(GraphSeen::default());
     let mut driver = Driver {
         cfg,
         settings,
-        pubs: Publishers {
-            odom: odom_pub,
-            odom_slow,
-            joint_states: joint_pub,
-            tf: tf_pub,
-            telemetry: telemetry_pub,
-            firmware_info: firmware_pub,
-        },
+        pubs,
         slots,
         clocks,
         graph: graph.clone(),
@@ -1225,21 +1272,28 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         .spawn(move || driver.run())?;
 
     // ---- spin the subscriptions until shutdown ---------------------------
-    // The graph is read here because the node lives here.
+    // The graph is read here because the node lives here. On the bus only
+    // the rear light is left on the node (its graph is not read: the bus's
+    // writers are), and with that off there is nothing to spin: the node only
+    // lives until the module returns.
     let running = Arc::new(AtomicBool::new(true));
-    let spin = {
+    let (spin, kept) = if on_bus && !rear_light_on {
+        (None, Some(node))
+    } else {
         let running = running.clone();
-        tokio::task::spawn_blocking(move || {
+        let read_graph = !on_bus;
+        let spin = tokio::task::spawn_blocking(move || {
             let mut polled: Option<Instant> = None;
             while running.load(Ordering::Relaxed) {
                 node.spin_once(Duration::from_millis(50));
-                if polled.map_or(true, |t| t.elapsed() >= GraphSeen::POLL) {
+                if read_graph && polled.map_or(true, |t| t.elapsed() >= GraphSeen::POLL) {
                     polled = Some(Instant::now());
                     graph.poll(&node, &cmd_vel_topic, &override_topic);
                 }
             }
             drop(node);
-        })
+        });
+        (Some(spin), None)
     };
 
     let mut failure: Option<String> = None;
@@ -1266,11 +1320,186 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         }
     }
     running.store(false, Ordering::Relaxed);
-    let _ = spin.await;
+    if let Some(spin) = spin {
+        let _ = spin.await;
+    }
+    drop(kept);
     match failure {
         Some(message) => Err(message.into()),
         None => Ok(()),
     }
+}
+
+
+// ---- the subscriptions' callbacks, for an r2r stream or a bus reader --------
+// Each keeps only what it makes of the newest message for the next cycle
+// (`Slots`), as the C++ controller's realtime boxes do.
+
+fn forward_cmd_vel<M: Borrow<TwistStamped> + Send + 'static>(
+    mut cmd_vel: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+    clocks: Arc<dyn Clocks>, cmd_vel_timeout: f64,
+) {
+    tokio::spawn(async move {
+        let mut warned_zero_stamp = false;
+        while let Some(msg) = cmd_vel.next().await {
+            match accept_cmd_vel(msg.borrow(), &*clocks, cmd_vel_timeout) {
+                Received::Accepted { command, zero_stamp } => {
+                    if zero_stamp && !warned_zero_stamp {
+                        warned_zero_stamp = true;
+                        r2r::log_warn!(
+                            &logger,
+                            "Received TwistStamped with zero timestamp, setting it to \
+                             current time, this message will only be shown once"
+                        );
+                    }
+                    // Only the newest command survives to the next cycle:
+                    // the C++ controller reads one realtime box, not a queue.
+                    slots.lock().expect("slots").cmd_vel = Some(command);
+                }
+                Received::Stale { stamp_ns, age_s } => r2r::log_warn!(
+                    &logger,
+                    "Ignoring the received message (timestamp {:.10}) because it is older \
+                     than the current time by {:.10} seconds, which exceeds the allowed \
+                     timeout ({:.4})",
+                    mower_base_core::seconds(stamp_ns),
+                    age_s,
+                    cmd_vel_timeout
+                ),
+            }
+        }
+    });
+}
+
+fn forward_led<M: Borrow<StringMsg> + Send + 'static>(
+    mut sub: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+) {
+    tokio::spawn(async move {
+        let mut serial: u8 = 0;
+        while let Some(msg) = sub.next().await {
+            let msg = msg.borrow();
+            serial = serial.wrapping_add(1);
+            match requests::led(&msg.data, serial) {
+                Some(req) => {
+                    r2r::log_info!(
+                        &logger,
+                        "light request: mode {} rgb({},{},{}) period {} ms",
+                        req.mode,
+                        req.r,
+                        req.g,
+                        req.b,
+                        req.period_ms
+                    );
+                    slots.lock().expect("slots").led = Some(req);
+                }
+                None => r2r::log_warn!(
+                    &logger,
+                    "ignoring light request without a valid mode: {}",
+                    msg.data
+                ),
+            }
+        }
+    });
+}
+
+fn forward_pid<M: Borrow<StringMsg> + Send + 'static>(
+    mut sub: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+) {
+    tokio::spawn(async move {
+        while let Some(msg) = sub.next().await {
+            let msg = msg.borrow();
+            match requests::pid(&msg.data) {
+                Some(cfg) => {
+                    r2r::log_info!(
+                        &logger,
+                        "pid request: L {:.3}/{:.3}/{:.3} R {:.3}/{:.3}/{:.3} persist={} closed_loop={}",
+                        cfg.left_kp, cfg.left_ki, cfg.left_kd,
+                        cfg.right_kp, cfg.right_ki, cfg.right_kd,
+                        cfg.persist_to_flash as u8, cfg.closed_loop_enabled as u8
+                    );
+                    slots.lock().expect("slots").pid = Some(cfg);
+                }
+                None => r2r::log_warn!(
+                    &logger,
+                    "ignoring pid request without left/right kp: {}",
+                    msg.data
+                ),
+            }
+        }
+    });
+}
+
+fn forward_override<M: Borrow<StringMsg> + Send + 'static>(
+    mut sub: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+) {
+    tokio::spawn(async move {
+        while let Some(msg) = sub.next().await {
+            let msg = msg.borrow();
+            let req = requests::wheel_override(&msg.data).unwrap_or_else(|cancel| {
+                r2r::log_warn!(
+                    &logger,
+                    "wheel override request is not JSON, cancelling: {}",
+                    msg.data
+                );
+                cancel
+            });
+            slots.lock().expect("slots").wheel_override = Some(req);
+        }
+    });
+}
+
+fn forward_servo<M: Borrow<StringMsg> + Send + 'static>(
+    mut sub: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+) {
+    tokio::spawn(async move {
+        while let Some(msg) = sub.next().await {
+            let msg = msg.borrow();
+            match requests::servo(&msg.data) {
+                Some(req) => slots.lock().expect("slots").servo = Some(req),
+                None => r2r::log_warn!(
+                    &logger,
+                    "ignoring servo request without pulse_us: {}",
+                    msg.data
+                ),
+            }
+        }
+    });
+}
+
+fn forward_rear_light(
+    mut sub: impl MessageStream<Item = StringMsg> + Send + Unpin + 'static, slots: Shared, logger: String,
+    clocks: Arc<dyn Clocks>, timeout_ns: i64,
+) {
+    tokio::spawn(async move {
+        let mut sources = RearLightSources::default();
+        while let Some(msg) = sub.next().await {
+            match requests::rear_light(&msg.data) {
+                Some((source, recording)) => {
+                    let until = sources.update(&source, recording, clocks.control_ns(), timeout_ns);
+                    slots.lock().expect("slots").rear_light = Some(until);
+                }
+                None => r2r::log_warn!(
+                    &logger,
+                    "ignoring rear light request without a known effect: {}",
+                    msg.data
+                ),
+            }
+        }
+    });
+}
+
+fn forward_blade<M: Borrow<StringMsg> + Send + 'static>(
+    mut sub: impl MessageStream<Item = M> + Send + Unpin + 'static, slots: Shared, logger: String,
+) {
+    tokio::spawn(async move {
+        while let Some(msg) = sub.next().await {
+            let msg = msg.borrow();
+            let req = requests::blade(&msg.data).unwrap_or_else(|stop| {
+                r2r::log_warn!(&logger, "blade request is not JSON, stopping: {}", msg.data);
+                stop
+            });
+            slots.lock().expect("slots").blade = Some(req);
+        }
+    });
 }
 
 #[cfg(test)]
