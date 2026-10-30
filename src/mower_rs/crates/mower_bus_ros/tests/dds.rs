@@ -722,7 +722,7 @@ fn from_ros_replays_a_latched_dds_value_to_a_late_bus_subscriber() {
         let localize = bus.scope("ekf_filter_node_map");
         let mut first = localize.subscribe::<Text>(topic, Qos::latched()).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, first.recv()).await.unwrap().unwrap().data, "imu_link");
-        assert!(running.topic(topic).dds_reader);
+        eventually("the bridge to record its DDS reader", || running.topic(topic).dds_reader).await;
         let mut late = bus.scope("navsat").subscribe::<Text>(topic, Qos::latched()).unwrap();
         assert_eq!(late.try_recv().unwrap().data, "imu_link");
         publisher.publish(&text("gps_link")).unwrap();
@@ -779,7 +779,7 @@ fn from_ros_reads_dds_only_while_the_bus_has_a_reader() {
             eventually("the DDS reader on the graph", || nav2.readers(topic) == 1).await;
             drop(reader);
             eventually("the DDS reader to leave the graph", || nav2.readers(topic) == 0).await;
-            assert!(!running.topic(topic).dds_reader);
+            eventually("the bridge to record its DDS reader gone", || !running.topic(topic).dds_reader).await;
             eventually("the writer to lose its match", || writer.get_inter_process_subscription_count().unwrap() == 0).await;
         }
         running.stop().await.unwrap();
@@ -815,7 +815,7 @@ fn a_latched_value_heard_before_the_last_bus_reader_went_does_not_reach_the_next
         writer.publish(&text("t1")).unwrap();
         let mut next = status.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, next.recv()).await.unwrap().unwrap().data, "t1", "a stale value first");
-        assert!(running.topic(topic).dds_reader);
+        eventually("the bridge to record its DDS reader", || running.topic(topic).dds_reader).await;
         running.stop().await.unwrap();
     });
 }
@@ -845,7 +845,7 @@ fn a_latched_dds_value_leaves_the_bus_with_its_writer_and_a_new_writer_s_comes_a
         let publisher = coverage.with(|n| n.create_publisher::<Text>(topic, latched_2())).unwrap();
         publisher.publish(&text("old path")).unwrap();
         assert_eq!(tokio::time::timeout(WAIT, live.recv()).await.unwrap().unwrap().data, "old path");
-        assert!(running.topic(topic).bus_writer);
+        eventually("the bridge to record its bus writer", || running.topic(topic).bus_writer).await;
         let mut late = adapter.subscribe::<Text>(topic, Qos::latched().keep_last(2)).unwrap();
         assert_eq!(late.try_recv().unwrap().data, "old path");
 
@@ -1069,7 +1069,7 @@ fn service_to_ros_serves_on_dds_only_while_the_bus_has_a_server() {
             let failed = Instant::now();
             eventually("the DDS server to leave the graph", || app.service_servers(name) == (0, 0)).await;
             assert!(failed.elapsed() < Duration::from_secs(1), "round {round}: gone after {:?}", failed.elapsed());
-            assert!(!running.service(name).dds_server);
+            eventually("the bridge to record its DDS server gone", || !running.service(name).dds_server).await;
             assert_no_dds_server(&client, &format!("round {round}, the module down")).await;
         }
         let stats = running.service(name);
@@ -1118,7 +1118,7 @@ fn a_bus_server_that_flaps_leaves_one_dds_server_or_none() {
         eventually("one DDS server on the graph, none left over", || app.service_servers(name) == (1, 1)).await;
         module.close();
         eventually("the DDS server to leave the graph", || app.service_servers(name) == (0, 0)).await;
-        assert!(!running.service(name).dds_server);
+        eventually("the bridge to record its DDS server gone", || !running.service(name).dds_server).await;
         running.stop().await.unwrap();
     });
 }
@@ -1157,7 +1157,7 @@ fn a_dds_call_made_as_the_bus_server_goes_is_not_made_to_the_next_one() {
         first.close();
         let mut lost = Box::pin(client.request(&set_bool(true)).unwrap());
         eventually("the DDS server to go", || app.service_servers(name) == (0, 0)).await;
-        assert!(!running.service(name).dds_server);
+        eventually("the bridge to record its DDS server gone", || !running.service(name).dds_server).await;
         let second = bus.scope("mission_manager");
         let _second = counting(&second);
         wait_for_service(&client).await;
@@ -1375,7 +1375,7 @@ fn service_from_ros_serves_on_the_bus_only_while_a_dds_server_is_there() {
                 }
             };
             assert_eq!(answer.message, "dds got true");
-            assert!(running.service(name).bus_server);
+            eventually("the bridge to record its bus server", || running.service(name).bus_server).await;
 
             // nav goes
             server.abort();
