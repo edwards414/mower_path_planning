@@ -1,0 +1,10 @@
+[package]
+name = "mower_schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ROS 2 message definitions without ROS: the .msg texts, RIHS01 hashes and layouts of the bus's types, and rosbag2's schema text (generated from the robot image, no dependencies)"
+
+[dev-dependencies]
+mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
+zstd = "0.14"

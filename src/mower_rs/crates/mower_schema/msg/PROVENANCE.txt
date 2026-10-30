@@ -1,0 +1,12 @@
+# The .msg files under msg/ and the hashes in src/table.rs, as gen/gen_schema.py found them.
+# package  version (Debian package ros-jazzy-<package>, or the path for a source build)
+builtin_interfaces 2.0.4-1noble.20260911.051621
+diagnostic_msgs 5.3.8-1noble.20260911.082700
+geometry_msgs 5.3.8-1noble.20260911.081635
+mower_interface mower_ws/install/mower_interface
+nav_msgs 5.3.8-1noble.20260911.083650
+rcl_interfaces 2.0.4-1noble.20260911.054103
+sensor_msgs 5.3.8-1noble.20260911.124809
+std_msgs 5.3.8-1noble.20260911.054859
+tf2_msgs 0.36.23-1noble.20260916.034811
+visualization_msgs 5.3.8-1noble.20260911.130930

@@ -1,0 +1,18 @@
+[package]
+name = "mower_cdr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Schema-guided CDR for ROS 2 messages without ROS: serde and dynamic values, byte for byte what rmw writes"
+
+[dependencies]
+mower_schema = { path = "../mower_schema" }
+serde = { workspace = true }
+
+[dev-dependencies]
+# tests/rmw_oracle.rs: rmw itself, through r2r, is the oracle while ROS is in
+# the image (E5 design G3); it goes with r2r at E9
+r2r = { workspace = true }
+rand = "0.8"
+mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
+zstd = "0.14"
