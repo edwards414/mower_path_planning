@@ -92,7 +92,8 @@ jobs:
             test/test_pairing.py \
             test/test_qos_configuration.py \
             test/test_robot_info.py \
-            test/test_site_store.py
+            test/test_site_store.py \
+            test/test_time_sync_gate.py
 
       # The rest of mower_recorder's tests need mcap / moto / boto3 (bags, R2).
       - name: Run ROS-free mower_recorder tests

@@ -13,7 +13,13 @@ bt_navigator:
     robot_base_frame: base_footprint
     odom_frame: odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # BT action/service reply deadlines are milliseconds, not travel timeouts.
+    # On the RK3568, measured planner goal ACKs take 16-60 ms; 20 ms aborts
+    # healthy requests. Keep bounded headroom for executor scheduling jitter.
+    default_server_timeout: 500
+    # Wait for a canceled child action's terminal result before halting the BT.
+    # This stays inside mower_nav's 3 s cancellation confirmation deadline.
+    default_cancel_timeout: 2000
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]

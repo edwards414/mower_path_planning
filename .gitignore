@@ -31,3 +31,6 @@ src/mower_recorder/config/r2.env
 src/mower_description/setting.local.sh
 deploy/server/cloudflared-config.yml
 deploy/server/tunnel-credentials.json
+
+# tools/ab output (ab.py run without --out)
+/ab-out/

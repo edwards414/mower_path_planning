@@ -1,0 +1,106 @@
+name: Image A/B
+
+# Two robot images side by side on fake devices, compared through what the
+# app sees (tools/ab/README.md): the app contract, the bridge's topic list and
+# policy, the read-only services, every topic's shape and content, the frames
+# sent to the STM32 and the normalised log. Run it by hand for each cleanup
+# PR: image_a = the image the robots run (or the PR's base), image_b = the
+# PR's image. The job fails when the diff is not empty, unless report_only.
+on:
+  workflow_dispatch:
+    inputs:
+      image_a:
+        description: 'Image A, e.g. docker.io/fxrbindi/mower_path_planning@sha256:... or ghcr.io/<owner>/mower_path_planning:main'
+        required: true
+        type: string
+      image_b:
+        description: 'Image B'
+        required: true
+        type: string
+      checks:
+        description: 'Checks whose difference fails the job (comma-separated; contract,lists,services,topics,frames,log)'
+        required: false
+        type: string
+        default: 'contract,lists,services,topics,frames,log'
+      report_only:
+        description: 'Report the diff without failing the job'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ab:
+    name: A/B
+    # the images are arm64 (build.yml pushes linux/arm64 only)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # the host-side probes; everything else is stdlib
+      - name: Install websockets
+        timeout-minutes: 5
+        run: python -m pip install 'websockets==15.0.1'
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # the robots' registry (build.yml pushes there when DOCKERHUB_REPO is set)
+      - name: Login to Docker Hub
+        if: vars.DOCKERHUB_REPO != ''
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull the images
+        timeout-minutes: 10
+        env:
+          IMAGE_A: ${{ inputs.image_a }}
+          IMAGE_B: ${{ inputs.image_b }}
+        run: |
+          df -h /
+          docker pull --quiet "$IMAGE_A"
+          [ "$IMAGE_B" = "$IMAGE_A" ] || docker pull --quiet "$IMAGE_B"
+          df -h /
+
+      - name: A/B
+        timeout-minutes: 12
+        env:
+          IMAGE_A: ${{ inputs.image_a }}
+          IMAGE_B: ${{ inputs.image_b }}
+          CHECKS: ${{ inputs.checks }}
+          REPORT_ONLY: ${{ inputs.report_only }}
+        run: |
+          args=(--out ab-out --checks "${CHECKS:-contract,lists,services,topics,frames,log}")
+          if [ "$REPORT_ONLY" = true ]; then args+=(--report-only); fi
+          python tools/ab/ab.py run "$IMAGE_A" "$IMAGE_B" "${args[@]}"
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f ab-out/report.md ]; then cat ab-out/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload the outputs and the diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-${{ github.run_id }}
+          path: ab-out/
+          retention-days: 30
+          if-no-files-found: warn
