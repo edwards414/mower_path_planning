@@ -126,6 +126,27 @@ pub fn fromtimestamp_seconds(ns: i64) -> i64 {
     secs as i64 + if us >= 1e6 { 1 } else { 0 }
 }
 
+/// `os.path.expanduser(path)` for `~` and `~/...` (`$HOME`, else the
+/// passwd entry); `~user` is left as it is.
+pub fn expand_user(path: &str) -> String {
+    let Some(rest) = path.strip_prefix('~') else { return path.to_string() };
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return path.to_string();
+    }
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => unsafe {
+            let pw = libc::getpwuid(libc::getuid());
+            if pw.is_null() || (*pw).pw_dir.is_null() {
+                return path.to_string();
+            }
+            std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned()
+        },
+    };
+    let out = format!("{}{rest}", home.trim_end_matches('/'));
+    if out.is_empty() { "/".to_string() } else { out }
+}
+
 /// `tempfile.mkstemp(prefix='.tmp_', dir=...)`, write, fsync, `os.replace`.
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -202,6 +223,15 @@ mod tests {
         assert_eq!(t.compact(), "20261027T021500");
         let c = civil(1_793_348_331, 8 * 3600);
         assert_eq!(c.isoformat_seconds_with_offset(), "2026-10-30T16:18:51+08:00");
+    }
+
+    #[test]
+    fn expanduser_like_python() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_user("~/mower_bags"), format!("{}/mower_bags", home.trim_end_matches('/')));
+        assert_eq!(expand_user("/a/~b"), "/a/~b");
+        assert_eq!(expand_user(""), "");
+        assert_eq!(expand_user("~other/x"), "~other/x");
     }
 
     #[test]
