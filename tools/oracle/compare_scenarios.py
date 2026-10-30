@@ -9,9 +9,17 @@ run on the wall clock, so two recordings in the same image never agree line
 for line. This compares only what a run of the real nodes does not change:
 - the nav2 version, and the same trees and scenarios;
 - per scenario the same goals, each with the same acceptance, status, error
-  code and cancel answers;
+  code and cancel answers, except a cancel that races a send (below);
 - where the robot ends, within POSITION_TOLERANCE_M and
   HEADING_TOLERANCE_RAD.
+
+A cancel event at the same `t` as a send event of its scenario (the
+scenario script, tests/oracle/<node>/scenarios.json) races it: in
+cancel_running_while_pending, goal 1 is sent and goal 0 cancelled at
+t = 1.0, and controller_server accepts the cancel only when it handles it
+before its next loop preempts goal 0 with goal 1. The goal ends the same
+either way. Its answer is printed, not compared (two arm runs of run
+41056625955 answered False, the committed recording and a Mac run True).
 
 Result times, command counts, plan and follow_path counts and the recovery
 count in the last feedback vary from run to run (the 7-round wall scenario
@@ -33,7 +41,9 @@ import sys
 
 POSITION_TOLERANCE_M = 0.05
 HEADING_TOLERANCE_RAD = 0.1
-GOAL_FIELDS = ('accepted', 'status', 'error_code', 'cancel_accepted')
+GOAL_FIELDS = ('accepted', 'status', 'error_code')
+ORACLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..',
+                      'src', 'mower_rs', 'crates', 'mower_nav_core', 'tests', 'oracle')
 COUNTED = ('cmds', 'plans', 'compute_goals', 'follow_goals')
 
 
@@ -61,7 +71,38 @@ def recoveries(goal):
     return None if not feedback else feedback.get('number_of_recoveries')
 
 
-def compare(committed, fresh, label):
+def racing_cancels(script):
+    """{scenario name: {goal: [the t of each of its cancels that shares its t with a send, else None]}}"""
+    out = {}
+    for s in script['scenarios']:
+        sends = {e['t'] for e in s['events'] if e['op'] == 'send'}
+        goals = {}
+        for e in s['events']:
+            if e['op'] == 'cancel':
+                goals.setdefault(e['goal'], []).append(e['t'] if e['t'] in sends else None)
+        out[s['name']] = goals
+    return out
+
+
+def compare_cancels(where, i, a, b, races, problems, drift):
+    """cancel_accepted, one answer per cancel of the goal: a racing one is reported."""
+    if a == b:
+        return
+    if a is None or b is None or len(a) != len(b):
+        problems.append(f'{where} goal {i}: cancel_accepted {b!r}, committed {a!r}')
+        return
+    for k, (x, y) in enumerate(zip(a, b)):
+        if x == y:
+            continue
+        t = races[k] if k < len(races) else None
+        name = 'cancel_accepted' if len(a) == 1 else f'cancel_accepted[{k}]'
+        if t is None:
+            problems.append(f'{where} goal {i}: {name} {y!r}, committed {x!r}')
+        else:
+            drift.append(f'goal {i} {name} {y} (committed {x}; the cancel races a send at t={t})')
+
+
+def compare(committed, fresh, label, races):
     problems, report = [], []
     for key in ('nav2', 'nav2_controller'):
         if committed.get(key) != fresh.get(key):
@@ -81,6 +122,8 @@ def compare(committed, fresh, label):
             for field in GOAL_FIELDS:
                 if ga.get(field) != gb.get(field):
                     problems.append(f'{where} goal {i}: {field} {gb.get(field)!r}, committed {ga.get(field)!r}')
+            compare_cancels(where, i, ga.get('cancel_accepted'), gb.get('cancel_accepted'),
+                            races.get(name.split()[-1], {}).get(i, []), problems, drift)
             if 'result_t' in ga and 'result_t' in gb:
                 drift.append(f'goal {i} at {gb["result_t"]:.3f} s ({gb["result_t"] - ga["result_t"]:+.3f})')
             if recoveries(ga) != recoveries(gb):
@@ -107,7 +150,9 @@ def main():
             committed = json.load(f)
         with open(os.path.join(fresh_dir, f'{name}.json')) as f:
             fresh = json.load(f)
-        p, report = compare(committed, fresh, name)
+        with open(os.path.join(ORACLE, name, 'scenarios.json')) as f:
+            races = racing_cancels(json.load(f))
+        p, report = compare(committed, fresh, name, races)
         problems += p
         print(f'{name}: the fresh recording against the committed one (times, counts and recoveries: report only)')
         print('\n'.join(report))
