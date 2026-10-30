@@ -54,6 +54,8 @@
 //!   path shows it receives commands (again, after a loss).
 
 use crate::diff_drive::{Command, DiffDrive, DiffDriveParams, OdomSample, WheelCommand};
+use std::collections::BTreeMap;
+
 use crate::protocol::{self as proto, FrameParser, PidConfig};
 use crate::{seconds, TimeNs, TWO_PI};
 
@@ -196,6 +198,31 @@ pub struct LedRequest {
     pub period_ms: u16,
     /// Bumped per request so an identical repeat is still re-sent.
     pub serial: u8,
+}
+
+/// The rear-light requests (`/mower_base/rear_light`) of several recorders,
+/// each under its own `source` (`path_record`: the app's zone recording,
+/// `bag`: mower_recorder): `RearLightSources` of mower_protocol.cpp. The
+/// overlay is on while any source's last "recording" is younger than the
+/// timeout; a source's "off" clears only that source.
+#[derive(Debug, Default, Clone)]
+pub struct RearLightSources {
+    until_ns: BTreeMap<String, TimeNs>,
+}
+
+impl RearLightSources {
+    /// The latest deadline over all sources (control-clock ns), 0 when none
+    /// has ever been recording. The overlay is on while `now < deadline`. An
+    /// expired source keeps its (past) deadline, which is harmless: only the
+    /// latest one matters.
+    pub fn update(&mut self, source: &str, recording: bool, now_ns: TimeNs, timeout_ns: TimeNs) -> TimeNs {
+        if recording {
+            self.until_ns.insert(source.to_string(), now_ns.saturating_add(timeout_ns));
+        } else {
+            self.until_ns.remove(source);
+        }
+        self.until_ns.values().copied().max().unwrap_or(0)
+    }
 }
 
 /// Why the arm latch holds the wheels.
@@ -348,6 +375,8 @@ pub enum Event {
     /// "wheel override active (controller command bypassed)" /
     /// "wheel override expired, back to controller command"
     Override { active: bool },
+    /// The rear-recording overlay went out on (or off) with an 0x03.
+    RearLight { on: bool },
     /// "blade running at %d permille (dead-man held)" / "blade stop"
     Blade { running: bool, permille: i16 },
     /// diff_drive_controller's "Velocity command timed out. Braking.",
@@ -665,6 +694,9 @@ pub struct BaseCycle {
     led_request: Option<LedRequest>,
     led_sent: Option<LedRequest>,
     led_sent_ns: Option<TimeNs>,
+    /// The rear overlay's deadline, [`RearLightSources::update`]'s; 0: never.
+    rear_until_ns: TimeNs,
+    led_overlay_sent: u8,
     pid_request: Option<PidConfig>,
 }
 
@@ -717,6 +749,8 @@ impl BaseCycle {
             led_request: None,
             led_sent: None,
             led_sent_ns: None,
+            rear_until_ns: 0,
+            led_overlay_sent: 0,
             pid_request: None,
         };
         me.disarm(DisarmReason::Activation, now);
@@ -1340,6 +1374,12 @@ impl BaseCycle {
         self.led_request = Some(req);
     }
 
+    /// `/mower_base/rear_light`: the overlay's deadline on the control clock,
+    /// as [`RearLightSources::update`] gives it (`rear_recording_until_ns_`).
+    pub fn request_rear_light(&mut self, until_ns: TimeNs) {
+        self.rear_until_ns = until_ns;
+    }
+
     /// `/mower_base/pid_command`.
     pub fn request_pid(&mut self, cfg: PidConfig) {
         self.pid_request = Some(cfg);
@@ -1651,10 +1691,20 @@ impl BaseCycle {
         Some(proto::build_lawer_motor_command(seq, permille, self.cfg.command_timeout_ms))
     }
 
-    /// `send_led_if_needed`: on change, and again every `led_resend_period_s`.
+    /// `send_led_if_needed`: on change of the request or of the rear
+    /// overlay, and again every `led_resend_period_s`. With no request yet
+    /// and the overlay on (or just gone off) it sends SHOW, which keeps what
+    /// is on the strips, with the overlay byte.
     fn led_frame(&mut self, now: TimeNs) -> Option<Vec<u8>> {
-        let req = self.led_request?;
-        let changed = Some(req) != self.led_sent;
+        let overlay =
+            if self.rear_until_ns != 0 && now < self.rear_until_ns { proto::LED_OVERLAY_REAR_RECORDING } else { 0 };
+        let req = match self.led_request {
+            Some(req) => req,
+            None if overlay == 0 && self.led_overlay_sent == 0 => return None,
+            // nobody set a base light yet: keep what is on the strips (SHOW)
+            None => LedRequest { mode: proto::LED_SHOW, r: 0, g: 0, b: 0, period_ms: 0, serial: 0 },
+        };
+        let changed = Some(req) != self.led_sent || overlay != self.led_overlay_sent;
         let stale = match self.led_sent_ns {
             None => true,
             Some(t) => seconds(now) - seconds(t) >= self.cfg.led_resend_period_s,
@@ -1663,15 +1713,20 @@ impl BaseCycle {
             return None;
         }
         let seq = self.next_seq();
+        if overlay != self.led_overlay_sent {
+            self.events.push(Event::RearLight { on: overlay != 0 });
+        }
         self.led_sent = Some(req);
+        self.led_overlay_sent = overlay;
         self.led_sent_ns = Some(now);
-        Some(proto::build_ws2812_command(
+        Some(proto::build_ws2812_command_with_overlay(
             seq,
             req.mode,
             req.r,
             req.g,
             req.b,
             req.period_ms,
+            overlay,
         ))
     }
 }

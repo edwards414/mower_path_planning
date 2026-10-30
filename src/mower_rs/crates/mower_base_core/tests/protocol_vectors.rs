@@ -92,6 +92,15 @@ fn encoders_are_byte_identical() {
                 args[4].as_i64().unwrap() as u8,
                 args[5].as_i64().unwrap() as u16,
             ),
+            "ws2812_command_overlay" => build_ws2812_command_with_overlay(
+                args[0].as_i64().unwrap() as u8,
+                args[1].as_i64().unwrap() as u8,
+                args[2].as_i64().unwrap() as u8,
+                args[3].as_i64().unwrap() as u8,
+                args[4].as_i64().unwrap() as u8,
+                args[5].as_i64().unwrap() as u16,
+                args[6].as_i64().unwrap() as u8,
+            ),
             "pid_config_command" => {
                 let g = args[1].as_array().unwrap();
                 let cfg = PidConfig {
@@ -303,4 +312,26 @@ fn decoders_are_field_identical() {
         }
     }
     assert!(seen_rejections >= 9, "every decoder needs a wrong-length vector");
+}
+
+/// `RearLightSources::update` of mower_protocol.cpp, step by step: the
+/// deadline it returns after each `/mower_base/rear_light` request.
+#[test]
+fn rear_light_sources_match_oracle() {
+    use mower_base_core::cycle::RearLightSources;
+    let vs = vectors();
+    let cases = vs["rear_light_sources"].as_array().unwrap();
+    assert!(cases.len() >= 4);
+    for (n, steps) in cases.iter().enumerate() {
+        let mut sources = RearLightSources::default();
+        for st in steps.as_array().unwrap() {
+            let until = sources.update(
+                st["source"].as_str().unwrap(),
+                b(st, "recording"),
+                st["now_ns"].as_i64().unwrap(),
+                st["timeout_ns"].as_i64().unwrap(),
+            );
+            assert_eq!(until, st["until_ns"].as_i64().unwrap(), "case {n}: {st}");
+        }
+    }
 }

@@ -115,6 +115,20 @@ int main()
       build_ws2812_command(static_cast<uint8_t>(l[0]), static_cast<uint8_t>(l[1]), static_cast<uint8_t>(l[2]),
         static_cast<uint8_t>(l[3]), static_cast<uint8_t>(l[4]), static_cast<uint16_t>(l[5])));
   }
+  // with the overlay byte: LED_COMMAND_MODES.md's example (front white, rear
+  // recording breath), SHOW with and without it, and the other bits
+  const int overlays[][7] = {
+    {4, 1, 110, 110, 110, 0, 1}, {5, 5, 0, 0, 0, 0, 1}, {6, 5, 0, 0, 0, 0, 0}, {7, 6, 255, 180, 0, 1600, 1},
+    {8, 2, 1, 2, 3, 65535, 255},
+  };
+  for (const auto & l : overlays) {
+    char a[128];
+    std::snprintf(a, sizeof(a), "[%d, %d, %d, %d, %d, %d, %d]", l[0], l[1], l[2], l[3], l[4], l[5], l[6]);
+    add("ws2812_command_overlay", a,
+      build_ws2812_command(static_cast<uint8_t>(l[0]), static_cast<uint8_t>(l[1]), static_cast<uint8_t>(l[2]),
+        static_cast<uint8_t>(l[3]), static_cast<uint8_t>(l[4]), static_cast<uint16_t>(l[5]),
+        static_cast<uint8_t>(l[6])));
+  }
   {
     struct PidCase { int seq; float g[6]; bool persist; bool closed; };
     const PidCase pids[] = {
@@ -476,6 +490,38 @@ int main()
       "\", \"ok\": " + (ok ? "true" : "false") + ", \"fields\": null}");
   }
   for (size_t i = 0; i < dec.size(); ++i) out += dec[i] + (i + 1 == dec.size() ? "\n" : ",\n");
+  out += "  ],\n";
+
+  // ---- RearLightSources: the deadline after each request -----------------
+  // [source, recording, now_ns, timeout_ns] -> until_ns
+  struct RearStep { const char * source; bool recording; int64_t now; int64_t timeout; };
+  const std::vector<std::vector<RearStep>> rear_cases = {
+    // one source on, refreshed, off
+    {{"path_record", true, 1000, 6000}, {"path_record", true, 3000, 6000}, {"path_record", false, 4000, 6000}},
+    // two sources: the latest deadline wins, one's off clears only itself
+    {{"path_record", true, 1000, 6000}, {"bag", true, 2000, 6000}, {"path_record", false, 2500, 6000},
+     {"bag", false, 3000, 6000}},
+    // an expired source keeps its past deadline; an off for a source never on
+    {{"bag", true, 1000, 6000}, {"path_record", false, 9000, 6000}, {"path_record", true, 20000, 6000},
+     {"", true, 21000, 0}},
+    // a shorter timeout later does not shorten another source's deadline
+    {{"a", true, 0, 10000}, {"b", true, 1000, 2000}, {"a", false, 1500, 2000}},
+  };
+  out += "  \"rear_light_sources\": [\n";
+  for (size_t c = 0; c < rear_cases.size(); ++c) {
+    RearLightSources sources;
+    out += "    [";
+    for (size_t i = 0; i < rear_cases[c].size(); ++i) {
+      const auto & st = rear_cases[c][i];
+      const int64_t until = sources.update(st.source, st.recording, st.now, st.timeout);
+      char b[256];
+      std::snprintf(b, sizeof(b), "%s{\"source\": \"%s\", \"recording\": %s, \"now_ns\": %lld, \"timeout_ns\": %lld, "
+        "\"until_ns\": %lld}", i ? ", " : "", st.source, st.recording ? "true" : "false",
+        static_cast<long long>(st.now), static_cast<long long>(st.timeout), static_cast<long long>(until));
+      out += b;
+    }
+    out += c + 1 == rear_cases.size() ? "]\n" : "],\n";
+  }
   out += "  ]\n}\n";
 
   std::fputs(out.c_str(), stdout);

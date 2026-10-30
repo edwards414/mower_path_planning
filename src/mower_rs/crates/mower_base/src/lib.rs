@@ -84,8 +84,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use mower_base_core::cycle::{
-    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, ResetSignature, StopEdge,
-    Stream,
+    BaseConfig, BaseCycle, DisarmReason, Event, JointStates, LedRequest, RearLightSources,
+    ResetSignature, StopEdge, Stream,
 };
 use mower_base_core::diff_drive::{
     receive_command, Command, DiffDriveParams, LimitParams, OdomSample, Received, Twist,
@@ -203,6 +203,9 @@ struct Slots {
     servo: Option<(i64, i64)>,
     /// `(permille, ttl_ms)`
     blade: Option<(i32, i64)>,
+    /// The rear overlay's deadline on the control clock
+    /// ([`RearLightSources::update`]).
+    rear_light: Option<TimeNs>,
 }
 
 type Shared = Arc<Mutex<Slots>>;
@@ -515,6 +518,9 @@ impl Driver {
                 r2r::log_info!(l, "blade running at {} permille (dead-man held)", permille)
             }
             Event::Blade { running: false, .. } => r2r::log_info!(l, "blade stop"),
+            Event::RearLight { on } => {
+                r2r::log_info!(l, "rear light: recording breath {}", if on { "on" } else { "off" })
+            }
             Event::CmdVelTimedOut { linear_x, angular_z } => r2r::log_warn!(
                 l,
                 "Velocity command timed out. Braking. (last command {linear_x:.3} m/s, \
@@ -568,6 +574,7 @@ impl Driver {
                 wheel_override: slots.wheel_override.take(),
                 servo: slots.servo.take(),
                 blade: slots.blade.take(),
+                rear_light: slots.rear_light.take(),
             }
         };
         if let Some(led) = taken.led {
@@ -584,6 +591,9 @@ impl Driver {
         }
         if let Some((permille, ttl)) = taken.blade {
             base.request_blade(permille, ttl, now);
+        }
+        if let Some(until) = taken.rear_light {
+            base.request_rear_light(until);
         }
     }
 
@@ -802,7 +812,13 @@ fn covariance6(node: &r2r::Node, name: &str, default: [f64; 6]) -> [f64; 6] {
 }
 
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let mut node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
+    run_node(node, m).await
+}
+
+/// [`run`] with `node` made by the caller (the tests, which set its
+/// parameters first).
+pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
 
     let d = production_diff_drive();
@@ -905,6 +921,11 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let override_topic = params::string(&node, "override_topic", "/mower_base/wheel_override");
     let servo_topic = params::string(&node, "servo_topic", "/mower_base/servo_command");
     let blade_topic = params::string(&node, "blade_topic", "/mower_base/blade_command");
+    // The recorders' red breath on the back strip (path_record_node while the
+    // app records a zone, mower_recorder while it records a bag): the 0x03
+    // overlay byte, as mower_hardware set it. Empty turns it off.
+    let rear_light_topic = params::string(&node, "rear_light_topic", "/mower_base/rear_light");
+    let rear_light_timeout_s = params::f64(&node, "rear_light_timeout_s", 6.0);
     // The slow copy of /odom the status nodes read (heartbeat_source_topic and
     // odom_topic of robot_status, heartbeat / robot_info / telemetry), which
     // mission.launch.py's odom_throttle makes when ros2_control publishes
@@ -922,6 +943,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     //   /mower_base/firmware_info, led      transient local + reliable, depth 1
     //   pid                                 reliable, depth 4
     //   wheel_override, servo, blade        best effort, depth 1
+    //   rear_light                          transient local + reliable, depth 8
     //   /odom_slow                          what odom_throttle publishes on the
     //                                       robot: reliable + volatile, keep
     //                                       last 10 (`throttled_odom_qos`)
@@ -1083,6 +1105,34 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
                     None => r2r::log_warn!(
                         &logger,
                         "ignoring servo request without pulse_us: {}",
+                        msg.data
+                    ),
+                }
+            }
+        });
+    }
+    if !rear_light_topic.is_empty() {
+        // QoS(8).transient_local().reliable(), as mower_hardware: the
+        // recorders' latched values reach a restarted driver
+        let mut sub = node.subscribe::<StringMsg>(
+            &rear_light_topic,
+            QosProfile::default().keep_last(8).transient_local().reliable(),
+        )?;
+        let slots = slots.clone();
+        let logger = logger.clone();
+        let clocks = clocks.clone();
+        let timeout_ns = (rear_light_timeout_s * 1e9) as i64;
+        tokio::spawn(async move {
+            let mut sources = RearLightSources::default();
+            while let Some(msg) = sub.next().await {
+                match requests::rear_light(&msg.data) {
+                    Some((source, recording)) => {
+                        let until = sources.update(&source, recording, clocks.control_ns(), timeout_ns);
+                        slots.lock().expect("slots").rear_light = Some(until);
+                    }
+                    None => r2r::log_warn!(
+                        &logger,
+                        "ignoring rear light request without a known effect: {}",
                         msg.data
                     ),
                 }

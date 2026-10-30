@@ -686,6 +686,7 @@ name = "mower_base"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "libc",
  "mower_base_core",
  "mower_rs_common",
  "r2r",

@@ -48,6 +48,8 @@ they depend on.
       ws_bridge): listed so that the plan names its server (E3 decision 9).
     - nav's clients of nav2, until E9: `/bt_navigator/get_state` and the actions `/navigate_to_pose` and
       `/follow_path`, next to nav2 outside the process.
+    - mower_base's `/mower_base/rear_light` reader, until E5: path_record_node writes the name on the bus and
+      recorder_manager on DDS, and one r2r reader hears both; a bus reader would need the name both ways.
   - `silent`: a writer that is made and never publishes: mower_base's `/tf` (`enable_odom_tf` is false). Coverage's
     `/free_space_inflated` and `/risk_map_inflated` were (BUS_TOPICS.md 5.8 #2) until step 5 dropped them.
   - `only`: not in production. nav's `nav_core` backend (robot.launch.py `rust_nav_core:=true`, CI's
@@ -263,5 +265,5 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (282 names, the five action
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (283 names, the five action
   ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).

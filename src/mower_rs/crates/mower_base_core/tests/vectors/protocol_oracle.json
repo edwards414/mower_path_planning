@@ -41,6 +41,11 @@
     {"fn": "ws2812_command", "args": [1, 1, 255, 180, 0, 1600], "bytes": "a55a0103010801ffb400400600005f7a"},
     {"fn": "ws2812_command", "args": [2, 6, 10, 20, 30, 500], "bytes": "a55a01030208060a141ef4010000ddce"},
     {"fn": "ws2812_command", "args": [3, 5, 255, 255, 255, 65535], "bytes": "a55a0103030805ffffffffff00005900"},
+    {"fn": "ws2812_command_overlay", "args": [4, 1, 110, 110, 110, 0, 1], "bytes": "a55a01030408016e6e6e000001000387"},
+    {"fn": "ws2812_command_overlay", "args": [5, 5, 0, 0, 0, 0, 1], "bytes": "a55a010305080500000000000100766f"},
+    {"fn": "ws2812_command_overlay", "args": [6, 5, 0, 0, 0, 0, 0], "bytes": "a55a01030608050000000000000088ed"},
+    {"fn": "ws2812_command_overlay", "args": [7, 6, 255, 180, 0, 1600, 1], "bytes": "a55a0103070806ffb40040060100c9fd"},
+    {"fn": "ws2812_command_overlay", "args": [8, 2, 1, 2, 3, 65535, 255], "bytes": "a55a0103080802010203ffffff00a849"},
     {"fn": "pid_config_command", "args": [0, [0, 0, 0, 0, 0, 0], false, true], "bytes": "a55a0104001c000000000000000000000000000000000000000000000000000100007f7c"},
     {"fn": "pid_config_command", "args": [1, [2, 0.60000002384185791, 0, 2, 0.60000002384185791, 0], false, true], "bytes": "a55a0104011c000000409a99193f00000000000000409a99193f0000000000010000510a"},
     {"fn": "pid_config_command", "args": [2, [1.25, 0.125, 0.03125, 3.5, 0.75, 0], true, false], "bytes": "a55a0104021c0000a03f0000003e0000003d000060400000403f0000000001000000a296"},
@@ -100,5 +105,11 @@
     {"fn": "lawer_motor_status", "payload": "2c0158023200010a", "ok": true, "fields": {"commanded_permille": 300, "applied_pwm": 600, "command_age_ms": 50, "flags": 1, "last_rx_seq": 10}},
     {"fn": "lawer_motor_status", "payload": "00000000ffff02ff", "ok": true, "fields": {"commanded_permille": 0, "applied_pwm": 0, "command_age_ms": 65535, "flags": 2, "last_rx_seq": 255}},
     {"fn": "lawer_motor_status", "payload": "00000000000000", "ok": false, "fields": null}
+  ],
+  "rear_light_sources": [
+    [{"source": "path_record", "recording": true, "now_ns": 1000, "timeout_ns": 6000, "until_ns": 7000}, {"source": "path_record", "recording": true, "now_ns": 3000, "timeout_ns": 6000, "until_ns": 9000}, {"source": "path_record", "recording": false, "now_ns": 4000, "timeout_ns": 6000, "until_ns": 0}],
+    [{"source": "path_record", "recording": true, "now_ns": 1000, "timeout_ns": 6000, "until_ns": 7000}, {"source": "bag", "recording": true, "now_ns": 2000, "timeout_ns": 6000, "until_ns": 8000}, {"source": "path_record", "recording": false, "now_ns": 2500, "timeout_ns": 6000, "until_ns": 8000}, {"source": "bag", "recording": false, "now_ns": 3000, "timeout_ns": 6000, "until_ns": 0}],
+    [{"source": "bag", "recording": true, "now_ns": 1000, "timeout_ns": 6000, "until_ns": 7000}, {"source": "path_record", "recording": false, "now_ns": 9000, "timeout_ns": 6000, "until_ns": 7000}, {"source": "path_record", "recording": true, "now_ns": 20000, "timeout_ns": 6000, "until_ns": 26000}, {"source": "", "recording": true, "now_ns": 21000, "timeout_ns": 0, "until_ns": 26000}],
+    [{"source": "a", "recording": true, "now_ns": 0, "timeout_ns": 10000, "until_ns": 10000}, {"source": "b", "recording": true, "now_ns": 1000, "timeout_ns": 2000, "until_ns": 10000}, {"source": "a", "recording": false, "now_ns": 1500, "timeout_ns": 2000, "until_ns": 3000}]
   ]
 }
