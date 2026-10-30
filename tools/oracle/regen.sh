@@ -9,7 +9,8 @@
 # With no argument it runs all three. `git status` then shows what changed.
 # All of it is deterministic except the two node scenarios
 # (controller_server.json, navigator.json: real nodes on the wall clock,
-# different on every run); tools/oracle/check.sh is what the oracle
+# different on every run, compared by tools/oracle/compare_scenarios.py);
+# tools/oracle/check.sh is what the oracle
 # workflow runs on top of this.
 #
 #   docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh [nav|localize|base]...

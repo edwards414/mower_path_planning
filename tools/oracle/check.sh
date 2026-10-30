@@ -6,12 +6,16 @@
 # 2. the deterministic ones must come out byte for byte as committed;
 # 3. the two node scenarios (tests/data/controller_server.json and
 #    navigator.json) record the real controller_server and bt_navigator on
-#    the wall clock. Two runs in the same image differ by a few ms of
-#    scheduling in a thousand lines, so they are checked the way their Rust
-#    tests read them: the port's tests must pass against the fresh
-#    recording, which is then put back. A node starved of CPU aborts goals
-#    it otherwise reaches (seen on a loaded Mac), so a failing recording is
-#    made once more before the check fails.
+#    the wall clock, so no two runs agree line for line, and the times and
+#    plan / follow_path counts of the wall scenario vary by several rounds
+#    on nav2 itself. compare_scenarios.py holds the fresh recording to the
+#    committed one only where a run does not vary: the goals' outcomes and
+#    error codes, and where the robot ends. A node starved of CPU aborts
+#    goals it otherwise reaches (seen on a loaded Mac), so a recording that
+#    fails that is made once more before the check fails. The port's tests
+#    then run against the fresh recording as a report only: they hold the
+#    port to the committed recording, with its counts, in build.yml's
+#    mower_rs tests. The fresh recording is then put back.
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo"
@@ -21,16 +25,24 @@ scenarios=("$data/controller_server.json" "$data/navigator.json")
 
 tools/oracle/regen.sh
 
-scenario_tests() {
-  (cd src/mower_rs && CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/oracle-target}" \
-    cargo test --locked -q -p mower_nav_core --test controller_server_oracle --test navigator_oracle)
-}
-if ! scenario_tests; then
-  echo "the port disagrees with this recording of the node scenarios; recording them again"
+committed="$(mktemp -d)"
+for c in controller_server navigator; do
+  git show "HEAD:$data/$c.json" > "$committed/$c.json"
+done
+if ! python3 tools/oracle/compare_scenarios.py "$committed" "$data"; then
+  echo "this recording of the node scenarios lost an outcome of the committed one; recording them again"
   for c in controller_server navigator; do
     bash src/mower_rs/crates/mower_nav_core/tests/oracle/run_oracle.sh "$c"
   done
-  scenario_tests
+  python3 tools/oracle/compare_scenarios.py "$committed" "$data"
+fi
+
+# report only (see 3.): the port against this recording, counts included
+if ! (cd src/mower_rs && CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/oracle-target}" \
+    cargo test --locked -q -p mower_nav_core --test controller_server_oracle --test navigator_oracle); then
+  note="the port's scenario tests disagree with this recording of the real nodes (report only: they hold the port to the committed recording in mower_rs tests)"
+  echo "$note"
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning title=Node scenarios::$note"; fi
 fi
 git checkout -- "${scenarios[@]}"
 
@@ -41,4 +53,4 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "regenerating the oracle vectors changed them (diff above)" >&2
   exit 1
 fi
-echo "every oracle vector reproduced; the port agrees with a fresh recording of the node scenarios"
+echo "every deterministic oracle vector reproduced, and every outcome of the node scenarios"

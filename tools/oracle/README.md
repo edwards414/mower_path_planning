@@ -35,15 +35,24 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what
 `check.sh` runs `regen.sh` and then:
 - **The deterministic vectors** must come out byte for byte as committed:
   nav_core's seven components, all of localize_core and all of base_core.
-- **The two node scenarios** are checked through the port's tests instead:
+- **The two node scenarios** are compared where a run does not vary:
   `controller_server.json` and `navigator.json` record the real nodes on the
-  wall clock, and two runs in the same image differ in about a thousand lines.
-  - The port's tests (`controller_server_oracle`, `navigator_oracle`, with
-    their tolerances) must pass against the fresh recording, which is then
-    put back.
+  wall clock. Two runs in the same image differ in about a thousand lines,
+  and the wall scenario's times and plan / follow_path counts vary by
+  several rounds on nav2 itself (36 plans in the committed recording, 30 in
+  a CI run on 2026-10-30).
+  - `compare_scenarios.py` holds the fresh recording to the committed one on
+    every goal's acceptance, status, error code and cancel answers, and on
+    where the robot ends (5 cm, 0.1 rad). Times, counts and recoveries are
+    printed, not compared.
   - A real node starved of CPU aborts goals it otherwise reaches. A
     recording made while the Mac was loaded by other builds failed this way,
-    so a failing recording is made once more before the check fails.
+    so a recording that fails that is made once more before the check fails.
+  - The port's tests (`controller_server_oracle`, `navigator_oracle`) then
+    run against the fresh recording as a report only, with a warning on
+    the run when they disagree. They gate against the committed recording,
+    on every field, in build.yml's mower_rs tests. The fresh recording is
+    then put back.
 
 `regen.sh` runs:
 

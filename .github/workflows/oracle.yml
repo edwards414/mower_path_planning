@@ -3,8 +3,8 @@ name: Oracle vectors
 # Regenerates every committed oracle vector (tools/oracle/regen.sh: nav2,
 # robot_localization, ros2_controllers + mower_protocol.cpp) in the pinned
 # oracle image and fails if any of them changed (tools/oracle/check.sh; the
-# two wall-clock node scenarios are checked through the port's tests
-# instead of byte for byte): the Rust ports' tests are
+# two wall-clock node scenarios are compared on what a run does not vary,
+# their outcomes and end poses, not byte for byte): the Rust ports' tests are
 # only as good as the vectors, and the real implementations must still
 # produce them. Monthly, on demand, and for a PR or push that changes the
 # oracle image.
@@ -91,11 +91,13 @@ jobs:
           provenance: false
 
       # regen.sh, then: the deterministic vectors byte for byte, and the
-      # port's tests against a fresh recording of the two wall-clock node
-      # scenarios (tools/oracle/check.sh says why)
+      # outcomes and end poses of a fresh recording of the two wall-clock
+      # node scenarios; the port's tests against that recording are a report
+      # (a warning on the run), since its counts vary (tools/oracle/check.sh
+      # says why)
       - name: Regenerate and compare
         timeout-minutes: 30
-        run: docker run --rm -v "$GITHUB_WORKSPACE":/repo -w /repo mower-oracle:ci tools/oracle/check.sh
+        run: docker run --rm -e GITHUB_ACTIONS -v "$GITHUB_WORKSPACE":/repo -w /repo mower-oracle:ci tools/oracle/check.sh
 
       - name: Publish the image
         if: env.PUBLISH == 'true'
