@@ -223,3 +223,24 @@ async fn run_r2r(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let _ = spin.await;
     Ok(())
 }
+
+/// Outgoing commands carry the robot's own clock: `twist` takes no stamp, so
+/// none from upstream can be forwarded (E9-07, from
+/// test_controller_configuration.py).
+#[cfg(test)]
+mod outgoing_stamp {
+    use super::*;
+
+    #[test]
+    fn every_outgoing_command_is_stamped_now_on_the_robot_s_wall_clock() {
+        let before = wall_ns();
+        let msg = twist(0.3, -0.2);
+        let after = wall_ns();
+        let stamp = msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
+        assert!((before..=after).contains(&stamp), "{before} <= {stamp} <= {after}");
+        assert_eq!(msg.header.frame_id, "base_footprint");
+        assert_eq!((msg.twist.linear.x, msg.twist.angular.z), (0.3, -0.2));
+        let others = (msg.twist.linear.y, msg.twist.linear.z, msg.twist.angular.x, msg.twist.angular.y);
+        assert_eq!(others, (0.0, 0.0, 0.0, 0.0));
+    }
+}

@@ -614,3 +614,136 @@ mod tests {
         );
     }
 }
+
+/// The driver fails closed on a receiver that dies, goes quiet or never
+/// starts, on a pseudo terminal (E9-07, from
+/// test_controller_configuration.py): the module ends with the serial
+/// thread's error, without a shutdown, so that it is restarted and the
+/// navigation gate closes meanwhile.
+#[cfg(test)]
+mod receiver_rules {
+    use std::io::Write;
+    use std::sync::OnceLock;
+
+    use mower_rs_common::Shutdown;
+    use serialport::{SerialPort, TTYPort};
+
+    use super::*;
+
+    /// On ROS domain 87, as the other tests of this crate.
+    fn context() -> Option<r2r::Context> {
+        static CONTEXT: OnceLock<Option<r2r::Context>> = OnceLock::new();
+        CONTEXT
+            .get_or_init(|| {
+                std::env::set_var("ROS_DOMAIN_ID", "87");
+                r2r::Context::create().ok()
+            })
+            .clone()
+    }
+
+    /// One 3D epoch, closed by its NAV-EOE.
+    fn epoch(itow: u32) -> Vec<u8> {
+        let mut p = vec![0u8; NavPvt::LEN];
+        p[0..4].copy_from_slice(&itow.to_le_bytes());
+        p[20] = 3;
+        p[21] = NavPvt::FLAG_GNSS_FIX_OK;
+        p[23] = 17;
+        p[24..28].copy_from_slice(&1_205_387_000i32.to_le_bytes());
+        p[28..32].copy_from_slice(&236_950_000i32.to_le_bytes());
+        p[40..44].copy_from_slice(&500u32.to_le_bytes());
+        p[44..48].copy_from_slice(&1_000u32.to_le_bytes());
+        [mower_ubx::encode(class::NAV, id::PVT, &p), mower_ubx::encode(class::NAV, id::EOE, &itow.to_le_bytes())].concat()
+    }
+
+    struct Receiver {
+        tty: TTYPort,
+        fixes: mower_bus::Subscriber<NavSatFix>,
+        task: tokio::task::JoinHandle<ModuleResult>,
+        _shutdown: Shutdown,
+        _bus: mower_bus::Bus,
+    }
+
+    fn start(ctx: r2r::Context, test: &str, params: &[(&str, r2r::ParameterValue)]) -> Receiver {
+        let (tty, port) = TTYPort::pair().expect("a pseudo terminal");
+        let device = port.name().expect("the terminal's name");
+        drop(port);
+        let node = r2r::Node::create(ctx, "gps", &format!("/mower_gps_{test}")).unwrap();
+        let defaults = [("device", r2r::ParameterValue::String(device)), ("configure_receiver", r2r::ParameterValue::Bool(false))];
+        for (key, value) in defaults.into_iter().chain(params.iter().cloned()) {
+            node.params.lock().unwrap().insert(key.to_string(), r2r::Parameter::new(value));
+        }
+        let bus = mower_bus::Bus::new();
+        let shutdown = Shutdown::new();
+        let fixes = bus.scope("reader").subscribe::<NavSatFix>("/fix", Qos::default().keep_last(100)).unwrap();
+        let m = ModuleCtx::new("gps", shutdown.clone()).with_bus(bus.scope("gps"));
+        let task = tokio::spawn(run_node(node, m));
+        Receiver { tty, fixes, task, _shutdown: shutdown, _bus: bus }
+    }
+
+    impl Receiver {
+        /// Epochs at 4 Hz until a fix comes out (until the driver has opened
+        /// the terminal, it has no other end and refuses the write).
+        async fn first_fix(&mut self) -> std::sync::Arc<NavSatFix> {
+            for k in 0..80u32 {
+                let _ = self.tty.write_all(&epoch(100_000 + 250 * k));
+                if let Ok(Some(fix)) = tokio::time::timeout(Duration::from_millis(250), self.fixes.recv()).await {
+                    return fix;
+                }
+            }
+            panic!("no /fix within 20 s");
+        }
+    }
+
+    /// The module's error, once it has ended on its own.
+    async fn failure(task: tokio::task::JoinHandle<ModuleResult>) -> String {
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("the module ends on its own")
+            .unwrap()
+            .expect_err("with an error")
+            .to_string()
+    }
+
+    fn run(test: impl std::future::Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(test);
+    }
+
+    #[test]
+    fn a_receiver_that_never_sends_a_fix_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let receiver = start(ctx, "startup", &[("startup_timeout_s", r2r::ParameterValue::Double(1.0))]);
+            assert_eq!(failure(receiver.task).await, "no NAV-PVT from the receiver within 1 s of start");
+            drop(receiver.tty);
+        });
+    }
+
+    /// The fix is a NavSatFix with a diagonal covariance known from the
+    /// receiver's accuracy; once NAV-PVT stops, the module fails.
+    #[test]
+    fn a_receiver_that_goes_quiet_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let mut receiver = start(ctx, "quiet", &[("stale_timeout_s", r2r::ParameterValue::Double(0.6))]);
+            let fix = receiver.first_fix().await;
+            assert_eq!(fix.position_covariance_type, 2, "COVARIANCE_TYPE_DIAGONAL_KNOWN");
+            assert_eq!(fix.position_covariance, [0.25, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(failure(receiver.task).await, "no NAV-PVT from the receiver for 0.6 s");
+            drop(receiver.tty);
+        });
+    }
+
+    /// The receiver unplugged: its port hangs up under the driver.
+    #[test]
+    fn a_receiver_that_is_unplugged_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let mut receiver = start(ctx, "unplugged", &[]);
+            receiver.first_fix().await;
+            drop(receiver.tty);
+            let message = failure(receiver.task).await;
+            assert!(message.starts_with("GPS serial"), "{message}");
+        });
+    }
+}

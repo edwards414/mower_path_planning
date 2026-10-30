@@ -386,3 +386,173 @@ mod tests {
         });
     }
 }
+
+/// The serial loop's fail-closed rules, on a pseudo terminal (E9-07: what
+/// test_controller_configuration.py greps from both drivers). The driver
+/// opens the terminal by name as it opens /dev/imu_usb.
+#[cfg(test)]
+mod serial_rules {
+    use std::io::Write;
+    use std::sync::OnceLock;
+
+    use mower_rs_common::Shutdown;
+    use serialport::{SerialPort, TTYPort};
+
+    use super::*;
+
+    /// On ROS domain 88, as the other tests of this crate: the module still
+    /// creates its node (parameters, log).
+    fn context() -> Option<r2r::Context> {
+        static CONTEXT: OnceLock<Option<r2r::Context>> = OnceLock::new();
+        CONTEXT
+            .get_or_init(|| {
+                std::env::set_var("ROS_DOMAIN_ID", "88");
+                r2r::Context::create().ok()
+            })
+            .clone()
+    }
+
+    fn frame(kind: u8, regs: [i16; 4]) -> Vec<u8> {
+        let mut f = vec![0x55, kind];
+        for r in regs {
+            f.extend_from_slice(&r.to_le_bytes());
+        }
+        let sum = f.iter().map(|b| *b as u32).sum::<u32>() & 0xff;
+        f.push(sum as u8);
+        f
+    }
+
+    fn acceleration() -> Vec<u8> {
+        frame(0x51, [2048, 0, 0, 0])
+    }
+
+    fn angular_velocity() -> Vec<u8> {
+        frame(0x52, [0, 0, 16384, 0])
+    }
+
+    fn angle() -> Vec<u8> {
+        frame(0x53, [0, 0, 16384, 0])
+    }
+
+    fn cycle() -> Vec<u8> {
+        [acceleration(), angular_velocity(), angle()].concat()
+    }
+
+    struct Driver {
+        sensor: TTYPort,
+        imu: mower_bus::Subscriber<Imu>,
+        shutdown: Shutdown,
+        task: tokio::task::JoinHandle<ModuleResult>,
+        _bus: mower_bus::Bus,
+    }
+
+    impl Driver {
+        /// The driver on a fresh terminal, once a first cycle has come out.
+        async fn start(ctx: r2r::Context, test: &str) -> Driver {
+            let (mut sensor, port) = TTYPort::pair().expect("a pseudo terminal");
+            let port_name = port.name().expect("the terminal's name");
+            drop(port);
+            let node = r2r::Node::create(ctx, "imu", &format!("/mower_imu_{test}")).unwrap();
+            node.params.lock().unwrap().insert("port".to_string(), r2r::Parameter::new(r2r::ParameterValue::String(port_name)));
+            let bus = mower_bus::Bus::new();
+            let shutdown = Shutdown::new();
+            let mut imu = bus.scope("reader").subscribe::<Imu>("/imu/data_raw", Qos::default().keep_last(100)).unwrap();
+            let m = ModuleCtx::new("imu", shutdown.clone()).with_bus(bus.scope("imu"));
+            let task = tokio::spawn(run_node(node, m));
+            // Until the driver has opened the terminal, it has no other end
+            // and refuses the write.
+            for _ in 0..200 {
+                let _ = sensor.write_all(&cycle());
+                if let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(100), imu.recv()).await {
+                    let mut driver = Driver { sensor, imu, shutdown, task, _bus: bus };
+                    driver.count(Duration::from_millis(300)).await;
+                    return driver;
+                }
+            }
+            panic!("no IMU message within 20 s");
+        }
+
+        fn send(&mut self, bytes: &[u8]) {
+            self.sensor.write_all(bytes).expect("the driver's end is open");
+        }
+
+        /// The messages that come out within `window`.
+        async fn count(&mut self, window: Duration) -> usize {
+            let deadline = tokio::time::Instant::now() + window;
+            let mut n = 0;
+            while let Ok(Some(_)) = tokio::time::timeout_at(deadline, self.imu.recv()).await {
+                n += 1;
+            }
+            n
+        }
+
+        async fn stop(self) {
+            self.shutdown.trigger();
+            tokio::time::timeout(Duration::from_secs(5), self.task).await.expect("the driver stops").unwrap().expect("a clean stop");
+        }
+    }
+
+    fn run(test: impl std::future::Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(test);
+    }
+
+    /// Up to 88 bytes waiting (two cycles at 9600 baud) are frames; one byte
+    /// more is a backlog, dropped unread, and the driver goes on after it.
+    #[test]
+    fn a_backlog_over_88_bytes_is_dropped_unread() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let mut driver = Driver::start(ctx, "backlog").await;
+            let eight_frames = [cycle(), cycle(), acceleration(), angular_velocity()].concat();
+            assert_eq!(eight_frames.len(), 88);
+            driver.send(&eight_frames);
+            assert_eq!(driver.count(Duration::from_millis(500)).await, 2, "88 bytes are read");
+            driver.send(&[&[0u8][..], &eight_frames].concat());
+            assert_eq!(driver.count(Duration::from_millis(500)).await, 0, "89 bytes are a backlog");
+            driver.send(&cycle());
+            assert_eq!(driver.count(Duration::from_millis(500)).await, 1, "and then a cycle is read again");
+            driver.stop().await;
+        });
+    }
+
+    /// An orientation goes out only with acceleration and gyro from the last
+    /// 200 ms: never a sample put together from stale parts.
+    #[test]
+    fn an_orientation_needs_acceleration_and_gyro_from_the_last_200_ms() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let mut driver = Driver::start(ctx, "fresh").await;
+            driver.send(&[acceleration(), angular_velocity()].concat());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            driver.send(&angle());
+            assert_eq!(driver.count(Duration::from_millis(300)).await, 1, "parts 50 ms old");
+            driver.send(&[acceleration(), angular_velocity()].concat());
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            driver.send(&angle());
+            assert_eq!(driver.count(Duration::from_millis(300)).await, 0, "parts 400 ms old");
+            driver.send(&cycle());
+            assert_eq!(driver.count(Duration::from_millis(300)).await, 1);
+            driver.stop().await;
+        });
+    }
+
+    /// A port that dies under the driver (the sensor unplugged) ends the
+    /// module with an error, without a shutdown, so that it is restarted and
+    /// the navigation gate closes meanwhile.
+    #[test]
+    fn a_port_that_dies_fails_the_module() {
+        let Some(ctx) = context() else { return };
+        run(async {
+            let Driver { sensor, task, shutdown, _bus, imu } = Driver::start(ctx, "dies").await;
+            drop(sensor);
+            let err = tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .expect("the module ends on its own")
+                .unwrap()
+                .expect_err("with an error");
+            assert!(err.to_string().contains("IMU"), "{err}");
+            drop((shutdown, imu));
+        });
+    }
+}

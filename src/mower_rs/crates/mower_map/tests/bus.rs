@@ -506,3 +506,173 @@ fn the_parameter_services_stay_on_dds_and_a_new_radius_refreshes_the_bus_maps() 
         map.stop().await;
     });
 }
+
+/// The inflation radius changes only while navigation is known to be idle,
+/// never to a non-finite value or below the 0.75 m safety envelope, through
+/// either set service, and a change holds the nav server's lease while the
+/// maps refresh (E9-07: the rules test_controller_configuration.py and
+/// test_qos_configuration.py grep from map_manage, run here).
+#[test]
+fn the_inflation_radius_stays_within_the_safety_envelope() {
+    within(async {
+        let (clock, _manual) = Clock::manual(T0);
+        let map = Harness::start(clock).await;
+        let lock = serve_lock(&map.test);
+        serve_recorder(&map.test);
+        let peer = Peer::new("map_bus_test_envelope_peer");
+        let radius = |value: f64| vec![Parameter { name: "inflate_radius_m".into(), value: ParameterValue { type_: 3, double_value: value, ..Default::default() } }];
+        let set = |value: f64| {
+            let request = SetParameters::Request { parameters: radius(value) };
+            let peer = &peer;
+            async move {
+                let set = peer.call::<SetParameters::Service>("/map_manage/set_parameters", request).await;
+                set.results.iter().map(|r| (r.successful, r.reason.clone())).collect::<Vec<_>>()
+            }
+        };
+        let refused = |reason: &str| vec![(false, reason.to_string())];
+
+        // Navigation unknown, then active: no change.
+        let blocked = refused("inflate_radius_m cannot change while navigation is active or unknown");
+        assert_eq!(set(1.0).await, blocked);
+        let nav = map.nav_active(true);
+        let answer = once_nav_is_seen(|| async { trigger(map.call("/restore_free_space_coverage", Trigger::Request {}).await) }).await;
+        assert_eq!(answer.1, "Cannot restore free-space coverage: navigation is active");
+        assert_eq!(set(1.0).await, blocked);
+
+        // Idle, with maps to refresh.
+        nav.publish(&Bool { data: false }).unwrap();
+        let answer = once_nav_is_seen(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
+        assert!(answer.0, "{answer:?}");
+        assert_eq!(set(0.74).await, refused("inflate_radius_m must be >= 0.75 m"));
+        assert_eq!(set(f64::NAN).await, refused("inflate_radius_m must be finite"));
+        let atomic = r2r::rcl_interfaces::srv::SetParametersAtomically::Request { parameters: radius(0.5) };
+        let atomic = peer.call::<r2r::rcl_interfaces::srv::SetParametersAtomically::Service>("/map_manage/set_parameters_atomically", atomic).await;
+        assert_eq!((atomic.result.successful, atomic.result.reason.as_str()), (false, "inflate_radius_m must be >= 0.75 m"));
+        let names = vec!["inflate_radius_m".to_string()];
+        let got = peer.call::<GetParameters::Service>("/map_manage/get_parameters", GetParameters::Request { names: names.clone() }).await;
+        assert_eq!(got.values.iter().map(|v| v.double_value).collect::<Vec<_>>(), [0.75], "nothing refused took effect");
+
+        // The envelope itself is allowed, under the lease.
+        let before = lock.lock().unwrap().len();
+        assert_eq!(set(0.75).await, vec![(true, String::new())]);
+        let ops: Vec<(bool, String)> = lock.lock().unwrap()[before..].iter().map(|r| (r.acquire, r.operation.clone())).collect();
+        assert_eq!(ops, [(true, "refresh inflated maps".to_string()), (false, String::new())]);
+        drop(peer);
+        map.stop().await;
+    });
+}
+
+/// nav_action_server's lease service, granting every acquire and refusing
+/// every release, as one that lost the lease's owner does.
+fn serve_lock_refusing_release(test: &Scope) {
+    let mut srv = test.service::<MissionOperationLock::Request, MissionOperationLock::Response>("/mission_operation_lock").unwrap();
+    tokio::spawn(async move {
+        while let Some(req) = srv.next().await {
+            let success = req.message.acquire;
+            let _ = req.respond(MissionOperationLock::Response { success, message: if success { String::new() } else { "lease not owned".into() } });
+        }
+    });
+}
+
+/// `serve_recorder`'s zone and risk zone, with `channels` for the channel
+/// list.
+fn serve_recorder_with_channels(test: &Scope, channels: Vec<Marker>) {
+    let mut zones = test.service::<GetZoneList::Request, GetZoneList::Response>("/get_record_zone_list").unwrap();
+    let mut risks = test.service::<GetZoneList::Request, GetZoneList::Response>("/get_risk_zone_list").unwrap();
+    let mut chennals = test.service::<ChennalPathList::Request, ChennalPathList::Response>("/get_chennal_path_list").unwrap();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(req) = zones.next() => {
+                    let zone_list = MarkerArray { markers: vec![marker(1, &[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)])] };
+                    let _ = req.respond(GetZoneList::Response { success: true, message: "zones".into(), zone_list });
+                }
+                Some(req) = risks.next() => {
+                    let zone_list = MarkerArray { markers: vec![marker(1, &[(1.0, 1.0), (1.5, 1.0), (1.5, 1.5), (1.0, 1.5)])] };
+                    let _ = req.respond(GetZoneList::Response { success: true, message: "risks".into(), zone_list });
+                }
+                Some(req) = chennals.next() => {
+                    let chennal_path_array = MarkerArray { markers: channels.clone() };
+                    let _ = req.respond(ChennalPathList::Response { success: true, message: "channels".into(), chennal_path_array });
+                }
+                else => break,
+            }
+        }
+    });
+}
+
+/// A mutation whose lease release the nav server does not confirm is never
+/// acknowledged as a success, and the next one waits for the lease (E9-07:
+/// the rule test_qos_configuration.py checks only on map_manage_node.py).
+#[test]
+fn a_mutation_whose_lease_release_is_unconfirmed_is_no_success() {
+    within(async {
+        let (clock, _manual) = Clock::manual(T0);
+        let map = Harness::start(clock).await;
+        serve_lock_refusing_release(&map.test);
+        serve_recorder(&map.test);
+        let _nav = map.nav_active(false);
+        let answer = once_nav_is_seen(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
+        assert!(!answer.0 && answer.1.ends_with(mower_rs_common::guard::RELEASE_UNCONFIRMED), "{answer:?}");
+        let then = trigger(map.call("/create_risk_map", Trigger::Request {}).await);
+        assert_eq!(then, (false, "Another mutation is already active in this node".to_string()));
+        map.stop().await;
+    });
+}
+
+/// Channels are 1.2 m wide by default, and a channel of one point is
+/// incomplete data: the channel map is refused, not built from the rest
+/// (E9-07, from test_qos_configuration.py).
+#[test]
+fn the_channel_map_takes_only_complete_channels_1_2_m_wide_by_default() {
+    within(async {
+        let (clock, _manual) = Clock::manual(T0);
+        let map = Harness::start(clock).await;
+        let _lock = serve_lock(&map.test);
+        serve_recorder_with_channels(&map.test, vec![marker(1, &[(0.5, 3.0), (3.5, 3.0)]), marker(2, &[(1.0, 2.0)])]);
+        let _nav = map.nav_active(false);
+        let peer = Peer::new("map_bus_test_channel_peer");
+        let names = vec!["chennal_width_m".to_string()];
+        let got = peer.call::<GetParameters::Service>("/map_manage/get_parameters", GetParameters::Request { names }).await;
+        assert_eq!(got.values.iter().map(|v| (v.type_, v.double_value)).collect::<Vec<_>>(), [(3, 1.2)]);
+        let answer = once_nav_is_seen(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
+        assert!(answer.0, "{answer:?}");
+        let answer = trigger(map.call("/create_chennal_map", Trigger::Request {}).await);
+        assert!(!answer.0, "{answer:?}");
+        assert_eq!((map.retained("/chennal_map"), map.retained("/chennal_map_inflated")), (0, 0), "nothing published");
+        drop(peer);
+        map.stop().await;
+    });
+}
+
+/// Nav2's controller and planner get separate safety maps: /map_grid is the
+/// free space with the risk zones as drawn, /map_grid_global the free space
+/// eroded by the inflation radius with the risk zones inflated by it
+/// (E9-07, from test_qos_configuration.py).
+#[test]
+fn the_global_map_keeps_a_clearance_the_local_map_does_not() {
+    within(async {
+        let (clock, _manual) = Clock::manual(T0);
+        let map = Harness::start(clock).await;
+        let _lock = serve_lock(&map.test);
+        serve_recorder(&map.test);
+        let _nav = map.nav_active(false);
+        let answer = once_nav_is_seen(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
+        assert!(answer.0, "{answer:?}");
+        assert!(trigger(map.call("/create_risk_map", Trigger::Request {}).await).0);
+        let local = next(&mut map.latched::<OccupancyGrid>("/map_grid")).await;
+        let global = next(&mut map.latched::<OccupancyGrid>("/map_grid_global")).await;
+        let cell = |g: &OccupancyGrid, x: f64, y: f64| {
+            let resolution = g.info.resolution as f64;
+            let column = ((x - g.info.origin.position.x) / resolution).floor() as usize;
+            let row = ((y - g.info.origin.position.y) / resolution).floor() as usize;
+            g.data[row * g.info.width as usize + column]
+        };
+        // the zone is the 4 m square, the risk zone (1, 1)-(1.5, 1.5)
+        assert_eq!((cell(&local, 2.0, 3.0), cell(&global, 2.0, 3.0)), (0, 0), "the middle of the zone");
+        assert_eq!((cell(&local, 0.3, 3.0), cell(&global, 0.3, 3.0)), (0, 100), "0.3 m inside the zone's edge");
+        assert_eq!((cell(&local, 1.25, 1.25), cell(&global, 1.25, 1.25)), (100, 100), "the risk zone");
+        assert_eq!((cell(&local, 1.75, 1.25), cell(&global, 1.75, 1.25)), (0, 100), "0.25 m beside the risk zone");
+        map.stop().await;
+    });
+}

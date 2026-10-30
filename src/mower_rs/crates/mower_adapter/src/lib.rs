@@ -395,3 +395,74 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     drop(map_datum);
     Ok(())
 }
+
+/// What flutter_adapter_node.py relays as the robot pose, and its opt-in
+/// fixed datum (E9-07: rules test_qos_configuration.py checks only on the
+/// Python node).
+#[cfg(test)]
+mod relay_rules {
+    use super::*;
+    use mower_bus::Time;
+
+    const T0: Time = Time::from_ns(1_800_000_000_000_000_000);
+
+    fn gate(clock: &Clock) -> PoseGate {
+        PoseGate { max_age_s: 1.0, source_frame: "map".into(), child_frame: "base_footprint".into(), clock: clock.clone() }
+    }
+
+    /// The EKF's map pose of the base, stamped `age_s` before now.
+    fn odom(age_s: f64) -> Odometry {
+        let mut o = Odometry::default();
+        let (sec, nanosec) = Time::from_ns(T0.ns() - (age_s * 1e9) as i64).to_parts();
+        o.header.stamp = r2r::builtin_interfaces::msg::Time { sec, nanosec };
+        o.header.frame_id = "map".into();
+        o.child_frame_id = "base_footprint".into();
+        o.pose.pose.position.x = 1.0;
+        o.pose.pose.orientation.w = 1.0;
+        o
+    }
+
+    /// Only a fresh pose of base_footprint in map is relayed: no other
+    /// frame, nothing older than robot_pose_max_age_s or more than 0.5 s
+    /// ahead of the robot's clock, nothing non-finite.
+    #[test]
+    fn only_a_fresh_map_pose_of_the_base_is_relayed() {
+        let (clock, _manual) = Clock::manual(T0);
+        let g = gate(&clock);
+        let relayed = g.relay(&odom(0.0)).expect("fresh");
+        assert_eq!((relayed.header.frame_id.as_str(), relayed.pose.position.x), ("map", 1.0));
+        let mut other = odom(0.0);
+        other.header.frame_id = "odom".into();
+        assert!(g.relay(&other).is_none(), "another source frame");
+        let mut other = odom(0.0);
+        other.child_frame_id = "base_link".into();
+        assert!(g.relay(&other).is_none(), "another child frame");
+        assert!(g.relay(&odom(0.9)).is_some() && g.relay(&odom(1.1)).is_none(), "the age limit");
+        assert!(g.relay(&odom(-0.4)).is_some() && g.relay(&odom(-0.6)).is_none(), "the future limit");
+        let mut bad = odom(0.0);
+        bad.pose.pose.position.y = f64::NAN;
+        assert!(g.relay(&bad).is_none(), "non-finite");
+        let mut bad = odom(0.0);
+        bad.pose.pose.orientation.w = 0.5;
+        assert!(g.relay(&bad).is_none(), "not a unit quaternion");
+        let mut unstamped = odom(0.0);
+        unstamped.header.stamp = Default::default();
+        assert!(g.relay(&unstamped).is_none(), "no stamp");
+    }
+
+    /// The configured fixed datum goes out only when it was enabled: a
+    /// real-looking coordinate without GPS could put a saved site in the
+    /// wrong place (it is off by default, tests/bus.rs).
+    #[test]
+    fn the_fixed_datum_is_published_only_when_enabled() {
+        let bus = mower_bus::Bus::new();
+        let publisher = bus.scope("flutter_adapter").publisher::<StringMsg>("/adapter/map_datum", Qos::latched()).unwrap();
+        let mut datum = bus.scope("reader").subscribe::<StringMsg>("/adapter/map_datum", Qos::latched().keep_last(10)).unwrap();
+        let mut logged = false;
+        DatumFallback { enabled: false, lat: 23.6939508, lon: 120.5376539, bearing: 0.0 }.publish(&publisher, "relay_rules", &mut logged);
+        assert!(logged && datum.try_recv().is_err(), "off: nothing, once logged");
+        DatumFallback { enabled: true, lat: 23.6939508, lon: 120.5376539, bearing: 0.0 }.publish(&publisher, "relay_rules", &mut logged);
+        let doc: Value = serde_json::from_str(&datum.try_recv().expect("the fixed datum").data).unwrap();
+        assert_eq!((doc["origin_lat"].as_f64(), doc["origin_lon"].as_f64(), doc["source"].as_str()), (Some(23.6939508), Some(120.5376539), Some("fallback")));
+    }
+}

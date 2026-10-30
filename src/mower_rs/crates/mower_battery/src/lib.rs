@@ -338,3 +338,45 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     drop(node);
     Ok(())
 }
+
+/// The battery model of battery_estimator.py and the BatteryState health it
+/// reports (E9-07, from test_controller_configuration.py: the OCV table comes
+/// from tests/rclpy_parity.json, which the Python test checks against
+/// battery_estimator.py).
+#[cfg(test)]
+mod rclpy_parity {
+    use super::*;
+    use crate::estimator::{Config, DEFAULT_OCV_TABLE};
+
+    #[test]
+    fn the_ocv_table_is_the_python_estimator_s_row_for_row() {
+        let parity: Value = serde_json::from_str(include_str!("../tests/rclpy_parity.json")).expect("json");
+        let rows: Vec<(f64, f64)> =
+            parity["ocv_table"].as_array().expect("ocv_table").iter().map(|r| (r[0].as_f64().expect("volts"), r[1].as_f64().expect("charge"))).collect();
+        assert!(!rows.is_empty() && rows.len() <= DEFAULT_OCV_TABLE.len());
+        assert_eq!(DEFAULT_OCV_TABLE[..rows.len()], rows[..]);
+    }
+
+    /// Below 3.0 V a cell the pack is DEAD (3), above 4.3 V OVERVOLTAGE (4),
+    /// the sensor_msgs/BatteryState values, and GOOD (1) in between.
+    #[test]
+    fn a_flat_or_overcharged_pack_reports_its_health() {
+        let s = Settings {
+            stale_timeout_s: 5.0,
+            low_battery_pct: 20.0,
+            frame_id: "base_footprint".into(),
+            charger_present_min_v: 25.0,
+            meter_current_wired: false,
+            meter_current_signed: false,
+            capacity_ah: 0.0,
+        };
+        let health = |cell_v: f64| {
+            let mut est = BatteryEstimator::new(Config::default()).expect("estimator");
+            est.update(100.0, 6.0 * cell_v, false, f64::NAN);
+            let msg = message(&s, &est, Some(100.0), 100.0);
+            assert!(msg.present, "{cell_v} V");
+            msg.power_supply_health
+        };
+        assert_eq!((health(2.9), health(3.78), health(4.35)), (3, 1, 4));
+    }
+}

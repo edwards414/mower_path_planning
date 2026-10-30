@@ -894,3 +894,235 @@ fn when_nav_ends_mid_leg_the_goal_is_uncertain_until_proven_terminal() {
         nav.stop();
     });
 }
+
+// ---------------------------------------------------------------------------
+// E9-07: the rules test_controller_configuration.py and
+// test_qos_configuration.py grep from this crate, run instead
+// ---------------------------------------------------------------------------
+
+/// A DDS client node of the test's own, spun on a thread, for the node's
+/// parameter services.
+struct DdsPeer {
+    node: Arc<Mutex<r2r::Node>>,
+    running: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl DdsPeer {
+    fn new(name: &str) -> DdsPeer {
+        let node = Arc::new(Mutex::new(r2r::Node::create(context(), name, "").unwrap()));
+        let running = Arc::new(AtomicBool::new(true));
+        let thread = {
+            let (node, running) = (node.clone(), running.clone());
+            std::thread::spawn(move || {
+                while running.load(Ordering::Acquire) {
+                    node.lock().unwrap().spin_once(Duration::from_millis(5));
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+        };
+        DdsPeer { node, running, thread: Some(thread) }
+    }
+
+    async fn call<S: 'static + r2r::WrappedServiceTypeSupport>(&self, name: &str, request: S::Request) -> S::Response {
+        let (client, ready) = {
+            let mut node = self.node.lock().unwrap();
+            let client = node.create_client::<S>(name, QosProfile::services_default()).unwrap();
+            let ready = r2r::Node::is_available(&client).unwrap();
+            (client, ready)
+        };
+        wait("the DDS service", ready).await.unwrap();
+        wait("the DDS answer", client.request(&request).unwrap()).await.unwrap()
+    }
+}
+
+impl Drop for DdsPeer {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Every snapshot coverage publishes is latched (keep last 1, reliable,
+/// transient local), so a late joiner gets the current plan, and
+/// /coverage_path is the planned paths. Coverage calls the services of nav,
+/// map_manage and the recorder under their ROS names.
+#[test]
+fn the_snapshots_are_latched_and_the_path_is_the_plan() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let nav = FakeNav::start(&bus, &clock, Script::default());
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual).await;
+        let topics = bus.topics();
+        for name in ["/coverage_path", "/coverage_path_markers", "/coverage_invalid_segments", "/coverage_connectors", "/zone_sequence_status"] {
+            let topic = topics.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}"));
+            let qos: Vec<Qos> =
+                topic.publishers.iter().zip(&topic.publisher_qos).filter(|(p, _)| *p == "boustrophedon_coverage").map(|(_, q)| *q).collect();
+            assert_eq!(qos, [Qos::latched()], "{name}");
+        }
+        let mut late = coverage.test.subscribe::<Path>("/coverage_path", Qos::latched()).unwrap();
+        let plan = next(&mut late).await;
+        assert!(plan.poses.len() > 20, "{} poses", plan.poses.len());
+        assert_eq!(plan.header.frame_id, "map");
+        let services = bus.services();
+        for name in [
+            "/get_zone_map_list_srv",
+            "/confirm_navigation_dispatch",
+            "/cancel_navigation_dispatch",
+            "/check_nav_status",
+            "/get_channel_route",
+            "/mission_operation_lock",
+        ] {
+            let service = services.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("{name}"));
+            assert!(service.clients.iter().any(|c| c == "boustrophedon_coverage"), "{name}: {:?}", service.clients);
+        }
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// The parameters coverage_node.py declared, with its defaults, and the
+/// default of the sweep-angle search (off: an angle set from the app is
+/// never overridden); the planner's layout cannot change while navigation is
+/// active.
+#[test]
+fn the_parameters_have_the_python_node_s_defaults_and_the_layout_is_guarded() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let nav = FakeNav::start(&bus, &clock, Script::default());
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual).await;
+        let peer = DdsPeer::new("coverage_bus_test_defaults");
+        // (name, type, value as the parameter service answers it)
+        let defaults = [
+            ("strip_width_m", 3, "0.8"),
+            ("waypoint_spacing_m", 3, "0.2"),
+            ("zigzag_angle_deg", 3, "0"),
+            ("unknown_as_obstacle", 1, "true"),
+            ("min_safe_component_area_m2", 3, "0.05"),
+            ("coverage_pattern", 4, "zigzag"),
+            ("coverage_backend", 4, "rust"),
+            ("allow_backend_fallback", 1, "true"),
+            ("fallback_cancel_request_timeout_s", 3, "5"),
+            ("boundary_ring", 1, "false"),
+            ("zigzag_auto_angle", 1, "false"),
+        ];
+        let names: Vec<String> = defaults.iter().map(|(n, _, _)| n.to_string()).collect();
+        let got = peer.call::<GetParameters::Service>("/boustrophedon_coverage/get_parameters", GetParameters::Request { names }).await;
+        let got: Vec<(u8, String)> = got
+            .values
+            .iter()
+            .map(|v| {
+                let value = match v.type_ {
+                    1 => v.bool_value.to_string(),
+                    3 => v.double_value.to_string(),
+                    4 => v.string_value.clone(),
+                    t => format!("type {t}"),
+                };
+                (v.type_, value)
+            })
+            .collect();
+        let want: Vec<(u8, String)> = defaults.iter().map(|(_, t, v)| (*t, v.to_string())).collect();
+        assert_eq!(got, want);
+
+        let active = coverage.test.publisher::<Bool>("/nav_operation_active", Qos::latched()).unwrap();
+        active.publish(&Bool { data: true }).unwrap();
+        let value = r2r::rcl_interfaces::msg::ParameterValue { type_: 1, bool_value: true, ..Default::default() };
+        let parameters = vec![r2r::rcl_interfaces::msg::Parameter { name: "zigzag_auto_angle".into(), value }];
+        let deadline = Instant::now() + WAIT;
+        let refused = loop {
+            let request = r2r::rcl_interfaces::srv::SetParameters::Request { parameters: parameters.clone() };
+            let set = peer.call::<r2r::rcl_interfaces::srv::SetParameters::Service>("/boustrophedon_coverage/set_parameters", request).await;
+            // coverage takes the flag in on a task of its own
+            if !set.results[0].successful {
+                break set.results[0].reason.clone();
+            }
+            assert!(Instant::now() < deadline, "zigzag_auto_angle changed while navigation was active");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert_eq!(refused, "coverage parameters cannot change while navigation or coverage generation is active/unknown");
+        drop(peer);
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// A dispatch whose confirmation fails is reported as uncertain -- the
+/// mower may be moving -- and tracked until its end is proven.
+#[test]
+fn a_failed_confirmation_says_navigation_may_be_active() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let nav = FakeNav::start(&bus, &clock, Script { confirm: false, ..Script::default() });
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual).await;
+        let answer = coverage.exec_zone_now().await;
+        assert!(!answer.success);
+        assert!(
+            answer.message.ends_with("outcome is uncertain, navigation may be active, and cancellation is being tracked"),
+            "{}",
+            answer.message
+        );
+        settled("the goal's cancel", || nav.seen(|s| s.action_cancels.len() == 1)).await;
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// A second stop while the first one's cancel is still being tracked cancels
+/// nothing more: one cancel per goal.
+#[test]
+fn a_second_stop_does_not_cancel_the_leg_again() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let nav = FakeNav::start(&bus, &clock, Script::default());
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual).await;
+        assert!(coverage.run_sequence(&[1, 2]).await.success);
+        settled("the first leg's goal", || nav.seen(|s| s.goals.len() == 1)).await;
+        let first: Trigger::Response = call(&coverage.test, "/stop_zone_sequence", Trigger::Request {}).await;
+        assert_eq!(first.message, "已立即送出目前導航目標的取消請求；正追蹤至終止狀態");
+        settled("the leg's cancel", || nav.seen(|s| s.action_cancels.len() == 1)).await;
+        let second: Trigger::Response = call(&coverage.test, "/stop_zone_sequence", Trigger::Request {}).await;
+        assert_eq!(second.message, "目前導航目標的取消已在追蹤中");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(nav.seen(|s| (s.goals.len(), s.action_cancels.len())), (1, 1));
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// The channel leg between two zones is the sequence's goal as much as a
+/// zone leg is: a stop cancels it.
+#[test]
+fn stopping_a_sequence_on_its_channel_leg_cancels_that_leg() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let script = Script { succeed_after: Some(Duration::from_secs(1)), end_on_cancel: true, ..Script::default() };
+        let nav = FakeNav::start(&bus, &clock, script);
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual.clone()).await;
+        let mut status = coverage.test.subscribe::<Text>("/zone_sequence_status", Qos::latched().keep_last(100)).unwrap();
+        assert!(coverage.run_sequence(&[1, 2]).await.success);
+        settled("the first leg's goal", || nav.seen(|s| s.goals.len() == 1)).await;
+        pass(&manual, Duration::from_secs(1)).await;
+        settled("the channel leg's goal", || nav.seen(|s| s.goals.len() == 2)).await;
+        assert_eq!(nav.seen(|s| s.goals[1].1.zone_id), -1, "a channel route");
+        let stop: Trigger::Response = call(&coverage.test, "/stop_zone_sequence", Trigger::Request {}).await;
+        assert_eq!(stop.message, "已立即送出目前導航目標的取消請求；正追蹤至終止狀態");
+        let canceled = sequence_state(&mut status, "canceled").await;
+        assert_eq!(canceled["leg"].as_str(), Some("channel"));
+        pass(&manual, Duration::from_secs(3)).await;
+        assert_eq!(nav.seen(|s| (s.goals.len(), s.action_cancels.len())), (2, 1));
+        coverage.stop().await;
+        nav.stop();
+    });
+}

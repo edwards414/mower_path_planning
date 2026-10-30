@@ -466,3 +466,113 @@ mod tests {
         assert_eq!(nav2_log_summary(&[]), "recent_nav2_logs=None");
     }
 }
+
+/// The health-gate rules the `tests` above leave out (E9-07, from
+/// test_controller_configuration.py), on the production defaults run_node
+/// reads.
+#[cfg(test)]
+mod health_rules {
+    use super::*;
+    use std::time::Duration;
+
+    const NOW: Mono = Mono::from_ns(60_000_000_000);
+
+    fn production() -> SafetyParams {
+        SafetyParams {
+            manual_command_hold_s: 0.75,
+            require_navigation_health: true,
+            navigation_health_timeout_s: 0.30,
+            navigation_health_max_future_skew_s: 0.5,
+            max_gps_horizontal_sigma_m: 0.015,
+            max_imu_orientation_sigma_rad: 0.35,
+            max_imu_angular_velocity_sigma_rad_s: 0.10,
+            max_imu_linear_acceleration_sigma_m_s2: 0.50,
+        }
+    }
+
+    const FIX_COV: [f64; 9] = [0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
+
+    /// Everything else fresh: a missing or a 0.31 s old IMU closes the gate
+    /// with the default reason, a 0.29 s old one does not.
+    #[test]
+    fn a_missing_or_stale_imu_closes_the_gate() {
+        let p = production();
+        let mut s = NavState::new();
+        s.last_robot_pose_received_at = Some(NOW);
+        s.valid_fix_received_at_by_topic.insert("/fix".into(), NOW);
+        s.last_gps_odometry_received_at = Some(NOW);
+        assert_eq!(s.navigation_health_block_reason(&p, NOW).as_deref(), Some("IMU is unavailable or stale"));
+        s.last_imu_received_at = Some(NOW - Duration::from_millis(310));
+        assert_eq!(s.navigation_health_block_reason(&p, NOW).as_deref(), Some("IMU is unavailable or stale"));
+        s.last_imu_received_at = Some(NOW - Duration::from_millis(290));
+        assert_eq!(s.navigation_health_block_reason(&p, NOW), None);
+    }
+
+    /// A covariance with a zero horizontal eigenvalue claims a precision no
+    /// receiver has: the fix and navsat's odometry are refused.
+    #[test]
+    fn a_degenerate_horizontal_covariance_is_refused() {
+        let p = production();
+        let line = [0.0001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0004];
+        assert_eq!(gps_fix_block_reason(Some(0.05), "/fix", 2, 25.0, 121.5, &line, 2, &p).as_deref(), Some("GPS horizontal covariance is degenerate"));
+        let mut odom = vec![0.0; 36];
+        odom[0] = 0.0001;
+        assert_eq!(
+            gps_odometry_block_reason(Some(0.05), "map", [1.0, 2.0, 0.0], &odom, &p).as_deref(),
+            Some("GPS odometry horizontal covariance is degenerate")
+        );
+        odom[7] = 0.0001;
+        assert_eq!(gps_odometry_block_reason(Some(0.05), "map", [1.0, 2.0, 0.0], &odom, &p), None);
+    }
+
+    /// Latitude and longitude must be on the globe, bounds included.
+    #[test]
+    fn a_fix_off_the_globe_is_no_fix() {
+        let p = production();
+        let on = [(90.0, 0.5), (-90.0, 0.5), (25.0, 180.0), (25.0, -180.0)];
+        let off = [(90.000001, 0.5), (-90.000001, 0.5), (25.0, 180.000001), (25.0, -180.000001)];
+        for (lat, lon) in on {
+            assert_eq!(gps_fix_block_reason(Some(0.05), "/fix", 0, lat, lon, &FIX_COV, 2, &p), None, "{lat} {lon}");
+        }
+        for (lat, lon) in off {
+            let reason = gps_fix_block_reason(Some(0.05), "/fix", 0, lat, lon, &FIX_COV, 2, &p);
+            assert_eq!(reason.as_deref(), Some("GPS has no valid fix"), "{lat} {lon}");
+        }
+    }
+
+    /// Autonomy is authorised only while the reserved goal runs, nothing
+    /// cancels it, no mutation holds the lease, the last task's end is known,
+    /// no invalid manual command is pending and the health gate is open:
+    /// each one alone takes it away (twist_mux then holds the lock).
+    #[test]
+    fn autonomy_needs_every_condition_at_once() {
+        let p = production();
+        let running = || {
+            let mut s = NavState::new();
+            s.last_robot_pose_received_at = Some(NOW);
+            s.valid_fix_received_at_by_topic.insert("/fix".into(), NOW);
+            s.last_gps_odometry_received_at = Some(NOW);
+            s.last_imu_received_at = Some(NOW);
+            s.goal_reserved = true;
+            s.nav_state = "running".into();
+            s
+        };
+        assert!(running().autonomy_authorized(&p, NOW));
+        let spoilers: [(&str, fn(&mut NavState)); 7] = [
+            ("no reserved goal", |s| s.goal_reserved = false),
+            ("not running yet", |s| s.nav_state = "pending_confirmation".into()),
+            ("a cancel", |s| s.external_cancel_requested = true),
+            ("a mutation", |s| s.mutation_owner = Some("/map_manage:x".into())),
+            ("an unconfirmed end", |s| s.nav2_task_uncertain = true),
+            ("an invalid manual command", |s| {
+                s.invalid_manual_command_deadlines.insert("/joy_cmd".into(), NOW + Duration::from_millis(500));
+            }),
+            ("a stale IMU", |s| s.last_imu_received_at = None),
+        ];
+        for (what, spoil) in spoilers {
+            let mut s = running();
+            spoil(&mut s);
+            assert!(!s.autonomy_authorized(&p, NOW), "{what}");
+        }
+    }
+}
