@@ -63,6 +63,7 @@ _DAEMON_MODULES = (
     ('mux', 'rust_mux'),
     ('imu', 'rust_imu'),
     ('gps', 'enable_gps'),
+    ('static_tf', 'rust_static_tf'),
     ('localize', 'rust_localize'),
     ('map', 'rust_map'),
     ('coverage', None),
@@ -164,6 +165,16 @@ def _node_params_file(node, params):
     return f.name
 
 
+def _robot_description():
+    """The URDF mower.launch.py gives robot_state_publisher: xacro on
+    mower_description's real_robot.xacro, the same call, so the static_tf
+    module publishes the same text and the same frames."""
+    import xacro
+    return xacro.process_file(os.path.join(
+        get_package_share_directory('mower_description'), 'mower_robot',
+        'real_robot.xacro')).toxml()
+
+
 def _rust_daemon_node(context):
     """The single mower_rsd process, or nothing."""
     if not _truthy(LaunchConfiguration('rust_daemon').perform(context)):
@@ -209,6 +220,12 @@ def _rust_daemon_node(context):
     if 'gps' in modules:
         parameters.append(
             LaunchConfiguration('gps_params_file').perform(context))
+    if 'static_tf' in modules:
+        # rust_static_tf:=true: robot_state_publisher's robot_description,
+        # node-scoped (a launch_ros dict would go to every node under /**)
+        parameters.append(_node_params_file('static_tf_publisher', {
+            'robot_description': _robot_description(),
+        }))
     if 'record' in modules:
         # The same directories the separate mower_record gets from
         # mission.launch.py -- on the robot the ~/.mower bind mount. The yaml's
@@ -310,6 +327,7 @@ def generate_launch_description():
     rust_mux = LaunchConfiguration('rust_mux')
     rust_imu = LaunchConfiguration('rust_imu')
     rust_localize = LaunchConfiguration('rust_localize')
+    rust_static_tf = LaunchConfiguration('rust_static_tf')
     rust_bridge = LaunchConfiguration('rust_bridge')
     ws_bridge_bus = LaunchConfiguration('ws_bridge_bus')
     rust_base = LaunchConfiguration('rust_base')
@@ -336,6 +354,7 @@ def generate_launch_description():
             'rust_imu': rust_imu,
             'rust_base': rust_base,
             'rust_localize': rust_localize,
+            'rust_static_tf': rust_static_tf,
             'nav_composition': nav_composition,
             # rust_nav_core:=true: no nav2 at all. In mower.launch.py this
             # gates only the navigation.launch.py include (the nav2 servers or
@@ -551,6 +570,16 @@ def generate_launch_description():
             'rust_imu',
             default_value='false',
             description='mower_rs mower_imu instead of the wit_ros2_imu driver',
+        ),
+        DeclareLaunchArgument(
+            'rust_static_tf',
+            default_value='false',
+            description='mower_rsd module static_tf (mower_rs '
+                        'mower_static_tf, node static_tf_publisher) instead '
+                        'of robot_state_publisher, on the same URDF: the '
+                        'fixed joints on /tf_static, the wheels on /tf from '
+                        '/joint_states, /robot_description; only with '
+                        'rust_daemon',
         ),
         DeclareLaunchArgument(
             'rust_localize',

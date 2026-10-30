@@ -17,12 +17,14 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
   1-5); base, pid_autotune and the guards stay on r2r until they move after E3. ws_bridge is in the manifest (step E3),
-  on r2r. E4's mux (`rust_mux`, off by default) is born on the bus and replaces the outside twist_mux when it runs.
+  on r2r. E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default, are born on the bus and replace
+  the outside twist_mux and robot_state_publisher when they run.
 
 ## The manifest
 
-`MODULES` holds the 15 modules of `mower_rsd` that have endpoints (20 instances): the 14 typed modules, E4's mux among
-them, and ws_bridge (`bridge`, step E3), whose endpoints are its allow-list. `OUTSIDE` holds the nodes they depend on.
+`MODULES` holds the 16 modules of `mower_rsd` that have endpoints (21 instances): the 15 typed modules, E4's mux and
+static_tf among them, and ws_bridge (`bridge`, step E3), whose endpoints are its allow-list. `OUTSIDE` holds the nodes
+they depend on.
 
 - **The module code is the source of truth.** BUS_TOPICS.md sections 2 and 3 cite the lines.
 - **One entry per endpoint:** what it does (`publishes`, `subscribes`, `serves`, `calls`, and for an action
@@ -52,6 +54,10 @@ them, and ws_bridge (`bridge`, step E3), whose endpoints are its allow-list. `OU
     `nav_core_check.py`), with `/tf` and `/tf_static` for `nav_core.pose_source: tf`.
   - `replaced_by`: an outside node's endpoint that a module of `mower_rsd` takes the place of (E4). While that module
     runs in the process, robot.launch.py does not start the node, and the policy leaves the endpoint out.
+  - `unread_on_bus`: a writer off the bus whose samples no bus reader needs: on its own it brings its name in from DDS
+    no more. navsat's `utm` frame on `/tf_static`, once static_tf writes that name on the bus (E4's option A): the EKFs
+    do not need `utm`, so `/tf_static` only goes out, and DDS still sees two latched depth-1 writers, the bridge's and
+    navsat's.
 - **Outside** (BUS_TOPICS.md 5.3, "DDS→bus"), each with the step that removes it: twist_mux's `/cmd_vel_guard_input`
   (E4), robot_state_publisher's `/tf_static` and `/tf` (E4), nav2's `/rosout`, `/bt_navigator/get_state` and two
   actions (E9), the two teleop nodes (off by default), and the Python recorder (E5): `recorder_manager`'s status, its
@@ -168,13 +174,17 @@ each with its flag; every other instance is elsewhere, on DDS.
   velocity_smoother, `R V 1`), `to_ros /cmd_vel_guard_input` (to the final guard on r2r, `R V 1`) and `to_ros
   /diagnostics` (`R V 1`), and one less, nav's nav_core-only `to_ros /nav_cmd_vel`, which then reaches the mux
   in-process (the plan's notes say so). The outside twist_mux is `replaced_by` the mux: with the guards on the bus too
-  (step 6), the output is in-process and nothing of the drive path comes in from DDS. Without the mux in the set, the
-  plan is E2's line for line, as above.
+  (step 6), the output is in-process and nothing of the drive path comes in from DDS.
+- **E4-4, static_tf** in the production set (`rust_static_tf`): `/tf_static` turns round, `to_ros` (`R TL 1`) where
+  it came in (`from_ros R TL 100`); `from_ros /joint_states` (mower_base on r2r, rsp's `BE V 5`) and `to_ros
+  /robot_description` (`R TL 1`) are new; `/tf` goes out as before. The outside rsp is `replaced_by` static_tf, and
+  its `/tf` writer no longer makes nav's nav_core-only `/tf` reader a second direction (that note goes).
+- Without E4's modules in the set, the plan is E2's line for line, as above.
 
 - **Refused:** of all 16384 combinations of the E2 and E3 flags with the production set, for each set of E4 modules
-  (32768 with the mux in it or not), only those that put mower_base on the bus with exactly one of robot_status and
-  pid_autotune: `/mower_base/led_command` would then need both directions. Base and pid_autotune move together, after
-  status (decision 4), so the order never meets it.
+  (65536 with the mux and static_tf in it or not), only those that put mower_base on the bus with exactly one of
+  robot_status and pid_autotune: `/mower_base/led_command` would then need both directions. Base and pid_autotune move
+  together, after status (decision 4), so the order never meets it.
 
 ## Running
 
@@ -253,5 +263,5 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (278 names, the five action
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (282 names, the five action
   ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).

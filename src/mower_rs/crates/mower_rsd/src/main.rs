@@ -49,6 +49,10 @@
 //! shutdown, or a module that does not stop within `--stop-timeout`, makes
 //! the process exit non-zero so the launch `respawn` restarts the set.
 //!
+//! **Start order.** The instances start in the table's order, all at once,
+//! with one exception: with static_tf in the set, localize's three wait
+//! until its `/tf_static` is on the bus ([`waits_for_static_tf`], E4-4).
+//!
 //! **Bus.** The process also has one `mower_bus::Bus` and one clock. Every
 //! start of an instance runs on a fresh scope of the bus named after its
 //! node, and the supervisor closes that scope as soon as the start ends (see
@@ -160,6 +164,15 @@ const MODULES: &[Module] = &[
         id: "gps",
         switch: "enable_gps",
         instances: &[Instance { node: "gps", run: |c, m| Box::pin(mower_gps::run(c, m)) }],
+    },
+    Module {
+        // robot_state_publisher (E4, rust_static_tf, off by default): before
+        // localize, whose instances wait for its /tf_static
+        // (`waits_for_static_tf`). Born on the bus; rust_daemon:=false runs
+        // the C++ rsp.
+        id: "static_tf",
+        switch: "rust_static_tf",
+        instances: &[Instance { node: "static_tf_publisher", run: |c, m| Box::pin(mower_static_tf::run(c, m)) }],
     },
     Module {
         id: "localize",
@@ -413,6 +426,88 @@ fn close_scope(label: &str, scope: &Scope) {
 /// supervisor calls it once per start.
 type Start = Arc<dyn Fn(ModuleCtx) -> BoxFut + Send + Sync>;
 
+/// Whether module `id`'s instances wait for static_tf's `/tf_static` before
+/// they start: localize's do while static_tf is in the set (E4-4).
+///
+/// navsat builds the datum `delay` (3 s) after it starts, from the map EKF's
+/// heading, and the EKFs fuse the IMU only once they know how it is mounted:
+/// imu_link and base_link, fixed joints of the URDF, on `/tf_static`. From
+/// DDS, robot_state_publisher's message can come seconds late on a loaded
+/// host, and a datum built before the map EKF had it is rotated by up to the
+/// robot's heading. With static_tf in the process the order is certain: its
+/// latched message is on the bus before localize makes a reader, so the
+/// EKFs have the mounts from their first IMU sample and navsat's delay is
+/// theirs to converge in. Without static_tf (the C++ rsp, its frames from
+/// DDS) nothing waits, as before: holding localize back for rsp would change
+/// what production does.
+fn waits_for_static_tf(id: &str, set: &[String]) -> bool {
+    id == "localize" && set.iter().any(|m| m == "static_tf")
+}
+
+/// The slot of instance `node` of module `module` in the set `set`, held
+/// back for static_tf's `/tf_static` when [`waits_for_static_tf`] says so.
+fn slot(
+    module: &str, node: &'static str, set: &[String], extra: Vec<String>, remaps: Arc<Remaps>, start: Start,
+) -> Slot {
+    let label = format!("{module}/{node}");
+    let start = if waits_for_static_tf(module, set) { after_static_tf(label.clone(), start) } else { start };
+    Slot { label, node, extra, remaps, start }
+}
+
+/// `start`, once static_tf's `/tf_static` is on the bus: on its first poll,
+/// a reader made on the instance's scope has the latched message.
+fn after_static_tf(label: String, start: Start) -> Start {
+    Arc::new(move |m: ModuleCtx| -> BoxFut {
+        let (label, start) = (label.clone(), start.clone());
+        Box::pin(async move {
+            if !wait_for_tf_static(&label, &m).await? {
+                // the process stops: nothing was started
+                return Ok(());
+            }
+            start(m).await
+        })
+    })
+}
+
+/// Wait on `m`'s scope until a `/tf_static` message with transforms is on
+/// the bus; false when the process stops first. The reader has the EKFs' and
+/// navsat's QoS (R TL 100), the endpoint the manifest has for these nodes,
+/// and is gone before the instance starts.
+async fn wait_for_tf_static(label: &str, m: &ModuleCtx) -> Result<bool, mower_rs_common::BoxError> {
+    let topic = m.resolve_topic("/tf_static")?;
+    let qos = mower_bus::Qos::default().keep_last(100).reliable().transient_local();
+    let mut tf_static = m.bus.subscribe::<r2r::tf2_msgs::msg::TFMessage>(&topic, qos)?;
+    let mut waited = Duration::ZERO;
+    loop {
+        tokio::select! {
+            biased;
+            () = m.shutdown.wait() => return Ok(false),
+            msg = futures::StreamExt::next(&mut tf_static) => match msg {
+                Some(msg) if !msg.transforms.is_empty() => {
+                    if !waited.is_zero() {
+                        println!("[mower_rsd] {label}: static_tf's {topic} is on the bus");
+                    }
+                    return Ok(true);
+                }
+                Some(_) => {}
+                None => return Err(format!("the bus closed while waiting for static_tf's {topic}").into()),
+            },
+            () = tokio::time::sleep(WAIT_REPORT) => {
+                waited += WAIT_REPORT;
+                println!(
+                    "[mower_rsd] {label}: waiting for static_tf's {topic} ({:.0} s): navsat's datum needs the \
+                     sensor mounts",
+                    waited.as_secs_f64()
+                );
+            }
+        }
+    }
+}
+
+/// How often [`wait_for_tf_static`] says it is still waiting. On a healthy
+/// start static_tf publishes within milliseconds and nothing is printed.
+const WAIT_REPORT: Duration = Duration::from_secs(5);
+
 /// One node instance under supervision. A slot reports every time its
 /// instance ends; [`supervise`] starts it again (after RESTART_DELAY, the
 /// launch files' respawn_delay) unless the process is shutting down.
@@ -613,13 +708,8 @@ fn main() -> ExitCode {
         let mut add = |module: &Module, extra: Vec<String>| {
             for inst in module.instances {
                 let (ctx, run) = (ctx.clone(), inst.run);
-                slots.push(Slot {
-                    label: format!("{}/{}", module.id, inst.node),
-                    node: inst.node,
-                    extra: extra.clone(),
-                    remaps: remaps.clone(),
-                    start: Arc::new(move |m: ModuleCtx| run(ctx.clone(), m)),
-                });
+                let start: Start = Arc::new(move |m: ModuleCtx| run(ctx.clone(), m));
+                slots.push(slot(module.id, inst.node, &args.modules, extra.clone(), remaps.clone(), start));
             }
         };
         // The bridge first, so that its bus ends are there when the modules
@@ -663,6 +753,8 @@ mod tests {
 
     use futures::Stream;
     use mower_bus::{Qos, Subscriber};
+    use r2r::geometry_msgs::msg::TransformStamped;
+    use r2r::tf2_msgs::msg::TFMessage;
 
     use super::*;
 
@@ -694,6 +786,7 @@ mod tests {
             ("mux", vec!["twist_mux"]),
             ("imu", vec!["imu"]),
             ("gps", vec!["gps"]),
+            ("static_tf", vec!["static_tf_publisher"]),
             ("localize", vec!["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]),
             ("map", vec!["map_manage"]),
             ("coverage", vec!["boustrophedon_coverage"]),
@@ -795,6 +888,190 @@ mod tests {
     /// timer, so RESTART_DELAY and the stop timeout pass at once and in order.
     fn paused() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap()
+    }
+
+    /// What static_tf publishes that the localize nodes look up: the robot's
+    /// mounts of the GPS antenna and the IMU (the real one has 7 joints).
+    fn mounts() -> TFMessage {
+        let joint = |parent: &str, child: &str| TransformStamped {
+            header: r2r::std_msgs::msg::Header { frame_id: parent.into(), ..Default::default() },
+            child_frame_id: child.into(),
+            ..Default::default()
+        };
+        TFMessage {
+            transforms: vec![
+                joint("base_footprint", "base_link"),
+                joint("base_link", "gps_link"),
+                joint("base_link", "imu_link"),
+            ],
+        }
+    }
+
+    fn has_the_mounts(msg: &TFMessage) -> bool {
+        ["base_link", "gps_link", "imu_link"].iter().all(|c| msg.transforms.iter().any(|t| t.child_frame_id == *c))
+    }
+
+    /// A static_tf that publishes [`mounts`] latched `after` its start, as
+    /// the module does at once.
+    fn static_tf_slot(set: &[String], after: Duration) -> Slot {
+        let start: Start = Arc::new(move |m: ModuleCtx| -> BoxFut {
+            Box::pin(async move {
+                tokio::select! {
+                    () = tokio::time::sleep(after) => {}
+                    () = m.shutdown.wait() => return Ok(()),
+                }
+                let tf_static = m.bus.publisher::<TFMessage>(&m.resolve_topic("/tf_static")?, Qos::latched())?;
+                tf_static.publish_owned(mounts())?;
+                m.shutdown.wait().await;
+                Ok(())
+            })
+        });
+        slot("static_tf", "static_tf_publisher", set, Vec::new(), Arc::default(), start)
+    }
+
+    /// Each start of a localize instance: when it began, and whether the
+    /// latched reader it makes first (the EKFs' and navsat's, R TL 100) had
+    /// the mounts on its first poll. Its n-th start does `runs[n]`.
+    type Starts = Arc<Mutex<Vec<(&'static str, Duration, bool)>>>;
+
+    fn localize_slots(set: &[String], runs: &[Run], starts: &Starts) -> Vec<Slot> {
+        let t0 = tokio::time::Instant::now();
+        ["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]
+            .into_iter()
+            .map(|node| {
+                let (runs, starts) = (runs.to_vec(), starts.clone());
+                let start: Start = Arc::new(move |m: ModuleCtx| -> BoxFut {
+                    let (runs, starts) = (runs.clone(), starts.clone());
+                    Box::pin(async move {
+                        let qos = Qos::default().keep_last(100).reliable().transient_local();
+                        let mut tf_static = m.bus.subscribe::<TFMessage>(&m.resolve_topic("/tf_static")?, qos)?;
+                        let has = matches!(
+                            futures::StreamExt::next(&mut tf_static).now_or_never(),
+                            Some(Some(msg)) if has_the_mounts(&msg)
+                        );
+                        let run = {
+                            let mut seen = starts.lock().unwrap();
+                            let n = seen.iter().filter(|(of, _, _)| *of == node).count();
+                            seen.push((node, t0.elapsed(), has));
+                            runs[n.min(runs.len() - 1)]
+                        };
+                        match run {
+                            Run::Fail => Err("filter diverged".into()),
+                            _ => {
+                                m.shutdown.wait().await;
+                                Ok(())
+                            }
+                        }
+                    })
+                });
+                slot("localize", node, set, Vec::new(), Arc::default(), start)
+            })
+            .collect()
+    }
+
+    /// E4-4, the datum race: navsat's datum takes the map EKF's heading 3 s
+    /// after the start, and the EKFs fuse the IMU only once they have its
+    /// mount from /tf_static. With static_tf in the set, localize's three
+    /// instances start once its message is on the bus, however late static_tf
+    /// is (here 3.5 s, past navsat's delay: what DDS did to rsp's frames on a
+    /// loaded host), and each has the mounts on its first poll. Without
+    /// static_tf (the C++ rsp) they start at once, as before.
+    #[test]
+    fn with_static_tf_in_the_set_localize_starts_once_the_mounts_are_on_the_bus() {
+        let set = argv(&["imu", "gps", "static_tf", "localize", "nav"]);
+        assert!(waits_for_static_tf("localize", &set));
+        for id in ["base", "status", "guards", "imu", "gps", "static_tf", "map", "coverage", "nav", "bridge"] {
+            assert!(!waits_for_static_tf(id, &set), "{id} waits");
+        }
+        let without = argv(&["imu", "gps", "localize", "nav"]);
+        assert!(!waits_for_static_tf("localize", &without), "the C++ rsp: nothing waits");
+
+        let late = Duration::from_millis(3500);
+        paused().block_on(async {
+            let starts: Starts = Arc::default();
+            let shutdown = Shutdown::new();
+            let mut slots = vec![static_tf_slot(&set, late)];
+            slots.extend(localize_slots(&set, &[Run::Serve], &starts));
+            let stop_timeout = Duration::from_secs(1);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(late / 2).await;
+            assert!(starts.lock().unwrap().is_empty(), "localize started before static_tf published");
+            tokio::time::sleep(late).await;
+            {
+                let seen = starts.lock().unwrap();
+                assert_eq!(seen.len(), 3, "{seen:?}");
+                for (node, at, has) in seen.iter() {
+                    assert!(*at >= late, "{node} started at {at:?}, before static_tf's message at {late:?}");
+                    assert!(*has, "{node}: no mounts on the first poll of its latched reader");
+                }
+            }
+            shutdown.trigger();
+            assert!(supervisor.await.unwrap().is_empty());
+        });
+
+        // without static_tf in the set: at once, and nothing on the bus yet
+        paused().block_on(async {
+            let starts: Starts = Arc::default();
+            let shutdown = Shutdown::new();
+            let slots = localize_slots(&without, &[Run::Serve], &starts);
+            let stop_timeout = Duration::from_secs(1);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            {
+                let seen = starts.lock().unwrap();
+                assert_eq!(seen.len(), 3, "{seen:?}");
+                assert!(seen.iter().all(|(_, at, has)| at.is_zero() && !has), "{seen:?}");
+            }
+            shutdown.trigger();
+            assert!(supervisor.await.unwrap().is_empty());
+        });
+    }
+
+    /// The wait is part of every start: a localize instance restarted after a
+    /// failure finds the latched message at once. One that is still waiting
+    /// when the process stops ends at once, never having started.
+    #[test]
+    fn a_restarted_localize_instance_finds_the_mounts_and_a_waiting_one_stops_at_once() {
+        let set = argv(&["static_tf", "localize"]);
+        paused().block_on(async {
+            let starts: Starts = Arc::default();
+            let shutdown = Shutdown::new();
+            let mut slots = vec![static_tf_slot(&set, Duration::from_millis(100))];
+            slots.extend(localize_slots(&set, &[Run::Fail, Run::Serve], &starts));
+            let stop_timeout = Duration::from_secs(1);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(Duration::from_millis(100) + RESTART_DELAY * 2).await;
+            {
+                let seen = starts.lock().unwrap();
+                assert_eq!(seen.len(), 6, "each instance failed once and started again: {seen:?}");
+                assert!(seen.iter().all(|(_, _, has)| *has), "{seen:?}");
+                let second: Vec<Duration> = seen[3..].iter().map(|(_, at, _)| *at).collect();
+                assert!(second.iter().all(|at| *at == Duration::from_millis(100) + RESTART_DELAY), "{seen:?}");
+            }
+            shutdown.trigger();
+            assert!(supervisor.await.unwrap().is_empty());
+        });
+
+        // static_tf never publishes: localize waits, saying so, and a stop
+        // ends it within the stop window
+        paused().block_on(async {
+            let starts: Starts = Arc::default();
+            let shutdown = Shutdown::new();
+            let mut slots = vec![static_tf_slot(&set, Duration::from_secs(3600))];
+            slots.extend(localize_slots(&set, &[Run::Serve], &starts));
+            let stop_timeout = Duration::from_secs(1);
+            let supervisor =
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+            tokio::time::sleep(WAIT_REPORT * 3).await;
+            assert!(starts.lock().unwrap().is_empty());
+            shutdown.trigger();
+            let failures = tokio::time::timeout(stop_timeout / 2, supervisor).await.expect("stopped at once").unwrap();
+            assert!(failures.is_empty(), "{failures:?}");
+            assert!(starts.lock().unwrap().is_empty(), "started after the stop");
+        });
     }
 
     /// Every start resolves its bus names with the process's `-r` rules,

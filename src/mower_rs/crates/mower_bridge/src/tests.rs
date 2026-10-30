@@ -23,7 +23,7 @@ const PRODUCTION_MODULES: [&str; 15] = [
 
 /// E4's modules, behind switches that are off by default, each where
 /// robot.launch.py's `_DAEMON_MODULES` puts it. They are born on the bus.
-const E4_MODULES: [(&str, &str); 1] = [("mux", "guards")];
+const E4_MODULES: [(&str, &str); 2] = [("mux", "guards"), ("static_tf", "gps")];
 
 /// [`PRODUCTION_MODULES`] with E4's modules `e4` switched on, in
 /// robot.launch.py's order.
@@ -273,7 +273,7 @@ fn the_readme_counts_the_declarations_of_each_step() {
 /// module (the 13 of E2; ws_bridge joined the manifest in E3), and the
 /// modules serve 45 services besides the parameter services. E4's mux adds
 /// two: `/diagnostics`, and `/nav_cmd_vel`, which only nav's nav_core backend
-/// had.
+/// had; its static_tf one: `/robot_description`.
 #[test]
 fn the_manifest_has_bus_topics_md_s_counts() {
     let mut topics = BTreeSet::new();
@@ -287,7 +287,7 @@ fn the_manifest_has_bus_topics_md_s_counts() {
             served.insert(e.name);
         }
     }
-    assert_eq!((topics.len(), served.len()), (80, 45));
+    assert_eq!((topics.len(), served.len()), (81, 45));
 }
 
 /// Steps 5 to 7, for the record: the rest of the order needs no two-way
@@ -459,6 +459,78 @@ fn every_combination_of_flags_plans_but_a_split_led_command() {
         }
     }
     assert_eq!(planned, 16384 << E4_MODULES.len());
+}
+
+/// E4-4: static_tf in the production process (option A of the E4 design).
+/// `/tf_static` turns round: it goes out from the module (R TL 1) and no
+/// longer comes in, navsat's `utm` writer on r2r being `unread_on_bus`, so DDS
+/// still sees two latched depth-1 writers, the bridge's and navsat's. The
+/// wheels' `/joint_states` comes in from mower_base on r2r (rsp's reader,
+/// BE V 5) and `/robot_description` goes out (R TL 1); `/tf` goes out as
+/// before, the wheels with the EKFs' transforms.
+#[test]
+fn static_tf_turns_tf_static_round_in_the_production_plan() {
+    let before = production_plan(&E2_ON).unwrap();
+    let after = e4_plan(&E2_ON, &["static_tf"]).unwrap();
+    let (before_lines, after_lines) = (before.lines(), after.lines());
+    let gone: Vec<&String> = before_lines.iter().filter(|l| !after_lines.contains(l)).collect();
+    let new: Vec<&String> = after_lines.iter().filter(|l| !before_lines.contains(l)).collect();
+    assert_eq!(gone, ["from_ros /tf_static tf2_msgs/msg/TFMessage R TL 100"]);
+    assert_eq!(
+        new,
+        [
+            "from_ros /joint_states sensor_msgs/msg/JointState BE V 5",
+            "to_ros /robot_description std_msgs/msg/String R TL 1",
+            "to_ros /tf_static tf2_msgs/msg/TFMessage R TL 1",
+        ]
+    );
+    assert!(after_lines.contains(&"to_ros /tf tf2_msgs/msg/TFMessage R V 100".to_string()));
+    // rsp's /tf writer was what made nav's nav_core-only /tf reader a second
+    // direction: with the module it reads the wheels and the EKFs in-process
+    let tf_note = |n: &&String| n.starts_with("/tf: not bridged for nav_action_server");
+    assert_eq!(before.notes.iter().filter(tf_note).count(), 1, "{:?}", before.notes);
+    let without: Vec<&String> = before.notes.iter().filter(|n| !tf_note(n)).collect();
+    assert_eq!(after.notes.iter().collect::<Vec<_>>(), without);
+    // without the module navsat's writer still counts for the reader's QoS
+    // and its reason, as before E4
+    let tf_static = before.declarations.iter().find(|d| d.name == "/tf_static").unwrap();
+    assert!(tf_static.why.contains("navsat_transform (r2r)") && tf_static.why.contains("robot_state_publisher (outside)"));
+    // nothing of rsp's is planned for with the module
+    assert!(after.declarations.iter().all(|d| !d.why.contains("robot_state_publisher (outside)")));
+    // the base on the bus (step 6): /joint_states is in-process
+    let mut on = E2_ON.to_vec();
+    on.extend(["base", "pid_autotune", "guards"]);
+    let step6 = e4_plan(&on, &["static_tf"]).unwrap().lines();
+    assert!(!step6.iter().any(|l| l.starts_with("from_ros /joint_states")), "{step6:#?}");
+    assert!(!step6.iter().any(|l| l.starts_with("from_ros /tf_static")), "{step6:#?}");
+}
+
+/// An outside endpoint marked `replaced_by` leaves the plan exactly when its
+/// module runs in the process, and a writer marked `unread_on_bus` brings
+/// its name in only together with another writer.
+#[test]
+fn rsp_is_left_out_while_static_tf_runs_and_utm_alone_brings_nothing_in() {
+    let marked: Vec<(&str, &str)> = OUTSIDE
+        .iter()
+        .flat_map(|o| o.endpoints.iter().filter_map(move |e| e.replaced_by.map(|id| (o.node, id))))
+        .collect();
+    assert!(marked.contains(&("robot_state_publisher", "static_tf")), "{marked:?}");
+    for (_, id) in &marked {
+        assert!(module(id).is_some(), "{id} is no module of the manifest");
+    }
+    let unread: Vec<(&str, &str)> = MODULES
+        .iter()
+        .flat_map(|m| m.instances)
+        .flat_map(|i| i.endpoints.iter().filter(|e| e.unread_on_bus).map(move |e| (i.node, e.name)))
+        .collect();
+    assert_eq!(unread, [("navsat_transform", "/tf_static")]);
+    // localize alone (its binary): rsp's frames still come in
+    let alone = plan(&Running::standalone("localize", "localize").unwrap(), &production_remaps()).unwrap();
+    assert!(alone.lines().contains(&"from_ros /tf_static tf2_msgs/msg/TFMessage R TL 100".to_string()));
+    // static_tf with localize elsewhere: only out
+    let lines = plan(&Running::rsd(&["static_tf"], |_| true), &production_remaps()).unwrap().lines();
+    assert!(lines.contains(&"to_ros /tf_static tf2_msgs/msg/TFMessage R TL 1".to_string()), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.starts_with("from_ros /tf_static")));
 }
 
 /// Deterministic: the same input gives the same declarations in the same
@@ -1027,6 +1099,7 @@ fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
         ("mux", vec!["twist_mux"]),
         ("imu", vec!["imu"]),
         ("gps", vec!["gps"]),
+        ("static_tf", vec!["static_tf_publisher"]),
         ("localize", vec!["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]),
         ("map", vec!["map_manage"]),
         ("coverage", vec!["boustrophedon_coverage"]),

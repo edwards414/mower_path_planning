@@ -86,6 +86,9 @@ services:
       # no new image needed.
       - rust_base:=${RUST_BASE:-true}
       - rust_localize:=${RUST_LOCALIZE:-true}
+      # RUST_STATIC_TF (with RUST_DAEMON): mower_rsd's static_tf module
+      # instead of robot_state_publisher, on the same URDF.
+      - rust_static_tf:=${RUST_STATIC_TF:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour. Default on; RUST_DAEMON=false runs one binary each.

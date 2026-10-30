@@ -200,6 +200,21 @@ pub static MODULES: &[Module] = &[
         }],
     },
     Module {
+        // E4: robot_state_publisher 3.3.4's endpoints (measured,
+        // tools/rsp_capture.py), robot_description from robot.launch.py.
+        // Born on the bus.
+        id: "static_tf",
+        instances: &[Instance {
+            node: "static_tf_publisher",
+            endpoints: &[
+                publishes::<TFMessage>("/tf_static", R_TL_1),
+                publishes::<TFMessage>("/tf", R_V_100),
+                publishes::<Text>("robot_description", R_TL_1).named("/robot_description"),
+                subscribes::<JointState>("joint_states", BE_V_5).named("/joint_states"),
+            ],
+        }],
+    },
+    Module {
         id: "localize",
         // Upstream's names, remapped per node; the EKF inputs are the
         // parameter values of dual_ekf_navsat_params.yaml (odomN, imuN), with
@@ -236,9 +251,11 @@ pub static MODULES: &[Module] = &[
                     subscribes::<Imu>("imu", BE_V_1).named("/imu/data"),
                     publishes::<Odometry>("odometry/gps", R_V_10).named("/odometry/gps"),
                     publishes::<NavSatFix>("gps/filtered", R_V_10).named("/gps/filtered"),
-                    // The utm frame, on r2r until E4: /tf_static then only
-                    // goes DDS -> bus (mower_bus_ros README, option 1).
-                    publishes::<TFMessage>("/tf_static", R_TL_1).stays_on_r2r(),
+                    // The utm frame, on r2r: /tf_static goes DDS -> bus
+                    // (mower_bus_ros README, option 1), or, with E4's
+                    // static_tf on the bus, only bus -> DDS, and the EKFs do
+                    // not need utm (option A: on the bus with E5 and E9)
+                    publishes::<TFMessage>("/tf_static", R_TL_1).stays_on_r2r().unread_on_bus(),
                     serves::<ToLL::Service>("/toLL"),
                     serves::<FromLL::Service>("/fromLL"),
                     serves::<FromLLArray::Service>("/fromLLArray"),
@@ -571,10 +588,13 @@ pub static OUTSIDE: &[Outside] = &[
     },
     Outside {
         // tf2_ros' StaticBroadcasterQoS and DynamicBroadcasterQoS, R TL 1 and
-        // R V 100, measured
+        // R V 100, measured; rust_daemon with rust_static_tf does not start it
         node: "robot_state_publisher",
         until: "E4",
-        endpoints: &[publishes::<TFMessage>("/tf_static", R_TL_1), publishes::<TFMessage>("/tf", R_V_100)],
+        endpoints: &[
+            publishes::<TFMessage>("/tf_static", R_TL_1).replaced_by("static_tf"),
+            publishes::<TFMessage>("/tf", R_V_100).replaced_by("static_tf"),
+        ],
     },
     Outside {
         // rcl's /rosout writer is on every node; mower_nav reads nav2's.

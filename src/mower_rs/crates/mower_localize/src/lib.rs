@@ -26,10 +26,11 @@
 //! rcl gives them on the node, `-r` rules included
 //! ([`ModuleCtx::resolve_topic`]; docs/BUS_TOPICS.md 5.4). The r2r nodes stay
 //! for the parameters and their services, the log and the graph; navsat's
-//! also publishes the `utm` frame on `/tf_static` over DDS until E4.
+//! also publishes the `utm` frame on `/tf_static` over DDS (until E5 and E9).
 //! `/odom` and robot_state_publisher's `/tf_static` reach the bus from DDS
-//! through the bridge, and `/tf` and what nav2, the recorder or the tools
-//! read go out through it.
+//! through the bridge (with E4's `rust_static_tf`, the static_tf module
+//! publishes the fixed joints on the bus itself), and `/tf` and what nav2, the
+//! recorder or the tools read go out through it.
 //!
 //! Which node a task runs is decided by its node name, which is how
 //! `mower_rsd`'s module table addresses an instance; [`run_all`] is the same

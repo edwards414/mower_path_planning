@@ -18,7 +18,8 @@ references are to their own repositories, at the commits named in 1.4.
 
 - **15 modules, 18 node instances, 17 r2r nodes** run in `mower_rsd` in production. `mower_agent` has no node.
 - **78 topics** have an endpoint in a typed module. The bridge alone adds 5 more. E4's mux module (`rust_mux`, off by
-  default) adds `/diagnostics` and a production reader of `/nav_cmd_vel`: 80.
+  default) adds `/diagnostics` and a production reader of `/nav_cmd_vel`, its static_tf module
+  (`rust_static_tf`, off by default) `/robot_description`: 81.
 - **19 topics never leave the process** (5.1). Another **14 have no consumer on the robot** (rviz or the optional data
   collection only).
 - **75 services are served by `mower_rsd`**: 45, plus 30 parameter services on 5 nodes.
@@ -429,6 +430,13 @@ So do E3 before the moves in steps 6 and 7. Then neither the joystick path nor t
   final guard until step 6 and the recorder until E5). `/joy_cmd` and the teleop topics come in as before; the lock and
   the safety stop are in-process and still go out for the tools. Nav's own nav_core-only `/nav_cmd_vel` stays
   in-process then (mower_bridge README, "The policy").
+- **With E4-4's static_tf** (`rust_static_tf` with `rust_daemon`): robot_state_publisher is a module of the process.
+  `/tf_static` goes out (bus→DDS, `R TL 1`) instead of coming in, so the EKFs and navsat get the fixed joints
+  in-process; navsat's `utm` stays on r2r and is not brought onto the bus (option A of the E4 design: it moves with E5
+  and E9). `/joint_states` comes in from mower_base on r2r (`BE V 5`, rsp's reader) until step 6, the wheels go out on
+  `/tf` with the EKFs' transforms, `/robot_description` goes out (`R TL 1`). localize's three nodes start once the
+  module's `/tf_static` is on the bus (mower_rsd, `waits_for_static_tf`): from DDS, rsp's frames could reach the map
+  EKF after navsat's 3 s delay on a loaded host and rotate the datum by up to the robot's heading.
 
 **Until E5 (recorder), while a recording runs.**
 

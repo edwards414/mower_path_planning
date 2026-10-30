@@ -494,7 +494,8 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
     assert "executable='battery_simulator_node'" in nav2
     assert 'condition=IfCondition(launch_battery_simulator),' in nav2
     # ... and nav2 starts from nowhere else, while the mux and
-    # robot_state_publisher are not behind that switch
+    # robot_state_publisher are not behind that switch (rsp is behind E4's
+    # rust_static_tf only)
     for launch in (ROBOT_LAUNCH, MOWER_LAUNCH, MISSION_LAUNCH,
                    TWIST_MUX_LAUNCH, DUAL_EKF_LAUNCH, ROSBRIDGE_LAUNCH,
                    REAL_CONTROLLER_LAUNCH):
@@ -504,7 +505,10 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
     for name in ('twist_mux_launch = IncludeLaunchDescription(',
                  'robot_state_publisher = Node('):
         block = mower.split(name, 1)[1].split('\n    )\n', 1)[0]
-        assert 'condition=' not in block, name
+        assert 'enable_navigation' not in block and 'nav_core' not in block, name
+    mux_include = mower.split('twist_mux_launch = IncludeLaunchDescription(',
+                              1)[1].split('\n    )\n', 1)[0]
+    assert 'condition=' not in mux_include
 
     # the nav module's backend, node-scoped like the recorder's directories,
     # after mower_rsd.yaml -- which sets neither key, so with the switch off
@@ -532,7 +536,7 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
         assert text in lawan, text
     assert '[RUST_NAV_CORE]=false' in switch
     assert ('for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON '
-            'RUST_NAV_CORE RUST_MUX; do') in switch
+            'RUST_NAV_CORE RUST_MUX RUST_STATIC_TF; do') in switch
 
     # the behavioural half needs ROS launch (not in the python-tests job)
     pytest.importorskip('launch')
@@ -692,6 +696,75 @@ def test_production_twist_mux_config_never_meets_the_degenerate_rules():
         assert isinstance(handle['priority'], int) and handle['priority'] > 0
     priorities = [h['priority'] for h in section['topics'].values()]
     assert len(priorities) == len(set(priorities)), priorities
+
+
+def test_rust_static_tf_replaces_robot_state_publisher_only_inside_the_daemon():
+    """rust_static_tf:=true (compose RUST_STATIC_TF, default false; E4):
+    mower_rsd's static_tf module (mower_static_tf, node static_tf_publisher)
+    instead of robot_state_publisher, on the same URDF (robot.launch.py makes
+    it with mower.launch.py's xacro call) and publishing what rsp publishes.
+    It takes effect only with rust_daemon: mower.launch.py starts rsp unless
+    both are on, and robot.launch.py puts static_tf in the module set exactly
+    then, so every spelling starts one of the two."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    mower = MOWER_LAUNCH.read_text(encoding='utf-8')
+    for text in (robot, mower):
+        argument = re.search(
+            r"DeclareLaunchArgument\(\s*'rust_static_tf'(.*?)\n\s*\)", text,
+            flags=re.DOTALL)
+        assert argument is not None
+        assert "default_value='false'" in argument.group(1)
+    mower_include = robot.split("'mower.launch.py')", 1)[1].split(
+        '}.items()', 1)[0]
+    assert "'rust_static_tf': rust_static_tf," in mower_include
+    rsp = mower.split('robot_state_publisher = Node(', 1)[1].split(
+        '\n    )\n', 1)[0]
+    assert ("condition=_unless_in_daemon(LaunchConfiguration('rust_static_tf'),\n"
+            "                                    LaunchConfiguration('rust_daemon')),") in rsp
+    # the module, before localize, with the URDF rsp gets
+    assert "('gps', 'enable_gps'),\n    ('static_tf', 'rust_static_tf'),\n" \
+        "    ('localize', 'rust_localize')," in robot
+    block = robot.split("if 'static_tf' in modules:", 1)[1].split(
+        "if 'record' in modules:", 1)[0]
+    assert "parameters.append(_node_params_file('static_tf_publisher', {" in block
+    assert "'robot_description': _robot_description()," in block
+    helper = robot.split('def _robot_description():', 1)[1].split('\ndef ', 1)[0]
+    assert "get_package_share_directory('mower_description'), 'mower_robot'," \
+        in helper
+    assert "'real_robot.xacro')).toxml()" in helper
+    assert "'mower_robot',\n        'real_robot.xacro'\n    )" in mower
+    assert "xacro.process_file(robot_description_path).toxml()" in mower
+    daemon_main = MOWER_RSD_MAIN.read_text(encoding='utf-8')
+    assert 'id: "static_tf",' in daemon_main
+    assert 'switch: "rust_static_tf",' in daemon_main
+    assert '"crates/mower_static_tf"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
+    lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
+    assert '- rust_static_tf:=${RUST_STATIC_TF:-false}' in lawan
+    assert re.search(r'^RUST_STATIC_TF=false$',
+                     ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+    switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
+    passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
+                            re.M | re.S).group(1)
+    assert "'rust_static_tf:=${RUST_STATIC_TF'" in passthrough
+    assert '[RUST_STATIC_TF]=false' in switch
+    assert ('[ "$(n robot_state_publisher)" -eq 0 ] || '
+            'echo "C++ robot_state_publisher still running"') in switch
+
+    pytest.importorskip('launch')
+    pytest.importorskip('xacro')
+    pytest.importorskip('ament_index_python')
+    from launch import LaunchContext
+
+    robot_module = _load_launch_module(ROBOT_LAUNCH)
+    mower_module = _load_launch_module(MOWER_LAUNCH)
+    spellings = ('true', 'True', ' on', 'ON', 'yes', '1',
+                 'false', 'FALSE', '0', 'off', 'no', 'maybe', '')
+    for flag in spellings:
+        for daemon in spellings:
+            rust = robot_module._truthy(flag) and robot_module._truthy(daemon)
+            cpp = mower_module._unless_in_daemon(flag, daemon).evaluate(
+                LaunchContext())
+            assert cpp is not rust, (flag, daemon)
 
 
 def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
@@ -1647,9 +1720,13 @@ def test_rust_base_and_ros2_control_are_mutually_exclusive():
     # both are in the launch description, so the conditions are what decides
     for item in ('mower_controller_launch,', 'mower_base_node,'):
         assert item in mower_launch
-    # robot_state_publisher is untouched by the switch
-    rsp = mower_launch.split('robot_state_publisher = Node(', 1)[1].split(')', 1)[0]
-    assert 'condition' not in rsp
+    # robot_state_publisher is untouched by the switch (only E4's
+    # rust_static_tf replaces it)
+    rsp = mower_launch.split('robot_state_publisher = Node(', 1)[1].split(
+        '\n    )\n', 1)[0]
+    assert 'rust_base' not in rsp
+    assert ("condition=_unless_in_daemon(LaunchConfiguration('rust_static_tf'),"
+            in rsp)
 
     # the switch itself: declared on (since 2026-10-08), threaded down, and
     # a daemon module

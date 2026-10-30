@@ -17,6 +17,7 @@ the bottom drive an A/B measurement on the real robot.
 | `autotune_telemetry_check.py` | `mower_pid_autotune` subscribes to `/mower_base/telemetry` only while a session runs, black box: the real binary against a fake 20 Hz telemetry frame; no subscriber while idle, one per session (the frame reaches the precheck), none 1 s after it, and "no /mower_base/telemetry" after ~1.5 s when the base is quiet. Run by CI's mower_rs tests job: `python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune` |
 | `mux_oracle.py` | **twist_mux** (step E4): the real C++ twist_mux 4.5.0 and `mower_rsd --modules mux` in the runtime image, on the same timed input scripts (S01-S18 of the E4 design and a 10-minute random segment), every forwarded message, its content, its latency and every `/diagnostics` status compared with each other and with a model of twist_mux's rules; `vectors` writes `crates/mower_mux/tests/vectors/` from a C++ run ("The twist_mux oracle" below) |
 | `rsp_capture.py` | **robot_state_publisher** (step E4): what rsp 3.3.4 publishes for the real robot's xacro (`/tf_static`, `/robot_description`, and `/tf` for a script of `/joint_states` around its 20 Hz throttle), every float as written, into `crates/mower_static_tf/tests/rsp_capture.json` |
+| `static_tf_oracle.py` | **static_tf** (step E4): the image's rsp 3.3.4 and `mower_rsd --modules static_tf` side by side on DDS, the same URDF and rsp_capture.py's `/joint_states` script; every message of `/tf`, `/tf_static` and `/robot_description` compared (frames, stamps, values, latency), a late joiner, tf2 lookups, the writers' QoS, check_run.py's TF_CHAIN ("The static_tf oracle" below) |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline and on content (robot online, base and odometry fresh, pose updating) |
 | `switch.sh`, `measure.sh` | put the robot on a test image with `NAV_COMPOSITION` / `RUST_DAEMON` / `RUST_BASE` / `RUST_LOCALIZE` / `RUST_NAV_CORE` / any `KEY=VAL`, check which drivers actually run, and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 
@@ -110,6 +111,40 @@ the copy's; p50 stays within 1 ms. Every output must be the input it names, bit 
   Per message against the reference: p50 +0.50 ms, p99 +1.54 ms (the second copy +0.14 / +1.02): the bridge's hop.
 - `/diagnostics`: 2.00 a second, word for word, no wrong status. Its statuses always carry the current lock priority
   (its tick comes first by construction); the copies' carry the previous tick's in 103 and 89 of 1364.
+
+## The static_tf oracle
+
+`static_tf_oracle.py` runs the image's robot_state_publisher (its outputs remapped under `/oracle/`) and
+`mower_rsd --modules static_tf` (through mower_rsd's bridge, on the real names) side by side, on the URDF xacro makes
+of real_robot.xacro, and sends both rsp_capture.py's script of `/joint_states` at 25 Hz from one rclpy probe with
+mower_base's writer QoS. It compares every message: `/tf` one for one (frames, stamps, translations to the bit,
+quaternions within 1e-15) with the latency of each against rsp's; `/tf_static` (one message, one stamp, a late joiner
+gets it again, a tf2 Buffer fed from each side looks the production chains up within 1e-12); `/robot_description` (the
+URDF text); the writers' QoS as the graph shows them; and check_run.py's TF_CHAIN with the data collection's two
+static_transform_publishers next to the module.
+
+```bash
+docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=75 \
+  -v <repo>:/r:ro -v <out>:/o -v <dir with mower_rsd>:/b:ro \
+  --entrypoint bash mower_path_planning:ros-free-test -c \
+  'source /opt/ros/jazzy/setup.bash && source /mower_ws/install/setup.bash && \
+   python3 /r/src/mower_rs/tools/static_tf_oracle.py --rust /b/mower_rsd --out /o/static_tf.json'
+# STATIC_TF_ORACLE_OK, or STATIC_TF_ORACLE_FAIL and what differs
+```
+
+**Against rsp** (2026-10-30, the E4 merge's release mower_rsd, two runs): `STATIC_TF_ORACLE_OK` both times.
+
+- `/tf`: the same 50 and 51 messages out of the 88 joint states (the wall-clock part of the script falls on rsp's
+  throttle differently from run to run, the same for both), the same frames and stamps, translations to the bit,
+  quaternions within 2.8e-16 (218 of 388 and 224 of 396 components bit for bit: rsp's KDL has fused multiply-adds).
+  static_tf's messages arrive p50 +0.38 / +0.67 ms and p99 +1.48 / +1.13 ms after rsp's: the bridge's two hops,
+  `/joint_states` in and `/tf` out.
+- `/tf_static`: one message each, 7 transforms in rsp's order, 24 of 28 quaternion components bit for bit, worst
+  1.1e-16; a late joiner gets one message again; tf2 lookups through both differ by 1.1e-16 at most.
+- `/robot_description`: one message each, the same 16640 characters.
+- The writers: `R TL 1`, `R V 100`, `R TL 1` on both sides (the bridge's for static_tf); both read `/joint_states`
+  `BE V 5`.
+- check_run.py's TF_CHAIN holds with the module and the data collection's two static_transform_publishers.
 
 ## Switching and measuring on the robot
 

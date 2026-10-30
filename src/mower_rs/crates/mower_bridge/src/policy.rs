@@ -368,8 +368,11 @@ fn topic_directions(name: &str, ends: &[&End]) -> Result<Outcome, String> {
     let live_bus_writer = bus_writers.iter().any(|e| !e.endpoint.silent);
     let mut to_ros = !bus_writers.is_empty();
     // No live writer on the bus and none known elsewhere: whoever writes it
-    // is on DDS (a tool, a node the manifest does not know).
-    let from_ros = !bus_readers.is_empty() && (!dds_writers.is_empty() || !live_bus_writer);
+    // is on DDS (a tool, a node the manifest does not know). A writer whose
+    // samples no bus reader needs brings nothing in on its own (it still
+    // counts for the reader's QoS when something else does).
+    let needed = dds_writers.iter().any(|e| !e.endpoint.unread_on_bus);
+    let from_ros = !bus_readers.is_empty() && (needed || !live_bus_writer);
     let mut outcome = Outcome::default();
     if to_ros && from_ros {
         if live_bus_writer {
