@@ -135,9 +135,15 @@ mod tests {
         assert!(pty.slave_name.starts_with("/dev/pts/") || pty.slave_name.starts_with("/dev/tty"), "{}", pty.slave_name);
         let mut port = std::fs::OpenOptions::new().read(true).write(true).open(&link).unwrap();
         port.write_all(b"\xA5\x5Ahost").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // The tty layer hands the bytes on from a work queue, which on a
+        // loaded host can take longer than any fixed sleep.
         let mut buf = [0u8; 64];
-        let n = pty.read(&mut buf);
+        let mut n = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while n < 6 && std::time::Instant::now() < deadline {
+            n += pty.read(&mut buf[n..]);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert_eq!(&buf[..n], b"\xA5\x5Ahost", "raw: nothing translated or echoed");
         assert_eq!(pty.write(b"board\n\x0d"), 7);
         let mut got = [0u8; 7];
