@@ -80,6 +80,15 @@ def generate_launch_description():
         description='Run the mower_rs velocity guards instead of the rclpy ones',
     )
 
+    # rust_mux:=true (with rust_daemon) runs mower_rsd's mux module instead
+    # of the C++ twist_mux, which twist_mux.launch.py then does not start.
+    declare_rust_mux = DeclareLaunchArgument(
+        'rust_mux',
+        default_value='false',
+        description='The mux runs as mower_rsd module mux (with rust_daemon), '
+                    'so twist_mux.launch.py starts no C++ twist_mux',
+    )
+
     declare_rust_daemon = DeclareLaunchArgument(
         'rust_daemon',
         default_value='false',
@@ -267,6 +276,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'rust_guards': LaunchConfiguration('rust_guards'),
+            'rust_mux': LaunchConfiguration('rust_mux'),
             'rust_daemon': LaunchConfiguration('rust_daemon'),
         }.items(),
     )
@@ -442,6 +452,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_rust_guards,
+        declare_rust_mux,
         declare_rust_imu,
         declare_rust_base,
         declare_base_params_file,

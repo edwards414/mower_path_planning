@@ -6,7 +6,13 @@ license.workspace = true
 description = "twist_mux 4.5.0's rules as a mower_rsd module: priorities, locks and timeouts, /diagnostics (docs/ROS_FREE_PLAN.md step E4)"
 
 [dependencies]
+futures.workspace = true
+# the bus bridge's node names, which the interlock leaves out
+mower_bridge = { path = "../mower_bridge" }
 mower_bus = { path = "../mower_bus" }
+mower_rs_common = { path = "../mower_rs_common" }
+r2r.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 # tests/replay.rs reads the oracle's vectors

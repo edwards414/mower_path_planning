@@ -17,12 +17,12 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
   1-5); base, pid_autotune and the guards stay on r2r until they move after E3. ws_bridge is in the manifest (step E3),
-  on r2r.
+  on r2r. E4's mux (`rust_mux`, off by default) is born on the bus and replaces the outside twist_mux when it runs.
 
 ## The manifest
 
-`MODULES` holds the 14 modules of `mower_rsd` that have endpoints (19 instances): the 13 typed modules, and ws_bridge
-(`bridge`, step E3), whose endpoints are its allow-list. `OUTSIDE` holds the nodes they depend on.
+`MODULES` holds the 15 modules of `mower_rsd` that have endpoints (20 instances): the 14 typed modules, E4's mux among
+them, and ws_bridge (`bridge`, step E3), whose endpoints are its allow-list. `OUTSIDE` holds the nodes they depend on.
 
 - **The module code is the source of truth.** BUS_TOPICS.md sections 2 and 3 cite the lines.
 - **One entry per endpoint:** what it does (`publishes`, `subscribes`, `serves`, `calls`, and for an action
@@ -164,10 +164,17 @@ each with its flag; every other instance is elsewhere, on DDS.
 - **E2 steps 6 and 7 after it** take the guards' and pid_autotune's names into the process. What stays for ws_bridge
   is the recorder's six (until E5), `set_parameters` (until the parameter services move), and the `to_ros` of the
   three command topics: ws_bridge writes them on the bus, and every topic written on the bus gets its DDS face.
+- **E4-3, the mux** in the production set (`rust_mux`): three lines more, `from_ros /nav_cmd_vel` (nav2's
+  velocity_smoother, `R V 1`), `to_ros /cmd_vel_guard_input` (to the final guard on r2r, `R V 1`) and `to_ros
+  /diagnostics` (`R V 1`), and one less, nav's nav_core-only `to_ros /nav_cmd_vel`, which then reaches the mux
+  in-process (the plan's notes say so). The outside twist_mux is `replaced_by` the mux: with the guards on the bus too
+  (step 6), the output is in-process and nothing of the drive path comes in from DDS. Without the mux in the set, the
+  plan is E2's line for line, as above.
 
-- **Refused:** of all 16384 combinations of flags with the production set, only those that put mower_base on the bus
-  with exactly one of robot_status and pid_autotune: `/mower_base/led_command` would then need both directions. Base and
-  pid_autotune move together, after status (decision 4), so the order never meets it.
+- **Refused:** of all 16384 combinations of the E2 and E3 flags with the production set, for each set of E4 modules
+  (32768 with the mux in it or not), only those that put mower_base on the bus with exactly one of robot_status and
+  pid_autotune: `/mower_base/led_command` would then need both directions. Base and pid_autotune move together, after
+  status (decision 4), so the order never meets it.
 
 ## Running
 
@@ -246,5 +253,5 @@ say so.
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (270 names, the five action
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (278 names, the five action
   ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).

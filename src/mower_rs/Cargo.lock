@@ -840,8 +840,13 @@ dependencies = [
 name = "mower_mux"
 version = "0.1.0"
 dependencies = [
+ "futures",
+ "mower_bridge",
  "mower_bus",
+ "mower_rs_common",
+ "r2r",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -922,6 +927,7 @@ dependencies = [
  "mower_imu",
  "mower_localize",
  "mower_map",
+ "mower_mux",
  "mower_nav",
  "mower_pid_autotune",
  "mower_record",

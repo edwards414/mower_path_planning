@@ -144,6 +144,14 @@ const MODULES: &[Module] = &[
         ],
     },
     Module {
+        // twist_mux (E4, rust_mux, off by default): between the two guards,
+        // it reads the manual guard's output and feeds the final guard. Born
+        // on the bus; rust_daemon:=false runs the C++ twist_mux.
+        id: "mux",
+        switch: "rust_mux",
+        instances: &[Instance { node: "twist_mux", run: |c, m| Box::pin(mower_mux::run(c, m)) }],
+    },
+    Module {
         id: "imu",
         switch: "rust_imu",
         instances: &[Instance { node: "imu", run: |c, m| Box::pin(mower_imu::run(c, m)) }],
@@ -683,6 +691,7 @@ mod tests {
             ("base", vec!["mower_base"]),
             ("status", vec!["robot_status"]),
             ("guards", vec!["manual_velocity_guard", "velocity_command_guard"]),
+            ("mux", vec!["twist_mux"]),
             ("imu", vec!["imu"]),
             ("gps", vec!["gps"]),
             ("localize", vec!["ekf_filter_node_odom", "ekf_filter_node_map", "navsat_transform"]),

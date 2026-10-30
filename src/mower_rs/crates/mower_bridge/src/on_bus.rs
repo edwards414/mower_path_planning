@@ -10,6 +10,8 @@ pub const ON_BUS: &[(&str, bool)] = &[
     ("base", false),
     ("status", true),
     ("guards", false),
+    // E4: born on the bus
+    ("mux", true),
     ("imu", true),
     ("gps", true),
     ("localize", true),
