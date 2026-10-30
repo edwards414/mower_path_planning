@@ -106,7 +106,10 @@ transient-local reader on a volatile writer. The bus connects such pairs (bus/RE
 change behaviour when it moves. There is none (5.5).
 
 **"unconfirmed".** nav2, twist_mux, robot_state_publisher, tf2 and rosbag2 are apt packages in the image. Their QoS is
-upstream behaviour that this repo does not contain, and it was not checked here.
+upstream behaviour that this repo does not contain, and it was not checked here. For step E4, twist_mux 4.5.0,
+robot_state_publisher 3.3.4 and nav2's velocity_smoother were measured in the runtime image, offline
+(`tools/mux_oracle.py`, `tools/rsp_capture.py`, and the E4 design's `ros2 topic info -v`): those cells say
+"measured".
 
 **Rates and sizes.** Given only where the code or a measurement in the docs states them; "unknown" otherwise.
 
@@ -153,12 +156,12 @@ Each citation is `alias:line`.
 |---|---|---|---|---|---|---|---|
 | `/app_joy_cmd` | `geometry_msgs/TwistStamped` | app through ws_bridge, untyped writer `R V 10` (mower_ws_bridge/hub:417; allowed ws_bridge.yaml:30) | `manual_velocity_guard` as `cmd_vel_in`, `R V 1` (velocity_command_guard:84; rule robot.launch.py:83) | app: every 100 ms while a stick is held, plus on drag (app/manual_control_overlay:48, 305) | 10 Hz while driving | no | DDS→bus until E3 |
 | `/manual_command_clock` | `std_msgs/Header` | `manual_velocity_guard` as `command_clock`, `R V 1`; created only with `require_command_session` (velocity_command_guard:85-89; robot.launch.py:85; mower_rsd.yaml:81) | — | app via ws_bridge (app/mission_mock_provider:659-662); stale after 800 ms (:167-169) | 20 Hz (`command_clock_period_s` 0.05, velocity_command_guard:79, 90-91) | no | bus→DDS until E3 |
-| `/joy_cmd` | `TwistStamped` | `manual_velocity_guard` as `cmd_vel_out`, `R V 1` (velocity_command_guard:83; robot.launch.py:84) | `nav_action_server`, manual source, `R V 10` (mower_nav:1657-1658) | twist_mux input `app_manual`, priority 90, timeout 0.5 s (twist_mux_topics.yaml:13-16); its reader QoS unconfirmed | one per input, plus one forced zero 0.2 s after a non-zero stream stops (velocity_command_guard:73, 165-173; velocity_command_guard/core:232-240) | no | in-process to nav; bus→DDS until E4 |
+| `/joy_cmd` | `TwistStamped` | `manual_velocity_guard` as `cmd_vel_out`, `R V 1` (velocity_command_guard:83; robot.launch.py:84) | `nav_action_server`, manual source, `R V 10` (mower_nav:1657-1658) | twist_mux input `app_manual`, priority 90, timeout 0.5 s (twist_mux_topics.yaml:13-16); its reader `SD`, `R V 1` (measured) | one per input, plus one forced zero 0.2 s after a non-zero stream stops (velocity_command_guard:73, 165-173; velocity_command_guard/core:232-240) | no | in-process to nav; bus→DDS until E4 |
 | `/physical_joy_cmd`, `/keyboard_cmd_vel` | `TwistStamped` | none (teleop off by default: mower.launch.py:170-186, 333-345, 406-440) | `nav_action_server`, `R V 10` (mower_nav:1657) | twist_mux, priorities 100 and 80 (twist_mux_topics.yaml:17-24) | — | n/a | DDS→bus only if teleop is turned on |
-| `/nav_cmd_vel` | `TwistStamped` | nav2 `velocity_smoother` (`cmd_vel_smoothed` remapped: navigation.launch.py:351-355, mower.launch.py:315; stamped, nav2_params:238). *nav_core*: `nav_action_server`, `R V 10` (mower_nav/core_backend:121, 223-224) | — | twist_mux `navigation`, priority 10, timeout 0.5 s (twist_mux_topics.yaml:9-12) | 20 Hz while navigating (nav2_params:225; mower_nav/core_backend:22-26) | no | nav2: DDS only. *nav_core*: bus→DDS until E4 |
+| `/nav_cmd_vel` | `TwistStamped` | nav2 `velocity_smoother` (`cmd_vel_smoothed` remapped: navigation.launch.py:351-355, mower.launch.py:315; stamped, nav2_params:238), `R V 1` (measured). *nav_core*: `nav_action_server`, `R V 10` (mower_nav/core_backend:121, 223-224) | — | twist_mux `navigation`, priority 10, timeout 0.5 s (twist_mux_topics.yaml:9-12); its reader `R V 1` (measured) | 20 Hz while navigating (nav2_params:225; mower_nav/core_backend:22-26) | no | nav2: DDS only. *nav_core*: bus→DDS until E4 |
 | `/navigation_safety_stop` | `TwistStamped` (zero) | `nav_action_server`, `R V 10` (mower_nav:1630) | — | twist_mux, priority 50, timeout 0.2 s (twist_mux_topics.yaml:5-8) | 20 Hz whenever autonomy is not authorised: only a running, reserved goal is (mower_nav/state:162-171), so all the time at idle (mower_nav:271-282, 1981-1998) | no | bus→DDS until E4 |
 | `/navigation_coordinator_lock` | `std_msgs/Bool` | `nav_action_server`, `R V 10` (mower_nav:1631) | — | twist_mux lock, priority 50, timeout 0.3 s (twist_mux_topics.yaml:25-29) | 20 Hz (mower_nav:276, 1981-1998) | no | bus→DDS until E4. A stopped module leaves the lock stale, i.e. locked (mower_nav:2034-2035) |
-| `/cmd_vel_guard_input` | `TwistStamped` | twist_mux `cmd_vel_out` (twist_mux.launch.py:57); writer QoS unconfirmed | `velocity_command_guard` as `cmd_vel_in`, `R V 1` (velocity_command_guard:84; robot.launch.py:86) | twist_mux | about 20 Hz at idle, from the safety stop (19.7 Hz measured 2026-09, REFACTOR:24) | no | DDS→bus until E4 |
+| `/cmd_vel_guard_input` | `TwistStamped` | twist_mux `cmd_vel_out` (twist_mux.launch.py:57), `R V 1` (`rclcpp::QoS(KeepLast(1))`, measured) | `velocity_command_guard` as `cmd_vel_in`, `R V 1` (velocity_command_guard:84; robot.launch.py:86) | twist_mux | about 20 Hz at idle, from the safety stop (19.7 Hz measured 2026-09, REFACTOR:24) | no | DDS→bus until E4 |
 | `/drivetrain_guarded_cmd_vel` | `TwistStamped` | `velocity_command_guard` as `cmd_vel_out`, `R V 1` (velocity_command_guard:83; robot.launch.py:87) | `mower_base`, `SD` (mower_base:896, 965) | — | as its input | no | in-process only; move guard and base together (6, step 6) |
 
 ### 2.2 Base driver
@@ -167,7 +170,7 @@ Each citation is `alias:line`.
 |---|---|---|---|---|---|---|---|
 | `/odom` | `nav_msgs/Odometry` | `mower_base`, `SD` (mower_base:897, 940) | both EKFs as `odom0`, `BE V 10` (mower_localize/ekf:95-99, 347; ekf_params:16, 22, 68, 74). *nav_core*: `nav_action_server`, `R V 10` (mower_nav/core_backend:226) | nav2 `controller_server`: nav2_params:42-105 sets no `odom_topic`, so the upstream default `odom` applies (unconfirmed); recorder (record_topics.yaml:31) | 25 Hz (README:154; 25.005 Hz measured, README:1148) | no | in-process; bus→DDS until E9 and E5 |
 | `/odom_slow` | `Odometry` | `mower_base` slow copy, `R V 10` (mower_base:787-789, 912-913, 941-946; mower_rsd.yaml:49-50) | `robot_status`, one subscription serving both `heartbeat_source_topic` and `odom_topic`, `R V 10` (robot_status:160-166; mower_rsd.yaml:69, 72) | — | ≤5 Hz (4.41 Hz, README:1149) | no | in-process only |
-| `/joint_states` | `sensor_msgs/JointState` | `mower_base`, `SD` (mower_base:898, 947-948) | — | robot_state_publisher (reader QoS unconfirmed) | 25 Hz (README:156) | no | bus→DDS until E4 |
+| `/joint_states` | `sensor_msgs/JointState` | `mower_base`, `SD` (mower_base:898, 947-948) | — | robot_state_publisher, `BE V 5` (`SensorDataQoS`, measured) | 25 Hz (README:156) | no | bus→DDS until E4 |
 | `/mower_base/telemetry` | `std_msgs/String`, JSON | `mower_base`, `BE V 1` (mower_base:900, 950-954) | `robot_status`, `BE V 1` (robot_status:104, 170); `battery_state`, `BE V 1` (mower_battery:236, 290); `pid_autotune`, `BE V 1`, subscribed only during a session (mower_pid_autotune:807, 896, 951, 969-983) | recorder (record_topics.yaml:37) | one per 0x85 frame, about 15-17 Hz (README:157); about 1.2 kB (REFACTOR:27) | no | in-process; bus→DDS while recording (E5) |
 | `/mower_base/firmware_info` | `String`, JSON | `mower_base`, `R TL 1` (mower_base:901-902, 955-959) | `robot_status`, `R TL 1` (robot_status:95, 173-177) | — | once per distinct 0x87 (README:158) | no | in-process only |
 | `/mower_base/led_command` | `String`, JSON | `robot_status`, `R TL 1` (robot_status:99, 153-157); `pid_autotune`, `R TL 1` (mower_pid_autotune:810, 840) | `mower_base`, `R TL 1` (mower_base:903, 1002) | — | on change | no | in-process only; two latched writers (5.5 e) |
@@ -189,8 +192,8 @@ Each citation is `alias:line`.
 | `/odometry/global_slow` | `Odometry` | `ekf_filter_node_map` slow copy, `R V 10` (mower_localize/ekf:44-61, 211-214; mower_rsd.yaml:126-127) | `flutter_adapter`, `R V 10` (mower_adapter:171, 224; mower_rsd.yaml:162); `path_record_node`, `R V 10` (mower_record:180, 219; mower_rsd.yaml:157) | — | ≤5 Hz (4.33 Hz, README:1150-1151) | no | in-process only |
 | `/odometry/gps` | `Odometry` | `navsat_transform`, `R V 10` (mower_localize/navsat:41, 181) | `ekf_filter_node_map` as `odom1`, `BE V 10` (ekf_params:78, 84); `nav_action_server`, `R V 10` (mower_nav:1609-1611, 1767) | data collection | unknown: the loop runs at 30 Hz (ekf_params:141) and publishes only what the core prepared (mower_localize/navsat:383-393) | no | in-process only |
 | `/gps/filtered` | `NavSatFix` | `navsat_transform`, `R V 10` (mower_localize/navsat:42, 182-186; ekf_params:147) | `robot_status`, `BE V 5` (robot_status:102, 168) | — | unknown (same loop) | no | in-process only |
-| `/tf` | `tf2_msgs/TFMessage` | <ul><li>`ekf_filter_node_odom` (odom→base_footprint) and `ekf_filter_node_map` (map→odom), `R V 100` (mower_localize/ekf:107-109, 216, 287-323; ekf_params:9, 61)</li><li>`mower_base`, an `SD` writer that never publishes: `enable_odom_tf` is false (mower_base:619-621, 740; README:155)</li><li>robot_state_publisher: the wheel joints</li></ul> | none in production: the EKFs share their edges through `mower_localize::tfbus` (mower_localize/tfbus:1-33), and *nav_core* reads tfbus too (robot.launch.py:222-225) | nav2 tf listeners (QoS unconfirmed); recorder (record_topics.yaml:32) | 76.6 Hz measured 2026-09, with 30 Hz EKFs and 50 Hz joint states (REFACTOR:19); now unknown | no | bus→DDS until E9 and E5; nothing needs DDS→bus |
-| `/tf_static` | `TFMessage` | robot_state_publisher (base_link→imu_link, gps_link, ...; QoS unconfirmed); `navsat_transform`, the `utm` frame, `R TL 1` (mower_localize/navsat:187-191; ekf_params:146) | both EKFs and `navsat_transform`, `R TL 100` (mower_localize/ekf:111-113, 185; mower_localize/navsat:84-86, 114) | nav2 tf listeners; recorder, override `R TL 100` (qos_overrides.yaml:51-55) | latched: once per writer | no | DDS→bus until E4. Decided: navsat's `utm` writer stays on r2r until E4, so nothing goes bus→DDS and nothing can echo (5.5 d) |
+| `/tf` | `tf2_msgs/TFMessage` | <ul><li>`ekf_filter_node_odom` (odom→base_footprint) and `ekf_filter_node_map` (map→odom), `R V 100` (mower_localize/ekf:107-109, 216, 287-323; ekf_params:9, 61)</li><li>`mower_base`, an `SD` writer that never publishes: `enable_odom_tf` is false (mower_base:619-621, 740; README:155)</li><li>robot_state_publisher: the two wheel joints, `R V 100`, 12.5 Hz: one message per `/joint_states` whose stamp is 50 ms (`publish_frequency` 20 Hz) past the last one it published, stamped with that stamp (measured)</li></ul> | none in production: the EKFs share their edges through `mower_localize::tfbus` (mower_localize/tfbus:1-33), and *nav_core* reads tfbus too (robot.launch.py:222-225) | nav2 tf listeners, `R V 100` (measured); recorder (record_topics.yaml:32) | 76.6 Hz measured 2026-09, with 30 Hz EKFs and 50 Hz joint states (REFACTOR:19); now unknown | no | bus→DDS until E9 and E5; nothing needs DDS→bus |
+| `/tf_static` | `TFMessage` | robot_state_publisher, the URDF's 7 fixed joints in one message, sorted by joint name, one stamp (base_footprint→base_link, base_link→imu_link, gps_link, ...), `R TL 1` (measured); `navsat_transform`, the `utm` frame, `R TL 1` (mower_localize/navsat:187-191; ekf_params:146) | both EKFs and `navsat_transform`, `R TL 100` (mower_localize/ekf:111-113, 185; mower_localize/navsat:84-86, 114) | nav2 tf listeners; recorder, override `R TL 100` (qos_overrides.yaml:51-55) | latched: once per writer | no | DDS→bus until E4. Decided: navsat's `utm` writer stays on r2r until E4, so nothing goes bus→DDS and nothing can echo (5.5 d) |
 
 ### 2.4 Maps and mission geometry
 
@@ -260,9 +263,12 @@ None of the following has an endpoint in `mower_rsd`:
   - the costmap topics, which the recorder keeps in its snapshot buffer (record_topics.yaml:53-54);
   - action status and feedback;
   - `/bond`, unused because of `bond_timeout` 0 (navigation.launch.py:256-265, 364).
-- **robot_state_publisher's `/robot_description`.**
+- **robot_state_publisher's `/robot_description`:** the URDF text, one message, `R TL 1` (measured); nothing
+  subscribes.
 - **The recorder's own topics:** `/mower_recorder/fault`, `/graph_snapshot` and `/graph_events` (graph_snapshot:50-53).
 - **`/diagnostics` and `/cmd_vel`:** recorded (record_topics.yaml:34, 44), but no producer of either is in this repo.
+  `/diagnostics` comes from twist_mux (two a second, `R V 1`) and nav2's `lifecycle_manager_navigation` (one a second;
+  measured).
 
 ## 3. Services
 
@@ -415,7 +421,8 @@ So do E3 before the moves in steps 6 and 7. Then neither the joystick path nor t
 - *bus→DDS:* `/joy_cmd`, `/navigation_safety_stop`, `/navigation_coordinator_lock`, `/joint_states`; with *nav_core*,
   also `/nav_cmd_vel`.
 - *DDS→bus:* `/cmd_vel_guard_input`, and rsp's frames on `/tf_static`.
-- rsp's wheel joints on `/tf` have no consumer in the process. PLAN:357 keeps only the two static frames.
+- rsp's wheel joints on `/tf` have no consumer in the process. E4 keeps all of rsp's output anyway (the 7 fixed
+  joints, the wheels' `/tf` from `/joint_states`, `/robot_description`): the owner's decision D2 of the E4 design.
 
 **Until E5 (recorder), while a recording runs.**
 
@@ -501,6 +508,7 @@ Every rule above is passed to `mower_rsd` as a node-scoped `-r <node>:<from>:=<t
 - **Readers outside the process** (twist_mux, robot_state_publisher, nav2's StaticLayer and tf2) see only reliable
   writers from the process. A reliable writer matches any reader. Where those readers are transient local (StaticLayer,
   tf2 static), the writers are transient local too. So the unconfirmed upstream reader QoS cannot cause a refusal.
+  twist_mux's readers (`R V 1`) and robot_state_publisher's (`BE V 5`) are measured now.
 - **ws_bridge** picks its reader QoS from the publishers it discovers at the first subscribe: reliable only if all are
   reliable, transient local only if all are (mower_ws_bridge/hub:298-315). It then keeps that QoS for the life of the
   bridge. Only a best-effort writer appearing later on an allow-listed topic could be refused, and none exists.

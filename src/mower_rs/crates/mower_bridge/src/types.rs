@@ -396,11 +396,26 @@ pub struct Endpoint {
     /// (e.g. `nav_backend: nav_core`). Bridged unless that would need a
     /// second direction on its name.
     pub only: Option<&'static str>,
+    /// An outside node's endpoint that this module of mower_rsd takes the
+    /// place of (E4: twist_mux, robot_state_publisher). While that module
+    /// runs in the process, robot.launch.py does not start the node, and the
+    /// policy leaves the endpoint out.
+    pub replaced_by: Option<&'static str>,
 }
 
 impl Endpoint {
     const fn new(kind: Kind, code: &'static str, iface: Iface) -> Self {
-        Endpoint { kind, code, name: code, param: None, iface, stays_on_r2r: false, silent: false, only: None }
+        Endpoint {
+            kind,
+            code,
+            name: code,
+            param: None,
+            iface,
+            stays_on_r2r: false,
+            silent: false,
+            only: None,
+            replaced_by: None,
+        }
     }
 
     /// The production name, when the code's name is relative or remapped.
@@ -423,6 +438,12 @@ impl Endpoint {
 
     pub const fn only(self, configuration: &'static str) -> Self {
         Endpoint { only: Some(configuration), ..self }
+    }
+
+    /// An outside endpoint that module `id` replaces when it runs in the
+    /// process.
+    pub const fn replaced_by(self, id: &'static str) -> Self {
+        Endpoint { replaced_by: Some(id), ..self }
     }
 
     /// A topic's QoS profile.

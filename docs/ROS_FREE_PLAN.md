@@ -354,7 +354,7 @@ local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/glo
 | E1 | `mower_bus` crate | typed broadcast，channel 名沿用 topic 名；map / marker / `/robot/info` 這類 latched topic 要有 transient-local 語意；`Clock` trait 給 replay |
 | E2 | 15 個 crate 的 IO 層從 r2r 換 bus | base、localize、guards 已是「純核心 + 薄 IO」，機械式替換。參數改成 mowerd 讀一份 YAML、按模組名分段，key 不變 |
 | E3 | `ws_bridge` 的 schema registry | 現在靠 r2r untyped + ROS introspection 把任意訊息轉 JSON。改成每個 bus 型別用 serde 產出和 ROS 訊息同樣的 JSON 欄位佈局；範圍是 `.cargo/config.toml` 那 17 個套件裡實際用到的 21 個型別。`/rosapi/topics` 與 app 呼叫的參數服務（`/boustrophedon_coverage/set_parameters`）在這裡模擬；`/map_manage/get_parameters` 與 `/boustrophedon_coverage/get_parameters` 只有 adapter 在程序內每秒呼叫，app 呼叫不到（[BUS_TOPICS.md](BUS_TOPICS.md) 3.1） |
-| E4 | 併入 twist_mux、robot_state_publisher | mux 是優先權加 lock 約 100 行；rsp 只剩 imu_link / gps_link 兩個靜態 transform，從 xacro 抄進設定 |
+| E4 | 併入 twist_mux、robot_state_publisher | mux 是優先權、lock 與逾時，加每秒兩則 `/diagnostics`（twist_mux 4.5.0 的規則逐條實測過，`tools/mux_oracle.py`）；rsp 不只兩個靜態 transform：7 個 fixed joint 的 `/tf_static`、兩個輪子 12.5 Hz 的 `/tf` 和 `/robot_description`，E4 全部照發（決定 D2，`tools/rsp_capture.py`） |
 | E5 | recorder 重寫 | app 用六個 `/mower_recorder/*` 端點，加 Bag 頁的改名、刪除、上傳 R2，加 MediaMTX 錄影 API 與尾燈。用 Rust 的 `mcap` crate 寫 MCAP，Foxglove 與 `mower-check-run` 不用重寫。資料收集 profile（gscam 進 MCAP 給 GrassVision）要決定留不留 |
 | E6 | host 整合 | `firmware/tools/mower_flash.py`（480 行）移植進 `firmware-sync`，協定核心 `mower_base_core` 已有；link-status、pairing、host.request 收進 mowerd。第一版保留 `~/.mower` 的 JSON 檔契約，一次只換一層 |
 | E7 | 打包 | 先不脫離 Docker：`debian:bookworm-slim` + `mowerd` 約 40 MB，`mower-update.sh` 與 OTA 流程不動，每次更新只剩幾 MB，pull 的負載（2026-10-08 讓板子硬重開的那種）也跟著消失。原生 systemd 留給 Phase F |
