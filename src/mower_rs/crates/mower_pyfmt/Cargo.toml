@@ -1,0 +1,9 @@
+[package]
+name = "mower_pyfmt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python 3.12 json.dumps, float repr and PyYAML 6.0.1 safe_dump output, byte for byte (no dependencies)"
+
+[dev-dependencies]
+serde_json = { workspace = true }

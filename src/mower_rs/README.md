@@ -33,6 +33,23 @@ speed limits, the `BaseCycle` hardware state machine, serial record/replay).
 It has no `r2r` dependency, so `cargo test -p mower_base_core` runs anywhere;
 see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 
+Four more libraries, none used by a binary yet, are the ground work for the
+Rust recorder that will replace `mower_recorder` (E5); each is tested against
+what the Python recorder and rosbag2 wrote in `deploy/test/golden/recorder`:
+
+- `mower_schema`: the `.msg` texts and RIHS01 hashes of the bus's and the
+  record profiles' message types (generated from the robot image, committed),
+  their layouts, and the schema text rosbag2 writes for them;
+- `mower_cdr`: schema-guided CDR for those types, through serde or a dynamic
+  value, held to rmw_cyclonedds itself (`tests/rmw_oracle.rs`);
+- `mower_mcap`: the MCAP bags `ros2 bag record` writes (rosbag2 0.26.11,
+  libmcap 1.3.1), byte for byte: chunks, zstd, splits, snapshot mode, the
+  `rosbag2` metadata records and `metadata.yaml`;
+- `mower_pyfmt`: Python's `json.dumps` and PyYAML's `safe_dump`, byte for
+  byte, for the recorder's JSON messages and YAML files.
+
+They have no `r2r` dependency (`mower_cdr`'s oracle test uses it).
+
 `robot.launch.py` takes all the switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` / `RUST_BASE` in
 `/opt/mower/.env`) so the safety-critical ones — the guards and the base

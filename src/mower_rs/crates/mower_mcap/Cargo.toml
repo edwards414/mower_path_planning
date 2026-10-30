@@ -1,0 +1,14 @@
+[package]
+name = "mower_mcap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "rosbag2's MCAP bag writer (libmcap 1.3.1 and rosbag2 Jazzy 0.26.11, byte for byte): chunks, compression, splits, snapshot mode, the rosbag2 metadata records and metadata.yaml"
+
+[dependencies]
+mower_schema = { path = "../mower_schema" }
+zstd = "0.14"
+
+[dev-dependencies]
+# an independent reader for the tests
+mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
