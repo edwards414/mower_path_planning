@@ -44,6 +44,10 @@ services:
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
       - record:=false
+      # The recorder's robot id and R2 file, as the recorder service below
+      # gets them: only RUST_RECORDER's bag module reads them here.
+      - robot_id:=${MOWER_ROBOT_ID:-mower}
+      - r2_env_file:=/home/mower/.mower/r2.env
       # u-blox ZED-F9P driver (mower_rs mower_gps) in this container ->
       # /fix + /gps/status; parameters in src/mower_bringup/config/gps.yaml.
       - enable_gps:=${GPS:-true}
@@ -89,6 +93,11 @@ services:
       # RUST_STATIC_TF (with RUST_DAEMON): mower_rsd's static_tf module
       # instead of robot_state_publisher, on the same URDF.
       - rust_static_tf:=${RUST_STATIC_TF:-false}
+      # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
+      # Python recorder of the recorder service below, which then sleeps.
+      # Not RUST_RECORD, the zone path recorder. E5-3a: the module does not
+      # record yet (its start is refused): keep it false until E5-3b.
+      - rust_recorder:=${RUST_RECORDER:-false}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour. Default on; RUST_DAEMON=false runs one binary each.
@@ -169,6 +178,9 @@ services:
   # only owner of /mower_recorder/* -- except during a data-collection run:
   # host/mower-data-collection.sh stops this service first and starts it
   # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
+  # RUST_RECORDER=true (_truthy's spellings, robot.launch.py) puts mower_rsd's
+  # bag module in its place: this container then only sleeps, so that
+  # /mower_recorder/* has one owner, and RUST_RECORDER=false brings it back.
   recorder:
     image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-stable}
     pull_policy: missing
@@ -178,6 +190,10 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 60s
     command:
+      - bash
+      - -c
+      - 'read -r on <<< "$${RUST_RECORDER:-}"; case "$$on" in [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) exec sleep infinity ;; esac; exec "$$@"'
+      - recorder
       - ros2
       - launch
       - mower_recorder
@@ -193,6 +209,8 @@ services:
       - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
       # Never flash the STM32 from this container (no /dev/stmcom here).
       - MOWER_FIRMWARE_SYNC=0
+      # read by the command above: true = the bag module records instead
+      - RUST_RECORDER=${RUST_RECORDER:-false}
     network_mode: host
     ipc: host
     pid: host

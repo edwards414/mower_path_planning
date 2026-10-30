@@ -89,7 +89,8 @@ mod utils;
 pub use utils::*;
 
 mod subscribers;
-pub use subscribers::Subscription;
+// mower_rs patch 3: RawSubscription, RawMessage, DropCounter
+pub use subscribers::{DropCounter, RawMessage, RawSubscription, Subscription};
 
 mod publishers;
 pub use publishers::{Publisher, PublisherUntyped};
@@ -126,7 +127,8 @@ mod clocks;
 pub use clocks::{Clock, ClockType};
 
 mod nodes;
-pub use nodes::{Node, Timer};
+// mower_rs patch 3: TopicEndpointInfo, for its topic_type_hash
+pub use nodes::{Node, Timer, TopicEndpointInfo};
 
 pub mod qos;
 

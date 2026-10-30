@@ -9,8 +9,9 @@
 #
 # A switch is absolute, never cumulative: .env is rebuilt from the pre-test
 # backup each time and NAV_COMPOSITION, RUST_DAEMON, RUST_BASE, RUST_LOCALIZE,
-# RUST_NAV_CORE, RUST_MUX and RUST_STATIC_TF are always written (the last five
-# false unless given as KEY=VAL), so a flag from an earlier call cannot stick.
+# RUST_NAV_CORE, RUST_MUX, RUST_STATIC_TF and RUST_RECORDER are always written
+# (the last six false unless given as KEY=VAL), so a flag from an earlier call
+# cannot stick.
 # The branch compose is required: main's may not pass them through and compose
 # silently ignores .env keys it does not reference. After `up` the container's
 # launch arguments are checked and the script waits until the expected base
@@ -32,6 +33,12 @@
 # RUST_STATIC_TF=true (E4: mower_rsd's static_tf module instead of
 # robot_state_publisher) takes effect only with RUST_DAEMON=true; once up, rsp
 # must run exactly when it does not (checked like the drivers).
+#
+# RUST_RECORDER=true (E5: mower_rsd's bag module, or the mower_recorder
+# binary with RUST_DAEMON=false, instead of the Python recorder, whose
+# container then sleeps): once up, the module must run and no Python
+# recorder_manager may; `up` recreates the recorder container too. E5-3a's
+# module does not record (its start is refused): for tests only until E5-3b.
 #
 # RUST_NAV_CORE=true (mower_nav_core instead of nav2) needs RUST_DAEMON=true
 # and RUST_LOCALIZE=true RUST_NAV=true given here, as robot.launch.py does, or
@@ -60,14 +67,15 @@ MARKER=ROSFREE_TEST_ACTIVE
 # shellcheck disable=SC2016  # the literal compose text, not an expansion
 PASSTHROUGH=('nav_composition:=${NAV_COMPOSITION' 'rust_daemon:=${RUST_DAEMON' 'rust_mux:=${RUST_MUX'
              'rust_base:=${RUST_BASE' 'rust_localize:=${RUST_LOCALIZE'
-             'rust_nav_core:=${RUST_NAV_CORE' 'rust_static_tf:=${RUST_STATIC_TF')
+             'rust_nav_core:=${RUST_NAV_CORE' 'rust_static_tf:=${RUST_STATIC_TF'
+             'rust_recorder:=${RUST_RECORDER')
 DRIVERS='ros2_control_node|mower_base|mower_localize|mower_rsd|ekf_node|navsat_transform_node'
 # nav2: one component container (NAV_COMPOSITION=true) or one process per
 # server; none of them may run with RUST_NAV_CORE=true.
 NAV2='component_container_isolated|controller_server|smoother_server|planner_server|behavior_server|bt_navigator|waypoint_follower|velocity_smoother|lifecycle_manager'
 # A launch respawn, or a mower_rsd base/localize module failing ("[mower_rsd]
 # base/mower_base: <why>; restarting in 2.0 s") and coming back in the same PID.
-RESTART_RE="\\[mower_rsd\\] (restarting (base|localize|mux|static_tf)/|(base|localize|mux|static_tf)/[^ :]*: )|process has died.*($DRIVERS|twist_mux|robot_state_publisher)"
+RESTART_RE="\\[mower_rsd\\] (restarting (base|localize|mux|static_tf|bag)/|(base|localize|mux|static_tf|bag)/[^ :]*: )|process has died.*($DRIVERS|twist_mux|robot_state_publisher|mower_recorder)"
 RS_BIN=/mower_ws/install/mower_rs/lib/mower_rs
 # mower_base's disarm on 0x85 loss (fix/rf-base-preflight 27bbfaa). Without it
 # re-seating the STM32 lead resumes whatever command is live.
@@ -101,7 +109,8 @@ refuse_broken() {
 
 compose_up() {
   local out
-  if ! out=$(sudo docker compose up -d lawan_node 2>&1); then
+  # the recorder service too: its command reads RUST_RECORDER
+  if ! out=$(sudo docker compose up -d lawan_node recorder 2>&1); then
     echo "$out" >&2
     die "docker compose up failed"
   fi
@@ -126,11 +135,12 @@ show_effective() {
   echo "== build: MOWER_VERSION=$(env_of MOWER_VERSION "$CENV" | or_none '<unset>')" \
     "MOWER_GIT_SHA=$(env_of MOWER_GIT_SHA "$CENV" | or_none '<unset>')"
   printf '== launch arguments:'
-  for k in nav_composition rust_base rust_localize rust_daemon rust_nav rust_nav_core rust_mux rust_static_tf; do
+  for k in nav_composition rust_base rust_localize rust_daemon rust_nav rust_nav_core rust_mux rust_static_tf \
+           rust_recorder; do
     printf ' %s=%s' "$k" "$(cmd_arg $k | or_none '<not passed>')"
   done
   echo " MOWER_FIRMWARE_SYNC=$(env_of MOWER_FIRMWARE_SYNC "$CENV" | or_none '<unset>')"
-  echo "== .env: $(sudo grep -E '^(IMAGE_TAG|NAV_COMPOSITION|RUST_BASE|RUST_LOCALIZE|RUST_DAEMON|RUST_NAV|RUST_NAV_CORE|RUST_MUX|RUST_STATIC_TF|MOWER_FIRMWARE_SYNC)=' .env | tr '\n' ' ')"
+  echo "== .env: $(sudo grep -E '^(IMAGE_TAG|NAV_COMPOSITION|RUST_BASE|RUST_LOCALIZE|RUST_DAEMON|RUST_NAV|RUST_NAV_CORE|RUST_MUX|RUST_STATIC_TF|RUST_RECORDER|MOWER_FIRMWARE_SYNC)=' .env | tr '\n' ' ')"
 }
 
 # "<pid> <executable> [<mower_rsd modules>]" for every process in the container.
@@ -140,11 +150,18 @@ procs() {
     for (i = 3; i < NF; i++) if ($i == "--modules") m = " " $(i + 1)
     print $1, n m }'
 }
+# The recorder container's processes, "<pid> <args>"; empty without one.
+rec_procs() {
+  local rcid
+  rcid=$({ sudo docker compose ps -q recorder 2>/dev/null || true; } | head -1)
+  [ -n "$rcid" ] || return 0
+  { sudo docker top "$rcid" -o pid,args 2>/dev/null || true; } | awk 'NR > 1'
+}
 # What is wrong with one snapshot against the expected base / localization
 # drivers (and, with RUST_NAV_CORE, the absence of nav2), one problem per line;
 # empty = as expected.
 proc_problems() {
-  local snap=$1 base=$2 loc=$3 daemon=$4 navcore=$5 mux=${6:-false} stf=${7:-false}
+  local snap=$1 base=$2 loc=$3 daemon=$4 navcore=$5 mux=${6:-false} stf=${7:-false} rec=${8:-false}
   n() { awk -v x="$1" '$2 == x' <<<"$snap" | wc -l; }
   rsd() { awk -v m="$1" '$2 == "mower_rsd" && ("," $3 ",") ~ ("," m ",") { f = 1 } END { exit !f }' <<<"$snap"; }
   if truthy "$base"; then
@@ -185,6 +202,17 @@ proc_problems() {
     [ "$(n robot_state_publisher)" -ge 1 ] || echo "C++ robot_state_publisher not running"
     ! rsd static_tf || echo "mower_rsd runs the static_tf module"
   fi
+  # E5: RUST_RECORDER runs the bag module (in mower_rsd, or the mower_recorder
+  # binary) and the recorder container sleeps; off, neither runs here and the
+  # Python recorder, outside lawan_node, is not checked
+  if truthy "$rec"; then
+    if truthy "$daemon"; then rsd bag || echo "no mower_rsd running the bag module"
+    else [ "$(n mower_recorder)" -ge 1 ] || echo "mower_recorder not running"; fi
+    ! grep -q recorder_manager_node <<<"$(rec_procs)" || echo "the Python recorder_manager still running"
+  else
+    ! rsd bag || echo "mower_rsd runs the bag module"
+    [ "$(n mower_recorder)" -eq 0 ] || echo "mower_recorder running"
+  fi
   # RUST_NAV_CORE=false runs nav2 as before, which this script does not check
   if truthy "$navcore"; then
     awk -v re="^($NAV2)\$" '$2 ~ re { print "nav2 " $2 " still running" }' <<<"$snap"
@@ -206,12 +234,12 @@ log_restarts() { { sudo docker logs "$CID" 2>&1 || true; } | { grep -E "$RESTART
 # (restore) waits out a flapping driver and only reports logged restarts:
 # main's config is what it is, and the files are already back.
 wait_for_drivers() {
-  local base=$1 loc=$2 daemon=$3 navcore=$4 mode=${5:-strict} mux=${6:-false} stf=${7:-false}
+  local base=$1 loc=$2 daemon=$3 navcore=$4 mode=${5:-strict} mux=${6:-false} stf=${7:-false} rec=${8:-false}
   local deadline=$((SECONDS + WAIT_S + STABLE_S))
   local snap problems pids prev='' since=0 restarts
   while :; do
     snap=$(procs)
-    problems=$(proc_problems "$snap" "$base" "$loc" "$daemon" "$navcore" "$mux" "$stf")
+    problems=$(proc_problems "$snap" "$base" "$loc" "$daemon" "$navcore" "$mux" "$stf" "$rec")
     pids=$(awk -v re="^($DRIVERS)\$" '$2 ~ re { print $1, $2 }' <<<"$snap" | sort)
     restarts=$(log_restarts)
     if [ "$mode" = strict ] && [ -n "$restarts" ]; then
@@ -275,14 +303,14 @@ if [ "${1:-}" = restore ]; then
   inspect_container
   show_effective
   [ "$IMAGE" = "$REPO:${tag:-stable}" ] || die "container runs $IMAGE, the restored .env says $REPO:${tag:-stable}"
-  for k in rust_base rust_localize rust_daemon rust_nav_core rust_mux rust_static_tf; do
+  for k in rust_base rust_localize rust_daemon rust_nav_core rust_mux rust_static_tf rust_recorder; do
     v=$(cmd_arg $k)
     if truthy "$v" && ! sudo grep -qx "${k^^}=$v" "$ENV_BAK"; then
       die "container still has $k:=$v after the restore"
     fi
   done
   wait_for_drivers "$(cmd_arg rust_base)" "$(cmd_arg rust_localize)" "$(cmd_arg rust_daemon)" \
-    "$(cmd_arg rust_nav_core)" warn "$(cmd_arg rust_mux)" "$(cmd_arg rust_static_tf)"
+    "$(cmd_arg rust_nav_core)" warn "$(cmd_arg rust_mux)" "$(cmd_arg rust_static_tf)" "$(cmd_arg rust_recorder)"
   sudo rm -f "$ENV_BAK" "$CF_BAK" "$MARKER"
   echo "pre-test .env and docker-compose.yaml back (md5 verified), backups removed"
   echo RESTORE_OK
@@ -309,8 +337,8 @@ grep -qE 'image: \$\{IMAGE_REPO:-[^}]+\}:\$\{IMAGE_TAG' "$CF" ||
 
 declare -A SET=([IMAGE_TAG]=$TAG [NAV_COMPOSITION]=$NC [RUST_DAEMON]=$RD
                 [RUST_BASE]=false [RUST_LOCALIZE]=false [RUST_NAV_CORE]=false [RUST_MUX]=false
-                [RUST_STATIC_TF]=false)
-ORDER=(IMAGE_TAG NAV_COMPOSITION RUST_DAEMON RUST_BASE RUST_LOCALIZE RUST_NAV_CORE RUST_MUX RUST_STATIC_TF)
+                [RUST_STATIC_TF]=false [RUST_RECORDER]=false)
+ORDER=(IMAGE_TAG NAV_COMPOSITION RUST_DAEMON RUST_BASE RUST_LOCALIZE RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER)
 for kv in "$@"; do
   [[ $kv =~ ^([A-Z][A-Z0-9_]*)=(.*)$ && $kv != *$'\n'* ]] || die "not KEY=VAL: '$kv'"
   k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
@@ -444,11 +472,11 @@ compose_up
 inspect_container
 show_effective
 [ "$IMAGE" = "$REPO:$TAG" ] || die "container runs $IMAGE, not $REPO:$TAG"
-for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON RUST_NAV_CORE RUST_MUX RUST_STATIC_TF; do
+for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER; do
   v=$(cmd_arg "${k,,}")
   [ "$v" = "${SET[$k]}" ] || die "container got ${k,,}:=${v:-<not passed>}, asked for ${SET[$k]}"
 done
 wait_for_drivers "${SET[RUST_BASE]}" "${SET[RUST_LOCALIZE]}" "$RD" "${SET[RUST_NAV_CORE]}" strict \
-  "${SET[RUST_MUX]}" "${SET[RUST_STATIC_TF]}"
+  "${SET[RUST_MUX]}" "${SET[RUST_STATIC_TF]}" "${SET[RUST_RECORDER]}"
 PHASE=verified
 echo SWITCH_OK

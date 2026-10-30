@@ -19,6 +19,10 @@
 # /opt/mower/docker-compose.data-collection.yaml, else next to this script's
 # parent), ENV_FILE (default /opt/mower/.env), MAIN_COMPOSE_FILE (the robot
 # stack, default /opt/mower/docker-compose.yaml).
+#
+# `start` refuses while RUST_RECORDER is true (ENV_FILE, or the environment as
+# compose reads it): mower_rsd's bag module then owns /mower_recorder/*, and
+# data collection in it comes with step E5-5.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -49,6 +53,21 @@ app_recorder_running() {
   [ -f "$main_compose" ] && [ -n "$(stack ps -q --status running recorder 2>/dev/null)" ]
 }
 running() { [ -n "$(compose ps -q --status running "$svc" 2>/dev/null)" ]; }
+# RUST_RECORDER as compose sees it (the environment, else the last line of
+# $env_file), true in robot.launch.py's _truthy spellings.
+rust_recorder_on() {
+  local v=
+  if [ -n "${RUST_RECORDER+x}" ]; then
+    v=$RUST_RECORDER
+  elif [ -f "$env_file" ]; then
+    v=$(sed -n 's/^[[:space:]]*RUST_RECORDER[[:space:]]*=//p' "$env_file" | tail -n 1)
+  fi
+  v=${v%%[[:space:]]#*}
+  v=${v//\"/}
+  v=${v//\'/}
+  read -r v <<< "$v" || true
+  case "$(tr '[:upper:]' '[:lower:]' <<< "$v")" in true|1|yes|on) return 0 ;; *) return 1 ;; esac
+}
 # docker-entrypoint.sh sources ROS + the workspace (firmware sync is off here)
 ros() { compose exec -T "$svc" /usr/local/bin/docker-entrypoint.sh "$@"; }
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }; }
@@ -57,6 +76,13 @@ latest_run() { ros bash -c "ls -td $bags/*/ 2>/dev/null | head -1" | tr -d '\r' 
 
 case "${1:-}" in
   start)
+    if rust_recorder_on; then
+      echo "RUST_RECORDER=true ($env_file): mower_rsd's bag module owns /mower_recorder/*," \
+        "and data collection in it comes with step E5-5. Set RUST_RECORDER=false there and run" \
+        "'docker compose up --detach' in $(dirname "$main_compose") (the Python recorder comes back)," \
+        "then start the data collection again. Nothing was changed." >&2
+      exit 1
+    fi
     need_root
     if systemctl is-active --quiet mower-update.timer; then
       echo "timer=active" > "$state"

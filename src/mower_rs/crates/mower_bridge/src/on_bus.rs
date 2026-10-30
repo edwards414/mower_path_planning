@@ -34,6 +34,8 @@ pub const ON_BUS: &[(&str, bool)] = &[
     ("pid_autotune", false),
     // ws_bridge (step E3): its default backend, r2r. Its flag is RUNTIME's.
     ("bridge", false),
+    // E5: born on the bus
+    ("bag", true),
 ];
 
 /// Flags of single instances, by node name, for a module whose instances

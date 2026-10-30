@@ -25,6 +25,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 | `mowerctl` | nothing: a command-line view of the robot through ws_bridge (`topic list/info/echo/hz`, `service list/call`, `ping`), read-only by default, no ROS; [`crates/mowerctl/README.md`](crates/mowerctl/README.md) | none: no launch file or service runs it (in the image as `/usr/local/bin/mowerctl`) |
 | `mower_flash` | nothing yet: the STM32 firmware flasher, a port of `firmware/tools/mower_flash.py` that must be indistinguishable from it (frames, timing, flash, report, stdout, exit codes; the port opened exclusively is the one difference); [`crates/mower_flash/README.md`](crates/mower_flash/README.md) | none: `utils/firmware-sync` still runs the Python tool (E6-4 adds `MOWER_FIRMWARE_SYNC=python\|rust`); in the image as `/usr/local/bin/mower_flash` |
+| `mower_recorder` | `mower_recorder`'s three rclpy nodes, `recorder_manager`, `bag_store` and `graph_snapshot` (`/mower_recorder/status`, `/bags`, `/command` → `/command_result`, `start` / `stop` / `snapshot`, the rear light, `/graph_snapshot`, `/graph_events`, the R2 upload); **E5-3a: idle only, it does not record yet** (`start` is refused until E5-3b); [`crates/mower_recorder/README.md`](crates/mower_recorder/README.md) | `robot.launch.py rust_recorder:=true` (compose `RUST_RECORDER`, off by default; the module `bag` of `mower_rsd`, or this binary with `rust_daemon:=false`); compose's `recorder` service then sleeps. Not `rust_record` |
 | `mower_sim` | nothing: development only, the STM32, WIT IMU and u-blox F9P on ptys, driven by one truth world, for the production stack without hardware (not the Gazebo package `src/mower_sim`); [`crates/mower_sim/README.md`](crates/mower_sim/README.md) | none: not in the image; `deploy/sim/docker-compose.sim.yaml` runs a local build; it refuses real devices |
 
 Not every crate is a node: `mower_base_core` is a library only — the ROS-free
@@ -33,9 +34,11 @@ speed limits, the `BaseCycle` hardware state machine, serial record/replay).
 It has no `r2r` dependency, so `cargo test -p mower_base_core` runs anywhere;
 see [`crates/mower_base_core/README.md`](crates/mower_base_core/README.md).
 
-Five more libraries, none used by a binary yet, are the ground work for the
-Rust recorder that will replace `mower_recorder` (E5); each is tested against
-what the Python recorder and rosbag2 wrote in `deploy/test/golden/recorder`:
+Five more libraries are the ground work for the Rust recorder that will
+replace `mower_recorder` (E5; `mower_recorder` above uses
+`mower_recorder_core` and `mower_pyfmt`, the others come with E5-3b's
+recording); each is tested against what the Python recorder and rosbag2
+wrote in `deploy/test/golden/recorder`:
 
 - `mower_schema`: the `.msg` texts and RIHS01 hashes of the bus's and the
   record profiles' message types (generated from the robot image, committed),

@@ -113,9 +113,10 @@ pub static MODULES: &[Module] = &[
                 subscribes::<Text>("/mower_base/servo_command", BE_V_1).param("servo_topic"),
                 subscribes::<Text>("/mower_base/blade_command", BE_V_1).param("blade_topic"),
                 // The recorders' rear light (docs/BUS_TOPICS.md 5.8 #1). It stays on
-                // the r2r node until E5: path_record_node writes it on the bus and
-                // recorder_manager on DDS, and one r2r reader hears both, where a
-                // bus reader would need the name both ways (5.5 d).
+                // the r2r node until E5-7: path_record_node writes it on the bus and
+                // the Python recorder_manager on DDS, and one r2r reader hears both,
+                // where a bus reader would need the name both ways (5.5 d). With
+                // rust_recorder both writers are on the bus and go out together.
                 subscribes::<Text>("/mower_base/rear_light", R_TL_8).param("rear_light_topic").stays_on_r2r(),
             ],
         }],
@@ -577,6 +578,51 @@ pub static MODULES: &[Module] = &[
             ],
         }],
     },
+    Module {
+        // E5 (rust_recorder, off by default): mower_recorder's three nodes,
+        // their endpoints as recorder_manager_node.py, bag_store_node.py and
+        // graph_snapshot_node.py make them (rclpy's depth 10 is R V 10, their
+        // _latched() R TL 1; the /fix reader has depth 1). Born on the bus.
+        // While the module runs in the process the Python recorder sleeps
+        // (compose's recorder service), and its OUTSIDE entries leave the
+        // plan (`replaced_by`). E5-3a: idle, no recording yet.
+        id: "bag",
+        instances: &[
+            Instance {
+                node: "graph_snapshot",
+                endpoints: &[
+                    publishes::<Text>("/graph_snapshot", R_V_10),
+                    publishes::<Text>("/graph_events", R_V_10),
+                    // never fires: the watched names lack their slash
+                    // (docs/BUS_TOPICS.md 5.8 #9)
+                    publishes::<Bool>("/mower_recorder/fault", R_V_10).param("fault_topic"),
+                ],
+            },
+            Instance {
+                node: "recorder_manager",
+                endpoints: &[
+                    subscribes::<NavSatFix>("/fix", R_V_1).param("gps_topic"),
+                    subscribes::<Bool>("/mower_recorder/fault", R_V_10).param("fault_topic"),
+                    serves::<Trigger::Service>("/mower_recorder/start"),
+                    serves::<Trigger::Service>("/mower_recorder/stop"),
+                    serves::<Trigger::Service>("/mower_recorder/snapshot"),
+                    publishes::<Text>("/mower_recorder/status", R_TL_1),
+                    // mower_base reads it on its r2r node (R TL 8, stays_on_r2r):
+                    // it goes out with path_record_node's (design D5)
+                    publishes::<Text>("/mower_base/rear_light", R_TL_1).param("rear_light_topic"),
+                ],
+            },
+            Instance {
+                node: "bag_store",
+                endpoints: &[
+                    publishes::<Text>("/mower_recorder/bags", R_TL_1),
+                    publishes::<Text>("/mower_recorder/command_result", R_V_10),
+                    subscribes::<Text>("/mower_recorder/command", R_V_10),
+                    subscribes::<Text>("/mower_recorder/status", R_TL_1),
+                ],
+            },
+        ],
+    },
 ];
 
 /// The nodes outside the typed modules that a module's subscription or call
@@ -629,27 +675,31 @@ pub static OUTSIDE: &[Outside] = &[
     Outside {
         // The Python recorder (recorder_manager_node.py): its status for the
         // app, latched, and the services the app calls through ws_bridge
-        // (docs/BUS_TOPICS.md 2.8, 3.3).
+        // (docs/BUS_TOPICS.md 2.8, 3.3). rust_recorder (E5, off by default)
+        // puts compose's recorder service to sleep and runs the bag module
+        // in its place.
         node: "recorder_manager",
         until: "E5",
         endpoints: &[
-            publishes::<Text>("/mower_recorder/status", R_TL_1),
-            // "the rear light breathes red"; nothing reads it (docs/BUS_TOPICS.md 5.8 #1)
-            publishes::<Text>("/mower_base/rear_light", R_TL_1),
-            serves::<Trigger::Service>("/mower_recorder/start"),
-            serves::<Trigger::Service>("/mower_recorder/stop"),
-            serves::<Trigger::Service>("/mower_recorder/snapshot"),
+            publishes::<Text>("/mower_recorder/status", R_TL_1).replaced_by("bag"),
+            // "the rear light breathes red"; mower_base reads it (R TL 8, on
+            // its r2r node)
+            publishes::<Text>("/mower_base/rear_light", R_TL_1).replaced_by("bag"),
+            serves::<Trigger::Service>("/mower_recorder/start").replaced_by("bag"),
+            serves::<Trigger::Service>("/mower_recorder/stop").replaced_by("bag"),
+            serves::<Trigger::Service>("/mower_recorder/snapshot").replaced_by("bag"),
         ],
     },
     Outside {
         // bag_store_node.py: the bag list, latched, and the answers to the
-        // app's commands (docs/BUS_TOPICS.md 2.8).
+        // app's commands (docs/BUS_TOPICS.md 2.8); replaced by the bag
+        // module as recorder_manager is.
         node: "bag_store",
         until: "E5",
         endpoints: &[
-            publishes::<Text>("/mower_recorder/bags", R_TL_1),
-            publishes::<Text>("/mower_recorder/command_result", R_V_10),
-            subscribes::<Text>("/mower_recorder/command", R_V_10),
+            publishes::<Text>("/mower_recorder/bags", R_TL_1).replaced_by("bag"),
+            publishes::<Text>("/mower_recorder/command_result", R_V_10).replaced_by("bag"),
+            subscribes::<Text>("/mower_recorder/command", R_V_10).replaced_by("bag"),
         ],
     },
 ];

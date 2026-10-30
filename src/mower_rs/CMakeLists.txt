@@ -32,7 +32,9 @@ endif()
 # the command-line tool (crates/mowerctl): no launch file or service runs it.
 # mower_flash is the STM32 flasher (crates/mower_flash, a port of
 # firmware/tools/mower_flash.py); utils/firmware-sync does not call it yet.
-set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl mower_flash)
+# mower_recorder is the bag module's three nodes on their own (E5,
+# rust_recorder with rust_daemon:=false; mission.launch.py).
+set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl mower_flash mower_recorder)
 
 add_custom_target(mower_rs_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env

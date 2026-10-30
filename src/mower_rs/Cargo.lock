@@ -1110,6 +1110,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_recorder"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "mower_base",
+ "mower_bridge",
+ "mower_bus",
+ "mower_pyfmt",
+ "mower_recorder_core",
+ "mower_rs_common",
+ "mower_schema",
+ "r2r",
+ "tokio",
+]
+
+[[package]]
 name = "mower_recorder_core"
 version = "0.1.0"
 dependencies = [
@@ -1155,6 +1171,7 @@ dependencies = [
  "mower_nav",
  "mower_pid_autotune",
  "mower_record",
+ "mower_recorder",
  "mower_rs_common",
  "mower_static_tf",
  "mower_ws_bridge",

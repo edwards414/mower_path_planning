@@ -237,6 +237,19 @@ const MODULES: &[Module] = &[
         instances: &[Instance { node: "mower_agent", run: |_c, m| Box::pin(mower_agent::run(m)) }],
     },
     Module {
+        // mower_recorder's three nodes (E5, rust_recorder, off by default),
+        // as record.launch.py starts them. Born on the bus; with the switch
+        // off the Python recorder of compose's recorder service runs, and
+        // E5-3a's module records nothing (its start is refused).
+        id: "bag",
+        switch: "rust_recorder",
+        instances: &[
+            Instance { node: "graph_snapshot", run: |c, m| Box::pin(mower_recorder::graph::run(c, m)) },
+            Instance { node: "recorder_manager", run: |c, m| Box::pin(mower_recorder::manager::run(c, m)) },
+            Instance { node: "bag_store", run: |c, m| Box::pin(mower_recorder::store::run(c, m)) },
+        ],
+    },
+    Module {
         // The bus/DDS bridge of step E2, never in --modules: main starts it
         // first when a module of the set is on the bus, with the set's ids as
         // its arguments (`bus_bridge`).
@@ -797,6 +810,7 @@ mod tests {
             ("pid_autotune", vec!["pid_autotune"]),
             ("bridge", vec!["mower_ws_bridge"]),
             ("agent", vec!["mower_agent"]),
+            ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store"]),
             ("bus_bridge", vec!["mower_bus_bridge"]),
         ];
         assert_eq!(expected.len(), MODULES.len());
