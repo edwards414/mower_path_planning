@@ -150,12 +150,13 @@ jobs:
         shell: bash
         # rmw_cyclonedds_cpp: the image ships only Fast DDS, and mower_bus_ros's
         # DDS tests run on the robot's RMW (they select it themselves; every
-        # other test and step keeps the image's default).
+        # other test and step keeps the image's default). python3-serial:
+        # firmware/tools/mower_flash.py in the flasher check.
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
-            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
+            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp python3-serial
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -227,6 +228,18 @@ jobs:
           cd src/mower_rs
           cargo build --locked -p mower_pid_autotune
           python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
+
+      - name: Firmware flasher on a fake STM32 (black box)
+        timeout-minutes: 15
+        shell: bash
+        # firmware/tools/mower_flash.py against the unmodified bootloader source
+        # (bl_protocol.c) on a pty: the 57 quick scenarios (images up to 16 KB,
+        # about 3 min; tools/README.md, "Checking the firmware flasher"), held
+        # to the scenario table and to the G1 goldens
+        run: |
+          cd src/mower_rs
+          python3 tools/flash_check.py check --impl "python=python3 ../../firmware/tools/mower_flash.py" \
+            --golden ../../deploy/test/golden/firmware_sync
 
   firmware:
     # STM32 application + bootloader, same Makefile the Docker `firmware`

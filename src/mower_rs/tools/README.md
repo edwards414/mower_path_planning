@@ -18,6 +18,7 @@ the bottom drive an A/B measurement on the real robot.
 | `mux_oracle.py` | **twist_mux** (step E4): the real C++ twist_mux 4.5.0 and `mower_rsd --modules mux` in the runtime image, on the same timed input scripts (S01-S18 of the E4 design and a 10-minute random segment), every forwarded message, its content, its latency and every `/diagnostics` status compared with each other and with a model of twist_mux's rules; `vectors` writes `crates/mower_mux/tests/vectors/` from a C++ run ("The twist_mux oracle" below) |
 | `rsp_capture.py` | **robot_state_publisher** (step E4): what rsp 3.3.4 publishes for the real robot's xacro (`/tf_static`, `/robot_description`, and `/tf` for a script of `/joint_states` around its 20 Hz throttle), every float as written, into `crates/mower_static_tf/tests/rsp_capture.json` |
 | `static_tf_oracle.py` | **static_tf** (step E4): the image's rsp 3.3.4 and `mower_rsd --modules static_tf` side by side on DDS, the same URDF and rsp_capture.py's `/joint_states` script; every message of `/tf`, `/tf_static` and `/robot_description` compared (frames, stamps, values, latency), a late joiner, tf2 lookups, the writers' QoS, check_run.py's TF_CHAIN ("The static_tf oracle" below) |
+| `flash_check.py`, `fake_base.py --bootloader-lib`, `bl_sim/` | **the STM32 firmware flasher** (E6): the board with its UART bootloader on a pty, the bootloader being the unmodified `firmware/bootloader/Src/bl_protocol.c` compiled with `bl_sim/sim_flash.c` (the flash behind `bl_flash.h`, kept in a file across runs); `flash_check.py` runs `firmware/tools/mower_flash.py` (and the Rust `mower_flash`) through ~60 scenarios, normal and faulty, and compares every frame, the flash, the report, stdout, the exit code and the time (see [Checking the firmware flasher](#checking-the-firmware-flasher)) |
 | `probe_app.py` | **the app contract**: connects to `mower_ws_bridge` with the app's HMAC headers, subscribes to everything the app subscribes to and calls the read-only services, then passes or fails against a saved baseline and on content (robot online, base and odometry fresh, pose updating) |
 | `switch.sh`, `measure.sh` | put the robot on a test image with `NAV_COMPOSITION` / `RUST_DAEMON` / `RUST_BASE` / `RUST_LOCALIZE` / `RUST_NAV_CORE` / any `KEY=VAL`, check which drivers actually run, and restore; per-process CPU, loopback packet rate and DDS thread split over 10 s |
 
@@ -145,6 +146,72 @@ docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=75 \
 - The writers: `R TL 1`, `R V 100`, `R TL 1` on both sides (the bridge's for static_tf); both read `/joint_states`
   `BE V 5`.
 - check_run.py's TF_CHAIN holds with the module and the data collection's two static_transform_publishers.
+
+## Checking the firmware flasher
+
+`utils/firmware-sync` runs `firmware/tools/mower_flash.py sync` at every
+container start and re-flashes the STM32 through its UART bootloader whenever
+the image's firmware differs, which is every OTA. `flash_check.py` is what
+proves a flasher behaves the way that one does, without a board:
+
+```bash
+# Linux; mower_flash.py needs pyserial (apt install python3-serial)
+python3 tools/flash_check.py check --impl "python=python3 ../../firmware/tools/mower_flash.py" \
+    --golden ../../deploy/test/golden/firmware_sync
+# a second implementation is compared with the first, frame for frame
+python3 tools/flash_check.py check --impl "python=python3 ../../firmware/tools/mower_flash.py" \
+    --impl rust=target/debug/mower_flash --golden ../../deploy/test/golden/firmware_sync
+```
+
+Each scenario starts `fake_base.py --bootloader-lib` on a fresh pty with a
+flash file (a bootloader stand-in in sectors 0-1, an initial app, the PID
+settings sector), runs the flasher's command line against it once or twice
+(`-p PTY sync IMAGE --report ...`, or `flash`, `info`, `enter`, `run`,
+`app-info`) and records (a) every frame the host sent, every reply to it and
+every flash operation, (b) the 512 KB flash afterwards, (c) the report, (d)
+the exit code, (e) stdout and the last line of stderr, (f) the time. It checks
+them against the scenario table (what `mower_flash.py` does, from
+`E6_DESIGN.md` 1.5), every implementation against the first, and with
+`--golden` against what `mower_flash.py` did when the goldens were written
+(two runs of it give the same transcript; only (f) depends on timing).
+
+The scenarios: the app is the bundled build / another / an UNVERSIONED one /
+the dirty one / an old firmware without 0x87 / none (the board in its
+bootloader); no STM32; `--force`; an app that resets without its 0x8F, or
+ignores 0x0F; BL_ERASE failing; a write ack lost once, twice, three times,
+2.3 s late (a stale ack after the retry), one byte short, or with a bad CRC; a
+write failing; a bit flipping after a write (VERIFY's CRC_MISMATCH); a new app
+that never reports or reports another build; replies byte by byte or behind
+junk; the flasher killed mid-write and the board losing power mid-write, each
+followed by the next sync that recovers it; every bad image and manifest
+`load_image` / `load_manifest` can meet; image sizes from 4 KB to 352 KB
+(`--all`; > 32 KB wraps the frame seq); the other subcommands. `--bundled-bin
+IMAGE.bin` adds four with a real firmware (the runtime image's own, for the
+e2-verify A/B). Nothing may ever touch the bootloader or the settings sector:
+the fake aborts if anything would, and every scenario also compares them.
+
+The fake's bootloader is the C source itself: bytes go to
+`BlProtocol_FeedByte` one by one, an erase takes the STM32's time per sector
+(a write and a CRC theirs too), the reply leaves when it is done, and bytes
+arriving meanwhile are lost the way the UART's overrun loses them (a
+stop-and-wait host never causes one; every run checks there were none). The
+app that runs after the bootloader's jump is whatever the flash holds,
+recognised by size and CRC-32 among the scenario's builds; an unknown image
+is a broken app, silent. Faults are injected per reply, per offset or per
+write (`FakeStm32.__init__`).
+
+`deploy/test/golden/firmware_sync/` is G1 of the E6 design: per scenario the
+report `mower_flash.py` wrote (`*.firmware_sync.json`, byte for byte with
+`time` set to 0) and its transcript (`*.transcript.json`: per run the exit
+code, stdout, stderr's last line, every frame sent other than the writes in
+full, the write offsets in order and a digest of the data, the replies and
+flash operations, the final flash's sha256). Rewrite them only when
+`mower_flash.py` changes on purpose:
+
+```bash
+python3 tools/flash_check.py golden --all --impl "python=python3 ../../firmware/tools/mower_flash.py" \
+    --golden ../../deploy/test/golden/firmware_sync
+```
 
 ## Switching and measuring on the robot
 

@@ -1,0 +1,29 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\n",
+   "stderr": "image is empty",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ]
+   ],
+   "replies": [],
+   "events": [],
+   "host_signature": "06",
+   "host_sha256": "42744e6027f6fa386c61f5b83620138ef3c70f2dc490631914bfb9dc4404897b",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "5ba2fec39178f938b7f3b34912394c8f310cbec835dba388580914651b034743",
+ "overruns": 0,
+ "scenario": "S19b",
+ "title": "IMAGE is empty"
+}

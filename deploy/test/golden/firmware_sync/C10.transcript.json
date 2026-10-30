@@ -1,0 +1,140 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "application is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstarting application\n",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "10",
+     1,
+     ""
+    ],
+    [
+     "0f",
+     2,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "11",
+     4,
+     "00080000"
+    ],
+    [
+     "13",
+     21,
+     "0008000009fbe5e5"
+    ],
+    [
+     "14",
+     22,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     2,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     4,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     21,
+     "130009fbe5e5",
+     null
+    ],
+    [
+     "91",
+     22,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ]
+   ],
+   "host_signature": "10 0f 10 11 12x16 13 14",
+   "host_sha256": "6400ccef468d4992e7a749db592cbd20d51e263bf82058a91578a3b5fe45f43b",
+   "replies_sha256": "9b2b228a21094318eb8bc4d49b8fd00bd7c5ef4502ff92ab5f5439a4ba7726ee",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "a3845376",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "C10",
+ "title": "flash"
+}

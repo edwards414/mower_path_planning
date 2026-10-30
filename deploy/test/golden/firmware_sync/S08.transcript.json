@@ -1,0 +1,151 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: v0.5.7 sha=5ca1ab1e built=2026-08-29 10:40:00\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  no ack from app (continuing anyway)\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 2048 bytes ...\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00080000"
+    ],
+    [
+     "13",
+     22,
+     "0008000009fbe5e5"
+    ],
+    [
+     "14",
+     23,
+     ""
+    ],
+    [
+     "06",
+     24,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     22,
+     "130009fbe5e5",
+     null
+    ],
+    [
+     "91",
+     23,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x16 13 14 06",
+   "host_sha256": "e2ff473a7bdbb4d2b4829192bd7a4873663fb403b4a1a82e41479dde972f78f7",
+   "replies_sha256": "c5742e9b2e9e72f930dba1dfb42b0d9c50f9d915211993d61953f7b467ca25f5",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "a3845376",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "S08",
+ "title": "the app resets without its 0x8F"
+}

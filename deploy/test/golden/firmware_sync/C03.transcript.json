@@ -1,0 +1,41 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "",
+   "stderr": "board is in the bootloader, no application running",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "90",
+     2,
+     "00800008008005008000010000000000",
+     null
+    ]
+   ],
+   "events": [],
+   "host_signature": "06 10",
+   "host_sha256": "ff10fc2d08c7ce91cfdfcc1b316dd158a6716cd57c467da74c905f68ec8b5a01",
+   "replies_sha256": "952d6eb6e2ec5c2910e9e4d505dfc17b04f5d14ffe7d49dc9cbaba7550547225",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "d9cb14ab670124671ecfd5480d066e3172cfc5c13951b7e95a49dc062ab32ead",
+ "overruns": 0,
+ "scenario": "C03",
+ "title": "app-info, board in the bootloader"
+}

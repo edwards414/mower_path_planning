@@ -1,0 +1,29 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n{\"semver\": [0, 6, 0], \"version\": \"0.6.0\", \"protocol_version\": 1, \"git_sha32\": 3873892070, \"git_sha\": \"e6e6e6e6\", \"build_unix\": 1793000000, \"dirty\": false, \"unversioned\": false}\n",
+   "stderr": "",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ]
+   ],
+   "replies": [],
+   "events": [],
+   "host_signature": "06",
+   "host_sha256": "42744e6027f6fa386c61f5b83620138ef3c70f2dc490631914bfb9dc4404897b",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "C01",
+ "title": "app-info, app running"
+}

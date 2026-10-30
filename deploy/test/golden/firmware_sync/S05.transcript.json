@@ -1,0 +1,133 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 2048 bytes\nrunning: none (board is in the bootloader (no valid app?))\nflashing: board is in the bootloader (no valid app?)\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=False by_request=False erased=False\nerasing for 2048 bytes ...\n\r  100%  2048/2048 bytes\n  written in X s\nverifying ...\n  crc32 0xE5E5FB09 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "10",
+     3,
+     ""
+    ],
+    [
+     "11",
+     4,
+     "00080000"
+    ],
+    [
+     "13",
+     21,
+     "0008000009fbe5e5"
+    ],
+    [
+     "14",
+     22,
+     ""
+    ],
+    [
+     "06",
+     23,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "90",
+     2,
+     "00800008008005008000010000000000",
+     null
+    ],
+    [
+     "90",
+     3,
+     "00800008008005008000010000000000",
+     null
+    ],
+    [
+     "91",
+     4,
+     "110000080000",
+     null
+    ],
+    [
+     "91",
+     21,
+     "130009fbe5e5",
+     null
+    ],
+    [
+     "91",
+     22,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 2048
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10x2 11 12x16 13 14 06",
+   "host_sha256": "1a1b9111a31db045ac7c28eb39bd646a7f6c93a05c67031cd554e27ce55a269b",
+   "replies_sha256": "867356d53ae5c2cff244bfa2f2202128450a7ac685231a593378b71e5dddaa1a",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x780",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "a3845376",
+   "write_acks_ok": 16
+  }
+ ],
+ "flash_sha256": "4c2ef528c221945c3f4f3c9b73344c8ec1923197584d45a9ec3a1365a4bfe2ec",
+ "overruns": 0,
+ "scenario": "S05",
+ "title": "the board is in the bootloader (app's vector table blank)"
+}

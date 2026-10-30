@@ -1,0 +1,157 @@
+{
+ "steps": [
+  {
+   "rc": 0,
+   "stdout": "bundled: 0.6.0-e6 sha=e6e6e6e6 16384 bytes\nrunning: v0.5.9 sha=0123abcd built=2026-09-21 14:13:20\nflashing: different build\napplication is running, asking it to reboot into the bootloader\n  app acknowledged\nbootloader v1: app @ 0x08008000, max 352 KB, chunk 128 B, app_valid=True by_request=True erased=False\nerasing for 16384 bytes ...\n\r   25%  4096/16384 bytes\r   50%  8192/16384 bytes\r   75%  12288/16384 bytes\r  100%  16384/16384 bytes\n  written in X s\nverifying ...\n  crc32 0x721F11C2 ok\nstarting application\nnow running: v0.6.0 sha=e6e6e6e6 built=2026-10-26 07:33:20\n",
+   "stderr": "",
+   "report_written": true,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ],
+    [
+     "10",
+     2,
+     ""
+    ],
+    [
+     "0f",
+     3,
+     "07b007b000000000"
+    ],
+    [
+     "10",
+     4,
+     ""
+    ],
+    [
+     "11",
+     5,
+     "00400000"
+    ],
+    [
+     "13",
+     134,
+     "00400000c2111f72"
+    ],
+    [
+     "14",
+     135,
+     ""
+    ],
+    [
+     "06",
+     136,
+     ""
+    ]
+   ],
+   "replies": [
+    [
+     "8f",
+     3,
+     "00000000",
+     null
+    ],
+    [
+     "90",
+     4,
+     "00800008008005008000010300000000",
+     null
+    ],
+    [
+     "91",
+     5,
+     "110000400000",
+     null
+    ],
+    [
+     "91",
+     134,
+     "1300c2111f72",
+     null
+    ],
+    [
+     "91",
+     135,
+     "140000800008",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "state",
+     {
+      "state": "resetting"
+     }
+    ],
+    [
+     "reset",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "bl",
+      "entered_by_request": true,
+      "app_valid": true,
+      "stay": true
+     }
+    ],
+    [
+     "erase",
+     {
+      "first": 2,
+      "count": 1
+     }
+    ],
+    [
+     "crc",
+     {
+      "address": 134250496,
+      "len": 16384
+     }
+    ],
+    [
+     "jump",
+     {}
+    ],
+    [
+     "state",
+     {
+      "state": "starting"
+     }
+    ],
+    [
+     "state",
+     {
+      "state": "app",
+      "build": "bundled.json"
+     }
+    ]
+   ],
+   "host_signature": "06 10 0f 10 11 12x128 13 14 06",
+   "host_sha256": "874ab5e0203e817fa169f7dddcf6f943a758e07c7d9e83e2a172ed03429a6ca3",
+   "replies_sha256": "7e7ad3ec30f9fc678748ccbfc2d2aae070c7812297e2516c887feac91e494d79",
+   "write_offsets": [
+    [
+     "0x80",
+     "0x3f80",
+     128
+    ],
+    [
+     "0x0",
+     "0x0",
+     0
+    ]
+   ],
+   "write_data_crc32": "4483ee9f",
+   "write_acks_ok": 128
+  }
+ ],
+ "flash_sha256": "cca31f9f7ddd7ebd3b5769f01d690ff698f5e049dae20e0873556cb93af473e0",
+ "overruns": 0,
+ "scenario": "S21c",
+ "title": "a 16384-byte image"
+}

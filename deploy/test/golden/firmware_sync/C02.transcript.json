@@ -1,0 +1,29 @@
+{
+ "steps": [
+  {
+   "rc": 1,
+   "stdout": "",
+   "stderr": "application is running but does not answer 0x06 (firmware predates 0x87)",
+   "report_written": false,
+   "host": [
+    [
+     "06",
+     1,
+     ""
+    ]
+   ],
+   "replies": [],
+   "events": [],
+   "host_signature": "06",
+   "host_sha256": "42744e6027f6fa386c61f5b83620138ef3c70f2dc490631914bfb9dc4404897b",
+   "replies_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "write_offsets": [],
+   "write_data_crc32": "00000000",
+   "write_acks_ok": 0
+  }
+ ],
+ "flash_sha256": "02ee9a76b3c515b903848cb4a93a6fbf4b7be72e6719ecf12d4925d847654a54",
+ "overruns": 0,
+ "scenario": "C02",
+ "title": "app-info, old firmware"
+}
