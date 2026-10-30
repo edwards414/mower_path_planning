@@ -1548,3 +1548,67 @@ fn every_combination_of_the_drivetrain_s_flags_plans_but_a_split_led_command() {
         }
     }
 }
+
+
+/// E2 step 7: the manual guard on the bus as well, after step 6. Nav's `/joy_cmd` no longer comes in from DDS, and
+/// what the guard writes goes out for twist_mux (on DDS until E4) and for the graph. With ws_bridge on r2r the app's
+/// `/app_joy_cmd` comes in for the guard, read as it reads it (R V 1); with ws_bridge on the bus the whole joystick
+/// path is in the process, and `/manual_command_clock` no longer comes in for ws_bridge: the to_ros of the three
+/// command topics stays (ws_bridge writes them on the bus), and so do the recorder's names and `set_parameters`.
+#[test]
+fn step_7_takes_the_joystick_path_into_the_process() {
+    let step6 = |id: &str| ["base", "pid_autotune", "velocity_command_guard"].contains(&id);
+    let step7 = |id: &str| step6(id) || id == "manual_velocity_guard";
+    let shared_came = [
+        "to_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 1",
+        "to_ros /manual_command_clock std_msgs/msg/Header R V 1",
+    ];
+    for (what, on_now, gone, came) in [
+        (
+            "ws_bridge on r2r",
+            &[] as &[&str],
+            &["from_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 10"][..],
+            &["from_ros /app_joy_cmd geometry_msgs/msg/TwistStamped R V 1"][..],
+        ),
+        (
+            "ws_bridge on the bus",
+            &["bridge"][..],
+            &[
+                "from_ros /joy_cmd geometry_msgs/msg/TwistStamped R V 10",
+                "from_ros /manual_command_clock std_msgs/msg/Header R V 10",
+            ][..],
+            &[][..],
+        ),
+    ] {
+        let flags6 = |id: &str| on_bus_with(on_now)(id) || step6(id);
+        let flags7 = |id: &str| on_bus_with(on_now)(id) || step7(id);
+        let before = plan(&Running::rsd(&PRODUCTION_MODULES, flags6), &production_remaps()).unwrap().lines();
+        let after = plan(&Running::rsd(&PRODUCTION_MODULES, flags7), &production_remaps()).unwrap();
+        let lines = after.lines();
+        let mut got_gone: Vec<&str> = before.iter().map(String::as_str).filter(|l| !lines.iter().any(|g| g == l)).collect();
+        let mut got_came: Vec<&str> = lines.iter().map(String::as_str).filter(|l| !before.iter().any(|g| g == l)).collect();
+        let mut want_came: Vec<&str> = shared_came.iter().chain(came).copied().collect();
+        let mut want_gone: Vec<&str> = gone.to_vec();
+        for v in [&mut got_gone, &mut got_came, &mut want_gone, &mut want_came] {
+            v.sort();
+        }
+        assert_eq!(got_gone, want_gone, "{what}: gone");
+        assert_eq!(got_came, want_came, "{what}: came");
+        let why = |name: &str| after.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
+        assert_eq!(why("/joy_cmd"), "from manual_velocity_guard");
+        if on_now.is_empty() {
+            assert_eq!(why("/app_joy_cmd"), "for manual_velocity_guard, from mower_ws_bridge (r2r)");
+        } else {
+            // ws_bridge writes it on the bus; its DDS face carries nothing while no DDS node reads it
+            assert_eq!(why("/app_joy_cmd"), "from mower_ws_bridge");
+        }
+    }
+    // steps 6 and 7 together are the module flag `guards` with base and pid_autotune
+    let instances = plan(&Running::rsd(&PRODUCTION_MODULES, |id| on_bus(id) || step7(id)), &production_remaps()).unwrap();
+    let module = production_plan(&[
+        "battery", "status", "map", "record", "adapter", "imu", "gps", "localize", "coverage", "nav", "base",
+        "pid_autotune", "guards",
+    ])
+    .unwrap();
+    assert_eq!(instances.lines(), module.lines());
+}

@@ -275,18 +275,102 @@ async fn nothing_follows_the_last_zero() {
     assert!(ends.base.try_recv().is_err());
 }
 
-/// E2 step 6 moves the final guard only: the manual guard's bus IO (its session and command clock) comes in step 7,
-/// and until then it refuses to start.
+/// The manual guard as mower_rsd runs it (E2 step 7): the app's `/app_joy_cmd` in, `/joy_cmd` out and its command
+/// clock on `/manual_command_clock`, R V 1 all three, every endpoint in the manifest. The clock's first frame goes out
+/// at once and then one every 50 ms, stamped with the robot's clock and carrying this start's session id; a command
+/// that echoes a frame of it is forwarded with a fresh robot stamp, and one of another session, one with no stamp
+/// and one older than `max_input_age_s` (0.8 s, mower_rsd.yaml) are zeros. A new start is a new session.
 #[tokio::test(flavor = "current_thread")]
-async fn the_manual_guard_does_not_start_on_the_bus_before_step_7() {
+async fn the_manual_guard_issues_its_clock_and_takes_only_its_session_s_fresh_commands() {
+    use r2r::std_msgs::msg::Header;
     let bus = Bus::new();
-    let (clock, _manual) = manual_clock();
-    let params = [("require_command_session", ParameterValue::Bool(true))];
-    let mut guard = Guard::start(&bus, clock, "manual_velocity_guard", &params);
-    let task = guard.task.take().unwrap();
-    let result = tokio::time::timeout(WAIT, task).await.unwrap().unwrap();
-    let e = result.unwrap_err().to_string();
-    assert!(e.contains("step 7"), "{e}");
-    guard.scope.close();
-    assert!(bus.topics().iter().all(|t| t.publishers.is_empty() && t.subscribers.is_empty()));
+    let (clock, manual) = manual_clock();
+    let test = bus.scope("test");
+    // twist_mux's reader (SystemDefaults), ws_bridge's (keep last 10) and its writer
+    let mut joy = test.subscribe::<TwistStamped>("/joy_cmd", Qos::system_default()).unwrap();
+    let mut frames = test.subscribe::<Header>("/manual_command_clock", Qos::default()).unwrap();
+    let app = test.publisher::<TwistStamped>("/app_joy_cmd", Qos::default()).unwrap();
+    let params = [
+        ("require_command_session", ParameterValue::Bool(true)),
+        ("max_input_age_s", ParameterValue::Double(0.8)),
+    ];
+    let guard = Guard::start(&bus, clock.clone(), "manual_velocity_guard", &params);
+    let deadline = std::time::Instant::now() + WAIT;
+    while app.subscription_count() == 0 || joy.publisher_count() == 0 || frames.publisher_count() == 0 {
+        assert!(std::time::Instant::now() < deadline, "the guard's endpoints never came");
+        tokio::time::sleep(ms(5)).await;
+    }
+    mower_bridge::coverage::assert_in_manifest(&guard.m);
+    let topics = bus.topics();
+    let of = |name: &str| topics.iter().find(|t| t.name == name).unwrap().clone();
+    assert_eq!(of("/app_joy_cmd").subscriber_qos, [ONE]);
+    assert_eq!(of("/joy_cmd").publisher_qos, [ONE]);
+    assert_eq!(of("/manual_command_clock").publisher_qos, [ONE]);
+
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0, "the start's zero");
+    let first = tokio::time::timeout(WAIT, frames.recv()).await.unwrap().unwrap();
+    let session = first.frame_id.clone();
+    let id = session.strip_prefix("manual-session-v1:").expect("a session id");
+    assert!(id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit()), "{session}");
+    assert_eq!(Time::from_parts(first.stamp.sec, first.stamp.nanosec), clock.now());
+    // 20 Hz on the module's clock
+    for _ in 0..10 {
+        manual.advance(ms(50));
+        settle().await;
+    }
+    let mut got = Vec::new();
+    while let Ok(f) = frames.try_recv() {
+        assert_eq!(f.frame_id, session);
+        got.push(Time::from_parts(f.stamp.sec, f.stamp.nanosec));
+    }
+    assert_eq!(got.len(), 10, "one frame a tick");
+    assert!(got.windows(2).all(|w| w[1].duration_since(w[0]) == Some(ms(50))), "{got:?}");
+    assert_eq!(*got.last().unwrap(), clock.now());
+
+    // the app echoes the newest frame: forwarded, restamped
+    let echo = |stamp: Time, session: &str, x: f64| {
+        let mut c = command(stamp, x, 0.1);
+        c.header.frame_id = session.to_string();
+        c
+    };
+    manual.advance(ms(30));
+    app.publish(&echo(*got.last().unwrap(), &session, 0.2)).unwrap();
+    let out = next(&mut joy).await;
+    assert_eq!((out.twist.linear.x, out.twist.angular.z), (0.2, 0.1));
+    assert_eq!(stamp_of(&out), clock.now());
+    assert_eq!(out.header.frame_id, "base_footprint");
+    // another session, no stamp: zeros
+    manual.advance(ms(20));
+    app.publish(&echo(clock.now(), "manual-session-v1:00000000000000000000000000000000", 0.2)).unwrap();
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0);
+    manual.advance(ms(20));
+    app.publish(&echo(Time::from_ns(0), &session, 0.2)).unwrap();
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0);
+    // 1 s on (the watchdog is quiet: nothing moving), an echo of a frame 0.9 s old: a zero
+    manual.advance(ms(1000));
+    settle().await;
+    while frames.try_recv().is_ok() {}
+    app.publish(&echo(clock.now() - ms(900), &session, 0.2)).unwrap();
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0);
+    // the next frame after the refusal drives again
+    manual.advance(ms(50));
+    let fresh = tokio::time::timeout(WAIT, frames.recv()).await.unwrap().unwrap();
+    app.publish(&echo(Time::from_parts(fresh.stamp.sec, fresh.stamp.nanosec), &session, 0.3)).unwrap();
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.3);
+    // let go of the stick: the watchdog's zero 200 ms on
+    for _ in 0..6 {
+        manual.advance(ms(50));
+        settle().await;
+    }
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0, "the watchdog's zero");
+    guard.stop().await.unwrap();
+    assert_eq!(next(&mut joy).await.twist.linear.x, 0.0, "the last zero");
+    assert_eq!(frames.publisher_count(), 0, "the clock went with the guard");
+
+    // a new start, a new session
+    while frames.try_recv().is_ok() {}
+    let guard = Guard::start(&bus, clock.clone(), "manual_velocity_guard", &params);
+    let again = tokio::time::timeout(WAIT, frames.recv()).await.unwrap().unwrap();
+    assert!(again.frame_id.starts_with("manual-session-v1:") && again.frame_id != session);
+    guard.stop().await.unwrap();
 }

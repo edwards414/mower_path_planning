@@ -16,10 +16,10 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
-  1-5). base, pid_autotune and the final guard (step 6) have their bus IO next to their r2r IO, with their flags off:
-  they run on r2r until the owner switches the drivetrain over ("The flags"). ws_bridge is in the manifest (step E3),
-  on r2r. E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default, are born on the bus and replace
-  the outside twist_mux and robot_state_publisher when they run.
+  1-5). base, pid_autotune and the final guard (step 6) and the manual guard (step 7) have their bus IO next to their
+  r2r IO, with their flags off: they run on r2r until the owner switches the drivetrain over ("The flags"). ws_bridge
+  is in the manifest (step E3), on r2r. E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default,
+  are born on the bus and replace the outside twist_mux and robot_state_publisher when they run.
 
 ## The manifest
 
@@ -197,6 +197,10 @@ each with its flag; every other instance is elsewhere, on DDS.
   - **The LED writers:** with mower_base on the bus, both `/mower_base/led_command` writers must be too
     (`with_the_base_on_the_bus_both_led_writers_must_be_in_the_process`): `rust_status:=false` or
     `rust_pid_autotune:=false` then refuse the plan, and mower_rsd does not start.
+- **E2 step 7** (the manual guard; `step_7_takes_the_joystick_path_into_the_process`): nav's `/joy_cmd` no longer
+  comes in; `/joy_cmd` and `/manual_command_clock` go out (R V 1, for twist_mux and the graph); with ws_bridge on r2r
+  `/app_joy_cmd` comes in (R V 1), with ws_bridge on the bus `/manual_command_clock` no longer does. Steps 6 and 7
+  together plan as the module flag `guards` with base and pid_autotune.
 - **E2 steps 6 and 7 after it** take the guards' and pid_autotune's names into the process. What stays for ws_bridge
   is the recorder's six (until E5), `set_parameters` (until the parameter services move), and the `to_ros` of the
   three command topics: ws_bridge writes them on the bus, and every topic written on the bus gets its DDS face.

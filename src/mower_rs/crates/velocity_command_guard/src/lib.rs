@@ -15,8 +15,8 @@
 //! IO: r2r, or the in-process bus (`bus.rs`, step E2 of
 //! docs/ROS_FREE_PLAN.md), picked at start by the instance's flag in
 //! mower_bridge's on_bus.rs (`mower_bridge::instance_on_bus`). The final
-//! guard moves in E2 step 6. While its flag is false, nothing of `bus.rs`
-//! runs.
+//! guard moves in E2 step 6, the manual guard in step 7. While an instance's
+//! flag is false, nothing of `bus.rs` runs for it.
 
 mod bus;
 pub mod core;

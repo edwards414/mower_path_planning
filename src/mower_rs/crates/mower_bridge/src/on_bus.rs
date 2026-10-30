@@ -39,8 +39,8 @@ pub const ON_BUS: &[(&str, bool)] = &[
 /// Flags of single instances, by node name, for a module whose instances
 /// move in different steps: an instance is on the bus when its module's flag
 /// or its own is set. The final guard moves in E2 step 6, with mower_base and
-/// pid_autotune (docs/BUS_TOPICS.md section 6).
-pub const INSTANCES: &[(&str, bool)] = &[("velocity_command_guard", false)];
+/// pid_autotune, the manual guard in step 7 (docs/BUS_TOPICS.md section 6).
+pub const INSTANCES: &[(&str, bool)] = &[("velocity_command_guard", false), ("manual_velocity_guard", false)];
 
 /// The modules whose flag mower_rsd sets when it starts, from how it runs
 /// them, rather than here: ws_bridge, whose backend is chosen at run time
