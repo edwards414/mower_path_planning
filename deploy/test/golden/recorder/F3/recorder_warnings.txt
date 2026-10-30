@@ -1,0 +1,10 @@
+[recorder_manager_node-5] [WARN] [ros2bag]: Positional "topics" argument deprecated. Please use optional "--topics" argument instead.
+[recorder_manager_node-5] [WARN] [ros2bag]: Positional "topics" argument deprecated. Please use optional "--topics" argument instead.
+[graph_snapshot_node-4] [WARN] [1793347746.886715962] [graph_snapshot]: NODE DISAPPEARED: /e2_graph_dump
+[graph_snapshot_node-4] [WARN] [1793347748.900805505] [graph_snapshot]: NODE DISAPPEARED: /_ros2cli_307
+[graph_snapshot_node-4] [WARN] [1793347770.880419168] [graph_snapshot]: NODE DISAPPEARED: /e5_record_qos
+[graph_snapshot_node-4] [WARN] [1793347778.875673755] [graph_snapshot]: NODE DISAPPEARED: /mower_camera_recorder
+[graph_snapshot_node-4] [WARN] [1793347778.876146547] [graph_snapshot]: NODE DISAPPEARED: /mower_full_recorder
+[graph_snapshot_node-4] [WARN] [1793347784.921350175] [graph_snapshot]: NODE DISAPPEARED: /e5_record_listen
+# rosbag2_compression "Dropping message on topic:<t>from compression queue because it is full", per topic:
+{}

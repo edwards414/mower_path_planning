@@ -1,0 +1,350 @@
+{
+ "files": {
+  "MW-E5FIX_20261030T080903/bag/bag_0.mcap": {
+   "differ": 0,
+   "framed": 1241,
+   "identical": 1241,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     10,
+     0
+    ],
+    "/adapter/map_datum": [
+     1,
+     0
+    ],
+    "/adapter/map_layers/map_grid": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/coverage_path": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/zones": [
+     1,
+     0
+    ],
+    "/adapter/robot_pose": [
+     43,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     20,
+     0
+    ],
+    "/aon_battery_state": [
+     10,
+     0
+    ],
+    "/battery_state": [
+     10,
+     0
+    ],
+    "/diagnostics": [
+     30,
+     0
+    ],
+    "/fix": [
+     39,
+     0
+    ],
+    "/graph_events": [
+     1,
+     0
+    ],
+    "/graph_snapshot": [
+     5,
+     0
+    ],
+    "/imu/data": [
+     98,
+     0
+    ],
+    "/mower_base/telemetry": [
+     142,
+     0
+    ],
+    "/odom": [
+     243,
+     0
+    ],
+    "/robot/online": [
+     20,
+     0
+    ],
+    "/rosout": [
+     50,
+     0
+    ],
+    "/tf": [
+     515,
+     0
+    ],
+    "/tf_static": [
+     1,
+     0
+    ]
+   },
+   "unframed": 0
+  },
+  "MW-E5FIX_20261030T080903/bag/bag_1.mcap": {
+   "differ": 0,
+   "framed": 1214,
+   "identical": 1214,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     10,
+     0
+    ],
+    "/adapter/robot_pose": [
+     43,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     20,
+     0
+    ],
+    "/aon_battery_state": [
+     10,
+     0
+    ],
+    "/battery_state": [
+     10,
+     0
+    ],
+    "/diagnostics": [
+     30,
+     0
+    ],
+    "/fix": [
+     40,
+     0
+    ],
+    "/graph_snapshot": [
+     5,
+     0
+    ],
+    "/imu/data": [
+     101,
+     0
+    ],
+    "/mower_base/telemetry": [
+     155,
+     0
+    ],
+    "/odom": [
+     248,
+     0
+    ],
+    "/robot/online": [
+     20,
+     0
+    ],
+    "/tf": [
+     522,
+     0
+    ]
+   },
+   "unframed": 0
+  },
+  "MW-E5FIX_20261030T080903/bag/bag_2.mcap": {
+   "differ": 0,
+   "framed": 1212,
+   "identical": 1212,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     10,
+     0
+    ],
+    "/adapter/robot_pose": [
+     43,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     20,
+     0
+    ],
+    "/aon_battery_state": [
+     10,
+     0
+    ],
+    "/battery_state": [
+     10,
+     0
+    ],
+    "/diagnostics": [
+     30,
+     0
+    ],
+    "/fix": [
+     40,
+     0
+    ],
+    "/graph_events": [
+     2,
+     0
+    ],
+    "/graph_snapshot": [
+     5,
+     0
+    ],
+    "/imu/data": [
+     100,
+     0
+    ],
+    "/mower_base/telemetry": [
+     147,
+     0
+    ],
+    "/odom": [
+     249,
+     0
+    ],
+    "/robot/online": [
+     20,
+     0
+    ],
+    "/rosout": [
+     1,
+     0
+    ],
+    "/tf": [
+     525,
+     0
+    ]
+   },
+   "unframed": 0
+  },
+  "MW-E5FIX_20261030T080903/bag/bag_3.mcap": {
+   "differ": 0,
+   "framed": 1209,
+   "identical": 1209,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     10,
+     0
+    ],
+    "/adapter/robot_pose": [
+     43,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     20,
+     0
+    ],
+    "/aon_battery_state": [
+     10,
+     0
+    ],
+    "/battery_state": [
+     10,
+     0
+    ],
+    "/diagnostics": [
+     30,
+     0
+    ],
+    "/fix": [
+     40,
+     0
+    ],
+    "/graph_snapshot": [
+     5,
+     0
+    ],
+    "/imu/data": [
+     100,
+     0
+    ],
+    "/mower_base/telemetry": [
+     151,
+     0
+    ],
+    "/odom": [
+     247,
+     0
+    ],
+    "/robot/online": [
+     20,
+     0
+    ],
+    "/tf": [
+     523,
+     0
+    ]
+   },
+   "unframed": 0
+  },
+  "MW-E5FIX_20261030T080903/bag/bag_4.mcap": {
+   "differ": 0,
+   "framed": 679,
+   "identical": 679,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     6,
+     0
+    ],
+    "/adapter/robot_pose": [
+     25,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     10,
+     0
+    ],
+    "/aon_battery_state": [
+     6,
+     0
+    ],
+    "/battery_state": [
+     6,
+     0
+    ],
+    "/diagnostics": [
+     18,
+     0
+    ],
+    "/fix": [
+     23,
+     0
+    ],
+    "/graph_snapshot": [
+     2,
+     0
+    ],
+    "/imu/data": [
+     56,
+     0
+    ],
+    "/mower_base/telemetry": [
+     82,
+     0
+    ],
+    "/odom": [
+     139,
+     0
+    ],
+    "/robot/online": [
+     11,
+     0
+    ],
+    "/rosout": [
+     3,
+     0
+    ],
+    "/tf": [
+     292,
+     0
+    ]
+   },
+   "unframed": 0
+  }
+ },
+ "libzstd": [
+  1,
+  5,
+  5
+ ],
+ "zstandard": "0.22.0"
+}

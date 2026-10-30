@@ -1,0 +1,19 @@
+cbfb4a36bf5c38433cf88d90cce18e8cf38e6026e3410e3eb9d3245d5ea09afe       1073 MW-E5FIX_20261030T080903/run_metadata.yaml
+76c40f8c6ce102a6cc0d46cec38f2bb19cd94f0645e611cf7c216350848fa283     385798 MW-E5FIX_20261030T080903/bag/bag_0.mcap -> MW-E5FIX_20261030T080903/bag/bag_0.mcap.zst
+f95a80b111cdfb71041ec9961858406cb3e5e6a52d6a84508493945e6e776cfe     402860 MW-E5FIX_20261030T080903/bag/bag_1.mcap -> MW-E5FIX_20261030T080903/bag/bag_1.mcap.zst
+9d4fe8fa28a7d5d5f78f1691bbc069d1ff605ce3b265e1f8d8e5d43a34e1a141     406448 MW-E5FIX_20261030T080903/bag/bag_2.mcap -> MW-E5FIX_20261030T080903/bag/bag_2.mcap.zst
+1c02a8abb191a5030368d0c70c0ff91fcf3771a120d2c1424e642bdf1e2d1aeb     401149 MW-E5FIX_20261030T080903/bag/bag_3.mcap -> MW-E5FIX_20261030T080903/bag/bag_3.mcap.zst
+92664976ab8e514a734f61e497faa9f9bb568a9762f5dc555f04d8bc6ce4d432     284885 MW-E5FIX_20261030T080903/bag/bag_4.mcap -> MW-E5FIX_20261030T080903/bag/bag_4.mcap.zst
+aee864d70d72cdb86b840fb44caa39b70b7111cfda88421449aa38ce1d9e561d      31112 MW-E5FIX_20261030T080903/bag/metadata.yaml
+8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0        440 MW-E5FIX_20261030T080903/params/boustrophedon_coverage.yaml
+c0d2b01f1869d254eb6d8a7976e14ae85173fd706b5a605b63b7cd3cc72e9909        150 MW-E5FIX_20261030T080903/params/map_manage.yaml
+e4d4ac4038b7d711baaf710fd9a1ca7ebb25dc142e11b69f5eccb7f95b929fa5       2799 MW-E5FIX_20261030T080903/snapshots/metadata.yaml
+38185f3327237e63c6252c74415123379d94584c851bf81cc29bef9e059db3d8       9647 MW-E5FIX_20261030T080903/snapshots/snapshots_0.mcap -> MW-E5FIX_20261030T080903/snapshots/snapshots_0.mcap.zst
+d27a151101840dbcec785c91348882a2c3977f1e7a06f89db129d8fa6e623381     263122 qos.json -> qos.json.zst
+407bb561d5e0d77cb4c051a3940303a32a81f5cc00a615d38fcf588060254267    2599239 listen.jsonl -> listen.jsonl.zst
+163dcc246c9d6ce2b78ab7bdd42dc50ad3be7bdccc2420579b20435bb4d7d838        724 mediamtx.jsonl -> mediamtx.jsonl.zst
+fd516107d59c0c874d8b8f0071e92ebe86b2f6def0b2a962ce6508741bd6711b       1508 image_facts.txt
+4470a58a68c45ec4925455fb1239ff62db9931f8da89238d6610bb3024a96bfc       2951 record_topics_split.yaml
+(generated) replies.txt: start/snapshot/stop replies as ros2 service call printed them
+(generated) recorder_warnings.txt: WARN/ERROR lines of the recorder launch, the compression-queue drops counted per topic
+(generated) zstd_check.json: F6, every per-message zstd payload recompressed with libzstd level 1

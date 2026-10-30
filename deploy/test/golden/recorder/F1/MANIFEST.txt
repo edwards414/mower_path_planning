@@ -1,0 +1,18 @@
+e180740a6204395915777d1e1bae3b7f04b65cacdd9e0934ae637aa13b6b3b6e       1073 MW-E5FIX_20261030T081851/run_metadata.yaml
+1d7013fdac6e42315b05ff734d5f2f5dbc529baa2aa36b25e30b62dc44624fd4    3313681 MW-E5FIX_20261030T081851/bag/bag_0.mcap -> MW-E5FIX_20261030T081851/bag/bag_0.mcap.zst
+052b499d2f93afa5ef014d3a0c388588778a4504237a633e6f112b3a60bc7044      34542 MW-E5FIX_20261030T081851/bag/metadata.yaml
+8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0        440 MW-E5FIX_20261030T081851/params/boustrophedon_coverage.yaml
+c0d2b01f1869d254eb6d8a7976e14ae85173fd706b5a605b63b7cd3cc72e9909        150 MW-E5FIX_20261030T081851/params/map_manage.yaml
+fa7e9769c149a0511b1248b4dfbbdf6f0c8b6f97ccae8b93c424f4f3b4bc0f16       3003 MW-E5FIX_20261030T081851/snapshots/metadata.yaml
+a4980241345ce936f4103ad9ff6ea2b791e568201aa4b3e0a15b5f5f9eb097c0    4294595 MW-E5FIX_20261030T081851/snapshots/snapshots_0.mcap -> MW-E5FIX_20261030T081851/snapshots/snapshots_0.mcap.zst
+b6748dab41572b386fd733c5e814b0159a9376e24843800c3d7aa00bbd4ec728      12156 MW-E5FIX_20261030T081851/snapshots/snapshots_1.mcap -> MW-E5FIX_20261030T081851/snapshots/snapshots_1.mcap.zst
+2c05a703262222067291c419a185f0d012ec7d23d73f8d185be22502111d695a       5782 actions/actions_0.mcap -> actions/actions_0.mcap.zst
+ff0864fbcf4816b12ad4783a2dd03d3b51febc73886237fa8c6cbc83315a460f       2098 actions/metadata.yaml
+9b585c8f21d445e9154c59d89432f22755aa086c2629fd667d52e0b1fd829908     266125 qos.json -> qos.json.zst
+f59a0c2adf7171fad3893bc41f829dc79ca24e7ec456a6536d13b9e72fd0ae2d    4962240 listen.jsonl -> listen.jsonl.zst
+13d55b7c7369789c885e314020786aa3d982dd433ab0345f318feb7856fb8a57        723 mediamtx.jsonl -> mediamtx.jsonl.zst
+606963eb86feb6dd59e2cfbf39b26807a7d21d2dac2d37e00b5360eb2d59f7ff        220 nav_goal.json
+fd516107d59c0c874d8b8f0071e92ebe86b2f6def0b2a962ce6508741bd6711b       1508 image_facts.txt
+(generated) replies.txt: start/snapshot/stop replies as ros2 service call printed them
+(generated) recorder_warnings.txt: WARN/ERROR lines of the recorder launch, the compression-queue drops counted per topic
+(generated) zstd_check.json: F6, every per-message zstd payload recompressed with libzstd level 1

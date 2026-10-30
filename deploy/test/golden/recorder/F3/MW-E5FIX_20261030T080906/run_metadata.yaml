@@ -1,0 +1,65 @@
+run_id: MW-E5FIX_20261030T080906
+robot_id: MW-E5FIX
+start_time: '2026-10-30T08:09:06.058289'
+ros_distro: jazzy
+git:
+  sha: unknown
+gps_start:
+  lat: 25.032999999999998
+  lon: 121.5654
+  alt: 45.123
+recorded_topics:
+- /tf
+- /tf_static
+- /imu/data
+- /odom
+- /fix
+- /gps/status
+- /odometry/local
+- /odometry/global
+- /odometry/gps
+- /cmd_vel
+- /mower_base/telemetry
+- /battery_state
+- /diagnostics
+- /rosout
+- /graph_snapshot
+- /graph_events
+snapshot_topics: []
+profile: data_collection
+camera:
+  model: ELP-USBFHD06H
+  serial: E5-0000
+  device: /dev/video0
+  width: 80
+  height: 60
+  fps_native: 25
+  fps_recorded: 10
+  format: jpeg
+  autofocus: 'off'
+  exposure: auto
+  driver: gscam
+  pipeline: videotestsrc is-live=true pattern=ball ! video/x-raw,format=I420,width=80,height=60,framerate=25/1
+    ! jpegenc quality=50 ! image/jpeg,width=80,height=60,framerate=25/1 ! videorate
+    drop-only=true max-rate=10
+camera_height_m: 0.585
+camera_pitch_deg: 17.5
+extrinsics_source: placeholder
+calibration:
+  intrinsics_file: calib/camera_front.yaml
+  extrinsics_file: calib/extrinsics.yaml
+  date: '2026-10-30'
+  intrinsics_source: calibrated
+grass_height_cm: 8
+weather: sunny
+blade: 'off'
+heading_calibration: pending
+notes: ''
+camera_topics:
+- /camera/front/image_raw/compressed
+- /camera/front/camera_info
+- /tf_static
+build:
+  version: f3f4630
+  git_sha: f3f4630eb97537f93fb454a190ede03e0e346066
+  image: ghcr.io/edwards414/mower_path_planning:main
