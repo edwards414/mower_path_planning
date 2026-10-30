@@ -1,0 +1,178 @@
+{
+ "files": {
+  "MW-E5FIX_20261030T081247/bag/bag_0.mcap": {
+   "differ": 0,
+   "framed": 7508,
+   "identical": 7508,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     63,
+     0
+    ],
+    "/adapter/map_datum": [
+     1,
+     0
+    ],
+    "/adapter/map_layers/map_grid": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/channels": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/connectors": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/coverage_path": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/invalid_segments": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/risk_zones": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/zones": [
+     1,
+     0
+    ],
+    "/adapter/robot_pose": [
+     267,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     123,
+     0
+    ],
+    "/aon_battery_state": [
+     59,
+     0
+    ],
+    "/battery_state": [
+     59,
+     0
+    ],
+    "/diagnostics": [
+     185,
+     0
+    ],
+    "/fix": [
+     250,
+     0
+    ],
+    "/graph_events": [
+     7,
+     0
+    ],
+    "/graph_snapshot": [
+     32,
+     0
+    ],
+    "/imu/data": [
+     614,
+     0
+    ],
+    "/mower_base/telemetry": [
+     894,
+     0
+    ],
+    "/odom": [
+     1538,
+     0
+    ],
+    "/robot/online": [
+     122,
+     0
+    ],
+    "/rosout": [
+     59,
+     0
+    ],
+    "/tf": [
+     3226,
+     0
+    ],
+    "/tf_static": [
+     2,
+     0
+    ]
+   },
+   "unframed": 0
+  },
+  "MW-E5FIX_20261030T081247/bag/bag_1.mcap": {
+   "differ": 0,
+   "framed": 4320,
+   "identical": 4320,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     36,
+     0
+    ],
+    "/adapter/robot_pose": [
+     158,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     73,
+     0
+    ],
+    "/aon_battery_state": [
+     36,
+     0
+    ],
+    "/battery_state": [
+     33,
+     0
+    ],
+    "/diagnostics": [
+     105,
+     0
+    ],
+    "/fix": [
+     146,
+     0
+    ],
+    "/graph_snapshot": [
+     18,
+     0
+    ],
+    "/imu/data": [
+     353,
+     0
+    ],
+    "/mower_base/telemetry": [
+     530,
+     0
+    ],
+    "/odom": [
+     887,
+     0
+    ],
+    "/robot/online": [
+     71,
+     0
+    ],
+    "/rosout": [
+     3,
+     0
+    ],
+    "/tf": [
+     1871,
+     0
+    ]
+   },
+   "unframed": 0
+  }
+ },
+ "libzstd": [
+  1,
+  5,
+  5
+ ],
+ "zstandard": "0.22.0"
+}

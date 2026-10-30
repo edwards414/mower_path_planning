@@ -1,0 +1,16 @@
+4a851add5d5905180ec91156ced77898f1cd8d5121399ac006b2c56f1aad06af       1073 MW-E5FIX_20261030T081247/run_metadata.yaml
+63b1f74e3b00544aab64372e88af928237e66054e367bc043b54c2f9c14ab4fc    1781659 MW-E5FIX_20261030T081247/bag/bag_0.mcap -> MW-E5FIX_20261030T081247/bag/bag_0.mcap.zst
+a282d196574ce5046ca36339728ea669b911c4ca29422c10cc082db472ab7b04    1113814 MW-E5FIX_20261030T081247/bag/bag_1.mcap -> MW-E5FIX_20261030T081247/bag/bag_1.mcap.zst
+9f5db5e561804e37e15bfe4deb94632193fc176b4694190e191d41c7c5c9d278      37496 MW-E5FIX_20261030T081247/bag/metadata.yaml
+8aeb68b73d47adf41c8e152180072dd30d13b9e023c5607df0dd81b3603dbdd0        440 MW-E5FIX_20261030T081247/params/boustrophedon_coverage.yaml
+c0d2b01f1869d254eb6d8a7976e14ae85173fd706b5a605b63b7cd3cc72e9909        150 MW-E5FIX_20261030T081247/params/map_manage.yaml
+b49d56df557e5d8b259f8507ccd201a27ca92af6d31c9cd9536b86eb15a61d8f       2800 MW-E5FIX_20261030T081247/snapshots/metadata.yaml
+84dca0d98c2625c765ceb165335ea7318aad58f2865aeffed6aaa388804cab21       9648 MW-E5FIX_20261030T081247/snapshots/snapshots_0.mcap -> MW-E5FIX_20261030T081247/snapshots/snapshots_0.mcap.zst
+fa1e7af05d3baf8c2d7d39bf1037171a926480688a6445f4acd19aadac0e826a     263121 qos.json -> qos.json.zst
+0b3c9f883dc49eb6bf33a60cba885a8091a083abf242425272c221cfa00df5dd    4264284 listen.jsonl -> listen.jsonl.zst
+94f24ee1cee383bc502b30af766da2ba1aca3c4630e82e57a89142bc090e78c0        724 mediamtx.jsonl -> mediamtx.jsonl.zst
+fd516107d59c0c874d8b8f0071e92ebe86b2f6def0b2a962ce6508741bd6711b       1508 image_facts.txt
+820d1e43ce5131df7bb1b8400d85f2e75f619c8b09fc11c8bdaf681196cdc0a9       2953 record_topics_split.yaml
+(generated) replies.txt: start/snapshot/stop replies as ros2 service call printed them
+(generated) recorder_warnings.txt: WARN/ERROR lines of the recorder launch, the compression-queue drops counted per topic
+(generated) zstd_check.json: F6, every per-message zstd payload recompressed with libzstd level 1

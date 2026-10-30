@@ -1,0 +1,12 @@
+--- /mower_recorder/start
+requester: making request: std_srvs.srv.Trigger_Request()
+
+response:
+std_srvs.srv.Trigger_Response(success=True, message='開始錄製 run=MW-E5FIX_20261030T080906')
+
+--- /mower_recorder/stop
+requester: making request: std_srvs.srv.Trigger_Request()
+
+response:
+std_srvs.srv.Trigger_Response(success=True, message='已停止並封存: full, camera (run=MW-E5FIX_20261030T080906)')
+

@@ -1,0 +1,7 @@
+/map_manage:
+  ros__parameters:
+    chennal_width_m: 1.2
+    inflate_radius_m: 0.75
+    start_type_description_service: true
+    use_sim_time: false
+

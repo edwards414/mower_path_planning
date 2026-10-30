@@ -1,0 +1,32 @@
+libyaml-cpp0.8 0.8.0+dfsg-6build1
+libzstd1 1.5.5+dfsg2-2build1.1
+python3-boto3 1.34.46+dfsg-1ubuntu1
+python3-yaml 6.0.1-2build2
+python3-zstandard 0.22.0-1build1
+ros-jazzy-cyclonedds 0.10.5-1noble.20260305.204044
+ros-jazzy-gscam 2.0.2-5noble.20260911.153845
+ros-jazzy-mcap-vendor 0.26.11-1noble.20260604.093033
+ros-jazzy-rmw-cyclonedds-cpp 2.2.4-1noble.20260911.054215
+ros-jazzy-rosbag2-compression 0.26.11-1noble.20260911.182832
+ros-jazzy-rosbag2-compression-zstd 0.26.11-1noble.20260911.224724
+ros-jazzy-rosbag2-cpp 0.26.11-1noble.20260911.175843
+ros-jazzy-rosbag2-interfaces 0.26.11-1noble.20260911.054750
+ros-jazzy-rosbag2-py 0.26.11-1noble.20260911.230412
+ros-jazzy-rosbag2-storage 0.26.11-1noble.20260911.075819
+ros-jazzy-rosbag2-storage-default-plugins 0.26.11-1noble.20260911.144505
+ros-jazzy-rosbag2-storage-mcap 0.26.11-1noble.20260911.095159
+ros-jazzy-rosbag2-storage-sqlite3 0.26.11-1noble.20260911.101454
+ros-jazzy-rosbag2-transport 0.26.11-1noble.20260911.225152
+ros-jazzy-zstd-vendor 0.26.11-1noble.20260604.092801
+TZ= timezone=Etc/UTC date_Z=UTC
+ROS_DISTRO=jazzy RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+python 3.12.3 PyYAML 6.0.1 zstandard 0.22.0 libzstd (1, 5, 5)
+share/std_msgs/msg/String.idl
+share/std_msgs/msg/String.json
+share/std_msgs/msg/String.msg
+share/sensor_msgs/msg/NavSatFix.idl
+share/sensor_msgs/msg/NavSatFix.json
+share/sensor_msgs/msg/NavSatFix.msg
+share/nav2_msgs/action/NavigateToPose.action
+share/nav2_msgs/action/NavigateToPose.idl
+share/nav2_msgs/action/NavigateToPose.json

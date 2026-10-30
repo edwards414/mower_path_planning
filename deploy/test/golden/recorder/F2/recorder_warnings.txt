@@ -1,0 +1,24 @@
+[graph_snapshot_node-1] [WARN] [1793347744.357028878] [graph_snapshot]: NODE DISAPPEARED: /e2_graph_dump
+[recorder_manager_node-2] [WARN] [ros2bag]: Positional "topics" argument deprecated. Please use optional "--topics" argument instead.
+[recorder_manager_node-2] [WARN] [ros2bag]: Positional "topics" argument deprecated. Please use optional "--topics" argument instead.
+[recorder_manager_node-2] [WARN] [1793347744.477795336] [ROSBAG2_TRANSPORT]: Hidden topics are not recorded. Enable them with --include-hidden-topics
+[graph_snapshot_node-1] [WARN] [1793347768.343634042] [graph_snapshot]: NODE DISAPPEARED: /e5_record_qos
+[graph_snapshot_node-1] [WARN] [1793347792.371254928] [graph_snapshot]: NODE DISAPPEARED: /_ros2cli_requester_std_srvs_Trigger
+[graph_snapshot_node-1] [WARN] [1793347792.372594136] [graph_snapshot]: NODE DISAPPEARED: /mower_full_recorder
+[graph_snapshot_node-1] [WARN] [1793347792.373335386] [graph_snapshot]: NODE DISAPPEARED: /mower_snapshot_recorder
+[graph_snapshot_node-1] [WARN] [1793347798.343817292] [graph_snapshot]: NODE DISAPPEARED: /e5_record_listen
+# rosbag2_compression "Dropping message on topic:<t>from compression queue because it is full", per topic:
+{
+ "/adapter/marker_layers/coverage_path": 4,
+ "/adapter/marker_layers/zones": 3,
+ "/adapter/robot_pose": 1,
+ "/fix": 3,
+ "/graph_events": 1,
+ "/graph_snapshot": 1,
+ "/imu/data": 1,
+ "/mower_base/telemetry": 15,
+ "/odom": 1,
+ "/robot/online": 1,
+ "/rosout": 10,
+ "/tf": 23
+}

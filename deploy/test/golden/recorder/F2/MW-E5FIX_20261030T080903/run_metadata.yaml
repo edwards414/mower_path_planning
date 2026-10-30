@@ -1,0 +1,47 @@
+run_id: MW-E5FIX_20261030T080903
+robot_id: MW-E5FIX
+start_time: '2026-10-30T08:09:03.927881'
+ros_distro: jazzy
+git:
+  sha: unknown
+gps_start:
+  lat: 25.032999999999998
+  lon: 121.5654
+  alt: 45.123
+recorded_topics:
+- /adapter/robot_pose
+- /adapter/map_datum
+- /adapter/coverage_settings
+- /adapter/zone_summaries
+- /adapter/map_layers/map_grid
+- /adapter/map_layers/free_space_inflated
+- /adapter/map_layers/risk_map_inflated
+- /adapter/map_layers/chennal_map_inflated
+- /adapter/marker_layers/coverage_path
+- /adapter/marker_layers/zones
+- /adapter/marker_layers/channels
+- /adapter/marker_layers/connectors
+- /adapter/marker_layers/invalid_segments
+- /adapter/marker_layers/risk_zones
+- /robot/online
+- /battery_state
+- /aon_battery_state
+- /odom
+- /tf
+- /tf_static
+- /cmd_vel
+- /fix
+- /imu/data
+- /mower_base/telemetry
+- /risk_map_inflated
+- /free_space_inflated
+- /navigate_to_pose/_action/feedback
+- /navigate_to_pose/_action/status
+- /graph_snapshot
+- /graph_events
+- /diagnostics
+- /rosout
+snapshot_topics:
+- /global_costmap/costmap
+- /local_costmap/costmap
+- /plan

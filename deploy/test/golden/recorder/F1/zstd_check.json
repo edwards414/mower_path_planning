@@ -1,0 +1,114 @@
+{
+ "files": {
+  "MW-E5FIX_20261030T081851/bag/bag_0.mcap": {
+   "differ": 0,
+   "framed": 14503,
+   "identical": 14503,
+   "per_topic": {
+    "/adapter/coverage_settings": [
+     121,
+     0
+    ],
+    "/adapter/map_datum": [
+     1,
+     0
+    ],
+    "/adapter/map_layers/map_grid": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/channels": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/connectors": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/coverage_path": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/invalid_segments": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/risk_zones": [
+     1,
+     0
+    ],
+    "/adapter/marker_layers/zones": [
+     1,
+     0
+    ],
+    "/adapter/robot_pose": [
+     519,
+     0
+    ],
+    "/adapter/zone_summaries": [
+     239,
+     0
+    ],
+    "/aon_battery_state": [
+     116,
+     0
+    ],
+    "/battery_state": [
+     114,
+     0
+    ],
+    "/diagnostics": [
+     361,
+     0
+    ],
+    "/fix": [
+     478,
+     0
+    ],
+    "/graph_events": [
+     8,
+     0
+    ],
+    "/graph_snapshot": [
+     60,
+     0
+    ],
+    "/imu/data": [
+     1187,
+     0
+    ],
+    "/mower_base/telemetry": [
+     1740,
+     0
+    ],
+    "/odom": [
+     2979,
+     0
+    ],
+    "/robot/online": [
+     236,
+     0
+    ],
+    "/rosout": [
+     69,
+     0
+    ],
+    "/tf": [
+     6266,
+     0
+    ],
+    "/tf_static": [
+     2,
+     0
+    ]
+   },
+   "unframed": 0
+  }
+ },
+ "libzstd": [
+  1,
+  5,
+  5
+ ],
+ "zstandard": "0.22.0"
+}

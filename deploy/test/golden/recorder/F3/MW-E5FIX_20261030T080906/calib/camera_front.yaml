@@ -1,0 +1,55 @@
+image_width: 80
+image_height: 60
+camera_name: camera_front
+camera_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 65.75
+  - 0.0
+  - 40.125
+  - 0.0
+  - 65.875
+  - 29.75
+  - 0.0
+  - 0.0
+  - 1.0
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data:
+  - -0.31
+  - 0.11
+  - 0.0012
+  - -0.0004
+  - 0.0
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+projection_matrix:
+  rows: 3
+  cols: 4
+  data:
+  - 55.1
+  - 0.0
+  - 39.75
+  - 0.0
+  - 0.0
+  - 59.2
+  - 30.05
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  - 0.0
