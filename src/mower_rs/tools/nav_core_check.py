@@ -39,6 +39,7 @@ always in this order (D needs a stack that has never had a map):
 
 Needs a sourced ROS 2 Jazzy environment with mower_interface:
 
+  python3 src/mower_rs/tools/nav_core_check.py -- target/debug/mower_rsd --modules nav
   python3 src/mower_rs/tools/nav_core_check.py -- <path to mower_nav>
   python3 src/mower_rs/tools/nav_core_check.py --only a -- <path to mower_nav>
 

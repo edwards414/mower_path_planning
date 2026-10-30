@@ -229,6 +229,96 @@ jobs:
           cargo build --locked -p mower_pid_autotune
           python3 tools/autotune_telemetry_check.py --binary target/debug/mower_pid_autotune
 
+  mower-rsd-black-boxes:
+    # The four black boxes of mower_rs tests again, on mower_rsd, the binary
+    # the robot runs, with one module each: --modules starts that module
+    # and, since it is on the bus, the bus bridge that puts it on DDS for the
+    # rclpy tools. mower_rs tests keeps running them on the per-module
+    # standalone binaries, because rust_daemon:=false is still the roll-back
+    # path. Its own job, in parallel: it builds only mower_rsd, and on a warm
+    # cache it ends before mower_rs tests does, so the run takes no longer.
+    name: mower_rsd black boxes
+    runs-on: ubuntu-latest
+    if: github.event.action != 'labeled' || github.event.label.name == 'push-image'
+    container: ros:jazzy-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        timeout-minutes: 10
+        shell: bash
+        # the same as mower_rs tests, so both run the tools on one system
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            curl libclang-dev ros-jazzy-nav2-msgs ros-jazzy-geographic-msgs ros-jazzy-robot-localization \
+            ros-jazzy-nav2-simple-commander ros-jazzy-rmw-cyclonedds-cpp
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        timeout-minutes: 10
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/mower_rs
+          # as mower_rs tests: r2r never notices an edited interface
+          key: ${{ hashFiles('src/mower_interface/msg/**', 'src/mower_interface/srv/**', 'src/mower_interface/action/**') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build mower_interface and mower_rsd
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --packages-select mower_interface --event-handlers console_direct-
+          source install/setup.bash
+          cd src/mower_rs
+          cargo build --locked -p mower_rsd
+
+      - name: Coverage node cancel tracking (black box, mower_rsd)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          python3 tools/coverage_cancel_check.py -- target/debug/mower_rsd --modules coverage
+
+      - name: Coverage progress of both navigation servers (black box, mower_rsd)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          # each run restarts into the other server halfway, so both servers
+          # run every scenario and each resumes the other's checkpoint
+          export PYTHONPATH="$GITHUB_WORKSPACE/src/mower_mission:$PYTHONPATH"
+          py_nav=(python3 -m mower_mission.navigation.nav_action_server)
+          rs_nav=(target/debug/mower_rsd --modules nav)
+          python3 tools/nav_progress_check.py --restart-as "${py_nav[*]}" -- "${rs_nav[@]}"
+          python3 tools/nav_progress_check.py --restart-as "${rs_nav[*]}" -- "${py_nav[@]}"
+
+      - name: In-process navigation of mower_nav (black box, mower_rsd)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          python3 tools/nav_core_check.py -- target/debug/mower_rsd --modules nav
+
+      - name: pid_autotune telemetry only during a session (black box, mower_rsd)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          cd src/mower_rs
+          python3 tools/autotune_telemetry_check.py -- target/debug/mower_rsd --modules pid_autotune
+
   flasher-tests:
     # The STM32 firmware flasher: firmware/tools/mower_flash.py and its Rust
     # port side by side on a fake STM32 (tools/README.md, "Checking the
@@ -659,7 +749,8 @@ jobs:
     # first, every tag again afterwards.
     name: Publish runtime tags
     runs-on: ubuntu-latest
-    needs: [python-tests, coverage-core-tests, mower-rs-tests, flasher-tests, firmware, driver-tests, build]
+    needs: [python-tests, coverage-core-tests, mower-rs-tests, mower-rsd-black-boxes, flasher-tests, firmware,
+            driver-tests, build]
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'push-image')
     env:
       REPOSITORY_LC: ${{ github.repository }}
