@@ -1,5 +1,5 @@
-//! The five `/mower_base/*_command` JSON topics, parsed the way
-//! `mower_hardware::MowerSystem` parses them.
+//! The five `/mower_base/*_command` JSON topics and `/mower_base/rear_light`,
+//! parsed the way `mower_hardware::MowerSystem` parses them.
 //!
 //! The C++ does not use a JSON parser: `json_int` / `json_double` search for
 //! `"key"`, skip to the `:` and run `strtol` / `strtod`. That means a missing
@@ -155,9 +155,44 @@ pub fn blade(text: &str) -> Result<(i32, i64), (i32, i64)> {
     ))
 }
 
+/// `json_str(s, key)`: the first string value of `"key"` anywhere in the
+/// document, "" when there is none.
+fn json_str<'a>(v: &'a Value, key: &str) -> &'a str {
+    match find(v, key) {
+        Some(Value::String(s)) => s,
+        _ => "",
+    }
+}
+
+/// `on_rear_light`: `{"effect":"recording"|"off","source":"..."}` as
+/// `(source, recording)`; `None` for any other effect (and for text that is
+/// not JSON), which the C++ ignores with a warning. A missing `source` is "".
+pub fn rear_light(text: &str) -> Option<(String, bool)> {
+    let v = parse(text)?;
+    let recording = match json_str(&v, "effect") {
+        "recording" => true,
+        "off" => false,
+        _ => return None,
+    };
+    Some((json_str(&v, "source").to_string(), recording))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rear_light_takes_recording_or_off_per_source() {
+        assert_eq!(rear_light(r#"{"effect":"recording","source":"path_record"}"#), Some(("path_record".into(), true)));
+        assert_eq!(rear_light(r#"{"effect": "off", "source": "bag"}"#), Some(("bag".into(), false)));
+        // no source: the "" source
+        assert_eq!(rear_light(r#"{"effect":"recording"}"#), Some((String::new(), true)));
+        // another effect, none, not a string, not JSON: ignored
+        assert_eq!(rear_light(r#"{"effect":"breathe","source":"bag"}"#), None);
+        assert_eq!(rear_light(r#"{"source":"bag"}"#), None);
+        assert_eq!(rear_light(r#"{"effect":1}"#), None);
+        assert_eq!(rear_light("recording"), None);
+    }
 
     #[test]
     fn led_needs_a_mode_and_clamps_the_rest() {

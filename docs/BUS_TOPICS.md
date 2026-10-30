@@ -30,7 +30,8 @@ references are to their own repositories, at the commits named in 1.4.
 - **DDS refuses no publisher/subscriber pair today** (5.5). Moving pairs onto the bus therefore connects nothing new. The
   bridge itself can still create refusals, though: section 5.5 lists the traps.
 - **Surprises** (5.8):
-  - `/mower_base/rear_light` has two publishers and no subscriber since the Rust base replaced `mower_hardware`.
+  - `/mower_base/rear_light` had two publishers and no subscriber since the Rust base replaced `mower_hardware`;
+    mower_base reads it again since 2026-10-30 (5.8 #1).
   - The coverage node holds two latched publishers that never publish.
   - The plan's claim that the app calls `/map_manage/get_parameters` is wrong.
   - The E1 README lists only the guards and the IMU as relying on remapping. Four other modules depend on relative names
@@ -180,7 +181,7 @@ Each citation is `alias:line`.
 | `/mower_base/wheel_override` | `String`, JSON | `pid_autotune`, `BE V 1` (mower_pid_autotune:809, 839) | `mower_base`, `BE V 1` (mower_base:905, 1058) | — | during a session; unknown | no | in-process only; base asks the graph whether it has a publisher (mower_base:175-185, 1185-1188) |
 | `/mower_base/servo_command` | `String`, JSON | Studio through ws_bridge, `R V 10` (mower_ws_bridge/hub:417; ws_bridge.yaml:32; studio:164, 546) | `mower_base`, `BE V 1` (mower_base:906, 1076) | Studio | per change, debounced 100 ms (studio:546) | no | DDS→bus until E3 |
 | `/mower_base/blade_command` | `String`, JSON | Studio through ws_bridge (ws_bridge.yaml:33; studio:165) | `mower_base`, `BE V 1` (mower_base:907, 1093) | Studio | 5 Hz dead-man while held (studio:162, 574) | no | DDS→bus until E3 (a safety path) |
-| `/mower_base/rear_light` | `String`, JSON | `path_record_node`, `R TL 1`, refreshed every 2 s while recording (mower_record:183-184, 203-207, 277-292); `recorder_manager`, `R TL 1` (recorder_manager:59-63, 83, 145-146) | **none** (5.8) | recorder (writer) | every 2 s while a recording runs | n/a: no reader | see 5.8 |
+| `/mower_base/rear_light` | `String`, JSON | `path_record_node`, `R TL 1`, refreshed every 2 s while recording (mower_record:183-184, 203-207, 277-292); `recorder_manager`, `R TL 1` (recorder_manager:59-63, 83, 145-146) | `mower_base`, `R TL 8`, on its r2r node (mower_base:927, 1114-1119; 5.8 #1) | recorder (writer) | every 2 s while a recording runs | no | the reader stays on r2r until E5: path_record writes on the bus, the recorder on DDS |
 
 ### 2.3 Sensors and localization
 
@@ -377,14 +378,13 @@ Three more are in-process except for one outside caller each:
 
 **Actions:** `/nav_action_follow_path` (coverage to nav).
 
-**No consumer on the robot (14).** These can be bus only, or exposed through the E8 `--ros-tap` for rviz (PLAN:361):
+**No consumer on the robot (13).** These can be bus only, or exposed through the E8 `--ros-tap` for rviz (PLAN:361):
 
 - `/free_space`, `/chennal_map`, `/coverage_path`
 - `/zone_markers`, `/risk_zone_markers`, `/channel_path_array`
 - `/recorded_path`, `/chennal_path`, `/channel_path`
 - `/split_path`, `/coverage_split_points`
 - `/odometry/local` (data collection only)
-- `/mower_base/rear_light` (no reader)
 - `/coverage_progress` (allowed, but no client)
 
 `/physical_joy_cmd` and `/keyboard_cmd_vel` are subscribed but have no publisher.
@@ -609,6 +609,7 @@ the launch files set. "default" means nothing overrides the default.
 |---|---|---|---|
 | `mower_base` | `cmd_vel_topic`, `odom_topic`, `joint_states_topic`, `tf_topic` | `/drivetrain_guarded_cmd_vel`, `/odom`, `/joint_states`, `/tf` (mower_base:896-899) | default |
 | `mower_base` | `telemetry_topic`, `firmware_info_topic`, `led_topic`, `pid_topic`, `override_topic`, `servo_topic`, `blade_topic` | `/mower_base/...` (mower_base:900-907) | default |
+| `mower_base` | `rear_light_topic`, `rear_light_timeout_s` | `/mower_base/rear_light`, 6.0 s (mower_base:927-928) | default |
 | `mower_base` | `odom_slow_topic` | `/odom_slow` (mower_base:912) | `/odom_slow` (mower_rsd.yaml:49) |
 | `robot_status` | `heartbeat_source_topic`, `odom_topic` | `/odom`, `/odom` (robot_status:91, 97) | `/odom_slow`, `/odom_slow` (mower_rsd.yaml:69, 72) |
 | `robot_status` | `gps_fix_topic` | `/fix` (robot_status:101) | `/fix` (mower_rsd.yaml:73) |
@@ -632,12 +633,19 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
 
 ### 5.8 Other findings
 
-1. **`/mower_base/rear_light` has no reader.**
-   - The Rust base has no rear-light subscriber and no overlay byte: there is no match for it in `crates/mower_base` or
-     `crates/mower_base_core`. The C++ `MowerSystem` subscribed with `QoS(8)` `R TL` (src/mower_hardware/src/mower_system.cpp:115-118).
-   - Since `RUST_BASE`, two writers have been publishing into nothing: `path_record_node` (zone recording) and the
-     recorder ("the rear light breathes red", compose:153).
-   - If the Rust base gains the reader, the recorder's half needs DDS→bus until E5.
+1. **`/mower_base/rear_light` had no reader** (fixed 2026-10-30, `fix/base-rear-light`).
+   - The Rust base had no rear-light subscriber and no overlay byte. The C++ `MowerSystem` subscribed with `QoS(8)` `R TL`
+     (src/mower_hardware/src/mower_system.cpp:115-118, 309-321) and set the 0x03 frame's `overlay` byte (payload byte 6,
+     `REAR_RECORDING` 0x01: a red breath on the back strip over whatever `/mower_base/led_command` asked for) while any
+     `source`'s last `{"effect":"recording"}` was younger than `rear_light_timeout_s` (6 s); a source's `"off"` cleared
+     only itself (`RearLightSources`, mower_protocol.cpp:339-353). With no base light asked for yet it sent SHOW with
+     the overlay (`send_led_if_needed`, mower_system.cpp:323-352).
+   - Since `RUST_BASE`, two writers published into nothing: `path_record_node` (zone recording, `source` `path_record`)
+     and the recorder (`source` `bag`, "the rear light breathes red", compose:153).
+   - mower_base has the reader back, with the C++ semantics (mower_base_core `RearLightSources` and `led_frame`,
+     checked against mower_protocol.cpp by the protocol oracle). It stays on the module's r2r node when the base moves
+     (E2 step 6), until E5: path_record writes on the bus and the recorder on DDS, and a bus reader would need the name
+     both ways (5.5 d).
 2. **Coverage holds silent writers.** It creates publishers on `/free_space_inflated` and `/risk_map_inflated` that never
    publish (`#[allow(dead_code)]`, mower_coverage:442-445). On the bus they are harmless, but they fix the type and show
    up in introspection.

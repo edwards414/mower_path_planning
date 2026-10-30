@@ -45,6 +45,9 @@ pub const BE_V_5: Profile = keep_last(5, Reliability::BestEffort, Durability::Vo
 pub const BE_V_10: Profile = keep_last(10, Reliability::BestEffort, Durability::Volatile);
 /// Every module's `latched()`, and tf2's `StaticTransformBroadcaster`.
 pub const R_TL_1: Profile = keep_last(1, Reliability::Reliable, Durability::TransientLocal);
+/// mower_base's rear-light reader: mower_hardware's `QoS(8)`, transient
+/// local, reliable.
+pub const R_TL_8: Profile = keep_last(8, Reliability::Reliable, Durability::TransientLocal);
 /// ws_bridge's readers (E3): the depth of 10 its r2r subscriptions have,
 /// transient local so that a latched writer's value reaches a late client.
 pub const R_TL_10: Profile = keep_last(10, Reliability::Reliable, Durability::TransientLocal);

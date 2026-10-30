@@ -20,3 +20,7 @@ futures.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 serialport = { version = "4", default-features = false }
+
+[dev-dependencies]
+# tests/rear_light.rs: a pty for a fake board
+libc = "0.2"

@@ -111,6 +111,11 @@ pub static MODULES: &[Module] = &[
                 subscribes::<Text>("/mower_base/wheel_override", BE_V_1).param("override_topic"),
                 subscribes::<Text>("/mower_base/servo_command", BE_V_1).param("servo_topic"),
                 subscribes::<Text>("/mower_base/blade_command", BE_V_1).param("blade_topic"),
+                // The recorders' rear light (docs/BUS_TOPICS.md 5.8 #1). It stays on
+                // the r2r node until E5: path_record_node writes it on the bus and
+                // recorder_manager on DDS, and one r2r reader hears both, where a
+                // bus reader would need the name both ways (5.5 d).
+                subscribes::<Text>("/mower_base/rear_light", R_TL_8).param("rear_light_topic").stays_on_r2r(),
             ],
         }],
     },

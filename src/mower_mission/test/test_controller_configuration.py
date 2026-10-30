@@ -1825,6 +1825,12 @@ def test_rust_base_reproduces_the_launched_controller_parameters():
     assert '"/mower_base/telemetry"' in source
     assert '"/mower_base/firmware_info"' in source
     assert '"/mower_base/wheel_override"' in source
+    # the recorders' rear light, as mower_hardware read it: R TL 8, a 6 s keep-alive per source
+    assert 'params::string(&node, "rear_light_topic", "/mower_base/rear_light")' in source
+    assert 'params::f64(&node, "rear_light_timeout_s", 6.0)' in source
+    assert 'QosProfile::default().keep_last(8).transient_local().reliable()' in source
+    hw = (SRC_DIR / 'mower_hardware/include/mower_hardware/mower_system.hpp').read_text(encoding='utf-8')
+    assert 'rear_light_topic_ = "/mower_base/rear_light"' in hw and 'rear_light_timeout_s_ = 6.0' in hw
 
 
 def test_rust_source_modules_publish_the_slow_copies_their_throttle_made():

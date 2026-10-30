@@ -165,6 +165,7 @@ serial thread and the fail-closed path.
 | sub | `/mower_base/wheel_override` | `std_msgs/String` | best effort, depth 1 | raw permille while the ttl holds (<= 1000 ms) | `override_topic` |
 | sub | `/mower_base/servo_command` | `std_msgs/String` | best effort, depth 1 | one 0x07 per message | `servo_topic` |
 | sub | `/mower_base/blade_command` | `std_msgs/String` | best effort, depth 1 | dead-man, refreshed every cycle, one explicit 0 on expiry | `blade_topic` |
+| sub | `/mower_base/rear_light` | `std_msgs/String` (`{"effect":"recording"\|"off","source":...}`) | transient local, reliable, depth 8 | the 0x03 `overlay` byte (`REAR_RECORDING`) while any source's last `recording` is younger than `rear_light_timeout_s` (6 s); on SHOW when no light was asked for | `rear_light_topic` (`mower_hardware`'s rear light) |
 
 `SystemDefaultsQoS` is what the upstream controllers ask for, and this node
 asks for the same (`QosProfile::system_default()`), because it is not a

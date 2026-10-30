@@ -50,6 +50,12 @@ pub const LED_SHOW: u8 = 0x05;
 /// smooth comet around the strips (update indicator)
 pub const LED_ORBIT: u8 = 0x06;
 
+// 0x03 payload `overlay` bits, drawn on top of `mode` on the back strip
+// (firmware uart_interface.hpp UART_WS2812_OVERLAY_*; LED_COMMAND_MODES.md)
+pub const LED_OVERLAY_REAR_RECORDING: u8 = 0x01;
+// 0x83 flags: the firmware applies the rear-recording overlay
+pub const LED_STATUS_FLAG_REAR_RECORDING: u8 = 0x08;
+
 // 0x87 payload build_flags
 pub const FW_BUILD_FLAG_DIRTY: u8 = 0x01;
 pub const FW_BUILD_FLAG_UNVERSIONED: u8 = 0x02;
@@ -223,7 +229,7 @@ pub fn build_info_request(seq: u8) -> Vec<u8> {
     build_frame(INFO_REQUEST, seq, &[])
 }
 
-/// 0x03: WS2812 strips.
+/// 0x03: WS2812 strips, no overlay.
 pub fn build_ws2812_command(
     seq: u8,
     mode: u8,
@@ -232,7 +238,22 @@ pub fn build_ws2812_command(
     b: u8,
     effect_period_ms: u16,
 ) -> Vec<u8> {
-    let mut p = [mode, r, g, b, 0, 0, 0, 0];
+    build_ws2812_command_with_overlay(seq, mode, r, g, b, effect_period_ms, 0)
+}
+
+/// 0x03 with its `overlay` byte (payload byte 6, `LED_OVERLAY_*` bits):
+/// `build_ws2812_command(seq, mode, r, g, b, effect_period_ms, overlay)` of
+/// mower_protocol.cpp.
+pub fn build_ws2812_command_with_overlay(
+    seq: u8,
+    mode: u8,
+    r: u8,
+    g: u8,
+    b: u8,
+    effect_period_ms: u16,
+    overlay: u8,
+) -> Vec<u8> {
+    let mut p = [mode, r, g, b, 0, 0, overlay, 0];
     put_u16(&mut p[4..], effect_period_ms);
     build_frame(WS2812_COMMAND, seq, &p)
 }
