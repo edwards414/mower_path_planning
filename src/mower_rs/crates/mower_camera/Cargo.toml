@@ -1,0 +1,18 @@
+[package]
+name = "mower_camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The data-collection front camera without gscam (E5-6): a GStreamer pipeline into an appsink of image/jpeg, gscam's stamps, camera_info_manager's calibration file"
+
+[features]
+# The GStreamer capture (gstreamer-rs). Off by default, so that a plain
+# `cargo build` / `cargo test` needs no GStreamer development files; the
+# robot image builds mower_rsd with it (src/mower_rs/CMakeLists.txt), and
+# the libraries come with gscam's dependencies in the runtime image.
+gst = ["dep:gstreamer", "dep:gstreamer-app"]
+
+[dependencies]
+gstreamer = { version = "0.25", optional = true }
+gstreamer-app = { version = "0.25", optional = true }
+mower_pyfmt = { path = "../mower_pyfmt" }

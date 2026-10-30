@@ -18,6 +18,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
+name = "atomic_refcell"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -143,6 +149,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
 dependencies = [
  "nom",
+]
+
+[[package]]
+name = "cfg-expr"
+version = "0.20.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ba9e9ec16c447027685b1f897b720e18e9a8afd00bd7332c483537e38086c9f"
+dependencies = [
+ "smallvec",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -484,16 +500,182 @@ dependencies = [
 ]
 
 [[package]]
+name = "gio-sys"
+version = "0.22.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c28739f914c15b87a9856000bed9cbd5b3a8afbca5e982d9a299e1601422cb5"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "system-deps",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "glib"
+version = "0.22.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4cf9e5bd8713f1990a92c422998826e0fb34824277b46bc59757373483c6694"
+dependencies = [
+ "bitflags 2.13.2",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-task",
+ "futures-util",
+ "gio-sys",
+ "glib-macros",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "memchr",
+ "smallvec",
+]
+
+[[package]]
+name = "glib-macros"
+version = "0.22.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9597c68fa7bdf4154a3079642cd21c4dccac0b0bdd2897d82861523bf91e7b9"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "glib-sys"
+version = "0.22.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99b38907e67e40dec9b60f858bcada952598719cb512a13eb13d6cdcd16f8295"
+dependencies = [
+ "libc",
+ "system-deps",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "gobject-sys"
+version = "0.22.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07595c9ba696bd9819cb6a8df39f08078f3dd679508fe052dd558492c2053834"
+dependencies = [
+ "glib-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
+name = "gstreamer"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4237e2066a25ecb7e54be6c066409e30615920265b9799b8d560ef8ac9857c6"
+dependencies = [
+ "cfg-if",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "glib",
+ "gstreamer-sys",
+ "itertools 0.15.0",
+ "kstring",
+ "libc",
+ "muldiv",
+ "num-integer",
+ "num-rational",
+ "option-operations",
+ "pastey",
+ "pin-project-lite",
+ "smallvec",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "gstreamer-app"
+version = "0.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97f8ae9238c2352398dcc084de28df3f7099af216ac6c160b52318d23f25c010"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "glib",
+ "gstreamer",
+ "gstreamer-app-sys",
+ "gstreamer-base",
+ "libc",
+]
+
+[[package]]
+name = "gstreamer-app-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0798b8aef6694341d40bb81edc759f8979b896b59f9f0f45d8cfa3bb7bf2e743"
+dependencies = [
+ "glib-sys",
+ "gstreamer-base-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
+name = "gstreamer-base"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17cbd8f59586a369c40d4b0d2f3a61cf9e9287b3cf5503cdcd8e7c5faa99265e"
+dependencies = [
+ "atomic_refcell",
+ "cfg-if",
+ "glib",
+ "gstreamer",
+ "gstreamer-base-sys",
+ "libc",
+]
+
+[[package]]
+name = "gstreamer-base-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b05f77bfd76b5afee6b29c27dae19eaf5018b5cf8d0d17520f3de44c6385c32"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
+name = "gstreamer-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "436d9532847489a8285d57b8c3670762c12a18f777fdc2ab159b52e0e6f521b9"
+dependencies = [
+ "cfg-if",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
@@ -681,6 +863,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,6 +896,15 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kstring"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a09b82a7f771ed02dc0dd9b27130a0fa5499fa15ed3027116c1e5e4e591bd9e"
+dependencies = [
+ "static_assertions",
 ]
 
 [[package]]
@@ -921,6 +1121,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_camera"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "mower_pyfmt",
+]
+
+[[package]]
 name = "mower_cdr"
 version = "0.1.0"
 dependencies = [
@@ -1118,6 +1327,7 @@ dependencies = [
  "mower_base",
  "mower_bridge",
  "mower_bus",
+ "mower_camera",
  "mower_mcap",
  "mower_pyfmt",
  "mower_recorder_core",
@@ -1257,6 +1467,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "muldiv"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "956787520e75e9bd233246045d19f42fb73242759cc57fba9611d940ae96d4b0"
+
+[[package]]
 name = "ndarray"
 version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1309,6 +1525,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1332,6 +1558,15 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "option-operations"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aca39cf52b03268400c16eeb9b56382ea3c3353409309b63f5c8f0b1faf42754"
+dependencies = [
+ "pastey",
+]
 
 [[package]]
 name = "ordered-float"
@@ -1362,6 +1597,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "percent-encoding"
@@ -1782,6 +2023,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serde_yaml"
 version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1936,6 +2186,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "system-deps"
+version = "9.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db551ad38aac61d5e0343e0eeeb0163be3115c4e23b6a025959570ee0c03c67d"
+dependencies = [
+ "cfg-expr",
+ "heck",
+ "pkg-config",
+ "toml",
+ "version-compare",
+]
+
+[[package]]
+name = "target-lexicon"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2037,6 +2306,45 @@ dependencies = [
  "tungstenite",
  "webpki-roots 0.26.11",
 ]
+
+[[package]]
+name = "toml"
+version = "1.1.8+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+dependencies = [
+ "winnow",
+]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tungstenite"
@@ -2153,6 +2461,12 @@ dependencies = [
  "r2r",
  "tokio",
 ]
+
+[[package]]
+name = "version-compare"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03c2856837ef78f57382f06b2b8563a2f512f7185d732608fd9176cb3b8edf0e"
 
 [[package]]
 name = "version_check"
@@ -2322,6 +2636,12 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
 name = "writeable"

@@ -801,11 +801,20 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
     stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
     assert start.startswith('    need_root\n')
-    rust, python = start.split('    if rust_recorder_on; then\n', 1)[1].split(
-        '    else\n', 1)
+    module, rest = start.split('    if module_camera; then\n', 1)[1].split(
+        '    elif rust_recorder_on; then\n', 1)
+    rust, python = rest.split('    else\n', 1)
+    # E5-6: the module's camera (CAMERA_DRIVER=gstreamer): the request file
+    # alone; E5-5's gscam: the request file and the camera-only service
+    assert 'write_request' in module and 'compose' not in module
     assert rust.index('write_request') < rust.index('compose up -d "$svc"')
     assert 'stack stop recorder' in python and 'stack' not in rust
     assert stop.index('compose down') < stop.index('rm -f "$request"')
+    assert 'module_camera || compose down' in stop
+    # in lawan_node, ROS sourced by hand: its entrypoint syncs the firmware
+    lawan_ros = helper.split('if module_camera; then\n  #', 1)[1].split('\nfi\n', 1)[0]
+    assert 'stack exec -T lawan_node bash -c' in lawan_ros
+    assert 'docker-entrypoint' not in lawan_ros
     assert 'svc=data_collection_camera\n  profile_args=(--profile camera_only)' \
         in helper
     dc_compose = yaml.safe_load(DATA_COLLECTION_COMPOSE.read_text(
@@ -836,7 +845,8 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
         'profile': 'data_collection',
         'camera': {'camera_device': '/dev/video0', 'camera_size': '640x480',
                    'camera_fps': '30', 'record_fps': '10',
-                   'calib_dir': '/home/mower/.mower/calib'},
+                   'calib_dir': '/home/mower/.mower/calib',
+                   'driver': 'gstreamer'},
         'session_file': '/home/mower/.mower/data_collection_session.yaml',
         'upload_policy': 'manual'}
     (tmp_path / 'dc.yaml').write_text('services: {}\n')

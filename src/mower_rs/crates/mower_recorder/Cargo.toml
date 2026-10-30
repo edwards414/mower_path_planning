@@ -12,12 +12,18 @@ path = "src/lib.rs"
 name = "mower_recorder"
 path = "src/main.rs"
 
+[features]
+# E5-6: the camera instance captures (gstreamer-rs); mower_rsd's feature
+# `camera` turns it on for the robot image
+camera = ["mower_camera/gst"]
+
 [dependencies]
 futures.workspace = true
 # the bus bridge's node names, which the one-owner check leaves out, and the
 # standalone runner
 mower_bridge = { path = "../mower_bridge" }
 mower_bus = { path = "../mower_bus" }
+mower_camera = { path = "../mower_camera" }
 mower_mcap = { path = "../mower_mcap" }
 mower_pyfmt = { path = "../mower_pyfmt" }
 mower_recorder_core = { path = "../mower_recorder_core" }

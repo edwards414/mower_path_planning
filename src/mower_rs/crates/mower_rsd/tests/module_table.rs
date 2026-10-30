@@ -72,7 +72,7 @@ fn static_tf_is_the_rust_static_tf_switch_with_one_static_tf_publisher_node() {
 fn bag_is_the_rust_recorder_switch_with_the_recorder_s_three_nodes() {
     assert_eq!(
         module("bag"),
-        ("rust_recorder".to_string(), vec!["graph_snapshot".into(), "recorder_manager".into(), "bag_store".into()])
+        ("rust_recorder".to_string(), vec!["graph_snapshot".into(), "recorder_manager".into(), "bag_store".into(), "camera_front".into()])
     );
     assert_eq!(module("record").0, "rust_record");
 }

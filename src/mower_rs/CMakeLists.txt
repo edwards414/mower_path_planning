@@ -42,6 +42,10 @@ add_custom_target(mower_rs_cargo ALL
           "CARGO_TARGET_DIR=${_cargo_target_dir}"
           --unset=MAKEFLAGS --unset=MFLAGS
           ${CARGO_EXECUTABLE} build --release --locked
+          # E5-6: the bag module's camera captures with GStreamer (its
+          # development files come with gscam's dependencies, in the
+          # builder and in the runtime image's lock)
+          --features mower_rsd/camera
           --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
   COMMENT "cargo build --release (mower_rs)"
