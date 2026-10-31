@@ -897,7 +897,7 @@ jobs:
             # the "version sha8" in the log line of firmware-sync, as its python3 -c prints it
             test "$(mower_flash manifest "$m")" = "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d[\"version\"],d[\"git_sha\"][:8])" "$m")"
             test -x /usr/local/bin/firmware-sync
-            # firmware-sync finds the flasher each value names, 1 (the robot's)
+            # firmware-sync finds the flasher each value names, 1 (the robot value)
             # being rust since E6-5: a plain file as the port fails its open
             # (rc 1), where a flasher it cannot find is rc 127
             : > /tmp/fw-port
