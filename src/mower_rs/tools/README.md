@@ -149,14 +149,14 @@ docker run --rm -u 0 --network none --cap-add NET_ADMIN -e ROS_DOMAIN_ID=75 \
 
 ## Checking the firmware flasher
 
-`utils/firmware-sync` runs `firmware/tools/mower_flash.py sync` at every
-container start and re-flashes the STM32 through its UART bootloader whenever
-the image's firmware differs, which is every OTA (`MOWER_FIRMWARE_SYNC=rust`
-runs the Rust port `mower_flash` instead; `1` is the image's default, python
-until E6-5; the wrapper's own behaviour per value is held to
-`deploy/test/golden/firmware_sync_wrapper.json` by
+`utils/firmware-sync` runs `mower_flash sync`, the Rust port of
+`firmware/tools/mower_flash.py`, at every container start and re-flashes the
+STM32 through its UART bootloader whenever the image's firmware differs, which
+is every OTA (since E6-5 `1`, the image's default, is rust;
+`MOWER_FIRMWARE_SYNC=python` runs the Python tool; the wrapper's own behaviour
+per value is held to `deploy/test/golden/firmware_sync_wrapper.json` by
 `src/mower_mission/test/test_firmware_sync_wrapper.py`). `flash_check.py` is
-what proves a flasher behaves the way that one does, without a board:
+what proves a flasher behaves the way `mower_flash.py` does, without a board:
 
 ```bash
 # Linux; mower_flash.py needs pyserial (apt install python3-serial)
@@ -347,9 +347,9 @@ another on the restore, and a failed flash leaves the STM32 in its bootloader.
 When `git diff <main's sha> <test sha> -- firmware/` is empty, pass
 `MOWER_FIRMWARE_SYNC=0` as above; `restore` then brings back the pre-test value
 and main finds its own build still on the board. `MOWER_FIRMWARE_SYNC=python`
-or `rust` picks the flasher for the test instead (E6-4; an image from before
-the switch runs python for both); with `rust` the container log shows
-`[firmware-sync] using mower_flash (rust)` (`sudo docker logs
+or `rust` picks the flasher for the test instead (E6-4; `1` is rust since
+E6-5; an image from before E6-4 runs python for both); with rust the container
+log shows `[firmware-sync] using mower_flash (rust)` (`sudo docker logs
 mower-lawan_node-1 2>&1 | grep '^\[firmware-sync\]'`).
 
 **Pulling the STM32 cable does not test the restart path.** `/dev/stmcom` is

@@ -29,8 +29,9 @@ set -u
 dir=/opt/mower/firmware
 port="${MOWER_STM_PORT:-/dev/stmcom}"
 state="${MOWER_STATE_DIR:-$HOME/.mower}"
-# The flasher when MOWER_FIRMWARE_SYNC names none (E6-5 makes it rust).
-default=python
+# The flasher when MOWER_FIRMWARE_SYNC names none (rust since E6-5;
+# MOWER_FIRMWARE_SYNC=python is the roll-back).
+default=rust
 
 case "${MOWER_FIRMWARE_SYNC:-1}" in
   0|false|no|off) echo "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"; exit 0 ;;

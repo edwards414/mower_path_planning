@@ -59,7 +59,7 @@ compose 的 `recorder` 服務跑 `mower_recorder` 的常駐設定（`record.laun
 - image 內附 `/opt/mower/firmware/mower_robot_firmware.bin` + `.json`（版本、commit、build 時間）。
 - 容器每次啟動先跑 `firmware-sync`：讀 STM32 的 `0x87` 身分，不同才透過 bootloader 燒（約 20 s，馬達停止）；結果在 `~/.mower/firmware_sync.json`。
 - 手動 / 除錯：`MOWER_FIRMWARE_SYNC=0` 在 `.env` 關掉；板子上直接燒用 `firmware/tools/mower_flash.py -p /dev/stmcom flash …`（先 `sudo systemctl stop mower`）。
-- 用哪個 flasher：`MOWER_FIRMWARE_SYNC=python` 是 `mower_flash.py`，`rust` 是它的 Rust 版 `mower_flash`（frame、report、結束碼都一樣，log 多一行 `[firmware-sync] using mower_flash (rust)`）；`1` 或其他值是 image 的預設，目前是 python（E6-5 才翻成 rust）。`mower_flash` 不在時不會退回 python：印 `FAILED (rc=127)`、不燒、照起。改 `.env` 後要 `cd /opt/mower && sudo docker compose up -d`（`/system/restart` 不重讀 `.env`）；舊 image 把 `python` / `rust` 都當成開、用 python，所以任何值配任何 image 都安全。
+- 用哪個 flasher：`MOWER_FIRMWARE_SYNC=python` 是 `mower_flash.py`，`rust` 是它的 Rust 版 `mower_flash`（frame、report、結束碼都一樣，log 多一行 `[firmware-sync] using mower_flash (rust)`）；`1` 或其他值是 image 的預設：E6-5 起是 rust（機器上的 `.env` 是 `1`，所以 OTA 後就用 Rust 燒）。回退：`.env` 設 `MOWER_FIRMWARE_SYNC=python`，再 `cd /opt/mower && sudo docker compose up -d`。`mower_flash` 不在時不會退回 python：印 `FAILED (rc=127)`、不燒、照起。改 `.env` 後要 `cd /opt/mower && sudo docker compose up -d`（`/system/restart` 不重讀 `.env`）；舊 image 把 `python` / `rust` 都當成開、用 python，所以任何值配任何 image 都安全。
 - bootloader 本身（`firmware/bootloader/`）不走這條路，要 ST-Link。
 
 ## Host 端單元（`host/`）

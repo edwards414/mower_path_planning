@@ -360,8 +360,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /u
 # `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
 RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
 # The Rust port of mower_flash.py (src/mower_rs/crates/mower_flash), next to
-# it; firmware-sync runs it with MOWER_FIRMWARE_SYNC=rust (the default stays
-# python until E6-5).
+# it; firmware-sync runs it by default since E6-5 (MOWER_FIRMWARE_SYNC=python
+# runs the Python one).
 RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash /usr/local/bin/mower_flash
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/${USER_NAME}/.bashrc \

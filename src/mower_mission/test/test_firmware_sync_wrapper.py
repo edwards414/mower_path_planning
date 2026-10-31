@@ -2,7 +2,7 @@
 
   0 / false / no / off   skip
   python / rust          firmware/tools/mower_flash.py / its Rust port mower_flash
-  anything else          the image's default: python (E6-5 makes it rust)
+  anything else          the image's default: rust since E6-5 (python is the roll-back)
 
 Runs the wrapper with PATH holding nothing but fakes: `python3` and
 `mower_flash` log their argv and answer the way the real ones do (the
@@ -10,10 +10,10 @@ manifest's "version sha8"; FAKE_RC as the sync's exit code), `mkdir` is the
 real one. The wrapper's firmware directory is pointed at a temporary one, the
 only line of it changed; the transcripts name the temporary paths by the
 production ones. Each case's calls, stdout, stderr and exit code are held to
-deploy/test/golden/firmware_sync_wrapper.json; every case there whose value is
-not rust is what the wrapper did before the switch (c90789b), which the
-robot's MOWER_FIRMWARE_SYNC=1 still gets. Rewrite it only when the wrapper
-changes on purpose:
+deploy/test/golden/firmware_sync_wrapper.json. Its python and skip cases are
+what the wrapper did before the switch (c90789b); since E6-5 the values that
+name no flasher, the robot's MOWER_FIRMWARE_SYNC=1 among them, are the rust
+cases'. Rewrite it only when the wrapper changes on purpose:
 
     python3 src/mower_mission/test/test_firmware_sync_wrapper.py --write-golden
 """
@@ -31,7 +31,7 @@ WRAPPER = REPO / 'utils' / 'firmware-sync'
 GOLDEN = REPO / 'deploy' / 'test' / 'golden' / 'firmware_sync_wrapper.json'
 FW = '/opt/mower/firmware'
 FW_LINE = f'dir={FW}\n'
-DEFAULT_LINE = 'default=python\n'
+DEFAULT_LINE = 'default=rust\n'
 PORT = '/dev/stmcom'
 STATE = '/home/mower/.mower'
 USING_RUST = '[firmware-sync] using mower_flash (rust)'
@@ -203,13 +203,13 @@ def test_each_value_runs_one_flasher_and_only_that(transcripts):
         t = transcripts[case]
         if case.startswith('skip-') or {'port', 'bundle'} & set(missing):
             assert t['calls'] == [], case
-        elif value == 'rust':
-            # nothing of python on the rust path, not even the log line's manifest
-            assert all(c[0] == 'mower_flash' for c in t['calls']), case
-            assert _flashers(t) == ([] if 'mower_flash' in missing else ['mower_flash']), case
-        else:
+        elif value == 'python':
             assert all(c[0] == 'python3' for c in t['calls']), case
             assert _flashers(t) == ([] if 'python3' in missing else ['mower_flash.py']), case
+        else:
+            # rust, named or the default: nothing of python, not even the log line's manifest
+            assert all(c[0] == 'mower_flash' for c in t['calls']), case
+            assert _flashers(t) == ([] if 'mower_flash' in missing else ['mower_flash']), case
 
 
 def test_rust_differs_from_python_by_its_one_line(transcripts):
@@ -223,8 +223,17 @@ def test_rust_differs_from_python_by_its_one_line(transcripts):
         assert rs['calls'][-1] == ['mower_flash'] + SYNC_ARGS
         # and the same "version sha8" in the bundled line
         assert rs['stdout'][1] == f'[firmware-sync] bundled 0.6.0-e64 e64e64e6 on {PORT}'
-    for case in ('default-unset', 'default-1', 'python-rc0'):
-        assert USING_RUST not in transcripts[case]['stdout'], case
+    assert USING_RUST not in transcripts['python-rc0']['stdout']
+
+
+def test_a_value_naming_no_flasher_is_rust(transcripts):
+    """1 (the robot's), unset and anything else run exactly what rust runs."""
+    for case, (value, rc, missing) in CASES.items():
+        if case.startswith(('skip-', 'python-', 'rust-')):
+            continue
+        rust = next(t for c, t in transcripts.items()
+                    if CASES[c][0] == 'rust' and CASES[c][1:] == (rc, missing))
+        assert {**transcripts[case], 'MOWER_FIRMWARE_SYNC': 'rust'} == rust, case
 
 
 def test_a_missing_rust_flasher_fails_the_sync_without_python(transcripts):
@@ -247,15 +256,16 @@ def test_the_robot_value_leaves_the_choice_to_the_image():
     assert WRAPPER.read_text(encoding='utf-8').count(DEFAULT_LINE) == 1
 
 
-def test_e6_5_flips_the_default_in_one_line(tmp_path):
-    """With `default=rust` the values that name no flasher run rust; python stays python."""
+def test_the_default_is_one_line(tmp_path):
+    """With `default=python` (E6-4's image) the values that name no flasher
+    run python again; python and rust stay what they name."""
     for case, (value, rc, missing) in CASES.items():
         if case.startswith('skip-') or missing:
             continue
         d = tmp_path / case
         d.mkdir()
-        t = run_case(d, value, rc, missing, default='rust')
-        want = 'python3' if value == 'python' else 'mower_flash'
+        t = run_case(d, value, rc, missing, default='python')
+        want = 'mower_flash' if value == 'rust' else 'python3'
         assert t['calls'] and all(c[0] == want for c in t['calls']), case
         assert (USING_RUST in t['stdout']) == (want == 'mower_flash'), case
 
@@ -271,6 +281,6 @@ if __name__ == '__main__':
         'src/mower_mission/test/test_firmware_sync_wrapper.py: the fakes python3 and mower_flash '
         'on an otherwise empty PATH, the sync exiting sync_rc, `missing` naming what is absent '
         '(the port, the bundled .bin, a tool), temporary paths shown as the production ones. '
-        'Every case whose MOWER_FIRMWARE_SYNC is not rust is what the wrapper did before E6-4 '
-        '(c90789b).', cases))
+        'The python and skip cases are what the wrapper did before E6-4 (c90789b); since E6-5 '
+        '(default=rust) the values that name no flasher, 1 among them, run what rust runs.', cases))
     print(f'wrote {GOLDEN}')

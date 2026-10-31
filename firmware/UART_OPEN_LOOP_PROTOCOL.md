@@ -368,7 +368,7 @@ Payload 長度 `0`（有 payload 也會被忽略）。STM32 收到後立刻回�
 
 開機後立刻送一筆，之後每 `1000ms` 一次；收到 `0x06` 也會立刻多送一筆。Host 端用途：
 
-- 容器啟動時 `tools/mower_flash.py sync` 比對「正在跑的 build」和「image 內附的 build」，不同才燒錄
+- 容器啟動時 `utils/firmware-sync` 的 `sync`（E6-5 起預設是 Rust 版 `mower_flash`；`MOWER_FIRMWARE_SYNC=python` 用 `tools/mower_flash.py`，兩者行為相同）比對「正在跑的 build」和「image 內附的 build」，不同才燒錄
 - `mower_hardware` 驅動把它發到 `/mower_base/firmware_info`，再由 `/robot/info` 給 App 顯示
 
 Payload 長度固定 `16` bytes（`firmware_info_payload_t`，值由 `Module/Inc/firmware_version.h` 提供，`make` 從 `git describe` 填入）。
