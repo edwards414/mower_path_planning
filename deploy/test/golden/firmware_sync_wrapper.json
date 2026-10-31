@@ -1,5 +1,5 @@
 {
- "about": "utils/firmware-sync per MOWER_FIRMWARE_SYNC value (E6-4), written by src/mower_mission/test/test_firmware_sync_wrapper.py: the fakes python3 and mower_flash on an otherwise empty PATH, the sync exiting sync_rc, `missing` naming what is absent (the port, the bundled .bin, a tool), temporary paths shown as the production ones. Every case whose MOWER_FIRMWARE_SYNC is not rust is what the wrapper did before E6-4 (c90789b).",
+ "about": "utils/firmware-sync per MOWER_FIRMWARE_SYNC value (E6-4), written by src/mower_mission/test/test_firmware_sync_wrapper.py: the fakes python3 and mower_flash on an otherwise empty PATH, the sync exiting sync_rc, `missing` naming what is absent (the port, the bundled .bin, a tool), temporary paths shown as the production ones. The python and skip cases are what the wrapper did before E6-4 (c90789b); since E6-5 (default=rust) the values that name no flasher, 1 among them, run what rust runs.",
  "cases": {
   "skip-0": {
    "MOWER_FIRMWARE_SYNC": "0",
@@ -54,10 +54,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -72,10 +73,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -90,10 +92,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -108,10 +111,11 @@
    "sync_rc": 1,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)",
     "[firmware-sync] FAILED (rc=1); continuing, the driver will report the mismatch"
@@ -127,10 +131,11 @@
    "sync_rc": 2,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)",
     "[firmware-sync] no STM32 answering on /dev/stmcom (continuing without it)"
@@ -146,10 +151,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -164,10 +170,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -182,10 +189,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -200,10 +208,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -218,10 +227,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
@@ -236,10 +246,11 @@
    "sync_rc": 0,
    "missing": [],
    "calls": [
-    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
-    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
    ],
    "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
     "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
     "(flasher stdout)"
    ],
