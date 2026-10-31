@@ -348,29 +348,6 @@ fn hooks(
     }
 }
 
-/// How long `/robot_description` is waited for (robot_state_publisher's,
-/// latched).
-pub const URDF_WAIT: Duration = Duration::from_secs(3);
-
-/// robot_state_publisher's `/robot_description` (latched), read on the node:
-/// the URDF the data_collection launch got from xacro.
-fn robot_description(node: &Arc<Mutex<r2r::Node>>) -> Result<String, String> {
-    use futures::{FutureExt, StreamExt};
-    let mut n = lock(node);
-    let qos = QosProfile::default().keep_last(1).reliable().transient_local();
-    let mut sub = n.subscribe::<Text>("/robot_description", qos).map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + URDF_WAIT;
-    let mut got = None;
-    while got.is_none() && Instant::now() < deadline {
-        n.spin_once(Duration::from_millis(20));
-        while let Some(Some(msg)) = sub.next().now_or_never() {
-            got = Some(msg.data);
-        }
-    }
-    n.destroy_subscription(sub);
-    got.ok_or_else(|| format!("no /robot_description within {} s", URDF_WAIT.as_secs()))
-}
-
 /// E5-5: the request file as it is now, if it differs from what the
 /// manager runs with and no run records, applied: the manager is made again
 /// with the profile it asks for, or the default when it is gone.
@@ -416,7 +393,7 @@ async fn apply_request(ctx: &r2r::Context, s: &Settings, node: &Arc<Mutex<r2r::N
             };
             let share2 = share.clone();
             let r = tokio::task::spawn_blocking(move || {
-                let urdf = robot_description(&node2);
+                let urdf = crate::robot_description(&mut lock(&node2));
                 mower_recorder_core::dc_request::resolve(&req, &share2, urdf.as_deref().map_err(|e| e.clone()))
             })
             .await

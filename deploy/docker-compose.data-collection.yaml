@@ -20,7 +20,9 @@
 # plugins come in through mower_recorder/package.xml).
 #
 # RUST_RECORDER=true (E5-5): the recorder is mower_rsd's bag module in the
-# robot stack, and the helper starts only data_collection_camera below.
+# robot stack; with CAMERA_DRIVER=gscam the helper starts only
+# data_collection_camera below, and with CAMERA_DRIVER=gstreamer (E5-6, the
+# default) nothing here: the module runs the camera.
 #
 # Robot-local files under MOWER_STATE_DIR (host ~/.mower = /home/mower/.mower):
 #   calib/camera_front.yaml            camera_info_manager intrinsics

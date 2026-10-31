@@ -171,6 +171,13 @@ impl Bag {
 
     /// Only the instances `nodes` (a test that stands in for the others).
     async fn start_only(ns: &str, params: &[(&'static str, Params)], bridged: bool, nodes: &[&'static str]) -> Bag {
+        Bag::start_in(ns, params, bridged, nodes, Vec::new()).await
+    }
+
+    /// With `args` for the instances (E5-6: the camera's `--request-file`).
+    async fn start_in(
+        ns: &str, params: &[(&'static str, Params)], bridged: bool, nodes: &[&'static str], args: Vec<String>,
+    ) -> Bag {
         let (clock, manual) = Clock::manual(Time::from_ns(T0_NS));
         let bus = Bus::new();
         let shutdown = Shutdown::new();
@@ -184,6 +191,16 @@ impl Bag {
         }
         let mut ms = Vec::new();
         for &name in nodes {
+            if name == mower_recorder::NODE_CAMERA {
+                // E5-6: no node of its own until a request asks for it
+                let m = ModuleCtx::new(name, shutdown.clone())
+                    .with_bus(bus.scope(name))
+                    .with_clock(clock.clone())
+                    .with_args(args.clone());
+                tasks.push(tokio::spawn(mower_recorder::camera::run(context(), m.clone())));
+                ms.push(m);
+                continue;
+            }
             let node = r2r::Node::create(context(), name, ns).unwrap();
             for (key, value) in params.iter().filter(|(n, _)| *n == name).flat_map(|(_, p)| p) {
                 node.params.lock().unwrap().insert(key.to_string(), Parameter::new(value.clone()));
@@ -717,6 +734,127 @@ fn recorder_manager_takes_data_collection_from_the_request_file() {
             assert!(Instant::now() < deadline, "the default did not come back: {latest}");
         }
         bag.stop().await;
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
+/// E5-6: the camera instance, for a request with `camera.driver: gstreamer`
+/// (the fake camera's pipeline, F3's calibration): gscam's node and the two
+/// static TF nodes on the graph while it runs; JPEG frames (`format: jpeg`,
+/// the optical frame) with gscam's capture stamps, CameraInfo from the
+/// calibration with the same stamp, each `QoS(1)`; the two transforms
+/// latched on `/tf_static` as static_transform_publisher published them;
+/// all of it gone with the request. Needs the feature (`--features camera`)
+/// and GStreamer's base and good plugins.
+#[cfg(feature = "camera")]
+#[test]
+fn camera_front_runs_the_requested_camera() {
+    within(async {
+        let root = scratch("camera");
+        let golden = repo().join("deploy/test/golden/recorder/F3/MW-E5FIX_20261030T080906");
+        let calib = root.join("calib");
+        std::fs::create_dir_all(&calib).unwrap();
+        std::fs::copy(golden.join("calib/camera_front.yaml"), calib.join("camera_front.yaml")).unwrap();
+        std::fs::copy(golden.join("calib/extrinsics.yaml"), calib.join("extrinsics.yaml")).unwrap();
+        // mower_recorder's share/config, as an installed workspace has it
+        let prefix = root.join("prefix");
+        std::fs::create_dir_all(prefix.join("share/mower_recorder")).unwrap();
+        std::os::unix::fs::symlink(repo().join("src/mower_recorder/config"), prefix.join("share/mower_recorder/config")).unwrap();
+        let old = std::env::var("AMENT_PREFIX_PATH").unwrap_or_default();
+        std::env::set_var("AMENT_PREFIX_PATH", format!("{old}:{}", prefix.display()));
+        let pipeline = "videotestsrc is-live=true pattern=ball ! video/x-raw,format=I420,width=80,height=60,framerate=25/1 \
+                        ! jpegenc quality=50 ! image/jpeg,width=80,height=60,framerate=25/1 ! videorate drop-only=true max-rate=10";
+        let request = root.join("recorder_profile.json");
+        std::fs::write(
+            &request,
+            format!(
+                r#"{{"profile": "data_collection", "camera": {{"driver": "gstreamer", "camera_size": "80x60",
+                    "gscam_pipeline": "{pipeline}", "calib_dir": "{}"}}}}"#,
+                calib.display()
+            ),
+        )
+        .unwrap();
+        let viewer = Peer::new("e56_viewer", "");
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let infos = Arc::new(Mutex::new(Vec::new()));
+        let tfs = Arc::new(Mutex::new(Vec::new()));
+        let (mut img_sub, mut info_sub, mut tf_sub) = viewer.with(|n| {
+            (
+                n.subscribe::<r2r::sensor_msgs::msg::CompressedImage>("/camera/front/image_raw/compressed", reliable(100)).unwrap(),
+                n.subscribe::<r2r::sensor_msgs::msg::CameraInfo>("/camera/front/camera_info", reliable(100)).unwrap(),
+                n.subscribe::<r2r::tf2_msgs::msg::TFMessage>("/tf_static", reliable(10).transient_local()).unwrap(),
+            )
+        });
+        let collect = {
+            let (images, infos, tfs) = (images.clone(), infos.clone(), tfs.clone());
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        Some(m) = img_sub.next() => images.lock().unwrap().push(m),
+                        Some(m) = info_sub.next() => infos.lock().unwrap().push(m),
+                        Some(m) = tf_sub.next() => tfs.lock().unwrap().push(m),
+                        else => break,
+                    }
+                }
+            })
+        };
+        let args = vec!["--request-file".to_string(), request.to_string_lossy().into_owned()];
+        let bag = Bag::start_in("/e56_cam", &[], false, &[mower_recorder::NODE_CAMERA], args).await;
+        let nodes = || viewer.with(|n| n.get_node_names_and_namespaces().unwrap()).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        assert!(!nodes().contains(&"camera_front".to_string()), "nothing before the request is looked at");
+        bag.advance(mower_recorder::camera::POLL).await;
+        eventually("the camera's nodes", || {
+            let n = nodes();
+            ["camera_front", "camera_front_link_tf", "camera_front_optical_tf"].iter().all(|x| n.contains(&x.to_string()))
+        })
+        .await;
+        eventually("ten frames", || images.lock().unwrap().len() >= 10 && infos.lock().unwrap().len() >= 10).await;
+        eventually("the static TF", || tfs.lock().unwrap().len() >= 2).await;
+        let qos = viewer.with(|n| n.get_publishers_info_by_topic("/camera/front/image_raw/compressed", false).unwrap());
+        assert_eq!(qos.len(), 1);
+        assert_eq!(qos[0].node_name, "camera_front");
+        assert_eq!(qos[0].qos_profile.depth, 1);
+        let images = images.lock().unwrap().clone();
+        let infos = infos.lock().unwrap().clone();
+        for m in &images {
+            assert_eq!((m.format.as_str(), m.header.frame_id.as_str()), ("jpeg", "camera_front_optical_frame"));
+            assert!(m.data.starts_with(&[0xff, 0xd8]) && m.data.ends_with(&[0xff, 0xd9]), "a whole JPEG");
+        }
+        let ns = |t: &r2r::builtin_interfaces::msg::Time| t.sec as i64 * 1_000_000_000 + t.nanosec as i64;
+        let stamps: Vec<i64> = images.iter().map(|m| ns(&m.header.stamp)).collect();
+        assert!(stamps.windows(2).all(|w| w[1] - w[0] >= 40_000_000 && w[1] - w[0] <= 200_000_000), "10 fps of 25: {stamps:?}");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i64;
+        assert!((now - stamps.last().unwrap()).abs() < 2_000_000_000, "capture time mapped to ROS time");
+        let info = &infos[0];
+        assert_eq!(ns(&info.header.stamp), stamps[0], "the image's stamp");
+        assert_eq!((info.width, info.height, info.distortion_model.as_str()), (80, 60, "plumb_bob"));
+        assert_eq!(info.k, vec![65.75, 0.0, 40.125, 0.0, 65.875, 29.75, 0.0, 0.0, 1.0]);
+        assert_eq!(info.d, vec![-0.31, 0.11, 0.0012, -0.0004, 0.0]);
+        let tfs = tfs.lock().unwrap().clone();
+        let mut pairs: Vec<(String, String)> = tfs
+            .iter()
+            .flat_map(|m| m.transforms.iter().map(|t| (t.header.frame_id.clone(), t.child_frame_id.clone())))
+            .collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            [
+                ("base_link".to_string(), "camera_front_link".to_string()),
+                ("camera_front_link".to_string(), "camera_front_optical_frame".to_string())
+            ]
+        );
+        let optical = tfs.iter().flat_map(|m| &m.transforms).find(|t| t.child_frame_id == "camera_front_optical_frame").unwrap();
+        let q = &optical.transform.rotation;
+        // camera_link -> optical: rpy (-pi/2, 0, -pi/2), as repr(round(v, 9))
+        assert_eq!((q.x, q.y, q.z, q.w), (-0.5, 0.5, -0.5, 0.5));
+
+        // the request gone: the camera and its nodes too
+        std::fs::remove_file(&request).unwrap();
+        bag.advance(mower_recorder::camera::POLL).await;
+        eventually("the camera's nodes to go", || !nodes().iter().any(|n| n.starts_with("camera_front"))).await;
+        collect.abort();
+        bag.stop().await;
+        std::env::set_var("AMENT_PREFIX_PATH", old);
         std::fs::remove_dir_all(&root).unwrap();
     });
 }

@@ -21,6 +21,10 @@
 //!   robot's is missing), `run_info`. The camera itself stays gscam's in the
 //!   camera-only compose (front_camera.launch.py), which works out the same
 //!   transforms for the static TF from the same files.
+//! - (E5-6) `camera.driver`: `gscam` (E5-5's camera-only compose) or
+//!   `gstreamer` (the `bag` module's `camera_front` instance, which takes
+//!   the pipeline, the intrinsics and [`Resolved::extrinsics`]'s two
+//!   transforms from here). A file without it is E5-5's: gscam.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +53,10 @@ pub const DEFAULT_V4L2_CONTROLS: &str =
 /// `CAMERA_NAME`
 pub const CAMERA_NAME: &str = "camera_front";
 
+/// `camera.driver`'s values.
+pub const DRIVER_GSCAM: &str = "gscam";
+pub const DRIVER_GSTREAMER: &str = "gstreamer";
+
 /// The camera's launch arguments, with camera_launch.py's defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CameraArgs {
@@ -61,6 +69,8 @@ pub struct CameraArgs {
     pub calib_dir: String,
     pub intrinsics_file: String,
     pub extrinsics_file: String,
+    /// E5-6: who runs the camera, [`DRIVER_GSCAM`] or [`DRIVER_GSTREAMER`]
+    pub driver: String,
 }
 
 impl Default for CameraArgs {
@@ -75,6 +85,7 @@ impl Default for CameraArgs {
             calib_dir: "~/.mower/calib".into(),
             intrinsics_file: String::new(),
             extrinsics_file: String::new(),
+            driver: DRIVER_GSCAM.into(),
         }
     }
 }
@@ -140,6 +151,7 @@ impl Request {
                             "calib_dir" => c.calib_dir = val,
                             "intrinsics_file" => c.intrinsics_file = val,
                             "extrinsics_file" => c.extrinsics_file = val,
+                            "driver" => c.driver = val,
                             other => return Err(format!("camera.{other}: unknown")),
                         }
                     }
@@ -149,6 +161,9 @@ impl Request {
         }
         if r.profile != DATA_COLLECTION {
             return Err(format!("profile {:?}: only {DATA_COLLECTION:?}", r.profile));
+        }
+        if r.camera.driver != DRIVER_GSCAM && r.camera.driver != DRIVER_GSTREAMER {
+            return Err(format!("camera.driver {:?}: {DRIVER_GSCAM} or {DRIVER_GSTREAMER}", r.camera.driver));
         }
         if !matches!(r.upload_policy.as_str(), "" | "wifi_or_dock" | "always" | "manual") {
             return Err(format!("upload_policy {:?}: wifi_or_dock, always or manual", r.upload_policy));
@@ -205,6 +220,12 @@ pub struct Resolved {
     pub placeholder: Option<(PathBuf, String)>,
     /// The launch's warnings (LogInfo `WARNING:` lines), in its order.
     pub notes: Vec<String>,
+    /// The intrinsics file the camera publishes (the calibration's, or the
+    /// placeholder's path)
+    pub intrinsics: PathBuf,
+    /// `camera_extrinsics.compute`'s result: the static TF's two transforms
+    /// (`base_link_to_camera_link`, `camera_link_to_optical`)
+    pub extrinsics: extrinsics::Computed,
 }
 
 /// Python's `float(text)` (`"25"`, `" 10.0 "`, `"1e1"`).
@@ -294,7 +315,9 @@ pub fn resolve(req: &Request, share_config: &Path, urdf: Result<&str, String>) -
         ("fps_recorded", fps_recorded),
         ("format", Py::str("jpeg")),
         ("autofocus", autofocus),
-        ("driver", Py::str("gscam")),
+        // what runs the camera: gscam (the Python launch's, and E5-5's
+        // camera-only compose) or the module's GStreamer instance (E5-6)
+        ("driver", Py::str(&cam.driver)),
         ("pipeline", Py::str(&pipeline)),
     ]);
     let derived = Py::dict([
@@ -328,9 +351,11 @@ pub fn resolve(req: &Request, share_config: &Path, urdf: Result<&str, String>) -
             extrinsics_file: ext_path.to_string_lossy().into_owned(),
             extrinsics_derived: dumps(&derived)?,
         },
+        intrinsics: intrinsics.clone(),
         pipeline,
         placeholder,
         notes,
+        extrinsics: result,
     })
 }
 

@@ -622,6 +622,14 @@ pub static MODULES: &[Module] = &[
                     subscribes::<Text>("/mower_recorder/status", R_TL_1),
                 ],
             },
+            Instance {
+                // E5-6: the data-collection camera (gscam's node name), on
+                // r2r nodes of its own while mower-data-collection.sh asks
+                // for it, as gscam and its static TF were outside: nothing
+                // on the bus
+                node: "camera_front",
+                endpoints: &[],
+            },
         ],
     },
 ];

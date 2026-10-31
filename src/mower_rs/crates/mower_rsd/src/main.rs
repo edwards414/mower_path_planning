@@ -247,6 +247,9 @@ const MODULES: &[Module] = &[
             Instance { node: "graph_snapshot", run: |c, m| Box::pin(mower_recorder::graph::run(c, m)) },
             Instance { node: "recorder_manager", run: |c, m| Box::pin(mower_recorder::manager::run(c, m)) },
             Instance { node: "bag_store", run: |c, m| Box::pin(mower_recorder::store::run(c, m)) },
+            // E5-6: the data-collection camera, on the graph only while
+            // mower-data-collection.sh asks for it (camera.driver gstreamer)
+            Instance { node: "camera_front", run: |c, m| Box::pin(mower_recorder::camera::run(c, m)) },
         ],
     },
     Module {
@@ -810,7 +813,7 @@ mod tests {
             ("pid_autotune", vec!["pid_autotune"]),
             ("bridge", vec!["mower_ws_bridge"]),
             ("agent", vec!["mower_agent"]),
-            ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store"]),
+            ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store", "camera_front"]),
             ("bus_bridge", vec!["mower_bus_bridge"]),
         ];
         assert_eq!(expected.len(), MODULES.len());
