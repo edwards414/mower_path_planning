@@ -142,10 +142,15 @@ services:
     #   c 4:67    ttyS3 = /dev/stmcom, the STM32 host UART (LubanCat UART3)
     #   c 188:*   ttyUSB* = WIT IMU (CH340), or a CP2102 stmcom on a bench
     #   c 166:*   ttyACM* = u-blox ZED-F9P (CDC-ACM)
+    #   c 81:*    video4linux = the front USB camera, for the bag module's
+    #             camera during data collection (E5-6; mower-camera.service,
+    #             which has it otherwise, is stopped for the run). The image's
+    #             user is in the video group.
     device_cgroup_rules:
       - 'c 4:67 rmw'
       - 'c 188:* rmw'
       - 'c 166:* rmw'
+      - 'c 81:* rmw'
     volumes:
       - /dev:/dev
       - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower

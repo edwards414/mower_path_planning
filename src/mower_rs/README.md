@@ -25,7 +25,7 @@ process measurements and the roll-out order: `docs/RUST_REFACTOR_PLAN.md`.
 | `mower_agent` | `mower_agent` (registration with the provision token, the `mrelay1` relay WebSocket with 10 s heartbeats, phone sessions piped to the pairing gate, WHEP signaling relayed to MediaMTX, TURN credentials into the MediaMTX API; no ROS, reads `/robot/info` + `/robot/telemetry` through the loopback bridge) | `rosbridge.launch.py rust_agent:=true` |
 | `mowerctl` | nothing: a command-line view of the robot through ws_bridge (`topic list/info/echo/hz`, `service list/call`, `ping`), read-only by default, no ROS; [`crates/mowerctl/README.md`](crates/mowerctl/README.md) | none: no launch file or service runs it (in the image as `/usr/local/bin/mowerctl`) |
 | `mower_flash` | `firmware/tools/mower_flash.py`: the STM32 firmware flasher, a port that must be indistinguishable from it (frames, timing, flash, report, stdout, exit codes; the port opened exclusively is the one difference); [`crates/mower_flash/README.md`](crates/mower_flash/README.md) | `utils/firmware-sync` at every container start: the image's default since E6-5, so compose `MOWER_FIRMWARE_SYNC=1` (the robot's value) and `rust` run it; `python` is the roll-back to the Python tool; in the image as `/usr/local/bin/mower_flash` |
-| `mower_recorder` | `mower_recorder`'s three rclpy nodes, `recorder_manager`, `bag_store` and `graph_snapshot` (`/mower_recorder/status`, `/bags`, `/command` → `/command_result`, `start` / `stop` / `snapshot`, the rear light, `/graph_snapshot`, `/graph_events`, the R2 upload, the recording: the default profile's groups from DDS into rosbag2's MCAP, E5-3b); [`crates/mower_recorder/README.md`](crates/mower_recorder/README.md) | `robot.launch.py rust_recorder:=true` (compose `RUST_RECORDER`, off by default; the module `bag` of `mower_rsd`, or this binary with `rust_daemon:=false`); compose's `recorder` service then sleeps. Not `rust_record` |
+| `mower_recorder` | `mower_recorder`'s three rclpy nodes, `recorder_manager`, `bag_store` and `graph_snapshot` (`/mower_recorder/status`, `/bags`, `/command` → `/command_result`, `start` / `stop` / `snapshot`, the rear light, `/graph_snapshot`, `/graph_events`, the R2 upload, the recording: the default profile's groups from DDS into rosbag2's MCAP, E5-3b; data_collection by the request file, E5-5) and the data-collection front camera (gscam and its two static TFs, `camera_front`, E5-6); [`crates/mower_recorder/README.md`](crates/mower_recorder/README.md) | `robot.launch.py rust_recorder:=true` (compose `RUST_RECORDER`, off by default; the module `bag` of `mower_rsd`, or this binary with `rust_daemon:=false`); compose's `recorder` service then sleeps. Not `rust_record` |
 | `mower_sim` | nothing: development only, the STM32, WIT IMU and u-blox F9P on ptys, driven by one truth world, for the production stack without hardware (not the Gazebo package `src/mower_sim`); [`crates/mower_sim/README.md`](crates/mower_sim/README.md) | none: not in the image; `deploy/sim/docker-compose.sim.yaml` runs a local build; it refuses real devices |
 
 Not every crate is a node: `mower_base_core` is a library only — the ROS-free
@@ -55,7 +55,11 @@ is tested against what the Python recorder and rosbag2 wrote in
   hand over ureq, held to botocore's signatures and to the Python uploader
   against moto), MediaMTX, graph JSON, parameter dumps, camera extrinsics.
 
-They have no `r2r` dependency (`mower_cdr`'s oracle test uses it).
+They have no `r2r` dependency (`mower_cdr`'s oracle test uses it). Nor has
+`mower_camera` (E5-6), the front camera without gscam: gscam's stream on
+gstreamer-rs (an appsink of `image/jpeg`, gscam's stamps; behind the
+feature `gst`, so a plain `cargo test` needs no GStreamer development
+files) and the calibration file as camera_info_manager reads it.
 
 `robot.launch.py` takes all the switches (compose: `RUST_STATUS` /
 `RUST_ADAPTER` / `RUST_GUARDS` / `RUST_IMU` / `RUST_BRIDGE` / `RUST_BASE` in
@@ -760,10 +764,16 @@ live in `mower_bringup/config/ws_bridge.yaml` (a test keeps them equal to
 service needs its type there). One ROS subscription per topic, its QoS
 matched to the publishers like rosbridge, one serialisation per message
 fanned out to every subscribed client, latched topics replayed to late
-subscribers; service clients are reused and answered off the node thread
-(no serial `call_services_in_new_thread` queue). The pairing gate is the
-same X-Mower-* HMAC hand-shake as `identity.py` (401 otherwise) on the
-public listener; the loopback listener has no gate, as before.
+subscribers; service clients are reused and answered off the node thread.
+Each `call_service` runs in a task of its own (E3.3, as rosbridge's
+`call_services_in_new_thread`), its answer carrying its `id`, at most 16 per
+connection: one more is answered at once with `<service>: too many calls in
+flight on this connection (at most 16)`. Every other frame of a connection
+keeps its order, so a slow call holds up neither the joystick nor a
+subscribe; `/rosapi/*` and the allow-list's refusals are answered in line.
+The pairing gate is the same X-Mower-* HMAC hand-shake as `identity.py`
+(401 otherwise) on the public listener; the loopback listener has no gate,
+as before.
 
 Compared against rosbridge_websocket on the same graph: identical `msg` JSON
 for String, Bool, BatteryState (NaN -> null), NavSatFix, Header and

@@ -31,5 +31,6 @@ fn the_bag_module_runs_mower_recorder_s_three_roles() {
         "Instance { node: \"graph_snapshot\", run: |c, m| Box::pin(mower_recorder::graph::run(c, m)) }",
         "Instance { node: \"recorder_manager\", run: |c, m| Box::pin(mower_recorder::manager::run(c, m)) }",
         "Instance { node: \"bag_store\", run: |c, m| Box::pin(mower_recorder::store::run(c, m)) }",
+        "Instance { node: \"camera_front\", run: |c, m| Box::pin(mower_recorder::camera::run(c, m)) }",
     ]);
 }

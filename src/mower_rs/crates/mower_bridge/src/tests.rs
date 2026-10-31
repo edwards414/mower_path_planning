@@ -1237,7 +1237,7 @@ fn the_manifest_has_mower_rsd_s_modules_and_node_names() {
         ("battery", vec!["battery_state"]),
         ("pid_autotune", vec!["pid_autotune"]),
         ("bridge", vec!["mower_ws_bridge"]),
-        ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store"]),
+        ("bag", vec!["graph_snapshot", "recorder_manager", "bag_store", "camera_front"]),
     ];
     let got: Vec<(&str, Vec<&str>)> = MODULES.iter().map(|m| (m.id, m.instances.iter().map(|i| i.node).collect())).collect();
     assert_eq!(got, expected);

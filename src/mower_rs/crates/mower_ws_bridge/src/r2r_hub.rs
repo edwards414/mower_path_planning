@@ -208,7 +208,10 @@ impl NodeState {
                 // request is only sent once the server is matched: a request
                 // sent by a freshly created client before discovery completes
                 // is silently dropped by DDS and would never be answered.
+                // Several calls of one client wait at once (E3.3); r2r matches
+                // each answer to its request by sequence number.
                 runtime.spawn(async move {
+                    let mut reply = reply;
                     if tokio::time::timeout(AVAILABILITY_TIMEOUT, available).await.map(|r| r.is_err()).unwrap_or(true) {
                         let _ = reply.send(Err(format!("{service}: service unavailable")));
                         return;
@@ -220,7 +223,15 @@ impl NodeState {
                             return;
                         }
                     };
-                    let result = match request.await {
+                    // A server that never answers no longer keeps this task
+                    // for good: it ends with the caller's wait (the service
+                    // timeout), as every other part of the call does.
+                    let response = tokio::select! {
+                        response = request => Some(response),
+                        () = reply.closed() => None,
+                    };
+                    let Some(response) = response else { return };
+                    let result = match response {
                         Ok(Ok(v)) => Ok(v),
                         Ok(Err(e)) => Err(format!("{service}: {e:?}")),
                         Err(e) => Err(format!("{service}: {e:?}")),

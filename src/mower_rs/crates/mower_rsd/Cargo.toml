@@ -9,6 +9,12 @@ description = "One process running any subset of the mower_rs nodes on a single 
 name = "mower_rsd"
 path = "src/main.rs"
 
+[features]
+# E5-6: the bag module's camera instance captures with GStreamer
+# (mower_camera's `gst`). The robot image builds with it
+# (src/mower_rs/CMakeLists.txt); a plain build needs no GStreamer.
+camera = ["mower_recorder/camera"]
+
 [dependencies]
 mower_rs_common = { path = "../mower_rs_common" }
 mower_bus = { path = "../mower_bus" }

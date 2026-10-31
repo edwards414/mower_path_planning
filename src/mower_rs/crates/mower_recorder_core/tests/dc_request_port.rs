@@ -51,12 +51,16 @@ fn the_request_file_is_strict() {
     assert_eq!((r.session_file.as_str(), r.run_info.as_str(), r.upload_policy.as_str()), ("/s.yaml", "{weather: cloudy}", "manual"));
     let minimal = Request::parse(r#"{"profile": "data_collection"}"#).unwrap();
     assert_eq!(minimal.camera, CameraArgs::default());
+    assert_eq!(minimal.camera.driver, "gscam", "E5-5's file: gscam");
+    let rust = Request::parse(r#"{"profile": "data_collection", "camera": {"driver": "gstreamer"}}"#).unwrap();
+    assert_eq!(rust.camera.driver, "gstreamer");
     assert_eq!(minimal.session_file, "~/.mower/data_collection_session.yaml");
     for bad in [
         r#"{"profile": "default"}"#,
         r#"{"profile": "data_collection", "camera": {"camera_devise": "/dev/video0"}}"#,
         r#"{"profile": "data_collection", "upload": "manual"}"#,
         r#"{"profile": "data_collection", "upload_policy": "sometimes"}"#,
+        r#"{"profile": "data_collection", "camera": {"driver": "usb_cam"}}"#,
         r#"["data_collection"]"#,
         "not json",
     ] {
@@ -183,6 +187,13 @@ fn without_a_calibration_the_placeholders_and_the_notes() {
     assert_eq!(params.get("fps_recorded"), Some(&Py::Int(10)));
     let derived = mower_pyfmt::json::loads(&r.dc.extrinsics_derived).unwrap();
     assert_eq!(derived.get("block").unwrap().get("reference_source"), Some(&Py::str("builtin_default")));
+    assert_eq!(params.get("driver"), Some(&Py::str("gscam")));
+    assert_eq!(r.intrinsics, path, "the camera publishes the placeholder");
+    // E5-6: the module's camera says so in the metadata
+    let mut rust = req.clone();
+    rust.camera.driver = "gstreamer".into();
+    let r = resolve(&rust, &share_config(), Err(String::new())).unwrap();
+    assert_eq!(mower_pyfmt::json::loads(&r.dc.camera_params).unwrap().get("driver"), Some(&Py::str("gstreamer")));
     // a size that is not WxH fails, as the launch did
     let mut bad = req.clone();
     bad.camera.camera_size = "640".into();

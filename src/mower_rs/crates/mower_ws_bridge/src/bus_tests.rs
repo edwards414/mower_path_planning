@@ -1,7 +1,7 @@
-//! The bus backend end to end, without DDS (step E3.1): ws_bridge's own
-//! listener, gate and protocol, the bus hub on a `Bus` with typed endpoints
-//! standing in for mower_rsd's modules and its bus bridge, a manual clock,
-//! and WebSocket clients in the test.
+//! The bus backend end to end, without DDS (step E3.1; calls in flight,
+//! E3.3): ws_bridge's own listener, gate and protocol, the bus hub on a
+//! `Bus` with typed endpoints standing in for mower_rsd's modules and its
+//! bus bridge, a manual clock, and WebSocket clients in the test.
 //!
 //! - **Real time** only carries frames over loopback: a frame that must come
 //!   is waited for up to `WAIT`, one that must not for `QUIET`.
@@ -10,7 +10,8 @@
 //!   expects is pending.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,7 +34,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::bus_hub::{manifest_names, BusHub, LINGER};
-use crate::client::ClientHandle;
+use crate::client::{ClientHandle, MAX_CALLS_IN_FLIGHT};
 use crate::config::Policy;
 use crate::golden::fixtures;
 use crate::hub::Hub;
@@ -467,6 +468,328 @@ async fn other_ops_and_frames_that_are_not_json() {
 }
 
 // ---------------------------------------------------------------------------
+// Calls in flight (E3.3): each call in a task of its own, every other frame
+// in order
+// ---------------------------------------------------------------------------
+
+/// A server of `name` that answers each request `after` it came, on the
+/// door's clock, holding several at once (a slow module: an update, a
+/// recorder stop). How many it has taken so far is in the counter.
+fn serve_slowly(scope: &Scope, clock: Clock, name: &str, after: Duration, message: &str) -> (tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+    let mut service = scope.service::<Trigger::Request, Trigger::Response>(name).unwrap();
+    let taken = Arc::new(AtomicUsize::new(0));
+    let (counter, message) = (taken.clone(), message.to_string());
+    let task = tokio::spawn(async move {
+        while let Some(request) = service.next().await {
+            let at = clock.mono() + after;
+            counter.fetch_add(1, Ordering::SeqCst);
+            let (clock, message) = (clock.clone(), message.clone());
+            tokio::spawn(async move {
+                clock.sleep_until(at).await;
+                let _ = request.respond(Trigger::Response { success: true, message });
+            });
+        }
+    });
+    (task, taken)
+}
+
+/// The app's joystick frame number `k`: its stamp's nanoseconds are `k`.
+fn joystick(k: u32) -> Value {
+    json!({"header": {"stamp": {"sec": 7, "nanosec": k}, "frame_id": "manual-1"},
+           "twist": {"linear": {"x": 0.2, "y": 0, "z": 0}, "angular": {"x": 0, "y": 0, "z": 0.001 * f64::from(k)}}})
+}
+
+fn too_many(id: &str, service: &str) -> String {
+    let text = format!("{service}: too many calls in flight on this connection (at most {MAX_CALLS_IN_FLIGHT})");
+    answer(id, service, json!(text), false)
+}
+
+/// While a call waits for a slow server (10 s), the same client's publish,
+/// subscribe and other calls are handled at once, where each waited for it
+/// before (F1); the slow answers then come with their `id`s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_call_holds_up_nothing_behind_it() {
+    let door = Door::open().await;
+    let status_module = door.bus.scope("robot_status");
+    let (_update, taken) = serve_slowly(&status_module, door.m.clock.clone(), "/system/update", Duration::from_secs(10), "updated");
+    let online = status_module.publisher::<Bool>("/robot/online", Qos::latched()).unwrap();
+    online.publish(&Bool { data: true }).unwrap();
+    let nav = door.bus.scope("nav_action_server");
+    let _check = serve_with(&nav, "/check_nav_status", trigger("{\"state\":\"idle\"}"));
+    let guard = door.bus.scope("manual_velocity_guard");
+    let mut joy = guard.subscribe::<TwistStamped>("/app_joy_cmd", Qos::default().keep_last(64)).unwrap();
+    let mut app = door.client().await;
+
+    app.call("slow-1", "/system/update", json!({})).await;
+    eventually("the server to hold the call", || taken.load(Ordering::SeqCst) == 1).await;
+    // a publish
+    app.send(json!({"op": "advertise", "topic": "/app_joy_cmd", "type": "geometry_msgs/msg/TwistStamped"})).await;
+    app.send(json!({"op": "publish", "topic": "/app_joy_cmd", "msg": joystick(1)})).await;
+    let got = tokio::time::timeout(WAIT, joy.next()).await.expect("the joystick at once").unwrap();
+    assert_eq!(got.header.stamp.nanosec, 1);
+    // a subscribe
+    app.send(json!({"op": "subscribe", "topic": "/robot/online", "type": "std_msgs/msg/Bool"})).await;
+    assert_eq!(app.recv().await, publish_frame("/robot/online", json!({"data": true})));
+    // a second call, to another server
+    app.call("fast", "/check_nav_status", json!({})).await;
+    assert_eq!(app.recv().await, answer("fast", "/check_nav_status", json!({"message": "{\"state\":\"idle\"}", "success": true}), true));
+    // and one more to the slow server, which holds both
+    app.call("slow-2", "/system/update", json!({})).await;
+    eventually("the server to hold the second call", || taken.load(Ordering::SeqCst) == 2).await;
+    app.call("time", "/rosapi/get_time", json!({})).await;
+    assert_eq!(app.recv_json().await["id"], "time");
+    app.send(json!({"op": "publish", "topic": "/app_joy_cmd", "msg": joystick(2)})).await;
+    let got = tokio::time::timeout(WAIT, joy.next()).await.expect("the joystick at once").unwrap();
+    assert_eq!(got.header.stamp.nanosec, 2);
+
+    // Not a moment of the server's 10 s has passed: both calls still wait.
+    door.deadline_in(Duration::from_secs(10)).await;
+    door.manual.advance(Duration::from_millis(9_999));
+    app.quiet().await;
+    door.manual.advance(Duration::from_millis(1));
+    let mut answers = vec![app.recv().await, app.recv().await];
+    answers.sort();
+    let updated = json!({"message": "updated", "success": true});
+    assert_eq!(answers, [answer("slow-1", "/system/update", updated.clone(), true), answer("slow-2", "/system/update", updated, true)]);
+    app.quiet().await;
+    door.close().await;
+}
+
+/// Answers come in the order the servers give them, each with its own
+/// request's `id`, on its own connection: two clients may use the same ids.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn answers_carry_their_ids_in_the_order_the_servers_give_them() {
+    let door = Door::open().await;
+    let coverage = door.bus.scope("boustrophedon_coverage");
+    let mut exec = coverage.service::<ZoneExecPath::Request, ZoneExecPath::Response>("/zone_exec_path").unwrap();
+    let (mut app, mut studio) = (door.client().await, door.client().await);
+    for zone in 1..=3 {
+        app.call(&format!("z{zone}"), "/zone_exec_path", json!({"zone_id": zone})).await;
+    }
+    // the same id from another client, for another zone
+    studio.call("z2", "/zone_exec_path", json!({"zone_id": 9})).await;
+    // and one without an id
+    app.send(json!({"op": "call_service", "service": "/zone_exec_path", "args": {"zone_id": 4}})).await;
+    let mut held = Vec::new();
+    for _ in 0..5 {
+        held.push(tokio::time::timeout(WAIT, exec.next()).await.expect("every call at the server at once").unwrap());
+    }
+    app.quiet().await;
+    // The server answers the last zone first.
+    held.sort_by_key(|request| std::cmp::Reverse(request.message.zone_id));
+    for request in held {
+        let zone = request.message.zone_id;
+        let _ = request.respond(ZoneExecPath::Response { success: true, message: format!("zone {zone}") });
+        let values = json!({"message": format!("zone {zone}"), "success": true});
+        match zone {
+            9 => assert_eq!(studio.recv().await, answer("z2", "/zone_exec_path", values, true)),
+            4 => assert_eq!(
+                app.recv().await,
+                json!({"op": "service_response", "service": "/zone_exec_path", "values": values, "result": true}).to_string()
+            ),
+            _ => assert_eq!(app.recv().await, answer(&format!("z{zone}"), "/zone_exec_path", values, true)),
+        }
+    }
+    app.quiet().await;
+    studio.quiet().await;
+    door.close().await;
+}
+
+/// Subscribe, publish, advertise and every answer ws_bridge gives in line
+/// keep the order of their requests while calls wait, and the joystick's
+/// messages reach the guard all, in order. Only a call's answer comes when
+/// its server gives it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_other_frame_keeps_its_order_while_calls_wait() {
+    let door = Door::open().await;
+    let status_module = door.bus.scope("robot_status");
+    let (_update, taken) = serve_slowly(&status_module, door.m.clock.clone(), "/system/update", Duration::from_secs(10), "updated");
+    let online = status_module.publisher::<Bool>("/robot/online", Qos::latched()).unwrap();
+    online.publish(&Bool { data: true }).unwrap();
+    let info = status_module.publisher::<Text>("/robot/info", Qos::latched()).unwrap();
+    info.publish(&text("{\"v\":1}")).unwrap();
+    let nav = door.bus.scope("nav_action_server");
+    let _check = serve_with(&nav, "/check_nav_status", trigger("idle"));
+    let guard = door.bus.scope("manual_velocity_guard");
+    let mut joy = guard.subscribe::<TwistStamped>("/app_joy_cmd", Qos::default().keep_last(64)).unwrap();
+    // Another client has both latched topics already: a subscribe replays
+    // from the cache, in line.
+    let mut warm = door.client().await;
+    warm.subscribe("/robot/online", 0).await;
+    warm.recv().await;
+    warm.subscribe("/robot/info", 0).await;
+    warm.recv().await;
+
+    let mut app = door.client().await;
+    app.call("slow", "/system/update", json!({})).await;
+    eventually("the server to hold the call", || taken.load(Ordering::SeqCst) == 1).await;
+    let publish = |k: u32| json!({"op": "publish", "topic": "/app_joy_cmd", "msg": joystick(k)});
+    let mut script = vec![
+        json!({"op": "advertise", "id": "a1", "topic": "/cmd_vel", "type": "geometry_msgs/msg/Twist"}),
+        json!({"op": "advertise", "topic": "/app_joy_cmd", "type": "geometry_msgs/msg/TwistStamped"}),
+        publish(1),
+        json!({"op": "subscribe", "id": "s1", "topic": "/robot/online", "type": "std_msgs/msg/Bool"}),
+        publish(2),
+        json!({"op": "publish", "id": "p1", "topic": "/cmd_vel", "msg": {}}),
+        json!({"op": "call_service", "id": "c1", "service": "/check_nav_status", "args": {}}),
+        publish(3),
+        json!({"op": "subscribe", "id": "s2", "topic": "/robot/info"}),
+        json!({"op": "call_service", "id": "c2", "service": "/rm_rf", "args": {}}),
+        json!({"op": "subscribe", "id": "s3", "topic": "/odom"}),
+        json!({"op": "call_service", "id": "c3", "service": "/system/update", "args": {}}),
+    ];
+    script.extend((4..=20).map(publish));
+    script.push(json!({"op": "unsubscribe", "topic": "/robot/online"}));
+    script.push(json!({"op": "advertise", "id": "a2"}));
+    for frame in script {
+        app.send(frame).await;
+    }
+    let in_line = [
+        status(Some("a1"), "advertise: /cmd_vel is not allowed"),
+        publish_frame("/robot/online", json!({"data": true})),
+        status(Some("p1"), "publish: /cmd_vel is not allowed"),
+        publish_frame("/robot/info", json!({"data": "{\"v\":1}"})),
+        answer("c2", "/rm_rf", json!("service /rm_rf is not allowed"), false),
+        status(Some("s3"), "subscribe: /odom is not allowed"),
+        status(Some("a2"), "advertise: missing topic"),
+    ];
+    let mut got = Vec::new();
+    for _ in 0..=in_line.len() {
+        got.push(app.recv().await);
+    }
+    // c1's answer comes once its server gives it: after what came before c1
+    let c1 = answer("c1", "/check_nav_status", json!({"message": "idle", "success": true}), true);
+    let at = got.iter().position(|frame| *frame == c1).expect("c1's answer");
+    assert!(at >= 3, "c1 answered before the frames sent before it: {got:#?}");
+    got.remove(at);
+    assert_eq!(got, in_line);
+    for k in 1..=20 {
+        let msg = tokio::time::timeout(WAIT, joy.next()).await.expect("every joystick message").unwrap();
+        assert_eq!(msg.header.stamp.nanosec, k, "in order");
+    }
+    assert!(joy.try_recv().is_err(), "and no more");
+    // the unsubscribe took effect in its place
+    online.publish(&Bool { data: false }).unwrap();
+    assert_eq!(warm.recv().await, publish_frame("/robot/online", json!({"data": false})));
+    app.quiet().await;
+
+    // The slow calls answer only now, the second as well.
+    eventually("the server to hold c3", || taken.load(Ordering::SeqCst) == 2).await;
+    door.deadline_in(Duration::from_secs(10)).await;
+    door.manual.advance(Duration::from_secs(10));
+    let mut answers = vec![app.recv().await, app.recv().await];
+    answers.sort();
+    let updated = json!({"message": "updated", "success": true});
+    assert_eq!(answers, [answer("c3", "/system/update", updated.clone(), true), answer("slow", "/system/update", updated, true)]);
+    door.close().await;
+}
+
+/// Past `MAX_CALLS_IN_FLIGHT` calls waiting on one connection, a call is
+/// answered at once with an error and its `id`, and never reaches a server.
+/// What ws_bridge answers itself and every other op go on; another
+/// connection has places of its own; an answer frees a place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn past_the_cap_a_call_is_refused_at_once() {
+    let door = Door::open().await;
+    let status_module = door.bus.scope("robot_status");
+    let mut update = status_module.service::<Trigger::Request, Trigger::Response>("/system/update").unwrap();
+    let nav = door.bus.scope("nav_action_server");
+    let mut check = nav.service::<Trigger::Request, Trigger::Response>("/check_nav_status").unwrap();
+    let mut app = door.client().await;
+    for i in 0..MAX_CALLS_IN_FLIGHT {
+        app.call(&format!("h{i}"), "/system/update", json!({})).await;
+    }
+    let mut held = Vec::new();
+    for _ in 0..MAX_CALLS_IN_FLIGHT {
+        held.push(tokio::time::timeout(WAIT, update.next()).await.expect("every call at the server").unwrap());
+    }
+
+    app.call("over", "/system/update", json!({})).await;
+    assert_eq!(app.recv().await, too_many("over", "/system/update"));
+    // the places are the connection's, whatever the service
+    app.call("over-2", "/check_nav_status", json!({})).await;
+    assert_eq!(app.recv().await, too_many("over-2", "/check_nav_status"));
+    app.send(json!({"op": "call_service", "service": "/check_nav_status"})).await;
+    assert_eq!(
+        app.recv().await,
+        json!({"op": "service_response", "service": "/check_nav_status", "result": false,
+               "values": format!("/check_nav_status: too many calls in flight on this connection (at most {MAX_CALLS_IN_FLIGHT})")})
+        .to_string()
+    );
+    // what is answered in line takes no place
+    app.call("time", "/rosapi/get_time", json!({})).await;
+    assert_eq!(app.recv_json().await["id"], "time");
+    app.call("topics", "/rosapi/topics", json!({})).await;
+    assert_eq!(app.recv_json().await["result"], true);
+    app.call("no", "/rm_rf", json!({})).await;
+    assert_eq!(app.recv().await, answer("no", "/rm_rf", json!("service /rm_rf is not allowed"), false));
+    app.send(json!({"op": "publish", "id": "p", "topic": "/cmd_vel", "msg": {}})).await;
+    assert_eq!(app.recv().await, status(Some("p"), "publish: /cmd_vel is not allowed"));
+    assert!(tokio::time::timeout(QUIET, update.next()).await.is_err(), "nothing past the cap reached a server");
+    assert!(tokio::time::timeout(QUIET, check.next()).await.is_err(), "nothing past the cap reached a server");
+
+    // another connection has places of its own
+    let mut studio = door.client().await;
+    studio.call("s", "/check_nav_status", json!({})).await;
+    let studio_call = tokio::time::timeout(WAIT, check.next()).await.expect("the other client's call").unwrap();
+    let _ = studio_call.respond(Trigger::Response { success: true, message: "idle".into() });
+    assert_eq!(studio.recv().await, answer("s", "/check_nav_status", json!({"message": "idle", "success": true}), true));
+
+    // an answer frees a place at once
+    let first = held.pop().unwrap();
+    let _ = first.respond(Trigger::Response { success: true, message: "done".into() });
+    let done = app.recv_json().await;
+    assert_eq!((done["result"].clone(), done["values"]["message"].clone()), (json!(true), json!("done")));
+    app.call("again", "/check_nav_status", json!({})).await;
+    let again = tokio::time::timeout(WAIT, check.next()).await.expect("a call in the freed place").unwrap();
+    let _ = again.respond(Trigger::Response { success: true, message: "idle".into() });
+    assert_eq!(app.recv().await, answer("again", "/check_nav_status", json!({"message": "idle", "success": true}), true));
+    // the place is taken again by the next held call
+    app.call("over-3", "/check_nav_status", json!({})).await;
+    let next = tokio::time::timeout(WAIT, check.next()).await.expect("the last place").unwrap();
+    app.call("over-4", "/check_nav_status", json!({})).await;
+    assert_eq!(app.recv().await, too_many("over-4", "/check_nav_status"));
+    drop(next);
+    assert_eq!(app.recv().await, answer("over-3", "/check_nav_status", json!("/check_nav_status: service unavailable"), false));
+
+    let mut ids = Vec::new();
+    for request in held {
+        let _ = request.respond(Trigger::Response { success: true, message: "done".into() });
+        ids.push(app.recv_json().await["id"].as_str().unwrap().to_string());
+    }
+    ids.push(done["id"].as_str().unwrap().to_string());
+    ids.sort_by_key(|id| id[1..].parse::<usize>().unwrap());
+    assert_eq!(ids, (0..MAX_CALLS_IN_FLIGHT).map(|i| format!("h{i}")).collect::<Vec<_>>(), "each held call answered once");
+    door.close().await;
+}
+
+/// A call runs on after its client has gone, as it did when the connection
+/// waited for it: a call sent just before the link went still reaches its
+/// server, here one that only comes up afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_still_reaches_its_server_after_the_client_has_gone() {
+    let door = Door::open().await;
+    // the name is declared, with no server yet (the bus bridge's, while the
+    // recorder is down)
+    let _declared = door.bus.scope("mower_bus_bridge").client::<Trigger::Request, Trigger::Response>("/mower_recorder/stop").unwrap();
+    let mut app = door.client().await;
+    // a subscription, by which the test sees the connection end
+    app.subscribe("/mower_recorder/status", 0).await;
+    eventually("the subscription", || door.hub_clients("/mower_recorder/status") == 1).await;
+    app.call("stop", "/mower_recorder/stop", json!({})).await;
+    door.deadline_in(Duration::from_secs(5)).await;
+    drop(app);
+    eventually("the connection to end", || door.hub_clients("/mower_recorder/status") == 0).await;
+    door.manual.advance(Duration::from_secs(2));
+    let recorder = door.bus.scope("recorder_manager");
+    let mut stop = recorder.service::<Trigger::Request, Trigger::Response>("/mower_recorder/stop").unwrap();
+    let request = tokio::time::timeout(WAIT, stop.next()).await.expect("the stop reached the recorder").unwrap();
+    // its answer goes nowhere, harmlessly
+    assert!(request.respond(Trigger::Response { success: true, message: "stopped".into() }).is_ok());
+    door.close().await;
+}
+
+// ---------------------------------------------------------------------------
 // Delivery: throttle, replay, linger, slow consumers
 // ---------------------------------------------------------------------------
 
@@ -871,7 +1194,6 @@ async fn every_endpoint_the_bus_backend_makes_is_in_the_manifest() {
     let (module, bridge) = mower_bridge::instance("mower_ws_bridge").unwrap();
     assert_eq!(module.id, "bridge");
     let mut app = door.client().await;
-    let mut calls = BTreeMap::new();
     for e in bridge.endpoints {
         match e.kind {
             mower_bridge::types::Kind::Subscribe => app.subscribe(e.name, 0).await,
@@ -880,21 +1202,20 @@ async fn every_endpoint_the_bus_backend_makes_is_in_the_manifest() {
                 app.send(json!({"op": "publish", "id": e.name, "topic": e.name, "msg": msg})).await;
             }
             mower_bridge::types::Kind::Call => {
-                calls.insert(e.name.to_string(), ());
+                // Each call is answered (the servers answer defaults), nothing
+                // else is. One at a time, as the app calls: more than
+                // MAX_CALLS_IN_FLIGHT at once would be refused (E3.3).
                 app.call(e.name, e.name, json!({})).await;
+                loop {
+                    let frame = app.recv_json().await;
+                    if frame["op"] == "service_response" {
+                        assert_eq!((&frame["id"], &frame["result"]), (&json!(e.name), &json!(true)), "{frame}");
+                        break;
+                    }
+                    assert_eq!(frame["op"], json!("publish"), "{frame}");
+                }
             }
             other => panic!("ws_bridge does not {}", other.verb()),
-        }
-    }
-    // every call is answered (the servers answer defaults), nothing else is
-    let mut answered = 0;
-    while answered < calls.len() {
-        let frame = app.recv_json().await;
-        if frame["op"] == "service_response" {
-            assert_eq!(frame["result"], json!(true), "{frame}");
-            answered += 1;
-        } else {
-            assert_eq!(frame["op"], json!("publish"), "{frame}");
         }
     }
     let bus = &door.bus;
