@@ -1124,6 +1124,7 @@ dependencies = [
  "mower_rs_common",
  "mower_schema",
  "r2r",
+ "serde_json",
  "tokio",
  "zstd",
 ]

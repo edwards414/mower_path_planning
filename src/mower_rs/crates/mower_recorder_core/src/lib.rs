@@ -23,12 +23,16 @@
 //! - [`manager`] (E5-3b): recorder_manager's run logic (start, stop,
 //!   snapshot, the 2 s tick, the fault, the metadata and parameter dump)
 //!   behind small traits for what the `bag` module provides.
+//! - [`dc_request`] (E5-5): data_collection's request file
+//!   (`~/.mower/recorder_profile.json`, design D7) and what its launch files
+//!   worked out for recorder_manager (camera_launch.py's `resolve_camera`).
 //!
 //! The JSON and YAML go through `mower_pyfmt` (Python's json and PyYAML).
 //! Where a Python exception's text would reach a reply or `upload_error`,
 //! the Rust text says the same thing differently (A9).
 
 pub mod dc_metadata;
+pub mod dc_request;
 pub mod extrinsics;
 pub mod graph;
 pub mod manager;

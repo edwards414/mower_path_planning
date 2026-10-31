@@ -20,9 +20,14 @@
 # parent), ENV_FILE (default /opt/mower/.env), MAIN_COMPOSE_FILE (the robot
 # stack, default /opt/mower/docker-compose.yaml).
 #
-# `start` refuses while RUST_RECORDER is true (ENV_FILE, or the environment as
-# compose reads it): mower_rsd's bag module then owns /mower_recorder/*, and
-# data collection in it comes with step E5-5.
+# With RUST_RECORDER true (ENV_FILE, or the environment as compose reads it)
+# mower_rsd's bag module owns /mower_recorder/* (E5-5): `start` writes its
+# request file, recorder_profile.json in MOWER_STATE_DIR (the data_collection
+# profile, the camera arguments, the session file, the upload policy), and
+# starts only the camera (the compose file's data_collection_camera:
+# gscam and its static TFs); `stop` deletes the file and the module goes back
+# to the default profile. The commands, their output and exit codes are the
+# same either way.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -43,8 +48,9 @@ if [ -f "$env_file" ]; then env_args=(--env-file "$env_file"); fi
 state=/run/mower-data-collection.state   # timer / recorder state to restore on stop
 svc=data_collection
 bags=/home/mower/.mower/bags            # path inside the container
+profile_args=()                         # data_collection_camera's profile (RUST_RECORDER)
 
-compose() { docker compose "${env_args[@]}" -f "$compose_file" "$@"; }
+compose() { docker compose "${env_args[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} "$@"; }
 # The robot stack's idle recorder (the app's 錄話題 button) owns
 # /mower_recorder/* too; it steps aside for the run and comes back after it.
 main_compose=${MAIN_COMPOSE_FILE:-/opt/mower/docker-compose.yaml}
@@ -53,21 +59,49 @@ app_recorder_running() {
   [ -f "$main_compose" ] && [ -n "$(stack ps -q --status running recorder 2>/dev/null)" ]
 }
 running() { [ -n "$(compose ps -q --status running "$svc" 2>/dev/null)" ]; }
-# RUST_RECORDER as compose sees it (the environment, else the last line of
-# $env_file), true in robot.launch.py's _truthy spellings.
-rust_recorder_on() {
-  local v=
-  if [ -n "${RUST_RECORDER+x}" ]; then
-    v=$RUST_RECORDER
+# A setting as compose sees it: the environment, else the last line of
+# $env_file (a trailing comment and quotes dropped), else $2.
+setting() {
+  local name=$1 v=
+  if [ -n "${!name+x}" ]; then
+    v=${!name}
   elif [ -f "$env_file" ]; then
-    v=$(sed -n 's/^[[:space:]]*RUST_RECORDER[[:space:]]*=//p' "$env_file" | tail -n 1)
+    v=$(sed -n "s/^[[:space:]]*$name[[:space:]]*=//p" "$env_file" | tail -n 1)
   fi
   v=${v%%[[:space:]]#*}
   v=${v//\"/}
   v=${v//\'/}
   read -r v <<< "$v" || true
-  case "$(tr '[:upper:]' '[:lower:]' <<< "$v")" in true|1|yes|on) return 0 ;; *) return 1 ;; esac
+  printf '%s' "${v:-${2:-}}"
 }
+# RUST_RECORDER as compose sees it, true in robot.launch.py's _truthy spellings.
+rust_recorder_on() {
+  case "$(setting RUST_RECORDER | tr '[:upper:]' '[:lower:]')" in true|1|yes|on) return 0 ;; *) return 1 ;; esac
+}
+# E5-5: the bag module's request file, on the host (the state dir compose
+# mounts at /home/mower/.mower) and what goes in it (paths as the container
+# sees them; the camera arguments as compose passes them to the camera).
+request=$(setting MOWER_STATE_DIR /home/cat/.mower)/recorder_profile.json
+json_str() { local v=$1; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '"%s"' "$v"; }
+write_request() {
+  local tmp="$request.tmp"
+  {
+    printf '{"profile": "data_collection", "camera": {'
+    printf '"camera_device": %s, ' "$(json_str "$(setting CAMERA_DEVICE /dev/video0)")"
+    printf '"camera_size": %s, ' "$(json_str "$(setting CAMERA_SIZE 1280x720)")"
+    printf '"camera_fps": %s, ' "$(json_str "$(setting CAMERA_FPS 25)")"
+    printf '"record_fps": %s, ' "$(json_str "$(setting CAMERA_RECORD_FPS 10)")"
+    printf '"calib_dir": "/home/mower/.mower/calib"}, '
+    printf '"session_file": "/home/mower/.mower/data_collection_session.yaml", '
+    printf '"upload_policy": %s}\n' "$(json_str "$(setting DATA_COLLECTION_UPLOAD_POLICY wifi_or_dock)")"
+  } > "$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$request"
+}
+if rust_recorder_on; then
+  svc=data_collection_camera
+  profile_args=(--profile camera_only)
+fi
 # docker-entrypoint.sh sources ROS + the workspace (firmware sync is off here)
 ros() { compose exec -T "$svc" /usr/local/bin/docker-entrypoint.sh "$@"; }
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }; }
@@ -76,13 +110,6 @@ latest_run() { ros bash -c "ls -td $bags/*/ 2>/dev/null | head -1" | tr -d '\r' 
 
 case "${1:-}" in
   start)
-    if rust_recorder_on; then
-      echo "RUST_RECORDER=true ($env_file): mower_rsd's bag module owns /mower_recorder/*," \
-        "and data collection in it comes with step E5-5. Set RUST_RECORDER=false there and run" \
-        "'docker compose up --detach' in $(dirname "$main_compose") (the Python recorder comes back)," \
-        "then start the data collection again. Nothing was changed." >&2
-      exit 1
-    fi
     need_root
     if systemctl is-active --quiet mower-update.timer; then
       echo "timer=active" > "$state"
@@ -91,11 +118,16 @@ case "${1:-}" in
       echo "timer=inactive" > "$state"
     fi
     systemctl stop mower-camera.service     # it holds /dev/video0 (app has no video now)
-    if app_recorder_running; then
-      stack stop recorder                   # SIGINT: a bag it was recording is finalized
-      echo "recorder=running" >> "$state"
+    if rust_recorder_on; then
+      write_request                         # the bag module takes data_collection while idle
+      compose up -d "$svc"                  # the camera only
+    else
+      if app_recorder_running; then
+        stack stop recorder                 # SIGINT: a bag it was recording is finalized
+        echo "recorder=running" >> "$state"
+      fi
+      compose up -d
     fi
-    compose up -d
     echo "waiting for /camera/front/image_raw/compressed ..."
     for _ in $(seq 1 30); do
       if ros ros2 topic list 2>/dev/null | grep -q '^/camera/front/image_raw/compressed'; then
@@ -142,6 +174,7 @@ case "${1:-}" in
       ros ros2 service call /mower_recorder/stop std_srvs/srv/Trigger | tail -1 || true
       compose down                          # stop_signal SIGINT: clean shutdown
     fi
+    rm -f "$request"                        # RUST_RECORDER: the module's default profile again
     systemctl start mower-camera.service
     if grep -q '^recorder=running' "$state" 2>/dev/null; then
       stack up -d recorder
