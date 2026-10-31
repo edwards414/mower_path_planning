@@ -760,10 +760,16 @@ live in `mower_bringup/config/ws_bridge.yaml` (a test keeps them equal to
 service needs its type there). One ROS subscription per topic, its QoS
 matched to the publishers like rosbridge, one serialisation per message
 fanned out to every subscribed client, latched topics replayed to late
-subscribers; service clients are reused and answered off the node thread
-(no serial `call_services_in_new_thread` queue). The pairing gate is the
-same X-Mower-* HMAC hand-shake as `identity.py` (401 otherwise) on the
-public listener; the loopback listener has no gate, as before.
+subscribers; service clients are reused and answered off the node thread.
+Each `call_service` runs in a task of its own (E3.3, as rosbridge's
+`call_services_in_new_thread`), its answer carrying its `id`, at most 16 per
+connection: one more is answered at once with `<service>: too many calls in
+flight on this connection (at most 16)`. Every other frame of a connection
+keeps its order, so a slow call holds up neither the joystick nor a
+subscribe; `/rosapi/*` and the allow-list's refusals are answered in line.
+The pairing gate is the same X-Mower-* HMAC hand-shake as `identity.py`
+(401 otherwise) on the public listener; the loopback listener has no gate,
+as before.
 
 Compared against rosbridge_websocket on the same graph: identical `msg` JSON
 for String, Bool, BatteryState (NaN -> null), NavSatFix, Header and

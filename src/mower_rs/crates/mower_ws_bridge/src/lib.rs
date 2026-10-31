@@ -8,6 +8,8 @@
 //! once), service clients are kept, and subscribe requests are answered in
 //! parallel instead of one by one, so a phone that subscribes to twenty
 //! topics sees its first heartbeat in milliseconds rather than seconds.
+//! Each `call_service` runs in a task of its own, at most 16 per connection
+//! (E3.3, client.rs); every other frame keeps its order.
 //!
 //! Two backends (hub.rs), chosen with `--backend`:
 //! - `r2r`, the default: one r2r node of its own, with untyped endpoints.
@@ -249,6 +251,8 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shar
         let _ = sink.close().await;
     });
 
+    // One frame at a time, in order; a call to a server only starts its
+    // task here (client.rs), so nothing behind it waits for its answer.
     let result = loop {
         match source.next().await {
             Some(Ok(Message::Text(text))) => client.on_text(&text).await,
