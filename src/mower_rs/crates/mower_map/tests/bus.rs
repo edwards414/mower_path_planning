@@ -171,6 +171,18 @@ async fn once_nav_is_seen<Fut: Future<Output = (bool, String)>>(mut call: impl F
     }
 }
 
+/// The first answer of `call` after a flag that went from active to idle has
+/// reached the module: until then it still refuses as active.
+async fn once_nav_is_idle<Fut: Future<Output = (bool, String)>>(mut call: impl FnMut() -> Fut) -> (bool, String) {
+    loop {
+        let answer = once_nav_is_seen(&mut call).await;
+        if !answer.1.contains("navigation is active") {
+            return answer;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 fn trigger(response: Trigger::Response) -> (bool, String) {
     (response.success, response.message)
 }
@@ -541,7 +553,7 @@ fn the_inflation_radius_stays_within_the_safety_envelope() {
 
         // Idle, with maps to refresh.
         nav.publish(&Bool { data: false }).unwrap();
-        let answer = once_nav_is_seen(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
+        let answer = once_nav_is_idle(|| async { trigger(map.call("/create_free_space", Trigger::Request {}).await) }).await;
         assert!(answer.0, "{answer:?}");
         assert_eq!(set(0.74).await, refused("inflate_radius_m must be >= 0.75 m"));
         assert_eq!(set(f64::NAN).await, refused("inflate_radius_m must be finite"));
