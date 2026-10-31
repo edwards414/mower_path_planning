@@ -345,7 +345,10 @@ for kv in "$@"; do
   case $k in
     IMAGE_TAG|NAV_COMPOSITION|RUST_DAEMON) die "$k is a positional argument" ;;
     RUST_*|NAV_*) bool "$k" "$v" ;;
-    MOWER_FIRMWARE_SYNC) [[ $v == 0 || $v == 1 ]] || die "MOWER_FIRMWARE_SYNC must be 0 or 1" ;;
+    # 0 = skip, 1 = the image's default flasher, python / rust = that one
+    # (utils/firmware-sync; an image without the switch takes both as 1)
+    MOWER_FIRMWARE_SYNC) [[ $v =~ ^(0|1|python|rust)$ ]] ||
+      die "MOWER_FIRMWARE_SYNC must be 0, 1, python or rust, got '$v'" ;;
   esac
   [ -n "${SET[$k]+x}" ] || ORDER+=("$k")
   SET[$k]=$v

@@ -3,23 +3,39 @@
 #
 # The runtime image carries /opt/mower/firmware/mower_robot_firmware.bin (+
 # .json manifest) built from the same commit as the ros2_control driver.
-# mower_flash.py sync asks the running application for its 0x87 build
+# The flasher's sync asks the running application for its 0x87 build
 # identity and only flashes (through the UART bootloader) when it differs.
 # Motors are stopped by the bootloader during the ~20 s flash, which is why
 # this runs at container start and never while ROS is up.
 #
-#   MOWER_FIRMWARE_SYNC=0   skip (keep whatever is on the board, e.g. a
-#                           CubeIDE debug build)
+#   MOWER_FIRMWARE_SYNC     0 / false / no / off: skip (keep whatever is on
+#                           the board, e.g. a CubeIDE debug build)
+#                           python: firmware/tools/mower_flash.py
+#                           rust: mower_flash, its Rust port
+#                           (src/mower_rs/crates/mower_flash)
+#                           anything else, 1 or unset included: this image's
+#                           default, below
 #   MOWER_STM_PORT          serial device, default /dev/stmcom
 #   MOWER_STATE_DIR         where the report (firmware_sync.json) goes,
 #                           default ~/.mower; /robot/info shows it
+#
+# The two flashers have the same command line, output, report and exit
+# codes; rust adds one line, "using mower_flash (rust)". A missing
+# mower_flash is a failed sync (rc 127), never a quiet fall-back to python:
+# nothing is flashed and the stack starts, as after any failed sync. An image
+# from before this switch takes python and rust both as "on" and runs
+# mower_flash.py, so any value is safe with any image.
 set -u
 dir=/opt/mower/firmware
 port="${MOWER_STM_PORT:-/dev/stmcom}"
 state="${MOWER_STATE_DIR:-$HOME/.mower}"
+# The flasher when MOWER_FIRMWARE_SYNC names none (E6-5 makes it rust).
+default=python
 
 case "${MOWER_FIRMWARE_SYNC:-1}" in
   0|false|no|off) echo "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"; exit 0 ;;
+  python|rust) impl=$MOWER_FIRMWARE_SYNC ;;
+  *) impl=$default ;;
 esac
 if [ ! -e "$port" ]; then
   echo "[firmware-sync] $port not present, skipping"
@@ -30,8 +46,17 @@ if [ ! -f "$dir/mower_robot_firmware.bin" ]; then
   exit 0
 fi
 mkdir -p "$state"
-echo "[firmware-sync] bundled $(python3 -c "import json;d=json.load(open('$dir/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])" 2>/dev/null) on $port"
-python3 "$dir/mower_flash.py" -p "$port" sync "$dir/mower_robot_firmware.bin" --report "$state/firmware_sync.json"
+if [ "$impl" = rust ]; then
+  echo "[firmware-sync] using mower_flash (rust)"
+  # the same "version sha8" as the python3 -c below prints
+  bundled=$(mower_flash manifest "$dir/mower_robot_firmware.json" 2>/dev/null)
+  flash=(mower_flash)
+else
+  bundled=$(python3 -c "import json;d=json.load(open('$dir/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])" 2>/dev/null)
+  flash=(python3 "$dir/mower_flash.py")
+fi
+echo "[firmware-sync] bundled $bundled on $port"
+"${flash[@]}" -p "$port" sync "$dir/mower_robot_firmware.bin" --report "$state/firmware_sync.json"
 rc=$?
 case $rc in
   0) ;;

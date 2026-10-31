@@ -85,6 +85,7 @@ jobs:
             test/test_battery_simulator.py \
             test/test_controller_configuration.py \
             test/test_coverage_progress_tracker.py \
+            test/test_firmware_sync_wrapper.py \
             test/test_flutter_adapter_dto.py \
             test/test_image_mask_import.py \
             test/test_lte_uplink.py \
@@ -871,7 +872,7 @@ jobs:
             test -s /opt/mower/firmware/mower_robot_firmware.bin
             test -s /opt/mower/firmware/mower_robot_firmware.json
             python3 /opt/mower/firmware/mower_flash.py --help >/dev/null
-            # its Rust port, which firmware-sync does not run yet (crates/mower_flash)
+            # its Rust port, which firmware-sync runs with MOWER_FIRMWARE_SYNC=rust (crates/mower_flash)
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_flash"
             test "$(command -v mower_flash)" = /usr/local/bin/mower_flash
             mower_flash --help >/dev/null
@@ -879,6 +880,19 @@ jobs:
             # the "version sha8" in the log line of firmware-sync, as its python3 -c prints it
             test "$(mower_flash manifest "$m")" = "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d[\"version\"],d[\"git_sha\"][:8])" "$m")"
             test -x /usr/local/bin/firmware-sync
+            # firmware-sync finds the flasher each value names: a plain file as
+            # the port fails its open (rc 1), where a flasher it cannot find is rc 127
+            : > /tmp/fw-port
+            for v in 1 python rust; do
+              log=$(MOWER_FIRMWARE_SYNC=$v MOWER_STM_PORT=/tmp/fw-port MOWER_STATE_DIR=/tmp/fw-state firmware-sync 2>&1)
+              case "$v:$log" in
+                rust:*"using mower_flash (rust)"*"FAILED (rc=1);"*) ;;
+                rust:*) echo "firmware-sync rust: $log"; exit 1 ;;
+                *"using mower_flash"*) echo "firmware-sync $v ran rust: $log"; exit 1 ;;
+                *"FAILED (rc=1);"*) ;;
+                *) echo "firmware-sync $v: $log"; exit 1 ;;
+              esac
+            done
             test -x /usr/local/bin/mower-host-request
             # the slimmed image (docs/IMAGE_SIZE.md) must still load everything
             ros2 launch mower_nav2 navigation.launch.py --show-args >/dev/null

@@ -3,10 +3,10 @@
 //! `--opt=value`, exit 2 on a usage error) and its `main()`: what each
 //! subcommand prints and how it exits.
 //!
-//! Two additions the Python tool does not have, neither used by
-//! `utils/firmware-sync`: `--trace FILE` (every frame sent and received, one
-//! JSON line each, for on-robot runs) and `manifest FILE`, which prints the
-//! `version sha8` the wrapper's log line shows.
+//! Two additions the Python tool does not have: `--trace FILE` (every frame
+//! sent and received, one JSON line each, for on-robot runs; not used by
+//! `utils/firmware-sync`) and `manifest FILE`, which prints the `version sha8`
+//! of the wrapper's `bundled` log line (the wrapper runs it on its rust path).
 
 use mower_base_core::boot::BL_RUN_APP;
 

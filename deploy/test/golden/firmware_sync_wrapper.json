@@ -1,0 +1,478 @@
+{
+ "about": "utils/firmware-sync per MOWER_FIRMWARE_SYNC value (E6-4), written by src/mower_mission/test/test_firmware_sync_wrapper.py: the fakes python3 and mower_flash on an otherwise empty PATH, the sync exiting sync_rc, `missing` naming what is absent (the port, the bundled .bin, a tool), temporary paths shown as the production ones. Every case whose MOWER_FIRMWARE_SYNC is not rust is what the wrapper did before E6-4 (c90789b).",
+ "cases": {
+  "skip-0": {
+   "MOWER_FIRMWARE_SYNC": "0",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "skip-false": {
+   "MOWER_FIRMWARE_SYNC": "false",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "skip-no": {
+   "MOWER_FIRMWARE_SYNC": "no",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "skip-off": {
+   "MOWER_FIRMWARE_SYNC": "off",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] disabled by MOWER_FIRMWARE_SYNC"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "default-unset": {
+   "MOWER_FIRMWARE_SYNC": null,
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-empty": {
+   "MOWER_FIRMWARE_SYNC": "",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-1": {
+   "MOWER_FIRMWARE_SYNC": "1",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-1-rc1": {
+   "MOWER_FIRMWARE_SYNC": "1",
+   "sync_rc": 1,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] FAILED (rc=1); continuing, the driver will report the mismatch"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-1-rc2": {
+   "MOWER_FIRMWARE_SYNC": "1",
+   "sync_rc": 2,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] no STM32 answering on /dev/stmcom (continuing without it)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-true": {
+   "MOWER_FIRMWARE_SYNC": "true",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-yes": {
+   "MOWER_FIRMWARE_SYNC": "yes",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-on": {
+   "MOWER_FIRMWARE_SYNC": "on",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-Rust": {
+   "MOWER_FIRMWARE_SYNC": "Rust",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-PYTHON": {
+   "MOWER_FIRMWARE_SYNC": "PYTHON",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-2": {
+   "MOWER_FIRMWARE_SYNC": "2",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "default-unset-no-port": {
+   "MOWER_FIRMWARE_SYNC": null,
+   "sync_rc": 0,
+   "missing": ["port"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] /dev/stmcom not present, skipping"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "default-unset-no-bundle": {
+   "MOWER_FIRMWARE_SYNC": null,
+   "sync_rc": 0,
+   "missing": ["bundle"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] no bundled firmware in /opt/mower/firmware, skipping"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "python-rc0": {
+   "MOWER_FIRMWARE_SYNC": "python",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "python-rc1": {
+   "MOWER_FIRMWARE_SYNC": "python",
+   "sync_rc": 1,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] FAILED (rc=1); continuing, the driver will report the mismatch"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "python-rc2": {
+   "MOWER_FIRMWARE_SYNC": "python",
+   "sync_rc": 2,
+   "missing": [],
+   "calls": [
+    ["python3", "-c", "import json;d=json.load(open('/opt/mower/firmware/mower_robot_firmware.json'));print(d['version'],d['git_sha'][:8])"],
+    ["python3", "/opt/mower/firmware/mower_flash.py", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] no STM32 answering on /dev/stmcom (continuing without it)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "python-no-port": {
+   "MOWER_FIRMWARE_SYNC": "python",
+   "sync_rc": 0,
+   "missing": ["port"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] /dev/stmcom not present, skipping"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "python-no-python3": {
+   "MOWER_FIRMWARE_SYNC": "python",
+   "sync_rc": 0,
+   "missing": ["python3"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] bundled  on /dev/stmcom",
+    "[firmware-sync] FAILED (rc=127); continuing, the driver will report the mismatch"
+   ],
+   "stderr": [
+    "/usr/local/bin/firmware-sync: line N: python3: command not found"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "rust-rc0": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 0,
+   "missing": [],
+   "calls": [
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "rust-rc1": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 1,
+   "missing": [],
+   "calls": [
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] FAILED (rc=1); continuing, the driver will report the mismatch"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "rust-rc2": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 2,
+   "missing": [],
+   "calls": [
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)",
+    "[firmware-sync] no STM32 answering on /dev/stmcom (continuing without it)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "rust-no-port": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 0,
+   "missing": ["port"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] /dev/stmcom not present, skipping"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "rust-no-bundle": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 0,
+   "missing": ["bundle"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] no bundled firmware in /opt/mower/firmware, skipping"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "state_dir_created": false
+  },
+  "rust-no-python3": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 0,
+   "missing": ["python3"],
+   "calls": [
+    ["mower_flash", "manifest", "/opt/mower/firmware/mower_robot_firmware.json"],
+    ["mower_flash", "-p", "/dev/stmcom", "sync", "/opt/mower/firmware/mower_robot_firmware.bin", "--report", "/home/mower/.mower/firmware_sync.json"]
+   ],
+   "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
+    "[firmware-sync] bundled 0.6.0-e64 e64e64e6 on /dev/stmcom",
+    "(flasher stdout)"
+   ],
+   "stderr": [
+    "(flasher stderr)"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  },
+  "rust-no-mower_flash": {
+   "MOWER_FIRMWARE_SYNC": "rust",
+   "sync_rc": 0,
+   "missing": ["mower_flash"],
+   "calls": [],
+   "stdout": [
+    "[firmware-sync] using mower_flash (rust)",
+    "[firmware-sync] bundled  on /dev/stmcom",
+    "[firmware-sync] FAILED (rc=127); continuing, the driver will report the mismatch"
+   ],
+   "stderr": [
+    "/usr/local/bin/firmware-sync: line N: mower_flash: command not found"
+   ],
+   "rc": 0,
+   "state_dir_created": true
+  }
+ }
+}
