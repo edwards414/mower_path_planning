@@ -119,6 +119,40 @@ impl ParamSource for FakeParams {
     }
 }
 
+/// A node that answers only when the test opens the gate: a parameter dump
+/// still waiting on it (RosParams waits up to PARAM_TIMEOUT per call).
+#[derive(Default)]
+struct GatedParams {
+    state: Mutex<(bool, bool)>,
+    cv: std::sync::Condvar,
+}
+
+impl GatedParams {
+    fn wait_asked(&self) {
+        let mut st = self.state.lock().unwrap();
+        while !st.0 {
+            st = self.cv.wait(st).unwrap();
+        }
+    }
+
+    fn open(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.cv.notify_all();
+    }
+}
+
+impl ParamSource for GatedParams {
+    fn parameters(&self, _node: &str) -> Result<Vec<(String, ParamValue)>, String> {
+        let mut st = self.state.lock().unwrap();
+        st.0 = true;
+        self.cv.notify_all();
+        while !st.1 {
+            st = self.cv.wait(st).unwrap();
+        }
+        Ok(vec![("a".into(), ParamValue::Integer(1))])
+    }
+}
+
 type Script = Box<dyn FnMut(&GroupSpec, &Feed) + Send>;
 
 struct FakeSources {
@@ -622,6 +656,10 @@ struct Synthetic {
 }
 
 fn synthetic(tmp: &Path, config_file: &str) -> Synthetic {
+    synthetic_with(tmp, config_file, |trace| Arc::new(FakeParams(trace, BTreeMap::new())))
+}
+
+fn synthetic_with(tmp: &Path, config_file: &str, params: impl FnOnce(Arc<Trace>) -> Arc<dyn ParamSource>) -> Synthetic {
     let Rig { trace, out, root } = rig(tmp);
     let stub = stub(trace.clone());
     let low = Arc::new(AtomicBool::new(false));
@@ -635,7 +673,7 @@ fn synthetic(tmp: &Path, config_file: &str) -> Synthetic {
         clock: Box::new(StepClock(Mutex::new(1_793_348_331))),
         disk: Box::new(FakeDisk(trace.clone(), root.clone(), low.clone())),
         video: Some(Box::new(MediaMtx { api_url: stub.url.clone(), path: "front".into() })),
-        params: Arc::new(FakeParams(trace.clone(), BTreeMap::new())),
+        params: params(trace.clone()),
         sources: Box::new(FakeSources {
             trace: trace.clone(),
             root: root.clone(),
@@ -776,5 +814,35 @@ fn a_dropped_manager_finalizes_its_bags() {
     assert_eq!(finalized(&run), 2);
     let snap = std::fs::read_to_string(run.join("snapshots/metadata.yaml")).unwrap();
     assert!(snap.contains("message_count: 1"), "{snap}");
+    std::fs::remove_dir_all(&tmp).unwrap();
+}
+
+/// R5, the run's other writer: a parameter dump still waiting on a node when
+/// the manager is dropped writes nothing into the run afterwards. (arm64 CI
+/// 2026-10-31: the detached dump made `params/` while the test above removed
+/// the run, ENOTEMPTY.)
+#[test]
+fn a_dropped_manager_leaves_no_writer_in_its_run() {
+    let tmp = tmp("mgr_drop_dump");
+    let topics = config_dir().join("record_topics.yaml").to_string_lossy().into_owned();
+    let gate = Arc::new(GatedParams::default());
+    let g = gate.clone();
+    let s = synthetic_with(&tmp, &topics, move |_| g);
+    let mut m = s.m;
+    assert!(m.start().0);
+    let run = m.run_dir().unwrap().to_path_buf();
+    gate.wait_asked();
+    drop(m);
+    assert_eq!(finalized(&run), 2);
+    gate.open();
+    // the dump's thread is done when it has let go of the gate (the
+    // manager's hooks held the other reference)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while Arc::strong_count(&gate) > 1 {
+        assert!(std::time::Instant::now() < deadline, "the parameter dump did not end");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let left = tree(&run);
+    assert!(!left.iter().any(|p| p.starts_with("params/") && p.ends_with(".yaml")), "{left:?}");
     std::fs::remove_dir_all(&tmp).unwrap();
 }

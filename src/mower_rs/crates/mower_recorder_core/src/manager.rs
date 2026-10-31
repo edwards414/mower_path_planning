@@ -24,10 +24,11 @@
 //!
 //! The calls block (MediaMTX's 3 s timeouts, a finalize): the module runs
 //! them off its async threads. The parameter dump runs on its own thread
-//! after the start, as the Python's did.
+//! after the start, as the Python's did; a dropped manager leaves it no
+//! more to write into the run (R5, [`Manager`]'s drop).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use mower_pyfmt::{yaml, Py};
@@ -205,6 +206,36 @@ struct Group {
     rec: Recording,
 }
 
+/// The run's writers besides its groups (the parameter dump) write while the
+/// manager lives, under this lock: once the manager is dropped nothing
+/// changes in its runs any more.
+#[derive(Clone)]
+struct RunFiles(Arc<Mutex<bool>>);
+
+impl RunFiles {
+    fn new() -> RunFiles {
+        RunFiles(Arc::new(Mutex::new(true)))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, bool> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn open(&self) -> bool {
+        *self.lock()
+    }
+
+    /// `f` while the manager lives, `None` once it is gone.
+    fn write<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        let open = self.lock();
+        (*open).then(f)
+    }
+
+    fn close(&self) {
+        *self.lock() = false;
+    }
+}
+
 /// One recorder_manager.
 pub struct Manager {
     cfg: Config,
@@ -220,6 +251,18 @@ pub struct Manager {
     video_error: Option<String>,
     stop_reason: Option<String>,
     dumps: Vec<JoinHandle<()>>,
+    files: RunFiles,
+}
+
+impl Drop for Manager {
+    /// R5: a manager dropped mid-run (a panic, a module gone without
+    /// [`Manager::stop`]) finalizes its groups (each [`Recording`]'s drop,
+    /// after this) and leaves no writer in the run: a parameter dump still
+    /// waiting on a node writes nothing more. It is not waited for (RosParams
+    /// may wait 5 s a call).
+    fn drop(&mut self) {
+        self.files.close();
+    }
 }
 
 impl Manager {
@@ -243,6 +286,7 @@ impl Manager {
             video_error: None,
             stop_reason: None,
             dumps: Vec::new(),
+            files: RunFiles::new(),
         };
         for l in logs {
             match l {
@@ -605,20 +649,31 @@ impl Manager {
         let pdir = run_dir.join("params");
         let src = self.hooks.params.clone();
         let out = self.hooks.out.clone();
+        let files = self.files.clone();
         let spawned = std::thread::Builder::new().name("param-dump".into()).spawn(move || {
-            if let Err(e) = std::fs::create_dir_all(&pdir) {
-                out.log(Level::Warn, &format!("param dump: {}: {e}", pdir.display()));
-                return;
+            // once the manager is gone the dump ends quietly, writing nothing
+            match files.write(|| std::fs::create_dir_all(&pdir)) {
+                None => return,
+                Some(Err(e)) => {
+                    out.log(Level::Warn, &format!("param dump: {}: {e}", pdir.display()));
+                    return;
+                }
+                Some(Ok(())) => {}
             }
             for node in nodes {
+                if !files.open() {
+                    return;
+                }
                 // `ros2 param dump` names the node absolutely
                 let full = if node.starts_with('/') { node.clone() } else { format!("/{node}") };
-                let r = src
-                    .parameters(&full)
-                    .and_then(|ps| params::dump(&full, &ps))
-                    .and_then(|text| std::fs::write(pdir.join(run::params_file_name(&node)), text).map_err(|e| e.to_string()));
+                let r = src.parameters(&full).and_then(|ps| params::dump(&full, &ps)).and_then(|text| {
+                    let path = pdir.join(run::params_file_name(&node));
+                    files.write(|| std::fs::write(&path, text)).unwrap_or(Ok(())).map_err(|e| e.to_string())
+                });
                 if let Err(e) = r {
-                    out.log(Level::Warn, &format!("param dump {node} failed: {e}"));
+                    if files.open() {
+                        out.log(Level::Warn, &format!("param dump {node} failed: {e}"));
+                    }
                 }
             }
         });
