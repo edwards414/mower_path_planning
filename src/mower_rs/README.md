@@ -1012,7 +1012,26 @@ which robot_localization has no equivalent of: `ekf_filter_node_map`'s
 section in `mower_rsd.yaml` sets them (the defaults, `odometry/global_slow`
 at 5.0, and empty on `ekf_filter_node_odom`), they are taken out of the
 section before the resolver sees it, and the parameter services report them
-with the rest.
+with the rest. navsat's `datum_requires_rtk_fixed` is handled the same way
+(below).
+
+**The datum waits for RTK fixed** (owner, 2026-11-02, after the map origin
+moved 0.9 m between restarts of a robot standing still): upstream locks the
+datum on the first fix whose status is not NO_FIX, so a plain 3D fix metres
+off can anchor the map. With `datum_requires_rtk_fixed` (default false, as
+upstream, so the oracle vectors hold; `navsat_transform`'s section of
+`mower_rsd.yaml` sets it true) only a fix of status 2 (GBAS_FIX, RTK fixed)
+becomes the datum; a fix of a lower status is ignored for it and also drops
+a fixed one the transform was not built from yet, so the datum is always the
+latest fix and an RTK fixed one. Once locked, float fixes feed
+`/odometry/gps` as before. The node logs "Waiting for RTK fixed (status 2) to
+lock the datum" once and "Datum locked on an RTK fixed fix" when it does. A
+manual datum (`/datum`, `datum_check.py --fix`) is not gated. Without RTK
+fixed there is no datum, so no `/odometry/gps`, `/toLL` answers (0, 0, 0), and no map
+position: intended, mission start needs 1.5 cm GPS sigma anyway. The C++
+`navsat_transform` (`rust_localize:=false`) and the standalone
+`mower_localize` binary (`rust_daemon:=false`) never read `mower_rsd.yaml`,
+so their datum is not gated.
 
 **navsat's `delay`** (3 s) is applied as upstream applies it: the constructor
 creates everything and then sleeps before the timer exists, with nothing spun,

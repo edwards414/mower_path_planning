@@ -6,6 +6,9 @@
 //! goes through UTM), `use_odometry_yaw` false (the IMU supplies the heading),
 //! `wait_for_datum` false (the datum is the first good fix), `zero_altitude`
 //! true, `publish_filtered_gps` true.
+//!
+//! One rule upstream does not have, off by default so the oracle vectors
+//! hold: [`NavSatTransformCore::datum_requires_rtk_fixed`].
 
 use crate::filter_common::{POSE_SIZE, POSITION_SIZE};
 use crate::msgs::*;
@@ -53,6 +56,16 @@ pub struct NavSatTransformCore {
     pub gps_frame_id: String,
 
     pub transform_good: bool,
+    /// Lock the datum only on an RTK fixed fix (status `STATUS_GBAS_FIX`):
+    /// a fix of any lower status still feeds `/odometry/gps` once the datum
+    /// exists, but never becomes it. Upstream takes the first good fix of any
+    /// status, so a plain 3D fix metres off could anchor the map (outdoors,
+    /// 2026-11-02, the origin moved 0.9 m between restarts of a robot
+    /// standing still). Not a robot_localization parameter: false here, as
+    /// upstream; mower_localize sets it from `datum_requires_rtk_fixed`. A
+    /// manual datum (`/datum`) is not gated.
+    pub datum_requires_rtk_fixed: bool,
+    fixes_ignored_for_datum: u64,
     has_transform_odom: bool,
     has_transform_gps: bool,
     has_transform_imu: bool,
@@ -92,6 +105,8 @@ impl NavSatTransformCore {
             base_link_frame_id: "base_link".to_string(),
             gps_frame_id: String::new(),
             transform_good: false,
+            datum_requires_rtk_fixed: false,
+            fixes_ignored_for_datum: 0,
             has_transform_odom: false,
             has_transform_gps: false,
             has_transform_imu: false,
@@ -229,6 +244,16 @@ impl NavSatTransformCore {
         }
 
         if !self.transform_good && !self.use_manual_datum {
+            if self.datum_requires_rtk_fixed && msg.status != STATUS_GBAS_FIX {
+                // Not RTK fixed: never the datum, and neither is an older
+                // fixed fix the transform has not been built from yet. Like
+                // upstream's, the datum is the latest fix when the timer
+                // builds it, so it waits for the next fixed one. Nothing is
+                // published before the datum, so this fix has no other use.
+                self.has_transform_gps = false;
+                self.fixes_ignored_for_datum += 1;
+                return;
+            }
             let _ = self.set_transform_gps(msg);
         }
 
@@ -248,6 +273,17 @@ impl NavSatTransformCore {
         }
         self.gps_update_time_ns = msg.header.stamp_ns;
         self.gps_updated = true;
+    }
+
+    /// Good fixes `datum_requires_rtk_fixed` has kept from becoming the
+    /// datum (0 while it is off). The node logs the first one.
+    pub fn fixes_ignored_for_datum(&self) -> u64 {
+        self.fixes_ignored_for_datum
+    }
+
+    /// Whether the datum is (or will be) a manual one, from `/datum`.
+    pub fn manual_datum(&self) -> bool {
+        self.use_manual_datum
     }
 
     /// `NavSatTransform::setManualDatum`.
@@ -548,4 +584,142 @@ fn mat6_transpose_local(a: &Mat6) -> Mat6 {
         }
     }
     t
+}
+
+/// `datum_requires_rtk_fixed`: off, the first good fix of any status is the
+/// datum, as upstream; on, only an RTK fixed one is, and a manual datum
+/// still needs none.
+#[cfg(test)]
+mod datum_requires_rtk_fixed {
+    use super::*;
+
+    /// Where the antenna really is.
+    const TRUTH: (f64, f64) = (23.6940, 120.5377);
+
+    /// A fix `north_m` north of the truth (no antenna offset: the GPS frame
+    /// is the base frame).
+    fn fix(status: i8, north_m: f64) -> NavSatFix {
+        let mut f = NavSatFix {
+            header: Header { frame_id: "base_footprint".to_string(), stamp_ns: 2 },
+            status,
+            latitude: TRUTH.0 + north_m / 110_800.0,
+            longitude: TRUTH.1,
+            altitude: 50.0,
+            position_covariance: ZERO_MAT3,
+        };
+        f.position_covariance[0][0] = 0.04;
+        f.position_covariance[1][1] = 0.04;
+        f
+    }
+
+    /// The map EKF's odometry: the robot at the map origin, heading 0 (and
+    /// the same as `map -> base_footprint`, which /odometry/gps looks up).
+    fn odom(core: &mut NavSatTransformCore) {
+        core.transforms.insert("map", "base_footprint", Transform::identity());
+        core.odom_callback(&Odometry {
+            header: Header { frame_id: "map".to_string(), stamp_ns: 1 },
+            child_frame_id: "base_footprint".to_string(),
+            ..Default::default()
+        });
+    }
+
+    fn imu(core: &mut NavSatTransformCore) {
+        core.imu_callback(&Imu {
+            header: Header { frame_id: "base_footprint".to_string(), stamp_ns: 1 },
+            orientation: Quaternion::identity(),
+            ..Default::default()
+        });
+    }
+
+    /// The core as the delay ends: the map EKF's odometry and the IMU in,
+    /// only the datum's fix missing.
+    fn ready(gated: bool) -> NavSatTransformCore {
+        let mut core = NavSatTransformCore::new(NavSatConfig::default());
+        core.datum_requires_rtk_fixed = gated;
+        odom(&mut core);
+        imu(&mut core);
+        core
+    }
+
+    /// A fix, then the timer's tick.
+    fn step(core: &mut NavSatTransformCore, f: NavSatFix) {
+        core.gps_fix_callback(&f);
+        core.compute_transform();
+    }
+
+    /// The latitude the map origin was locked at.
+    fn origin_lat(core: &NavSatTransformCore) -> f64 {
+        core.to_ll(&Vector3::new(0.0, 0.0, 0.0)).expect("a datum").0
+    }
+
+    #[test]
+    fn off_the_first_good_fix_is_the_datum_whatever_its_status() {
+        let mut core = ready(false);
+        assert!(!core.datum_requires_rtk_fixed, "the test's own setting");
+        assert!(!NavSatTransformCore::new(NavSatConfig::default()).datum_requires_rtk_fixed, "off by default");
+        // a plain 3D fix, 3 m off
+        step(&mut core, fix(STATUS_FIX, 3.0));
+        assert!(core.transform_good);
+        assert!((origin_lat(&core) - (TRUTH.0 + 3.0 / 110_800.0)).abs() < 1e-8);
+        assert_eq!(core.fixes_ignored_for_datum(), 0);
+    }
+
+    #[test]
+    fn on_the_datum_waits_through_3d_and_float_and_locks_at_fixed() {
+        let mut core = ready(true);
+        // 3D, 3 m off; RTK float, 0.3 m off (both status 0 on /fix); SBAS
+        for f in [fix(STATUS_FIX, 3.0), fix(STATUS_FIX, 0.3), fix(1, 0.3)] {
+            step(&mut core, f);
+            assert!(!core.transform_good);
+        }
+        assert_eq!(core.fixes_ignored_for_datum(), 3);
+        assert_eq!(core.to_ll(&Vector3::new(0.0, 0.0, 0.0)), None);
+        assert!(core.prepare_gps_odometry().is_none());
+        // no fix at all is no good fix, as upstream: not counted
+        step(&mut core, fix(STATUS_NO_FIX, 0.0));
+        assert_eq!(core.fixes_ignored_for_datum(), 3);
+
+        step(&mut core, fix(STATUS_GBAS_FIX, 0.0));
+        assert!(core.transform_good);
+        assert!((origin_lat(&core) - TRUTH.0).abs() < 1e-8);
+
+        // Once locked, a float fix feeds /odometry/gps but never moves the datum.
+        core.gps_fix_callback(&fix(STATUS_FIX, 0.3));
+        let gps = core.prepare_gps_odometry().expect("/odometry/gps from a float fix");
+        assert!((gps.pose.position.y - 0.3).abs() < 0.01, "{:?}", gps.pose.position);
+        core.compute_transform();
+        assert!((origin_lat(&core) - TRUTH.0).abs() < 1e-8);
+        assert_eq!(core.fixes_ignored_for_datum(), 3);
+    }
+
+    /// A fixed fix the transform has not been built from yet (the IMU was
+    /// late) is not the datum once a float one has come after it: the datum
+    /// is the latest fix, which must be fixed.
+    #[test]
+    fn on_a_later_float_fix_drops_a_fixed_one_not_built_on_yet() {
+        let mut core = NavSatTransformCore::new(NavSatConfig::default());
+        core.datum_requires_rtk_fixed = true;
+        odom(&mut core);
+        step(&mut core, fix(STATUS_GBAS_FIX, 1.0));
+        assert!(!core.transform_good, "no IMU yet");
+        core.gps_fix_callback(&fix(STATUS_FIX, 0.4));
+        imu(&mut core);
+        core.compute_transform();
+        assert!(!core.transform_good, "the last fix was float");
+        step(&mut core, fix(STATUS_GBAS_FIX, 0.0));
+        assert!(core.transform_good);
+        assert!((origin_lat(&core) - TRUTH.0).abs() < 1e-8);
+    }
+
+    /// `/datum` (datum_check.py --fix) sets a manual datum without RTK.
+    #[test]
+    fn on_a_manual_datum_needs_no_rtk_fixed() {
+        let mut core = ready(true);
+        step(&mut core, fix(STATUS_FIX, 3.0));
+        assert!(!core.transform_good);
+        core.set_datum(25.0330, 121.5654, 10.0, Quaternion::identity());
+        core.compute_transform();
+        assert!(core.transform_good && core.manual_datum());
+        assert!((origin_lat(&core) - 25.0330).abs() < 1e-7);
+    }
 }

@@ -71,6 +71,9 @@ their two different `process_noise_covariance` diagonals.
   (`/gps/filtered`), plus the `toLL`/`fromLL` maths as `map_to_ll`/`from_ll`.
 * `set_datum` and the manual-datum path are ported (they are what a future
   saved-site datum would use) but are off in this yaml.
+* one rule upstream does not have, off by default (so the vectors hold):
+  `NavSatTransformCore::datum_requires_rtk_fixed`, only an RTK fixed fix
+  (status 2) becomes the datum; mower_localize sets it from its own key.
 
 ## What is NOT ported, and why
 

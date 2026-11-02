@@ -1017,25 +1017,31 @@ def test_rust_localize_replaces_the_two_ekfs_and_navsat_exclusively():
 
     # one module, three nodes (mower_rsd's tests/module_table.rs); under
     # mower_rsd they read the C++ nodes' own params file (no copy in
-    # mower_rsd.yaml to drift) and get the same wiring. The one section
-    # mower_rsd.yaml has is ekf_filter_node_map's slow copy, keys
-    # robot_localization does not have.
+    # mower_rsd.yaml to drift) and get the same wiring. mower_rsd.yaml has
+    # only keys robot_localization does not have: ekf_filter_node_map's slow
+    # copy and navsat_transform's datum_requires_rtk_fixed (mower_localize's
+    # src/navsat.rs).
     params = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
     rl_params = (
         SRC_DIR / 'mower_nav2/config/dual_ekf_navsat_params.yaml'
     ).read_text(encoding='utf-8')
     import yaml
     rsd = yaml.safe_load(params)
-    for node in ('ekf_filter_node_odom', 'ekf_filter_node_map',
-                 'navsat_transform'):
+    module_only = {
+        'ekf_filter_node_odom': set(),
+        'ekf_filter_node_map': {'odometry_slow_topic', 'odometry_slow_rate_hz'},
+        'navsat_transform': {'datum_requires_rtk_fixed'},
+    }
+    for node, allowed in module_only.items():
         assert f'\n{node}:\n  ros__parameters:' in rl_params, node
         own = rsd.get(node, {}).get('ros__parameters', {})
-        assert set(own) <= {'odometry_slow_topic', 'odometry_slow_rate_hz'}, \
-            (node, sorted(own))
+        assert set(own) <= allowed, (node, sorted(own))
         for key in own:
             assert f'\n    {key}:' not in rl_params, (node, key)
     assert '\nekf_filter_node_odom:\n' not in params
-    assert '\nnavsat_transform:\n' not in params
+    # the robot's datum waits for RTK fixed
+    assert rsd['navsat_transform']['ros__parameters'] == {
+        'datum_requires_rtk_fixed': True}
     assert "'dual_ekf_navsat_params.yaml'" in robot
     # one override reaches both stacks: robot.launch.py -> mower.launch.py ->
     # dual_ekf_navsat.launch.py for the C++ nodes and mower_localize, and
