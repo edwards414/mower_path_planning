@@ -813,6 +813,17 @@ fixed，無法開始 zone 記錄（…）」. A recording that loses RTK fixed k
 running but takes no sample (not even a channel's end point) until it is
 back; each outage is logged once as it starts and once with its length.
 
+A second start condition, checked after RTK fixed (owner, 2026-11-02): with
+`require_datum` (default true, also in mower_rsd.yaml) the start is refused,
+again before any lease, until navsat's datum is locked, i.e. until the latest
+`/odometry/gps` is at most `rtk_fix_max_age_s` old: 「datum 尚未鎖定，無法開始
+zone 記錄（尚未收到 navsat 的 /odometry/gps）」. navsat_transform (the Rust
+port and the C++ node alike, the latter through the bridge) publishes it only
+once its transform is good, one per fix, so it closes the window between RTK
+fixed and the lock (one fix period, or navsat's 3 s `delay` after a restart)
+and reopens when a restarted navsat has no transform again. Not
+`/adapter/map_datum`: flutter_adapter latches it once and never withdraws it.
+
 ## mower_nav
 
 `crates/mower_nav`: `geometry.rs` (path admission rules, canonical

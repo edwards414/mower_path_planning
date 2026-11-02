@@ -11,14 +11,16 @@
 //!   one at a time.
 //! - **Time** is a manual clock: the 0.5 s start-up check, the 10 Hz sampler
 //!   and the rear light run on it, and so do the pose ages and stamps.
-//! - **RTK fixed:** a recording starts and samples only on a fresh RTK fixed
-//!   `/fix` (`require_rtk_fixed`, on by default), so every test that records
-//!   runs a [`Gps`].
+//! - **RTK fixed and the datum:** a recording starts and samples only on a
+//!   fresh RTK fixed `/fix` (`require_rtk_fixed`, on by default), and starts
+//!   only once navsat's datum is locked, i.e. on a fresh `/odometry/gps`
+//!   (`require_datum`, on by default), so every test that records runs a
+//!   [`Gps`], which plays navsat with a locked datum too.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -175,13 +177,25 @@ async fn next<T: Message>(sub: &mut Subscriber<T>) -> Arc<T> {
     tokio::time::timeout(WAIT, sub.next()).await.expect("a message in time").expect("the bus is open")
 }
 
-/// The first answer of `call` that the nav activity flag and the first
-/// `/fix` have reached: the module takes each in on a task of its own, so a
-/// call can come first.
+/// The first answer of `call` that the nav activity flag, the first `/fix`
+/// and the first `/odometry/gps` have reached: the module takes each in on a
+/// task of its own, so a call can come first.
 async fn once_nav_is_seen<Fut: Future<Output = (bool, String)>>(mut call: impl FnMut() -> Fut) -> (bool, String) {
     loop {
         let answer = call().await;
-        if !answer.1.contains("navigation state is not available") && !answer.1.contains(NO_FIX_YET) {
+        if !answer.1.contains("navigation state is not available") && !answer.1.contains(NO_FIX_YET) && !answer.1.contains(NO_DATUM_YET) {
+            return answer;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The first answer of `call` that the first `/fix` and the first
+/// `/odometry/gps` have reached.
+async fn once_the_gps_is_seen<Fut: Future<Output = (bool, String)>>(mut call: impl FnMut() -> Fut) -> (bool, String) {
+    loop {
+        let answer = call().await;
+        if !answer.1.contains(NO_FIX_YET) && !answer.1.contains(NO_DATUM_YET) {
             return answer;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -202,35 +216,60 @@ async fn once_the_fix_is_seen<Fut: Future<Output = (bool, String)>>(mut call: im
 /// A start's refusal before any `/fix` has come.
 const NO_FIX_YET: &str = "（尚未收到 GPS /fix）";
 
+/// A start's refusal, on RTK fixed, before any `/odometry/gps` has come.
+const NO_DATUM_YET: &str = "（尚未收到 navsat 的 /odometry/gps）";
+
 /// mower_gps's `/fix`, every 2 ms of real time, with the status the test
-/// sets (2 = RTK fixed). The recorder ages it on the manual clock, which the
-/// helpers move at most 0.5 s between two sleeps, so it never goes stale
-/// while this runs.
+/// sets (2 = RTK fixed), and navsat's `/odometry/gps` after each one while
+/// its datum is locked (as navsat publishes one per fix once its transform is
+/// good). The recorder ages both on the manual clock, which the helpers move
+/// at most 0.5 s between two sleeps, so neither goes stale while this runs.
 struct Gps {
     status: Arc<AtomicI8>,
+    locked: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Gps {
+    /// A fix of `status`, navsat's datum locked.
     fn start(test: &Scope, status: i8) -> Gps {
+        Gps::with_datum(test, status, true)
+    }
+
+    fn with_datum(test: &Scope, status: i8, locked: bool) -> Gps {
         let publisher = test.publisher::<NavSatFix>("/fix", Qos::default()).unwrap();
+        let navsat = test.publisher::<Odometry>("/odometry/gps", Qos::default()).unwrap();
         let status = Arc::new(AtomicI8::new(status));
-        let now = status.clone();
+        let locked = Arc::new(AtomicBool::new(locked));
+        let (now, datum) = (status.clone(), locked.clone());
         let task = tokio::spawn(async move {
             loop {
                 let mut fix = NavSatFix::default();
                 fix.status.status = now.load(Ordering::Relaxed);
                 (fix.latitude, fix.longitude) = (23.7, 120.54);
                 let _ = publisher.publish(&fix);
+                if datum.load(Ordering::Relaxed) {
+                    let mut odom = Odometry::default();
+                    odom.header.frame_id = "map".into();
+                    odom.pose.pose.orientation.w = 1.0;
+                    let _ = navsat.publish(&odom);
+                }
                 tokio::time::sleep(Duration::from_millis(2)).await;
             }
         });
-        Gps { status, task }
+        Gps { status, locked, task }
     }
 
     /// Switch the status, and give the module time to take it in.
     async fn set(&self, status: i8) {
         self.status.store(status, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    /// Lock navsat's datum or lose it (a restarted navsat), and give the
+    /// module time to take it in.
+    async fn set_datum(&self, locked: bool) {
+        self.locked.store(locked, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
 }
@@ -523,7 +562,7 @@ fn recording_fails_closed_on_unknown_or_active_navigation_and_a_missing_lease_se
         let (clock, manual) = Clock::manual(T0);
         let rec = Harness::start(clock.clone()).await;
         let _gps = Gps::start(&rec.test, 2);
-        let answer = once_the_fix_is_seen(|| rec.trigger("/record_zone_start")).await;
+        let answer = once_the_gps_is_seen(|| rec.trigger("/record_zone_start")).await;
         assert_eq!(answer, (false, "Cannot record zone geometry: navigation state is not available".to_string()));
 
         let nav = rec.nav_active(true);
@@ -659,6 +698,69 @@ fn a_recording_starts_and_samples_only_on_rtk_fixed() {
         manual.advance(Duration::from_millis(100));
         let answer = rec.trigger("/channel_record_start").await;
         assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始 channel 記錄（GPS /fix 已 1.1 s 未更新）".to_string()));
+        rec.stop().await;
+    });
+}
+
+/// Zone recording needs navsat's datum locked as well (require_datum, on by
+/// default; owner, 2026-11-02): on RTK fixed, no start, and no lease taken,
+/// until an `/odometry/gps` at most 1 s old has come, which navsat publishes
+/// only once its transform is good. RTK fixed is checked first: without it
+/// the reply names RTK, whatever the datum.
+#[test]
+fn a_recording_starts_only_once_the_datum_is_locked() {
+    within("datum", |_dir| async move {
+        let (clock, manual) = Clock::manual(T0);
+        let rec = Harness::start(clock.clone()).await;
+        let lock = serve_lock(&rec.test);
+        let _nav = rec.nav_active(false);
+        let pose = rec.test.publisher::<Odometry>("/odometry/global", Qos::default()).unwrap();
+        let mut recorded = rec.test.subscribe::<PathMsg>("/recorded_path", Qos::default()).unwrap();
+        initialise(&clock, &manual, &pose, &mut recorded).await;
+
+        // RTK fixed, navsat still waiting (its delay, its next tick): the
+        // map EKF publishes, the map frame is not anchored yet.
+        let gps = Gps::with_datum(&rec.test, 2, false);
+        let answer = once_the_fix_is_seen(|| rec.trigger("/record_zone_start")).await;
+        assert_eq!(answer, (false, format!("datum 尚未鎖定，無法開始 zone 記錄{NO_DATUM_YET}")));
+        assert_eq!(rec.trigger("/risk_zone_start").await, (false, format!("datum 尚未鎖定，無法開始 risk 記錄{NO_DATUM_YET}")));
+        assert_eq!(rec.trigger("/chennal_record_start").await, (false, format!("datum 尚未鎖定，無法開始 channel 記錄{NO_DATUM_YET}")));
+        // float and no datum: RTK is named first
+        gps.set(0).await;
+        let answer = rec.trigger("/record_zone_start").await;
+        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）".to_string()));
+        assert!(ops(&lock).is_empty(), "a lease taken before the datum");
+
+        // navsat locks on the fixed fix: it starts and samples.
+        gps.set(2).await;
+        gps.set_datum(true).await;
+        let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
+        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        sample(&clock, &manual, &pose, &mut recorded, (2.0, 0.0), 1).await;
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消 zone 記錄".to_string()));
+
+        // navsat stops publishing (restarted: no transform until it locks
+        // again) while /fix comes on: 1.0 s still counts, 1.1 s does not.
+        // It stops after odometry has come at the clock's present time.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        gps.set_datum(false).await;
+        manual.advance(Duration::from_millis(1000));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(rec.trigger("/channel_record_start").await, (true, "成功開始記錄 chennal 路徑 #1".to_string()));
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消 channel 記錄".to_string()));
+        manual.advance(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let answer = rec.trigger("/channel_record_start").await;
+        assert_eq!(answer, (false, "datum 尚未鎖定，無法開始 channel 記錄（navsat /odometry/gps 已 1.1 s 未更新）".to_string()));
+        assert_eq!(
+            ops(&lock),
+            [
+                (true, "record zone geometry".to_string()),
+                (false, String::new()),
+                (true, "record channel geometry".to_string()),
+                (false, String::new()),
+            ]
+        );
         rec.stop().await;
     });
 }

@@ -171,6 +171,11 @@ path_record_node:
     # defaults; false lets a robot without RTK record again.
     require_rtk_fixed: true
     rtk_fix_max_age_s: 1.0
+    # ... and, checked after RTK fixed, only once navsat's datum is locked:
+    # the latest /odometry/gps (navsat publishes it only once its transform
+    # is good) at most rtk_fix_max_age_s old (owner, 2026-11-02). The code's
+    # default too; false lets a stack without navsat record.
+    require_datum: true
 
 # --- adapter (rust_adapter) --------------------------------------------------
 flutter_adapter:

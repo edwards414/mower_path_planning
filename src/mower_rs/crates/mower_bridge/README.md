@@ -174,7 +174,7 @@ each with its flag; every other instance is elsewhere, on DDS.
 |---|---|---|---|---|
 | nothing | 0 | 0 | 0 | 0 |
 | battery, status | 6 | 7 | 3 | 0 |
-| + map, record, adapter | 39 | 11 | 28 | 2 |
+| + map, record, adapter | 39 | 12 | 28 | 2 |
 | + imu, gps, localize | 48 | 9 | 32 | 1 |
 
 - **ws_bridge on the bus** (E3.1, `ws_bridge_bus:=true`) adds the 13 names the app uses that only DDS has, and changes

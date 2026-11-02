@@ -111,11 +111,12 @@ fn expand_user(path: &str) -> String {
 const RELEASE_SUFFIX_ZH: &str = "；操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 path_record_node 與 nav_action_server";
 const RELEASE_SUFFIX_SAVED_ZH: &str = "；資料已儲存，但操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 path_record_node 與 nav_action_server";
 
-/// `_reject_start_while_recording`: RTK fixed (no lease taken without it),
-/// manifest check, lease, detach the site.
+/// `_reject_start_while_recording`: RTK fixed, then navsat's datum locked
+/// (no lease taken without both; the reply names the first missing), manifest
+/// check, lease, detach the site.
 async fn begin_recording(app: &mut App, kind: Kind) -> Result<(), String> {
     app.rec.check_start(kind)?;
-    if let Err(msg) = app.rec.check_rtk_start(kind) {
+    if let Err(msg) = app.rec.check_fix_and_datum_start(kind) {
         app.out.warn(&msg);
         return Err(msg);
     }
@@ -189,6 +190,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         // robot does, so only a test without a /fix needs it off.
         require_rtk_fixed: params::bool(&node, "require_rtk_fixed", true),
         rtk_fix_max_age_s: params::f64(&node, "rtk_fix_max_age_s", 1.0),
+        // On by default too: the sim's navsat locks its datum 3 s after it
+        // starts, on the sim's RTK fixed fix, as the robot's does.
+        require_datum: params::bool(&node, "require_datum", true),
     };
     let pose_topic = params::string(&node, "robot_pose_source_topic", "/odometry/global");
     // Red breathing rear light while recording (mower_hardware -> STM32 0x03
@@ -252,6 +256,21 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             while let Some(fix) = stream.next().await {
                 let at = clock.mono();
                 shared.lock().await.rec.on_fix(fix.status.status, at);
+            }
+        });
+    }
+    // navsat_transform's GPS odometry, for the datum gate: navsat publishes
+    // it only once its datum is locked (its transform is good), one per fix,
+    // whichever navsat runs (rust_localize, or the C++ node through the
+    // bridge); reliable, as nav_action_server reads it.
+    {
+        let mut stream = m.bus.subscribe::<Odometry>(&m.resolve_topic("/odometry/gps")?, Qos::default())?;
+        let shared = shared.clone();
+        let clock = m.clock.clone();
+        tokio::spawn(async move {
+            while stream.next().await.is_some() {
+                let at = clock.mono();
+                shared.lock().await.rec.on_gps_odometry(at);
             }
         });
     }
