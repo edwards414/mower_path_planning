@@ -156,7 +156,8 @@ show_effective() {
 # (RUST_BRIDGE=false: the Python rosbridge).
 ws_backend() {
   local args
-  args=$({ sudo docker top "$CID" -o args 2>/dev/null || true; } | awk 'NR > 1' |
+  # docker top needs the pid column in -o; it is dropped here
+  args=$({ sudo docker top "$CID" -o pid,args 2>/dev/null || true; } | awk 'NR > 1 { $1 = ""; print substr($0, 2) }' |
     grep -E '(^|/)(mower_rsd|mower_ws_bridge)( |$)' || true)
   if ! grep -qE '(^|/)mower_ws_bridge( |$)|--modules ([^ ]*,)?bridge(,| |$)' <<<"$args"; then echo none
   elif grep -q -- '--backend bus' <<<"$args"; then echo bus
