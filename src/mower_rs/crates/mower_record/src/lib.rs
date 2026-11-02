@@ -25,6 +25,7 @@ use mower_bus::Qos;
 use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::mower_interface::srv::{ChannelPathList, ChannelRoute, ChennalPathList, EditZone, GetZoneList, MissionOperationLock, SiteOp};
 use r2r::nav_msgs::msg::{Odometry, Path as PathMsg};
+use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::{Bool, String as StringMsg};
 use r2r::std_srvs::srv::Trigger;
 use r2r::visualization_msgs::msg::{Marker, MarkerArray};
@@ -110,9 +111,14 @@ fn expand_user(path: &str) -> String {
 const RELEASE_SUFFIX_ZH: &str = "；操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 path_record_node 與 nav_action_server";
 const RELEASE_SUFFIX_SAVED_ZH: &str = "；資料已儲存，但操作鎖釋放未確認，導航仍被禁止；請檢查機器後重啟 path_record_node 與 nav_action_server";
 
-/// `_reject_start_while_recording`: manifest check, lease, detach the site.
+/// `_reject_start_while_recording`: RTK fixed (no lease taken without it),
+/// manifest check, lease, detach the site.
 async fn begin_recording(app: &mut App, kind: Kind) -> Result<(), String> {
     app.rec.check_start(kind)?;
+    if let Err(msg) = app.rec.check_rtk_start(kind) {
+        app.out.warn(&msg);
+        return Err(msg);
+    }
     if let Some(msg) = app.rec.blocked_manifest_reply(&format!("開始 {} 錄製", kind.label())) {
         app.out.error(&msg);
         return Err(msg);
@@ -179,6 +185,10 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         polygon_simplify_dist: params::f64(&node, "polygon_simplify_dist", 0.1),
         max_site_datum_distance_m: params::f64(&node, "max_site_datum_distance_m", 100.0),
         robot_pose_max_age_s: params::f64(&node, "robot_pose_max_age_s", 1.0),
+        // On by default: the sim's fixed mode publishes status 2 as the
+        // robot does, so only a test without a /fix needs it off.
+        require_rtk_fixed: params::bool(&node, "require_rtk_fixed", true),
+        rtk_fix_max_age_s: params::f64(&node, "rtk_fix_max_age_s", 1.0),
     };
     let pose_topic = params::string(&node, "robot_pose_source_topic", "/odometry/global");
     // Red breathing rear light while recording (mower_hardware -> STM32 0x03
@@ -215,7 +225,8 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let guard = Guard::on_bus(owner, lock_client, m.clock.clone(), logger.clone());
 
     let clock = m.clock.clone();
-    let mut rec = Recorder::new(cfg, Box::new(move || recorder::stamp(&clock)));
+    let mono = m.clock.clone();
+    let mut rec = Recorder::new(cfg, Box::new(move || recorder::stamp(&clock))).with_mono(Box::new(move || mono.mono()));
     rec.restore_startup_persistence(&out);
     rec.publish_site_list(&out);
     let shared: Shared = Arc::new(Mutex::new(App { rec, guard, out }));
@@ -228,6 +239,19 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             while let Some(odom) = stream.next().await {
                 let pose = r2r::geometry_msgs::msg::PoseStamped { header: odom.header.clone(), pose: odom.pose.pose.clone() };
                 shared.lock().await.rec.on_pose_source(&odom.header.frame_id, &odom.child_frame_id, pose);
+            }
+        });
+    }
+    // mower_gps's fix, for the RTK fixed gate (best effort, as robot_status
+    // and nav_action_server read it).
+    {
+        let mut stream = m.bus.subscribe::<NavSatFix>(&m.resolve_topic("/fix")?, Qos::sensor_data())?;
+        let shared = shared.clone();
+        let clock = m.clock.clone();
+        tokio::spawn(async move {
+            while let Some(fix) = stream.next().await {
+                let at = clock.mono();
+                shared.lock().await.rec.on_fix(fix.status.status, at);
             }
         });
     }

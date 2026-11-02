@@ -805,6 +805,14 @@ site save / edit sync / load under a rotated datum / rename / delete,
 load_zone_list, navigation-active rejection): every reply, every work file,
 every published list and the 34 lock calls identical.
 
+One rule the Python node does not have (owner, 2026-11-02): with
+`require_rtk_fixed` (default true, also in mower_rsd.yaml) a zone, risk-zone
+or channel start is refused, before any lease, unless the latest `/fix` is
+RTK fixed (status 2) and at most `rtk_fix_max_age_s` (1.0 s) old: 「RTK 尚未
+fixed，無法開始 zone 記錄（…）」. A recording that loses RTK fixed keeps
+running but takes no sample (not even a channel's end point) until it is
+back; each outage is logged once as it starts and once with its length.
+
 ## mower_nav
 
 `crates/mower_nav`: `geometry.rs` (path admission rules, canonical

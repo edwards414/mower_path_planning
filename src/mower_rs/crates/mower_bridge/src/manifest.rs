@@ -402,6 +402,8 @@ pub static MODULES: &[Module] = &[
                 subscribes::<Odometry>("/odometry/global_slow", R_V_10).param("robot_pose_source_topic"),
                 subscribes::<Text>("/adapter/map_datum", R_TL_1),
                 subscribes::<Bool>("/nav_operation_active", R_TL_1),
+                // the RTK fixed gate of a recording (require_rtk_fixed)
+                subscribes::<NavSatFix>("/fix", BE_V_5),
                 serves::<Trigger::Service>("/record_zone_start"),
                 serves::<Trigger::Service>("/record_zone_end"),
                 serves::<Trigger::Service>("/risk_zone_start"),
