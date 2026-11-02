@@ -1,0 +1,99 @@
+# The outdoor stress harness: an override of ../docker-compose.sim.yaml.
+# Development only, never on a robot. Run it through outdoor.sh, which sets
+# the project name, the CPU quota and the image/binary paths:
+#
+#   deploy/sim/outdoor/outdoor.sh up T50 typ
+#
+# What it adds to the sim:
+#   sim       throttled (cpuset 0-3, a 10 ms CFS period and OUTDOOR_CPU_QUOTA,
+#             so the quota acts like a slow clock rather than long freezes),
+#             on a user bridge network with no published ports (several runs
+#             can coexist with each other and with other agents' sims), the
+#             fault control dir on a volume, outdoor-entry.sh
+#   observer  the runtime image in the sim's network and PID namespaces,
+#             unthrottled: rclpy recorders (tools/outdoor/observe.py),
+#             e2-verify's watchers, cpu_window.py, faults.py (the control dir
+#             through the volume, never an exec into the throttled sim)
+#   netem_sim tc on the sim's eth0 (the robot's uplink); DDS stays on lo
+#   client    the app: tc on its own eth0 (the downlink) and the ws tools,
+#             with only the sim pair file mounted
+# mediamtx is off (profile `camera`): no row here looks at the camera.
+services:
+  sim:
+    entrypoint: ["/bin/bash", "/sim/outdoor/outdoor-entry.sh"]
+    cpuset: ${OUTDOOR_CPUSET:-0-3}
+    cpu_period: 10000
+    cpu_quota: ${OUTDOOR_CPU_QUOTA:?outdoor.sh sets the CPU quota}
+    ports: !reset []
+    networks: [outdoor]
+    environment:
+      - SIM_SEED=${SIM_SEED:-1}
+      - MANUAL_GUARD_TIMEOUT_S=${MANUAL_GUARD_TIMEOUT_S:-}
+      - FINAL_GUARD_TIMEOUT_S=${FINAL_GUARD_TIMEOUT_S:-}
+      - RUST_RECORDER=${RUST_RECORDER:-true}
+      - RUST_MUX=${RUST_MUX:-false}
+      - RUST_STATIC_TF=${RUST_STATIC_TF:-false}
+    volumes:
+      - sim_ctl:/tmp/mower_sim
+      - ../../tools/ab/fixtures:/fixtures:ro
+
+  mediamtx:
+    profiles: [camera]
+
+  observer:
+    image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-main}
+    pull_policy: missing
+    network_mode: service:sim
+    pid: service:sim
+    user: "0:0"
+    init: true
+    depends_on: [sim]
+    entrypoint: ["sleep", "infinity"]
+    environment:
+      - ROS_DOMAIN_ID=17
+      - MOWER_PAIR_FILE=/fixtures/pair.json
+      - MOWER_BACKEND_URL=
+    volumes:
+      - sim_ctl:/ctl
+      - ../../tools/outdoor:/to:ro
+      - ../../src/mower_rs/tools:/rt:ro
+      - ../../tools/ab/fixtures:/fixtures:ro
+      - ${E2V_SCRIPTS:?e2-verify scripts dir}:/v:ro
+
+  netem_sim:
+    image: mower-outdoor-netem:local
+    pull_policy: never
+    network_mode: service:sim
+    depends_on: [sim]
+    cap_add: [NET_ADMIN]
+    init: true
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ./outdoor/netem.sh:/netem.sh:ro
+
+  client:
+    image: mower-outdoor-netem:local
+    pull_policy: never
+    hostname: app-client
+    networks: [outdoor]
+    depends_on: [sim]
+    cap_add: [NET_ADMIN]
+    init: true
+    entrypoint: ["sleep", "infinity"]
+    environment:
+      - MOWER_PAIR_FILE=/fixtures/pair.json
+      - MOWER_BACKEND_URL=
+      - MOWER_WS_URL=ws://sim:9090
+    volumes:
+      - ./outdoor/netem.sh:/netem.sh:ro
+      - ../../tools/outdoor:/to:ro
+      - ../../src/mower_rs/tools:/rt:ro
+      # the pair file outdoor.sh checked (tools/ab's dev pairing), nothing else
+      - ${MOWER_PAIR_FILE:?outdoor.sh checks and sets it}:/fixtures/pair.json:ro
+      - ${E2V_SCRIPTS:?e2-verify scripts dir}:/v:ro
+
+networks:
+  outdoor: {}
+
+volumes:
+  sim_ctl:
