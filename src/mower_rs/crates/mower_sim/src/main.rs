@@ -13,8 +13,15 @@
 //!
 //! The geometry is the stack's own (geometry.rs): the sensors' mount from the
 //! URDF, the wheels from mower_rsd.yaml over mower_base's defaults. Faults
-//! come from a control directory (control.rs). It runs in real time on the
-//! system clock (robot.launch.py wants use_sim_time:=false).
+//! come from a control directory (control.rs): stalls, the IMU and the F9P
+//! unplugged and plugged back in (pty.rs `Plug`; the F9P comes back
+//! power-cycled, gnss.rs), the GNSS solution. Every control event is one
+//! line on stderr, `mower_sim: control: <event>`, for a harness to count:
+//! the files' own (`hub_gone on`, `gps_mode float:400`), `imu gone` /
+//! `imu back`, `gps gone` / `gps back`, `gps reacquire <solution>` and
+//! `gps cfg acks=N` (a burst of CFG the driver sent, acknowledged). It runs
+//! in real time on the system clock (robot.launch.py wants
+//! use_sim_time:=false).
 //!
 //! **Never on a robot.** It only ever creates ptys and links, and refuses to
 //! start when a device path exists as anything but a link to a pty: on the
@@ -49,8 +56,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::control::Control;
 use crate::geometry::{Mount, Origin, Wheels};
-use crate::gnss::{Gnss, Mode};
-use crate::pty::Pty;
+use crate::gnss::{Gnss, GpsMode, Mode, REACQUIRE_S};
+use crate::pty::{Plug, Pty};
 use crate::rng::Rng;
 use crate::stm32::{FirmwareId, Stm32};
 use crate::world::{Battery, World};
@@ -81,16 +88,26 @@ usage: mower_sim [options]
                       $MOWER_FIRMWARE_MANIFEST or
                       /opt/mower/firmware/mower_robot_firmware.json, else
                       fake_base.py's 0.6.0+abcd1234)
-  --gps-mode MODE     fixed (RTK, default), float, 3d or none
+  --gps-mode MODE     fixed (RTK, default), float, 3d, none (no fix, 3
+                      satellites) or nosat (no satellite); MODE:HACC_MM
+                      reports that hAcc instead of the mode's (float:400)
   --gps-noise M       horizontal 1-sigma of the position (default by mode:
                       0.005 / 0.12 / 0.9 m)
+  --reacquire NOSAT_S,THREED_S,FLOAT_S
+                      after the F9P is plugged back in, seconds of no
+                      satellite, of 3D and of RTK float before RTK fixed
+                      (default 2,5,10; never better than --gps-mode or
+                      gps_mode)
   --slip F            fraction of the wheels' travel lost on the ground (0)
   --battery-v V       the pack's resting voltage at the start (24.3, ~85 %)
   --capacity-ah AH    the pack's capacity (10)
   --flash-stall-s S   how long a PID save stalls the board (1)
   --seed N            the noise's seed (1)
-  --control-dir DIR   fault files: base_mute, base_deaf, sensors_mute and
-                      gps_mode (fixed|float|3d|none), read every 50 ms
+  --control-dir DIR   fault files, read every 50 ms: base_mute, base_deaf,
+                      sensors_mute (a stall), imu_gone, gps_gone, hub_gone
+                      (unplugged: the pty closed, the link removed) and
+                      gps_mode (fixed|float|3d|none|nosat[:HACC_MM]); each
+                      event is a line `mower_sim: control: ...` on stderr
   --truth-log FILE    the truth at 10 Hz, one JSON line each
   --duration S        stop after S seconds (default: until SIGINT / SIGTERM)
 ";
@@ -114,8 +131,9 @@ struct Options {
     urdf: Option<PathBuf>,
     params: Option<PathBuf>,
     manifest: Option<PathBuf>,
-    gps_mode: Mode,
+    gps_mode: GpsMode,
     gps_noise: Option<f64>,
+    reacquire: [f64; 3],
     slip: f64,
     battery_v: f64,
     capacity_ah: f64,
@@ -139,8 +157,9 @@ fn parse(argv: &[String]) -> Result<Options, String> {
         urdf: None,
         params: None,
         manifest: None,
-        gps_mode: Mode::Fixed,
+        gps_mode: Mode::Fixed.into(),
         gps_noise: None,
+        reacquire: REACQUIRE_S,
         slip: 0.0,
         battery_v: 24.3,
         capacity_ah: 10.0,
@@ -172,7 +191,12 @@ fn parse(argv: &[String]) -> Result<Options, String> {
             "--firmware-manifest" => o.manifest = Some(value()?.into()),
             "--gps-mode" => {
                 let v = value()?;
-                o.gps_mode = Mode::parse(&v).ok_or_else(|| format!("--gps-mode {v:?}: fixed, float, 3d or none"))?;
+                o.gps_mode = GpsMode::parse(&v).ok_or_else(|| format!("--gps-mode {v:?}: fixed, float, 3d, none or nosat, optionally :HACC_MM"))?;
+            }
+            "--reacquire" => {
+                let v = value()?;
+                let s: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0)).collect::<Option<_>>().unwrap_or_default();
+                o.reacquire = s.try_into().map_err(|_| format!("--reacquire {v:?}: NOSAT_S,THREED_S,FLOAT_S, three seconds >= 0"))?;
             }
             "--gps-noise" => o.gps_noise = Some(num(value()?)?.max(0.0)),
             "--slip" => o.slip = num(value()?)?.clamp(0.0, 0.95),
@@ -206,6 +230,27 @@ fn on_ament_path(relative: &str) -> Option<PathBuf> {
 
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// One control event on stderr, the line a harness counts.
+fn event(line: &str) {
+    eprintln!("mower_sim: control: {line}");
+}
+
+/// Unplug a device or plug it back in, as the control files say: `Some(true)`
+/// when it came back, `Some(false)` when it went, with its event line.
+fn replug(dev: &mut Plug, plugged: bool, name: &str) -> Option<bool> {
+    match dev.set(plugged) {
+        Ok(true) => {
+            event(&format!("{name} {}", if plugged { "back" } else { "gone" }));
+            Some(plugged)
+        }
+        Ok(false) => None,
+        Err(e) => {
+            event(&format!("{name} cannot come back: {e}"));
+            None
+        }
+    }
 }
 
 fn unix_now() -> f64 {
@@ -267,12 +312,13 @@ fn run(o: Options) -> Result<(), String> {
     world.slip = o.slip;
     let mut board = Stm32::new(firmware, o.flash_stall_s);
     let mut gnss = Gnss::new(o.gps_mode, o.gps_noise);
+    gnss.reacquire = o.reacquire;
     let mut rng = Rng::new(o.seed);
     let mut control = Control::new(o.control_dir.clone());
 
     let stm = Pty::open(&o.stm32, o.owner)?;
-    let imu_pty = Pty::open(&o.imu, o.owner)?;
-    let gps_pty = Pty::open(&o.gps, o.owner)?;
+    let mut imu_dev = Plug::open(&o.imu, o.owner)?;
+    let mut gps_dev = Plug::open(&o.gps, o.owner)?;
     // SAFETY: the handler only stores to an atomic.
     unsafe {
         libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
@@ -286,10 +332,10 @@ fn run(o: Options) -> Result<(), String> {
         "mower_sim: STM32 {} -> {}, IMU {} -> {}, F9P {} -> {}",
         stm.link.display(),
         stm.slave_name,
-        imu_pty.link.display(),
-        imu_pty.slave_name,
-        gps_pty.link.display(),
-        gps_pty.slave_name
+        o.imu.display(),
+        imu_dev.pty().map_or("", |p| &p.slave_name),
+        o.gps.display(),
+        gps_dev.pty().map_or("", |p| &p.slave_name)
     );
     println!(
         "mower_sim: start {:.7} {:.7} {:.3} m heading {:.1} deg (ENU); wheels {:.3} m apart, r {:.3}/{:.3} m, {} rpm, {} counts/rev ({}); \
@@ -316,6 +362,13 @@ fn run(o: Options) -> Result<(), String> {
         firmware.git_sha32,
         o.gps_mode.name()
     );
+    println!(
+        "mower_sim: after a plug-in the F9P reacquires: {} s nosat, {} s 3d, {} s float, then {}",
+        o.reacquire[0],
+        o.reacquire[1],
+        o.reacquire[2],
+        o.gps_mode.name()
+    );
     let _ = std::io::stdout().flush();
 
     const DT: f64 = 0.005;
@@ -332,9 +385,16 @@ fn run(o: Options) -> Result<(), String> {
         }
         if now >= next_control {
             for change in control.poll() {
-                println!("mower_sim: {change}");
+                event(&change);
             }
             gnss.mode = control.gps_mode.unwrap_or(o.gps_mode);
+            // the IMU keeps nothing across a power cycle: it streams again at once
+            replug(&mut imu_dev, control.imu_plugged(), "imu");
+            match replug(&mut gps_dev, control.gps_plugged(), "gps") {
+                Some(true) => gnss.plug_in(now),
+                Some(false) => gnss.unplug(),
+                None => {}
+            }
             next_control = now + 0.05;
         }
         let base_faults = control.base;
@@ -349,18 +409,22 @@ fn run(o: Options) -> Result<(), String> {
             }
             board.on_bytes(&buf[..n], now, base_faults, &mut world, &mut out);
         }
-        loop {
-            let n = gps_pty.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            if !sensors_mute {
-                let mut acks = Vec::new();
-                gnss.on_bytes(&buf[..n], &mut acks);
-                gps_pty.write(&acks);
+        if let Some(gps_pty) = gps_dev.pty() {
+            loop {
+                let n = gps_pty.read(&mut buf);
+                if n == 0 {
+                    break;
+                }
+                if !sensors_mute {
+                    let mut acks = Vec::new();
+                    gnss.on_bytes(&buf[..n], now, &mut acks);
+                    gps_pty.write(&acks);
+                }
             }
         }
-        while imu_pty.read(&mut buf) > 0 {} // nothing is ever sent to the IMU
+        if let Some(imu_pty) = imu_dev.pty() {
+            while imu_pty.read(&mut buf) > 0 {} // nothing is ever sent to the IMU
+        }
 
         // the world up to now, in fixed steps
         while sim_t + DT <= now {
@@ -372,7 +436,7 @@ fn run(o: Options) -> Result<(), String> {
         board.tick(now, base_faults, &mut world, &mut out);
         stm.write(&out);
         if now >= next_imu {
-            if !sensors_mute {
+            if let (false, Some(imu_pty)) = (sensors_mute, imu_dev.pty()) {
                 imu_pty.write(&imu::cycle(&world, &mount));
             }
             imu_cycles += 1;
@@ -381,10 +445,16 @@ fn run(o: Options) -> Result<(), String> {
                 next_imu = now + 0.1;
             }
         }
-        let mut epoch = Vec::new();
-        gnss.tick(now, unix_now(), &world, &mount, &origin, &mut rng, &mut epoch);
-        if !sensors_mute {
-            gps_pty.write(&epoch);
+        // the receiver runs only while it has power
+        if let Some(gps_pty) = gps_dev.pty() {
+            let mut epoch = Vec::new();
+            gnss.tick(now, unix_now(), &world, &mount, &origin, &mut rng, &mut epoch);
+            if !sensors_mute {
+                gps_pty.write(&epoch);
+            }
+        }
+        for line in gnss.events(now) {
+            event(&line);
         }
 
         if now >= next_truth {
@@ -424,9 +494,9 @@ fn run(o: Options) -> Result<(), String> {
         }
 
         // sleep until a driver writes or the next deadline (5 ms at most)
-        let mut fds = [stm.fd(), gps_pty.fd(), imu_pty.fd()].map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+        let mut fds = [stm.fd(), gps_dev.fd(), imu_dev.fd()].map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
         let wait = Duration::from_millis(2);
-        // SAFETY: poll on three descriptors we own.
+        // SAFETY: poll on up to three descriptors we own (-1 is skipped).
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, wait.as_millis() as libc::c_int) };
     }
     println!("mower_sim: stopping after {:.1} s, {:.1} m driven", start.elapsed().as_secs_f64(), world.odometer);
@@ -445,11 +515,18 @@ mod tests {
     fn options() {
         let o = parse(&v(&["--stm32-link", "/tmp/a", "--gps-mode", "float", "--owner", "1000:1001", "--heading", "-30", "--slip", "2"])).unwrap();
         assert_eq!(o.stm32, PathBuf::from("/tmp/a"));
-        assert_eq!(o.gps_mode, Mode::Float);
+        assert_eq!(o.gps_mode, Mode::Float.into());
         assert_eq!(o.owner, Some((1000, 1001)));
         assert_eq!((o.heading_deg, o.slip), (-30.0, 0.95));
         assert_eq!(parse(&v(&["--owner", "1000"])).unwrap().owner, Some((1000, 1000)));
-        assert!(parse(&v(&["--gps-mode", "/dev/gps_rtk"])).unwrap_err().contains("fixed, float, 3d or none"));
+        assert!(parse(&v(&["--gps-mode", "/dev/gps_rtk"])).unwrap_err().contains("fixed, float, 3d, none or nosat"));
+        let o = parse(&v(&["--gps-mode", "float:400", "--reacquire", "1,2.5,0"])).unwrap();
+        assert_eq!(o.gps_mode, GpsMode { mode: Mode::Float, h_acc_mm: Some(400) });
+        assert_eq!(o.reacquire, [1.0, 2.5, 0.0]);
+        assert_eq!(parse(&v(&["--gps-mode", "nosat"])).unwrap().gps_mode, Mode::NoSat.into());
+        for bad in ["1,2", "1,2,3,4", "1,-2,3", "1,x,3", "1,inf,3"] {
+            assert!(parse(&v(&["--reacquire", bad])).unwrap_err().contains("NOSAT_S,THREED_S,FLOAT_S"), "{bad}");
+        }
         assert!(parse(&v(&["--imu-link", "/dev/stmcom"])).unwrap_err().contains("two devices"));
         assert!(parse(&v(&["--lat"])).is_err());
         assert!(parse(&v(&["--lat", "north"])).is_err());
@@ -457,6 +534,7 @@ mod tests {
         let d = parse(&[]).unwrap();
         assert_eq!((d.stm32.to_str(), d.imu.to_str(), d.gps.to_str()), (Some("/dev/stmcom"), Some("/dev/imu_usb"), Some("/dev/gps_rtk")));
         assert_eq!((d.lat, d.lon, d.heading_deg), (25.0330, 121.5654, 120.0));
+        assert_eq!(d.reacquire, [2.0, 5.0, 10.0]);
     }
 
     #[test]
