@@ -22,6 +22,7 @@ Profiles (PLAN.md "Stress profiles"):
           the 5th, 14th, 23rd, 32nd and 41st event; never two at once
   G23     G2 for 180 s, then G3 (row 4's degraded drive in one run)
   G-boot-fixed  gps_mode fixed at --start (G-boot: the sim boots in 3d)
+  HUB1    one hub reset of 2.0 s at --start (row 5, mid-record)
 --interval A,B replaces U(15, 60) between events (row 3 uses 8,20 to get
 about 45 flaps into 12 minutes instead of 30).
 nosat, imu_gone, gps_gone and hub_gone need a mower_sim with the new
@@ -54,6 +55,8 @@ def schedule(profile, rng, start, duration, gap=(15, 60)):
         ev.append((t, 'gps_mode', 'fixed'))
     elif profile == 'G3':
         ev += [(start, 'gps_mode', 'nosat'), (start + 120, 'gps_mode', 'fixed')]
+    elif profile == 'HUB1':
+        ev += [(start, 'hub_gone', True), (start + 2.0, 'hub_gone', False)]
     elif profile == 'G-boot-fixed':
         ev.append((start, 'gps_mode', 'fixed'))
     elif profile == 'G23':

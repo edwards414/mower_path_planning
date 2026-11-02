@@ -82,6 +82,7 @@ def cell(args, cpu, net, outdir):
     os.makedirs(os.path.join(d, 'sim'), exist_ok=True)
     sh('docker', 'cp', f'{cl}:/tmp/client/teleop.json', os.path.join(d, 'client', 'teleop.json'))
     sh('docker', 'cp', f'{obs}:/tmp/obs/teleop.jsonl', os.path.join(d, 'obs', 'teleop.jsonl'))
+    sh('docker', 'cp', f'{obs}:/tmp/obs/vmload.jsonl', os.path.join(d, 'obs', 'vmload.jsonl'), check=False)
     sim = cid('sim')
     sh('docker', 'cp', f'{sim}:/tmp/outdoor/truth.1.jsonl', os.path.join(d, 'sim', 'truth.1.jsonl'))
     with open(os.path.join(d, 'stack.log'), 'w') as f:

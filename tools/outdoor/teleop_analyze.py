@@ -54,6 +54,24 @@ def load_jsonl(path):
     return out
 
 
+def vm_busy(run, t0, t1):
+    """The VM's CPU use while [t0, t1] ran (vmload.py), [mean, max] %."""
+    for name in ('obs/vmload.jsonl', 'vmload.jsonl'):
+        rows = [d['busy_pct'] for d in load_jsonl(os.path.join(run, name)) if 'busy_pct' in d and t0 <= d['t'] <= t1]
+        if rows:
+            return [round(sum(rows) / len(rows), 1), max(rows)]
+    return None
+
+
+def vm_stalls(run):
+    """(time, seconds) of the canary's VM stalls (vmload.py)."""
+    for name in ('obs/vmload.jsonl', 'vmload.jsonl'):
+        rows = [(d['t'], d['stall_s']) for d in load_jsonl(os.path.join(run, name)) if 'stall_s' in d]
+        if rows:
+            return rows
+    return []
+
+
 def pct(xs, q):
     if not xs:
         return None
@@ -166,11 +184,15 @@ def analyze(run, manual_t, final_t):
         az = round(float(d['az']), 4)
         if az in az_of and az not in delivered:
             delivered[az] = d
+    # forwarded = its angular.z on /joy_cmd, or downstream of it (twist_mux
+    # and the final guard pass the values through): any of the three, so a
+    # sample the best-effort observer missed on one topic still counts
     accepted = {}
-    for d in joy_out:
-        az = round(float(d['az']), 4)
-        if az in az_of and abs(float(d['lx'])) > 0 and az not in accepted:
-            accepted[az] = d
+    for topic in ('/joy_cmd', '/cmd_vel_guard_input', '/drivetrain_guarded_cmd_vel'):
+        for d in by.get(topic, []):
+            az = round(float(d['az']), 4)
+            if az in az_of and abs(float(d['lx'])) > 0 and (az not in accepted or d['t'] < accepted[az]['t']):
+                accepted[az] = d
 
     # the guard, replayed on every delivered frame (moves and zeros)
     g = GuardReplay(manual_t)
@@ -233,7 +255,13 @@ def analyze(run, manual_t, final_t):
         hm = [s for s in moves if hs['t'] - 0.01 <= s[1] <= rl['t'] + 0.01]
         acc = [accepted[round(s[5], 4)]['t'] for s in hm if round(s[5], 4) in accepted]
         sent_n = len(hm)
-        row = {'tag': tag, 'sent': sent_n, 'accepted': len(acc),
+        # the client's own 100 ms tick slipping means the whole VM stalled
+        # (Docker Desktop), not the stack: such holds are kept out of the
+        # latency figures and counted
+        times = [s[1] for s in client['sends'] if hs['t'] - 0.01 <= s[1] <= rl['t'] + 0.2]
+        gap = max([b - a for a, b in zip(times, times[1:])] + [0.0])
+        row = {'tag': tag, 'sent': sent_n, 'accepted': len(acc), 'host_stall': gap > 0.35 and tag != 'blk',
+               'max_send_gap_s': round(gap, 3),
                'ticks_skipped': sum(1 for k in client['skipped'] if hs['t'] <= k[0] <= rl['t'] and k[1] == 'move')}
         if acc:
             t_last = max(acc)
@@ -248,8 +276,9 @@ def analyze(run, manual_t, final_t):
         holds.append(row)
 
     soak = [h for h in holds if h['tag'].startswith('soak')]
-    lat_acc = [h['stop_after_last_accept_s'] for h in soak if h.get('stop_after_last_accept_s') is not None]
-    lat_rel = [h['stop_after_release_s'] for h in soak if h.get('stop_after_release_s') is not None]
+    clean = [h for h in soak if not h['host_stall']]
+    lat_acc = [h['stop_after_last_accept_s'] for h in clean if h.get('stop_after_last_accept_s') is not None]
+    lat_rel = [h['stop_after_release_s'] for h in clean if h.get('stop_after_release_s') is not None]
     n_moves_soak = sum(h['sent'] for h in soak)
     out = {
         'run': os.path.basename(run.rstrip('/')),
@@ -268,6 +297,10 @@ def analyze(run, manual_t, final_t):
         'stop_bound_s': round(min(manual_t, final_t) + 0.1, 3),
         'stop_bound_violations': sum(1 for x in lat_acc if x > manual_t + 0.1),
         'connections': client['connections'],
+        'vm_busy_pct_mean_max': vm_busy(run, t0, t1),
+        'host_stall_holds': sum(1 for h in soak if h['host_stall']),
+        'stop_after_last_accept_s_incl_stalls_max': max([h['stop_after_last_accept_s'] for h in soak
+                                                         if h.get('stop_after_last_accept_s') is not None] or [None]),
         'holds': holds,
     }
     if blk:

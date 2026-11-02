@@ -73,6 +73,18 @@ wait_ready() {  # the app contract through the gate, unshaped, up to $1 s
   die "not ready"
 }
 
+KEEP=$RUNS/cpukeeper
+keep() {  # the CPU keeper puts "$2 10000" back into container $1's cgroup
+  mkdir -p "$KEEP/targets"
+  echo "$2 10000" >"$KEEP/targets/$1"
+  if [ -z "$(docker ps -q -f name=^outdoor-cpukeeper$)" ]; then
+    docker rm -f outdoor-cpukeeper >/dev/null 2>&1 || true
+    docker run -d --name outdoor-cpukeeper --privileged --cgroupns=host -v /sys/fs/cgroup:/host_cg \
+      -v "$KEEP/targets:/targets:ro" -v "$here/cpukeeper.sh:/cpukeeper.sh:ro" --entrypoint sh \
+      mower-outdoor-netem:local /cpukeeper.sh >/dev/null
+  fi
+}
+
 net() {  # profile on both ends: sim eth0 = uplink, client eth0 = downlink
   local p=$1
   [ "$p" = clean ] && p=clear
@@ -92,6 +104,7 @@ case "$cmd" in
     docker image inspect mower-outdoor-netem:local >/dev/null 2>&1 \
       || docker build -q -t mower-outdoor-netem:local -f "$here/netem.Dockerfile" "$here" >/dev/null
     compose up -d --quiet-pull sim observer netem_sim client >&2
+    docker exec -d "$(cid observer)" python3 /to/vmload.py --out /tmp/obs/vmload.jsonl
     log "up: image $(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$(cid sim)" | grep '^MOWER_GIT_SHA=' | cut -c15-21)," \
         "RUST_NAV_CORE=${RUST_NAV_CORE:-false} MOWER_RS_TARGET=${MOWER_RS_TARGET:-image} guards=${MANUAL_GUARD_TIMEOUT_S:-default}/${FINAL_GUARD_TIMEOUT_S:-default}"
     wait_ready 300
@@ -103,11 +116,25 @@ case "$cmd" in
     [ "$nav" = navcore ] && export RUST_NAV_CORE=true
     OUTDOOR_CPU_QUOTA=$(quota_of "$cpu"); export OUTDOOR_CPU_QUOTA
     compose up -d --quiet-pull sim observer netem_sim client >&2
+    docker exec -d "$(cid observer)" python3 /to/vmload.py --out /tmp/obs/vmload.jsonl
+    keep "$(docker inspect -f '{{.Id}}' "$(cid sim)")" "$OUTDOOR_CPU_QUOTA"
+    got=$(docker exec "$(cid sim)" cat /sys/fs/cgroup/cpu.max)
+    [ "$got" = "$OUTDOOR_CPU_QUOTA 10000" ] || die "cpu.max is '$got'"
     log "up-cold $cpu: quota $OUTDOOR_CPU_QUOTA us / 10 ms, SIM_ARGS=${SIM_ARGS:-}" ;;
   cpu)
+    # docker update alone is not enough: on Docker Desktop it rewrites the
+    # cgroup's period (cpu.max came out "22120 40000" for 5530/10000), so
+    # the quota would come as 40-80 ms freezes instead of a slow clock. The
+    # value goes straight into the container's cgroup as well, and is
+    # checked from inside.
     q=$(quota_of "${1:?level}")
-    docker update --cpu-period 10000 --cpu-quota "$q" "$(cid sim)" >/dev/null
-    log "cpu $1: quota $q us / 10 ms = $(python3 -c "print($q/10000)") cores on cpuset ${OUTDOOR_CPUSET:-0-3}"
+    sim=$(cid sim); id=$(docker inspect -f '{{.Id}}' "$sim")
+    docker update --cpu-period 10000 --cpu-quota "$q" "$sim" >/dev/null
+    keep "$id" "$q"
+    sleep 1.2
+    got=$(docker exec "$sim" cat /sys/fs/cgroup/cpu.max)
+    [ "$got" = "$q 10000" ] || die "cpu.max is '$got', wanted '$q 10000'"
+    log "cpu $1: cpu.max $got = $(python3 -c "print($q/10000)") cores on cpuset ${OUTDOOR_CPUSET:-0-3}"
     ;;
   net) net "${1:?profile}" ;;
   blk)    # both ends 100 % loss; prints the VM clock at the client's switch
@@ -138,6 +165,8 @@ case "$cmd" in
     docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$(cid sim)" | grep -E '^(MOWER_GIT_SHA|RUST_|SIM_|MANUAL_|FINAL_)' >"$out/env.txt" || true
     log "collected into $out" ;;
   down)
+    s=$(cid sim 2>/dev/null || true)
+    [ -n "$s" ] && rm -f "$KEEP/targets/$(docker inspect -f '{{.Id}}' "$s")"
     compose --profile camera down -v -t 5 >/dev/null 2>&1 || true
     log "down (containers, network and volumes of project $OD removed)" ;;
   calibrate)

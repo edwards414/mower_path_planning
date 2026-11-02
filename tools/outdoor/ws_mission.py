@@ -10,7 +10,7 @@ with resume after any stop (I6, client container). Development only.
 /coverage_progress_status and /check_nav_status. When the execution ends
 without succeeding and the checkpoint says it can continue, wait until
 /check_nav_status is ready and call /resume_coverage {zone_id: -1} (every
-5 s until one is accepted, at most 30). Ends on SUCCEEDED, on --max-s, or
+5 s until one is accepted, at most --max-resumes, 200). Ends on SUCCEEDED, on --max-s, or
 when nothing can be resumed. Every call, answer and poll is kept with its
 wall time.
 """
@@ -120,6 +120,7 @@ async def main():
     ap.add_argument('--zone', type=int, default=1)
     ap.add_argument('--max-s', type=float, default=900.0)
     ap.add_argument('--no-resume', action='store_true')
+    ap.add_argument('--max-resumes', type=int, default=200)
     args = ap.parse_args()
     safety.check(args.url)
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
@@ -153,7 +154,7 @@ async def main():
                     done = 'stopped, no checkpoint'
                     break
             elif n.get('ready', n.get('success')) and time.time() - last_try >= 5:
-                if resumes >= 30:
+                if resumes >= args.max_resumes:
                     done = 'resume limit'
                     break
                 last_try = time.time()
@@ -162,12 +163,13 @@ async def main():
                 ok = ((m or {}).get('values') or {}).get('success')
                 b.ev('resume', n=resumes, ok=ok, at=p['ckpt_seg'])
                 if ok:
-                    seen_running = False
+                    # the resume was accepted: it counts as running even when
+                    # the next stop comes before a poll sees it running
+                    seen_running = True
                     t_wait = time.time()
-                    while time.time() - t_wait < 20:
+                    while time.time() - t_wait < 3:
                         pm = await b.call('/coverage_progress_status', timeout=5, record=False)
-                        if progress_of(pm)['status'] in (1, 2, SUCCEEDED):
-                            seen_running = True
+                        if progress_of(pm)['status'] in (1, 2, SUCCEEDED, FAILED, CANCELED):
                             break
                         await asyncio.sleep(0.5)
         elif stopped and args.no_resume:

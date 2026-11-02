@@ -24,7 +24,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from teleop_analyze import load_jsonl, pct, stop_time  # noqa: E402
+from teleop_analyze import load_jsonl, pct, stop_time, vm_busy, vm_stalls  # noqa: E402
 
 R_EARTH = 6378137.0
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -112,6 +112,26 @@ def zone_poly(zone):
     return None
 
 
+def layer_path(by, zone):
+    """The zone's planned path from the app's coverage-path layer (the last
+    /adapter/marker_layers/coverage_path): its markers carry no zone id, so
+    the one with the most points inside the zone's polygon."""
+    docs = [d['j'] for d in by.get('/adapter/marker_layers/coverage_path', []) if isinstance(d.get('j'), dict)]
+    poly = zone_poly(zone)
+    if not docs or not poly:
+        return None
+    best, score = None, 0
+    for mk in docs[-1].get('markers', []):
+        pts = [[p['x'], p['y']] if isinstance(p, dict) else [p[0], p[1]] for p in mk.get('points', [])]
+        if len(pts) < 2:
+            continue
+        a = np.asarray(pts)
+        n = int(in_poly(a[:, 0], a[:, 1], poly).sum())
+        if n > score:
+            best, score = pts, n
+    return best
+
+
 def running_windows(polls):
     """[start, end] wall times where /coverage_progress_status said running."""
     wins, cur = [], None
@@ -126,6 +146,35 @@ def running_windows(polls):
     return wins
 
 
+def safety_stops(run, out):
+    """Every safety stop the nav server logged (its own ROS stamp), grouped
+    into episodes (2 s apart), each marked when the VM stall canary fired
+    within 1 s before it."""
+    import re
+    stalls = vm_stalls(run)
+    eps = []
+    for _, line in log_events(run, 'Navigation safety stop:'):
+        mm = re.search(r'\[(\d+\.\d+)\] \[nav_action_server\]: Navigation safety stop: (.*)$', line)
+        if not mm:
+            continue
+        ts, why = float(mm.group(1)), mm.group(2)
+        if eps and ts - eps[-1]['t_last'] < 2.0:
+            eps[-1]['t_last'] = ts
+            eps[-1]['why'].add(why)
+        else:
+            eps.append({'t': ts, 't_last': ts, 'why': {why}})
+    for e in eps:
+        e['vm_stall'] = any(e['t'] - 1.0 <= t <= e['t'] + 0.2 for t, _ in stalls)
+        e['why'] = sorted(e['why'])
+    out['safety_stop_episodes'] = len(eps)
+    out['safety_stop_episodes_with_vm_stall'] = sum(1 for e in eps if e['vm_stall'])
+    out['safety_stop_reasons'] = {}
+    for e in eps:
+        for w in e['why']:
+            out['safety_stop_reasons'][w] = out['safety_stop_reasons'].get(w, 0) + 1
+    out['vm_stalls'] = {'n': len(stalls), 'max_s': max([x for _, x in stalls] or [0])}
+
+
 def mission(run, zone):
     m = json.load(open(os.path.join(run, 'client', 'mission.json')))
     by = obs_by(run, 'mission.jsonl')
@@ -134,10 +183,13 @@ def mission(run, zone):
     datum = datum_of(by)
     out = {'run': os.path.basename(run.rstrip('/')), 'end': m['end'], 'duration_s': m['duration_s'],
            'resumes': m['resumes'], 'datum': datum}
-    if not datum or str(zone) not in zp['zones'] or not truth:
+    safety_stops(run, out)
+    out['vm_busy_pct_mean_max'] = vm_busy(run, m['t_start'], m['t_start'] + m['duration_s'])
+    path = (zp['zones'].get(str(zone)) or {}).get('path') or layer_path(by, zone)
+    out['path_points'] = len(path or [])
+    if not datum or not path or len(path) < 2 or not truth:
         out['error'] = 'no datum, path or truth'
         return out
-    path = zp['zones'][str(zone)]['path']
     half = (zp.get('strip_width_m') or 0.3) / 2.0
     tt = np.array([d['t'] for d in truth])
     tx, ty = to_map([d['lat'] for d in truth], [d['lon'] for d in truth], datum)
@@ -320,7 +372,7 @@ def reconnect(run, obs_name):
             r['fixed_back_s'] = round(float(b[0] - t_off), 2) if len(b) and b[0] < nxt else None
         allowed = math.ceil((t_off - t_on) / 2.0) + 1
         for mod in ('imu', 'gps'):
-            n = sum(1 for t, line in restarts if t_on <= t < nxt and line.endswith(f'restarting {mod}'))
+            n = sum(1 for t, line in restarts if t_on <= t < nxt and f'restarting {mod}/' in line)
             r[f'restarts_{mod}'] = n
             r[f'restarts_{mod}_over'] = n > allowed
         rows.append(r)
@@ -344,14 +396,61 @@ def reconnect(run, obs_name):
         'imu_backlog_lines': len(log_events(run, 'oversized IMU serial backlog')),
         'restart_over_limit': sum(1 for r in rows if r['restarts_imu_over'] or r['restarts_gps_over']),
         'restarts_total': {m: sum(r[f'restarts_{m}'] for r in rows) for m in ('imu', 'gps')},
+        'vm_busy_pct_mean_max': vm_busy(run, events[0][0] - 20, events[-1][1] + 20) if events else None,
         'rows': rows,
     }
     return out
 
 
+def hausdorff(a, b):
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    d1 = seg_dist(a[:, 0], a[:, 1], np.vstack([b, b[:1]]))
+    d2 = seg_dist(b[:, 0], b[:, 1], np.vstack([a, a[:1]]))
+    return float(max(d1.max(), d2.max())), float(np.percentile(d1, 95))
+
+
+def area(poly):
+    p = np.asarray(poly, float)[:, :2]
+    return 0.5 * abs(np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1)))
+
+
+def zone(run):
+    """Row 5: the recorded zone against the perimeter the robot truly drove."""
+    c = json.load(open(os.path.join(run, 'client', 'zone.json')))
+    by = obs_by(run, 'loc.jsonl')
+    datum = datum_of(by)
+    truth = truth_rows(run)
+    zl = json.load(open(os.path.join(run, 'zone_list.json')))
+    fixture_ids = {z['id'] for z in json.load(open(os.path.join(REPO, 'deploy', 'sim', 'fixtures', 'zone_record', 'zone_list.json')))}
+    new = [z for z in zl if z['id'] not in fixture_ids]
+    out = {'run': os.path.basename(run.rstrip('/')), 'calls': [x[1:4] for x in c.get('calls', [])], 'new_zones': len(new)}
+    if not new or not datum:
+        out['error'] = 'no recorded zone' if not new else 'no datum'
+        return out
+    rec = [p[:2] for p in new[-1]['points']]
+    t0, t1 = c['t_record_start'], c['t_record_end']
+    sel = [d for d in truth if t0 <= d['t'] <= t1]
+    tx, ty = to_map([d['lat'] for d in sel], [d['lon'] for d in sel], datum)
+    drv = np.column_stack([tx, ty])[::2]
+    h, h95 = hausdorff(rec, drv)
+    a_rec, a_true = area(rec), area(drv)
+    gaps = np.hypot(*np.diff(np.asarray(rec + rec[:1], float), axis=0).T)
+    out.update({'points': len(rec), 'hausdorff_m': round(h, 3), 'rec_to_truth_p95_m': round(h95, 3),
+                'area_rec_m2': round(a_rec, 3), 'area_truth_m2': round(a_true, 3),
+                'area_err_pct': round(100.0 * (a_rec - a_true) / a_true, 2),
+                'max_point_gap_m': round(float(gaps.max()), 3), 'median_point_gap_m': round(float(np.median(gaps)), 3),
+                'record_s': round(t1 - t0, 1)})
+    faults = [f for f in load_jsonl(os.path.join(run, 'obs', 'faults.jsonl')) if 'k' in f]
+    out['faults'] = [[round(f['t'] - t0, 1), f['k'], f['v']] for f in faults]
+    reload = os.path.join(run, 'zone_list.after_restart.json')
+    if os.path.exists(reload):
+        out['reload_identical'] = json.load(open(reload)) == zl
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('what', choices=['mission', 'loc', 'reconnect'])
+    ap.add_argument('what', choices=['mission', 'loc', 'reconnect', 'zone'])
     ap.add_argument('--obs', default=None, help='the observer file (default <what>.jsonl)')
     ap.add_argument('run')
     ap.add_argument('--zone', type=int, default=1)
@@ -360,6 +459,8 @@ def main():
         out = mission(args.run, args.zone)
     elif args.what == 'loc':
         out = loc(args.run, args.obs or 'loc.jsonl')
+    elif args.what == 'zone':
+        out = zone(args.run)
     else:
         out = reconnect(args.run, args.obs or 'loc.jsonl')
     with open(os.path.join(args.run, f'{args.what}_summary.json'), 'w') as f:
