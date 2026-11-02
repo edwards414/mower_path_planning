@@ -1412,6 +1412,7 @@ dependencies = [
  "mower_ubx",
  "serde_json",
  "serde_yaml",
+ "serialport",
 ]
 
 [[package]]

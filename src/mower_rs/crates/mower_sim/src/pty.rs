@@ -7,6 +7,13 @@
 //! never sees a hang-up. mower_sim only ever creates ptys and links: a path
 //! that already exists and is anything but a link to a pty (a real device,
 //! the robot's udev link to ttyS3) makes it refuse to start.
+//!
+//! A `Plug` is a device that can be unplugged (a USB device behind the hub):
+//! unplugging drops its pty, which hangs the slave up under the driver (its
+//! reads see EOF or POLLHUP, its ioctls EIO, as on a USB serial device that
+//! went away) and removes the link, so opening the path fails as it does
+//! once udev has removed the node; plugging it back in makes a fresh pty and
+//! links it again.
 
 use std::ffi::CStr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -116,6 +123,56 @@ impl Pty {
     }
 }
 
+/// A device behind the USB hub: its pty while plugged in, nothing at all
+/// (no pty, no link) while out.
+pub struct Plug {
+    link: PathBuf,
+    owner: Option<(u32, u32)>,
+    pty: Option<Pty>,
+    /// the last failure to plug back in, said once
+    failed: Option<String>,
+}
+
+impl Plug {
+    pub fn open(link: &Path, owner: Option<(u32, u32)>) -> Result<Plug, String> {
+        Ok(Plug { link: link.to_path_buf(), owner, pty: Some(Pty::open(link, owner)?), failed: None })
+    }
+
+    pub fn pty(&self) -> Option<&Pty> {
+        self.pty.as_ref()
+    }
+
+    /// The master's descriptor for poll(2); -1 (ignored there) while out.
+    pub fn fd(&self) -> i32 {
+        self.pty.as_ref().map_or(-1, Pty::fd)
+    }
+
+    /// Unplug or plug back in. `Ok(true)` when it changed; an error, once
+    /// per distinct one, when a fresh pty could not be made (tried again on
+    /// every call).
+    pub fn set(&mut self, plugged: bool) -> Result<bool, String> {
+        if plugged == self.pty.is_some() {
+            return Ok(false);
+        }
+        if !plugged {
+            self.pty = None;
+            return Ok(true);
+        }
+        match Pty::open(&self.link, self.owner) {
+            Ok(p) => {
+                self.pty = Some(p);
+                self.failed = None;
+                Ok(true)
+            }
+            Err(e) if self.failed.as_deref() == Some(&e) => Ok(false),
+            Err(e) => {
+                self.failed = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+}
+
 impl Drop for Pty {
     fn drop(&mut self) {
         // only our own link
@@ -209,6 +266,80 @@ mod tests {
         let pty = Pty::open(&stale, None).unwrap();
         assert_eq!(std::fs::read_link(&stale).unwrap(), Path::new(&pty.slave_name));
         drop(pty);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Unplugged, the driver's open port reads EOF, its writes and ioctls
+    /// fail, and the path is gone; plugged back in, a fresh pty answers on
+    /// the same path. serialport (the drivers' library) sees the hang-up as
+    /// an error both ways mower_gps (read) and mower_imu (bytes_to_read)
+    /// look at the port.
+    #[test]
+    fn an_unplugged_device_hangs_up_under_the_driver_and_comes_back_fresh() {
+        let dir = std::env::temp_dir().join(format!("mower_sim_pty_plug_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("gps_rtk");
+        let mut dev = Plug::open(&link, None).unwrap();
+        let first = dev.pty().unwrap().slave_name.clone();
+        let mut port = std::fs::OpenOptions::new().read(true).write(true).open(&link).unwrap();
+        let mut sp = serialport::new(link.to_str().unwrap(), 38_400).timeout(std::time::Duration::from_millis(200)).open().unwrap();
+        assert_eq!(dev.pty().unwrap().write(b"fix"), 3);
+        let mut got = [0u8; 3];
+        port.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"fix");
+
+        assert_eq!(dev.set(false), Ok(true));
+        assert!(dev.pty().is_none() && dev.fd() == -1);
+        assert_eq!(dev.set(false), Ok(false), "already out");
+        let mut buf = [0u8; 16];
+        match port.read(&mut buf) {
+            Ok(0) => {}
+            Err(e) if e.raw_os_error() == Some(libc::EIO) => {}
+            other => panic!("the driver's read after the unplug: {other:?}"),
+        }
+        assert!(port.write_all(b"cfg").is_err(), "a write to a device that went away fails");
+        let e = sp.read(&mut buf).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "mower_gps's read: {e}");
+        assert!(sp.bytes_to_read().is_err(), "mower_imu's bytes_to_read");
+        assert!(std::fs::symlink_metadata(&link).is_err(), "the path is gone");
+        let reopen = std::fs::OpenOptions::new().read(true).write(true).open(&link).unwrap_err();
+        assert_eq!(reopen.kind(), std::io::ErrorKind::NotFound);
+
+        assert_eq!(dev.set(true), Ok(true));
+        assert_eq!(dev.set(true), Ok(false), "already in");
+        let second = dev.pty().unwrap().slave_name.clone();
+        assert_ne!(first, second, "a fresh pty (the old one is still held open by the driver)");
+        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new(&second));
+        // the old descriptor stays hung up; a new open talks to the new pty
+        assert!(matches!(port.read(&mut buf), Ok(0) | Err(_)));
+        drop((port, sp));
+        let mut sp = serialport::new(link.to_str().unwrap(), 38_400).timeout(std::time::Duration::from_secs(2)).open().unwrap();
+        assert_eq!(dev.pty().unwrap().write(b"again"), 5);
+        let mut got = [0u8; 5];
+        sp.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"again");
+        sp.write_all(b"\xB5\x62").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut n = 0;
+        while n < 2 && std::time::Instant::now() < deadline {
+            n += dev.pty().unwrap().read(&mut buf[n..]);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(&buf[..n], b"\xB5\x62");
+        drop(sp);
+        drop(dev);
+        assert!(std::fs::symlink_metadata(&link).is_err(), "the link goes with the device");
+
+        // a path taken over while out (a real device) is never replaced:
+        // the error is said once and tried again
+        let mut dev = Plug::open(&link, None).unwrap();
+        dev.set(false).unwrap();
+        std::fs::write(&link, "").unwrap();
+        assert!(dev.set(true).unwrap_err().contains("not a link"));
+        assert_eq!(dev.set(true), Ok(false), "said once");
+        std::fs::remove_file(&link).unwrap();
+        assert_eq!(dev.set(true), Ok(true));
+        drop(dev);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

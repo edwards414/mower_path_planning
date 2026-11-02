@@ -8,9 +8,21 @@
 //! - the position is the antenna's (gps_link of the URDF, turned with the
 //!   robot) plus noise, on WGS84 around the start point;
 //! - `Mode`: RTK fixed (default; hAcc 14 mm, the app wants <= 15 mm to start
-//!   a mission), RTK float, plain 3D, or no fix, switchable at run time;
+//!   a mission), RTK float, plain 3D, no fix (3 satellites) or no satellites
+//!   at all, switchable at run time; `GpsMode` adds an optional hAcc of its
+//!   own (`float:400`);
 //! - NAV-RELPOSNED is the vector from a base station placed so that it reads
 //!   fake_sensors.py's (12.34, -5.67, 0.89) m at the start.
+//!
+//! At the start the receiver is already configured as mower_gps leaves it
+//! (a container restart finds it so). Plugged back in after an unplug
+//! (`plug_in`: the `gps_gone` / `hub_gone` control files, a USB hub reset
+//! that cut its power) it is a power-cycled F9P: the factory configuration
+//! in RAM (1 Hz, no UBX message enabled, NMEA GGA and RMC on USB), so
+//! nothing but NMEA comes out until the driver configures it again, and the
+//! solution walks nosat -> 3d -> float -> fixed (`reacquire`, seconds per
+//! stage) before the asked-for mode holds again. The CFG messages
+//! acknowledged in one burst are reported (`events`: `gps cfg acks=N`).
 
 use mower_ubx::{class, encode, id, Parser};
 
@@ -32,6 +44,9 @@ pub enum Mode {
     Float,
     ThreeD,
     NoFix,
+    /// No satellite in view (under a roof, the antenna's cable out, just
+    /// powered up): numSV 0, an empty NAV-SAT, fixType 0.
+    NoSat,
 }
 
 struct Solution {
@@ -44,7 +59,13 @@ struct Solution {
     relpos_flags: u32,
     /// N, E, D accuracy of NAV-RELPOSNED, 0.1 mm
     relpos_acc: [u32; 3],
+    /// NAV-SAT lists fake_sensors.py's five satellites; none when false
+    sky: bool,
 }
+
+/// The largest hAcc an override may give, mm: NAV-HPPOSLLH carries it in
+/// 0.1 mm in a u32 (it is the no-fix value, 4.29 km).
+pub const MAX_H_ACC_MM: u32 = 4_294_967;
 
 impl Mode {
     pub fn parse(text: &str) -> Option<Mode> {
@@ -53,6 +74,7 @@ impl Mode {
             "float" => Some(Mode::Float),
             "3d" => Some(Mode::ThreeD),
             "none" | "nofix" => Some(Mode::NoFix),
+            "nosat" => Some(Mode::NoSat),
             _ => None,
         }
     }
@@ -63,6 +85,18 @@ impl Mode {
             Mode::Float => "float",
             Mode::ThreeD => "3d",
             Mode::NoFix => "none",
+            Mode::NoSat => "nosat",
+        }
+    }
+
+    /// Worse to better, for the reacquisition walk.
+    fn rank(self) -> u8 {
+        match self {
+            Mode::NoSat => 0,
+            Mode::NoFix => 1,
+            Mode::ThreeD => 2,
+            Mode::Float => 3,
+            Mode::Fixed => 4,
         }
     }
 
@@ -71,28 +105,96 @@ impl Mode {
         // (bits 3-4), relPosNormalized, as fake_sensors.py sends them
         let rtk = |carr: u32| 0x001 | 0x002 | 0x004 | 0x200 | (carr << 3);
         match self {
-            Mode::Fixed => Solution { fix_type: 3, flags: 0x83, num_sv: 17, h_acc_mm: 14, v_acc_mm: 23, sigma_m: 0.005, relpos_flags: rtk(2), relpos_acc: [140, 150, 300] },
-            Mode::Float => Solution { fix_type: 3, flags: 0x43, num_sv: 16, h_acc_mm: 250, v_acc_mm: 420, sigma_m: 0.12, relpos_flags: rtk(1), relpos_acc: [2500, 2500, 4200] },
-            Mode::ThreeD => Solution { fix_type: 3, flags: 0x01, num_sv: 12, h_acc_mm: 1600, v_acc_mm: 2600, sigma_m: 0.9, relpos_flags: 0x001, relpos_acc: [16000, 16000, 26000] },
-            Mode::NoFix => Solution { fix_type: 0, flags: 0x00, num_sv: 3, h_acc_mm: 4_294_967, v_acc_mm: 3_750_082, sigma_m: 0.0, relpos_flags: 0, relpos_acc: [0, 0, 0] },
+            Mode::Fixed => Solution { fix_type: 3, flags: 0x83, num_sv: 17, h_acc_mm: 14, v_acc_mm: 23, sigma_m: 0.005, relpos_flags: rtk(2), relpos_acc: [140, 150, 300], sky: true },
+            Mode::Float => Solution { fix_type: 3, flags: 0x43, num_sv: 16, h_acc_mm: 250, v_acc_mm: 420, sigma_m: 0.12, relpos_flags: rtk(1), relpos_acc: [2500, 2500, 4200], sky: true },
+            Mode::ThreeD => Solution { fix_type: 3, flags: 0x01, num_sv: 12, h_acc_mm: 1600, v_acc_mm: 2600, sigma_m: 0.9, relpos_flags: 0x001, relpos_acc: [16000, 16000, 26000], sky: true },
+            Mode::NoFix => Solution { fix_type: 0, flags: 0x00, num_sv: 3, h_acc_mm: 4_294_967, v_acc_mm: 3_750_082, sigma_m: 0.0, relpos_flags: 0, relpos_acc: [0, 0, 0], sky: true },
+            Mode::NoSat => Solution { fix_type: 0, flags: 0x00, num_sv: 0, h_acc_mm: 4_294_967, v_acc_mm: 3_750_082, sigma_m: 0.0, relpos_flags: 0, relpos_acc: [0, 0, 0], sky: false },
         }
     }
 }
+
+/// What `--gps-mode` and the `gps_mode` control file ask for: a solution
+/// and, after a colon, the horizontal accuracy it reports in mm
+/// (`float:400`) instead of the mode's own. The override is what the
+/// receiver says (NAV-PVT and NAV-HPPOSLLH hAcc, NAV-RELPOSNED accN/accE,
+/// so /fix's covariance), not the position's noise (`--gps-noise`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpsMode {
+    pub mode: Mode,
+    pub h_acc_mm: Option<u32>,
+}
+
+impl From<Mode> for GpsMode {
+    fn from(mode: Mode) -> GpsMode {
+        GpsMode { mode, h_acc_mm: None }
+    }
+}
+
+impl GpsMode {
+    /// `MODE` or `MODE:HACC_MM` (1..=MAX_H_ACC_MM).
+    pub fn parse(text: &str) -> Option<GpsMode> {
+        let text = text.trim();
+        let (mode, h_acc) = match text.split_once(':') {
+            Some((m, h)) => (m, Some(h.trim().parse::<u32>().ok().filter(|h| (1..=MAX_H_ACC_MM).contains(h))?)),
+            None => (text, None),
+        };
+        Some(GpsMode { mode: Mode::parse(mode)?, h_acc_mm: h_acc })
+    }
+
+    pub fn name(self) -> String {
+        match self.h_acc_mm {
+            Some(h) => format!("{}:{h}", self.mode.name()),
+            None => self.mode.name().to_string(),
+        }
+    }
+
+    fn solution(self) -> Solution {
+        let mut s = self.mode.solution();
+        if let Some(h) = self.h_acc_mm {
+            s.h_acc_mm = h;
+            s.relpos_acc[0] = h.saturating_mul(10);
+            s.relpos_acc[1] = h.saturating_mul(10);
+        }
+        s
+    }
+}
+
+/// How the walk after a plug-in goes by default: seconds of nosat, of 3D
+/// and of float before RTK fixed.
+pub const REACQUIRE_S: [f64; 3] = [2.0, 5.0, 10.0];
+/// A CFG burst is over (and reported) after this long without another.
+const CFG_BURST_QUIET_S: f64 = 1.0;
+/// The factory default measurement period.
+const DEFAULT_PERIOD_MS: u32 = 1000;
 
 /// The NAV messages whose rate CFG-MSG sets, in the order they go out.
 const NAV: [u8; 5] = [id::PVT, id::HPPOSLLH, id::RELPOSNED, id::SAT, id::EOE];
 
 pub struct Gnss {
     parser: Parser,
-    pub mode: Mode,
+    /// the solution asked for (the command line's, or the control file's)
+    pub mode: GpsMode,
     /// metres; the mode's own when None
     pub sigma: Option<f64>,
     period_ms: u32,
     every: [u8; 5],
+    /// the factory default's NMEA GGA and RMC on USB, every epoch
+    nmea: bool,
     epoch: u64,
     next_epoch: f64,
     /// the RTK base station, east / north / up of the start, metres
     base: [f64; 3],
+    /// seconds of nosat, 3D and float after a plug-in
+    pub reacquire: [f64; 3],
+    /// when it was last plugged in, while the walk is not over
+    walk_from: Option<f64>,
+    /// the solution the walk last reported
+    walk_said: Option<String>,
+    /// CFG messages acknowledged in the current burst, and the last one's time
+    burst: u64,
+    burst_at: f64,
+    events: Vec<String>,
     pub acks: u64,
     pub epochs: u64,
 }
@@ -122,16 +224,23 @@ fn split(value: f64, scale: f64, parts: i64) -> (i32, i8) {
 }
 
 impl Gnss {
-    pub fn new(mode: Mode, sigma: Option<f64>) -> Gnss {
+    pub fn new(mode: impl Into<GpsMode>, sigma: Option<f64>) -> Gnss {
         Gnss {
             parser: Parser::default(),
-            mode,
+            mode: mode.into(),
             sigma,
             period_ms: 250,
             every: [1, 1, 1, 4, 1],
+            nmea: false,
             epoch: 0,
             next_epoch: 0.0,
             base: [5.67, -12.34, 0.89],
+            reacquire: REACQUIRE_S,
+            walk_from: None,
+            walk_said: None,
+            burst: 0,
+            burst_at: 0.0,
+            events: Vec::new(),
             acks: 0,
             epochs: 0,
         }
@@ -141,14 +250,86 @@ impl Gnss {
         self.period_ms
     }
 
-    /// Bytes the driver wrote: CFG messages, each acknowledged.
-    pub fn on_bytes(&mut self, data: &[u8], out: &mut Vec<u8>) {
+    /// Unplugged: whatever burst of CFG was going on is reported now.
+    pub fn unplug(&mut self) {
+        self.flush_burst();
+    }
+
+    /// Plugged back in at `now` after an unplug: a power-cycled receiver,
+    /// back on its factory configuration in RAM (1 Hz, no UBX output, NMEA
+    /// on), starting the reacquisition walk.
+    pub fn plug_in(&mut self, now: f64) {
+        self.flush_burst();
+        self.parser = Parser::default();
+        self.period_ms = DEFAULT_PERIOD_MS;
+        self.every = [0; 5];
+        self.nmea = true;
+        self.epoch = 0;
+        // its first epoch a period after power-up
+        self.next_epoch = now + DEFAULT_PERIOD_MS as f64 / 1000.0;
+        self.walk_from = Some(now);
+        self.walk_said = None;
+    }
+
+    /// The solution at `now`: the one asked for, or the walk's stage after
+    /// a plug-in while that is worse.
+    pub fn solution_at(&self, now: f64) -> GpsMode {
+        let Some(from) = self.walk_from else { return self.mode };
+        let t = now - from;
+        let [nosat, threed, float] = self.reacquire;
+        let stage = if t < nosat {
+            Mode::NoSat
+        } else if t < nosat + threed {
+            Mode::ThreeD
+        } else if t < nosat + threed + float {
+            Mode::Float
+        } else {
+            Mode::Fixed
+        };
+        if stage.rank() < self.mode.mode.rank() {
+            stage.into()
+        } else {
+            self.mode
+        }
+    }
+
+    /// The lines for the control log since the last call: each solution of
+    /// the walk after a plug-in (`gps reacquire 3d`, ... up to the mode
+    /// asked for), and each burst of CFG acknowledged (`gps cfg acks=N`).
+    pub fn events(&mut self, now: f64) -> Vec<String> {
+        if let Some(from) = self.walk_from {
+            let now_is = self.solution_at(now).name();
+            if self.walk_said.as_deref() != Some(&now_is) {
+                self.events.push(format!("gps reacquire {now_is}"));
+                self.walk_said = Some(now_is);
+            }
+            if now - from >= self.reacquire.iter().sum::<f64>() {
+                self.walk_from = None;
+            }
+        }
+        if self.burst > 0 && now - self.burst_at >= CFG_BURST_QUIET_S {
+            self.flush_burst();
+        }
+        std::mem::take(&mut self.events)
+    }
+
+    fn flush_burst(&mut self) {
+        if self.burst > 0 {
+            self.events.push(format!("gps cfg acks={}", self.burst));
+            self.burst = 0;
+        }
+    }
+
+    /// Bytes the driver wrote at `now`: CFG messages, each acknowledged.
+    pub fn on_bytes(&mut self, data: &[u8], now: f64, out: &mut Vec<u8>) {
         for f in self.parser.push_all(data) {
             if f.class != class::CFG {
                 continue;
             }
             out.extend_from_slice(&encode(class::ACK, id::ACK_ACK, &[f.class, f.id]));
             self.acks += 1;
+            self.burst += 1;
+            self.burst_at = now;
             let p = &f.payload;
             match f.id {
                 id::CFG_RATE if p.len() >= 6 => {
@@ -179,7 +360,7 @@ impl Gnss {
         }
         let gps_ms = ((unix + GPS_LEAP_S - GPS_EPOCH_UNIX) * 1000.0) as u64;
         let itow = ((gps_ms % WEEK_MS) / self.period_ms as u64 * self.period_ms as u64) as u32;
-        let sol = self.mode.solution();
+        let sol = self.solution_at(now).solution();
         let fix = sol.fix_type != 0;
         let sigma = if fix { self.sigma.unwrap_or(sol.sigma_m) } else { 0.0 };
         let (s, c) = world.yaw.sin_cos();
@@ -201,10 +382,13 @@ impl Gnss {
             out.extend(encode(class::NAV, id::RELPOSNED, &relposned(itow, &sol, rel)));
         }
         if due(3) {
-            out.extend(encode(class::NAV, id::SAT, &navsat(itow)));
+            out.extend(encode(class::NAV, id::SAT, &navsat(itow, sol.sky)));
         }
         if due(4) {
             out.extend(encode(class::NAV, id::EOE, &itow.to_le_bytes()));
+        }
+        if self.nmea {
+            out.extend(nmea(unix, &sol, fix.then_some((lat, lon, h)), vel));
         }
         self.epoch += 1;
         self.epochs += 1;
@@ -288,19 +472,65 @@ fn relposned(itow: u32, sol: &Solution, ned: [f64; 3]) -> Vec<u8> {
     p
 }
 
-/// fake_sensors.py's sky: five satellites, used, with corrections.
-fn navsat(itow: u32) -> Vec<u8> {
+/// fake_sensors.py's sky: five satellites, used, with corrections (none
+/// at all without a sky).
+fn navsat(itow: u32, sky: bool) -> Vec<u8> {
     let sats: [(u8, u8, u8, i8, i16); 5] = [(0, 3, 42, 55, 120), (0, 7, 38, 30, 250), (2, 11, 40, 70, 10), (3, 21, 36, 25, 300), (6, 9, 33, 15, 80)];
+    let sats = if sky { &sats[..] } else { &[] };
     let mut p = Vec::with_capacity(8 + 12 * sats.len());
     p.extend_from_slice(&itow.to_le_bytes());
     p.extend_from_slice(&[1, sats.len() as u8, 0, 0]);
-    for (gnss, sv, cno, elev, azim) in sats {
+    for &(gnss, sv, cno, elev, azim) in sats {
         p.extend_from_slice(&[gnss, sv, cno, elev as u8]);
         p.extend_from_slice(&azim.to_le_bytes());
         p.extend_from_slice(&(-12i16).to_le_bytes());
         p.extend_from_slice(&(0x08u32 | 0x40 | 7).to_le_bytes());
     }
     p
+}
+
+/// `$<body>*CS\r\n`
+fn sentence(body: &str) -> String {
+    let cs = body.bytes().fold(0u8, |a, b| a ^ b);
+    format!("${body}*{cs:02X}\r\n")
+}
+
+/// Degrees as NMEA's (d)ddmm.mmmmm and its hemisphere.
+fn nmea_angle(deg: f64, width: usize, pos: char, neg: char) -> String {
+    let a = deg.abs();
+    let whole = a.trunc();
+    format!("{:0width$}{:08.5},{}", whole as u32, (a - whole) * 60.0, if deg < 0.0 { neg } else { pos })
+}
+
+/// Two of the six sentences the factory configuration sends on USB, GGA
+/// and RMC (GLL, GSA, GSV and VTG are skipped by mower_gps's parser alike).
+fn nmea(unix: f64, sol: &Solution, pos: Option<(f64, f64, f64)>, (ve, vn): (f64, f64)) -> Vec<u8> {
+    let (y, mo, d, h, mi, s) = civil(unix);
+    let cs = ((unix.fract() * 100.0) as u32).min(99);
+    let time = format!("{h:02}{mi:02}{s:02}.{cs:02}");
+    // GGA quality and RMC mode: 4 / R RTK fixed, 5 / F float, 1 / A 3D
+    let (quality, mode) = match (sol.fix_type, sol.flags & 0xC0) {
+        (0, _) => (0, 'N'),
+        (_, 0x80) => (4, 'R'),
+        (_, 0x40) => (5, 'F'),
+        _ => (1, 'A'),
+    };
+    let (gga, rmc) = match pos {
+        Some((lat, lon, hgt)) => {
+            let place = format!("{},{}", nmea_angle(lat, 2, 'N', 'S'), nmea_angle(lon, 3, 'E', 'W'));
+            let knots = ve.hypot(vn) * 3600.0 / 1852.0;
+            let course = ve.atan2(vn).to_degrees().rem_euclid(360.0);
+            (
+                format!("GNGGA,{time},{place},{quality},{:02},0.80,{:.3},M,{GEOID_SEPARATION_M:.3},M,,", sol.num_sv, hgt - GEOID_SEPARATION_M),
+                format!("GNRMC,{time},A,{place},{knots:.3},{course:.2},{d:02}{mo:02}{:02},,,{mode},V", y.rem_euclid(100)),
+            )
+        }
+        None => (
+            format!("GNGGA,{time},,,,,0,{:02},99.99,,,,,,", sol.num_sv),
+            format!("GNRMC,{time},V,,,,,,,{d:02}{mo:02}{:02},,,N,V", y.rem_euclid(100)),
+        ),
+    };
+    format!("{}{}", sentence(&gga), sentence(&rmc)).into_bytes()
 }
 
 #[cfg(test)]
@@ -335,7 +565,7 @@ mod tests {
         cfg.extend(mower_ubx::cfg::rate(100, 1));
         cfg.extend(mower_ubx::cfg::msg_rate(class::NAV, id::SAT, 10));
         cfg.extend(mower_ubx::cfg::msg_rate(class::NAV, id::RELPOSNED, 0));
-        g.on_bytes(&cfg, &mut out);
+        g.on_bytes(&cfg, 0.0, &mut out);
         let acks: Vec<Ack> = frames(&out).iter().filter_map(Ack::parse).collect();
         assert_eq!(acks.len(), 4);
         assert!(acks.iter().all(|a| a.ok && a.class == class::CFG));
@@ -430,5 +660,187 @@ mod tests {
         assert_eq!(split(121.565_400_123, 1e7, 100), (1_215_654_001, 23));
         assert_eq!(split(-0.000_000_123_45, 1e7, 100), (-1, -23));
         assert_eq!(split(45.12346, 1e3, 10), (45_123, 5));
+    }
+
+    /// What mower_gps sends at every start (Driver::configure, rate_hz 4):
+    /// UART1 output off, 250 ms, NAV-PVT, -HPPOSLLH, -RELPOSNED, -SAT every
+    /// 4th, -EOE.
+    fn driver_cfg() -> Vec<u8> {
+        let mut cfg = encode(class::CFG, 0x8A, &[0, 1, 0, 0, 1, 0, 0x74, 0x10, 0, 2, 0, 0x74, 0x10, 0, 4, 0, 0x74, 0x10, 0]);
+        cfg.extend(mower_ubx::cfg::rate(250, 1));
+        for (m, every) in [(id::PVT, 1), (id::HPPOSLLH, 1), (id::RELPOSNED, 1), (id::SAT, 4), (id::EOE, 1)] {
+            cfg.extend(mower_ubx::cfg::msg_rate(class::NAV, m, every));
+        }
+        cfg
+    }
+
+    /// One epoch's PVT (with its HPPOSLLH and NAV-SAT, when sent) at `now`.
+    fn epoch_at(g: &mut Gnss, now: f64) -> (Option<NavPvt>, Option<NavHpPosLlh>, Option<NavSat>, Vec<u8>) {
+        let (world, mount, origin, mut rng) = setup();
+        let mut out = Vec::new();
+        g.tick(now, 1.8e9 + now, &world, &mount, &origin, &mut rng, &mut out);
+        let f = frames(&out);
+        let find = |i: u8| f.iter().find(|x| x.id == i).map(|x| x.payload.clone());
+        (find(id::PVT).and_then(|p| NavPvt::parse(&p)), find(id::HPPOSLLH).and_then(|p| NavHpPosLlh::parse(&p)), find(id::SAT).and_then(|p| NavSat::parse(&p)), out)
+    }
+
+    #[test]
+    fn nosat_has_no_satellite_and_no_fix() {
+        let mut g = Gnss::new(Mode::NoSat, None);
+        let (pvt, hp, sat, _) = epoch_at(&mut g, 0.0);
+        let (pvt, hp, sat) = (pvt.unwrap(), hp.unwrap(), sat.unwrap());
+        assert_eq!((pvt.fix_type, pvt.num_sv, pvt.fix_ok()), (0, 0, false));
+        assert_eq!((pvt.navsat_status(), pvt.carrier_solution()), (-1, CarrierSolution::None));
+        assert!(sat.sats.is_empty() && sat.num_used() == 0, "{sat:?}");
+        let fix = Fix::from_epoch(&pvt, Some(&hp));
+        assert!(fix.status == -1 && fix.latitude_deg.is_nan() && hp.invalid);
+        // `none` stays what it was: 3 satellites, five in NAV-SAT
+        let (pvt, _, sat, _) = epoch_at(&mut Gnss::new(Mode::NoFix, None), 0.0);
+        assert_eq!((pvt.unwrap().num_sv, sat.unwrap().sats.len()), (3, 5));
+        assert_eq!(Mode::parse("nosat"), Some(Mode::NoSat));
+        assert_eq!(Mode::NoSat.name(), "nosat");
+    }
+
+    #[test]
+    fn an_h_acc_of_its_own_is_what_the_fix_reports() {
+        let mut g = Gnss::new(GpsMode::parse("float:400").unwrap(), None);
+        let (pvt, hp, _, out) = epoch_at(&mut g, 0.0);
+        let (pvt, hp) = (pvt.unwrap(), hp.unwrap());
+        assert_eq!(pvt.h_acc_mm, 400);
+        assert_eq!(pvt.carrier_solution(), CarrierSolution::Float);
+        let fix = Fix::from_epoch(&pvt, Some(&hp));
+        assert!(fix.high_precision && (fix.h_var_m2.sqrt() - 0.4).abs() < 1e-9, "{fix:?}");
+        assert_eq!(fix.status, 0, "float reads 0");
+        // vAcc, the noise and the solution are float's own
+        assert!((fix.v_var_m2.sqrt() - 0.42).abs() < 1e-9);
+        let relpos = frames(&out).iter().find(|x| x.id == id::RELPOSNED).and_then(|f| NavRelPosNed::parse(&f.payload)).unwrap();
+        assert_eq!((relpos.acc_n_0_1mm, relpos.acc_e_0_1mm), (4000, 4000));
+        // RTK fixed with a worse hAcc is still GBAS_FIX
+        let mut g = Gnss::new(GpsMode::parse("fixed:30").unwrap(), None);
+        let (pvt, hp, _, _) = epoch_at(&mut g, 0.0);
+        let fix = Fix::from_epoch(&pvt.unwrap(), hp.as_ref());
+        assert_eq!(fix.status, 2);
+        assert!((fix.h_var_m2.sqrt() - 0.030).abs() < 1e-9, "the app's 15 mm is not met: {fix:?}");
+        assert_eq!(GpsMode::parse("float:400").unwrap().name(), "float:400");
+        assert_eq!(GpsMode::parse(" fixed ").unwrap(), Mode::Fixed.into());
+        for bad in ["float:", "float:0", "float:x", "fixed:4294968", "rtk-ish:5", ""] {
+            assert_eq!(GpsMode::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(GpsMode::parse("none:4294967").unwrap().h_acc_mm, Some(MAX_H_ACC_MM));
+    }
+
+    /// Plugged back in, the receiver is a power-cycled F9P: 1 Hz NMEA and
+    /// no UBX until the driver configures it again; the burst of CFG it
+    /// acknowledges is reported once it is over.
+    #[test]
+    fn a_plug_in_resets_the_configuration_until_the_driver_sends_it_again() {
+        let mut g = Gnss::new(Mode::Fixed, None);
+        let mut acks = Vec::new();
+        g.on_bytes(&driver_cfg(), 0.0, &mut acks);
+        assert_eq!(frames(&acks).iter().filter_map(Ack::parse).filter(|a| a.ok).count(), 7);
+        assert!(g.events(0.5).is_empty(), "the burst may go on");
+        assert_eq!(g.events(1.0), ["gps cfg acks=7"]);
+        assert!(g.events(5.0).is_empty(), "said once");
+
+        g.unplug();
+        g.plug_in(10.0);
+        assert_eq!(g.period_ms(), 1000);
+        let (world, mount, origin, mut rng) = setup();
+        let mut out = Vec::new();
+        let mut t = 10.0;
+        while t < 13.0 {
+            g.tick(t, 1.8e9 + t, &world, &mount, &origin, &mut rng, &mut out);
+            t += 0.05;
+        }
+        assert!(frames(&out).is_empty(), "no UBX message is on by default");
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.split_terminator("\r\n").collect();
+        assert_eq!(lines.len(), 2 * 2, "GGA and RMC once a second, from a second after power-up: {lines:?}");
+        for l in &lines {
+            let (body, cs) = l[1..].split_once('*').unwrap();
+            assert_eq!(u8::from_str_radix(cs, 16).unwrap(), body.bytes().fold(0, |a, b| a ^ b), "{l}");
+        }
+        assert!(lines[0].starts_with("$GNGGA,") && lines[0].contains(",,,,,0,00,99.99,"), "nosat at first: {}", lines[0]);
+        assert!(lines[1].starts_with("$GNRMC,") && lines[1].contains(",V,"));
+        // mower_gps's parser skips it all, and the CFG goes in as before
+        let mut p = Parser::default();
+        assert!(p.push_all(text.as_bytes()).is_empty() && p.checksum_failures == 0);
+        let mut acks = Vec::new();
+        g.on_bytes(&driver_cfg()[..30], 13.0, &mut acks);
+        g.on_bytes(&driver_cfg()[30..], 13.2, &mut acks);
+        assert_eq!(frames(&acks).iter().filter_map(Ack::parse).filter(|a| a.ok).count(), 7);
+        assert_eq!(g.period_ms(), 250);
+        assert!(!g.events(14.0).iter().any(|e| e.starts_with("gps cfg")), "the burst may go on");
+        let ev = g.events(14.2);
+        assert!(ev.contains(&"gps cfg acks=7".to_string()), "{ev:?}");
+        let mut out = Vec::new();
+        let mut t = 14.0;
+        while t < 16.0 {
+            g.tick(t, 1.8e9 + t, &world, &mount, &origin, &mut rng, &mut out);
+            t += 0.05;
+        }
+        let f = frames(&out);
+        let count = |i: u8| f.iter().filter(|x| x.id == i).count();
+        assert_eq!((count(id::PVT), count(id::HPPOSLLH), count(id::RELPOSNED), count(id::EOE)), (8, 8, 8, 8), "4 Hz again");
+        assert_eq!(count(id::SAT), 2);
+        // a burst cut short by an unplug is still reported
+        let mut acks = Vec::new();
+        g.on_bytes(&driver_cfg()[..30], 20.0, &mut acks);
+        g.unplug();
+        let ev = g.events(20.1);
+        assert_eq!(ev.iter().filter(|e| e.starts_with("gps cfg")).collect::<Vec<_>>(), ["gps cfg acks=1"], "the VALSET only");
+    }
+
+    /// After a plug-in the solution walks nosat -> 3d -> float -> fixed,
+    /// never better than the mode asked for, and each step is reported.
+    #[test]
+    fn the_reacquisition_walk_takes_its_time() {
+        let mut g = Gnss::new(Mode::Fixed, None);
+        g.plug_in(100.0);
+        let mut acks = Vec::new();
+        g.on_bytes(&driver_cfg(), 100.1, &mut acks);
+        let mut said = Vec::new();
+        let mut seen: Vec<(f64, i8, CarrierSolution, u8)> = Vec::new();
+        let mut t = 100.0;
+        while t < 120.0 {
+            if let (Some(pvt), _, _, _) = epoch_at(&mut g, t) {
+                if seen.last().map(|s| (s.1, s.2, s.3)) != Some((pvt.navsat_status(), pvt.carrier_solution(), pvt.num_sv)) {
+                    seen.push((t, pvt.navsat_status(), pvt.carrier_solution(), pvt.num_sv));
+                }
+            }
+            said.extend(g.events(t).into_iter().map(|e| (t, e)));
+            t += 0.01;
+        }
+        let when = |i: usize| seen[i].0 - 100.0;
+        assert_eq!(seen.iter().map(|s| (s.1, s.2, s.3)).collect::<Vec<_>>(), [(-1, CarrierSolution::None, 0), (0, CarrierSolution::None, 12), (0, CarrierSolution::Float, 16), (2, CarrierSolution::Fixed, 17)]);
+        // epochs every 250 ms: each stage shows within one epoch of its time
+        assert!(when(0) < 1.5, "{seen:?}");
+        assert!((2.0..2.3).contains(&when(1)), "3d at 2 s: {seen:?}");
+        assert!((7.0..7.3).contains(&when(2)), "float at 2 + 5 s: {seen:?}");
+        assert!((17.0..17.3).contains(&when(3)), "fixed at 2 + 5 + 10 s: {seen:?}");
+        let lines: Vec<&str> = said.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(lines, ["gps reacquire nosat", "gps cfg acks=7", "gps reacquire 3d", "gps reacquire float", "gps reacquire fixed"]);
+        assert!((said[4].0 - 117.0).abs() < 0.02 && (said[2].0 - 102.0).abs() < 0.02, "{said:?}");
+        assert_eq!(g.solution_at(1000.0), Mode::Fixed.into());
+
+        // never better than asked: float:400 ends at float:400, none at none
+        for (mode, walk) in [("float:400", vec!["nosat", "3d", "float:400"]), ("none", vec!["nosat", "none"]), ("nosat", vec!["nosat"])] {
+            let mut g = Gnss::new(GpsMode::parse(mode).unwrap(), None);
+            g.reacquire = [1.0, 1.0, 1.0];
+            g.plug_in(0.0);
+            let mut lines = Vec::new();
+            for k in 0..500 {
+                lines.extend(g.events(k as f64 * 0.01));
+            }
+            let want: Vec<String> = walk.iter().map(|w| format!("gps reacquire {w}")).collect();
+            assert_eq!(lines, want, "{mode}");
+            assert_eq!(g.solution_at(10.0), GpsMode::parse(mode).unwrap());
+        }
+        // no walk at all with 0,0,0
+        let mut g = Gnss::new(Mode::Fixed, None);
+        g.reacquire = [0.0; 3];
+        g.plug_in(5.0);
+        assert_eq!(g.solution_at(5.0), Mode::Fixed.into());
+        assert_eq!(g.events(5.0), ["gps reacquire fixed"]);
     }
 }

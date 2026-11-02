@@ -82,11 +82,19 @@ docker compose -f deploy/sim/docker-compose.sim.yaml exec sim touch /tmp/mower_s
 |---|---|
 | `base_mute` | the STM32's UART with both leads pulled: nothing either way (the board stops its wheels after 300 ms) |
 | `base_deaf` | only the robot's TX lead out: the board keeps reporting, COMMAND_TIMEOUT |
-| `sensors_mute` | a USB hub reset: the IMU and the F9P go silent (their drivers exit and come back) |
-| `gps_mode` | its text: `fixed`, `float`, `3d` or `none` (`echo float > /tmp/mower_sim/gps_mode`) |
+| `sensors_mute` | the IMU and the F9P stall: they go silent with their ports open (their drivers exit after 3 s / 5 s of silence and come back) |
+| `imu_gone` | the IMU unplugged: its pty closed under the driver (read error / EOF) and `/dev/imu_usb` removed; a fresh pty and link when the file goes |
+| `gps_gone` | the F9P unplugged the same way (`/dev/gps_rtk`); it comes back power-cycled: factory configuration (mower_gps must send its CFG again) and a fix that walks nosat, 3d, float, fixed (`--reacquire 2,5,10` seconds) |
+| `hub_gone` | a USB hub reset: the IMU and the F9P unplugged at once (`touch`, wait ~2 s, `rm`) |
+| `gps_mode` | its text: `fixed`, `float`, `3d`, `none` (no fix) or `nosat` (no satellite at all), optionally with an hAcc in mm (`echo float:400 > /tmp/mower_sim/gps_mode`) |
+
+Each control event is one line on stderr, `mower_sim: control: <event>`
+(`hub_gone on`, `imu gone`, `gps back`, `gps reacquire float`, `gps cfg
+acks=7`, ...), so a test harness can count them in `docker compose logs`.
 
 Start options go in `SIM_ARGS` (`mower_sim --help` in the image), e.g.
-`SIM_ARGS="--gps-mode float --heading 30 --battery-v 22.5"`, or `--slip 0.05`
+`SIM_ARGS="--gps-mode float --heading 30 --battery-v 22.5"`, `--reacquire 1,3,5`,
+or `--slip 0.05`
 to make /odom drift from the truth. `--truth-log FILE` writes the true pose
 at 10 Hz.
 

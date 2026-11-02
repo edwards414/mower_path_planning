@@ -97,7 +97,7 @@ for _ in $(seq 50); do
   kill -0 $! 2>/dev/null || { log "mower_sim did not start"; exit 1; }
   sleep 0.1
 done
-log "faults: touch $CONTROL/base_mute, base_deaf or sensors_mute; echo float > $CONTROL/gps_mode"
+log "faults: touch $CONTROL/base_mute, base_deaf, sensors_mute, imu_gone, gps_gone or hub_gone; echo float > $CONTROL/gps_mode"
 
 # --- 5. the stack -------------------------------------------------------------------
 # deploy/docker-compose.yaml's command with the robot's .env (every RUST_*
