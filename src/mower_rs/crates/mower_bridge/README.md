@@ -16,9 +16,9 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
   - **The check** (`coverage`): every endpoint a module made on the bus must be in the manifest.
 - **Where it runs:** as `mower_rsd`'s bridge module, and next to a moved module in its own binary (`module_main`).
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
-  1-5). base, pid_autotune and the final guard (step 6) and the manual guard (step 7) have their bus IO next to their
-  r2r IO, with their flags off: they run on r2r until the owner switches the drivetrain over ("The flags"). ws_bridge
-  is in the manifest (step E3), on r2r. E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default,
+  1-5), and so are base, pid_autotune and the final guard (step 6) and the manual guard (step 7), whose flags are on
+  since E3.2; they still have their r2r IO next to the bus IO ("The flags"). ws_bridge is in the manifest (step E3),
+  on the bus by default since E3.2 (`ws_bridge_bus`). E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default,
   are born on the bus and replace the outside twist_mux and robot_state_publisher when they run; so is E5's `bag`
   (`rust_recorder`, off by default; E5-3a, idle only), which replaces the outside Python recorder.
 
@@ -101,7 +101,9 @@ conversion. A flag says "this module's code uses the bus"; a module of steps 1-5
   `instance_on_bus(<its node>)`, and its `main.rs` runs `module_main_by_flag`, which puts the bridge next to it only
   when it is on the bus. The plan reads the same flags, so module and bridge agree
   (`the_flag_a_module_reads_is_the_one_the_plan_has`). With the flags false nothing of the bus IO runs, and the plan
-  is E2's line for line. The owner flips them after a supervised test.
+  is E2's line for line. They are on since E3.2, after the owner's supervised test
+  (`the_production_plan_has_the_drivetrain_on_the_bus`); setting one back to false is the roll-back, and since the
+  flags are compiled in that is a new image (or the previous one, `mower-update.sh --tag`).
 - **Instances:** `INSTANCES` holds flags of single instances, by node name, for a module whose instances move in
   different steps: the final guard (`velocity_command_guard`) in step 6, the manual guard in step 7. An instance is on
   the bus when its module's flag (`guards`) or its own is set. `Running::rsd` asks its `on_bus` for the module's id,

@@ -809,6 +809,9 @@ What it was asked to provide:
      - with mower_base on the bus, `rust_status:=false` or `rust_pid_autotune:=false` (their rclpy nodes) refuse the
        plan (two `/mower_base/led_command` writers, one on each side, 5.5 d): mower_rsd does not start. Those two
        switches must stay true once the flags are on.
+   - **On** with E3.2, after the owner's supervised test: `base`, `pid_autotune` and both guards' instance flags are
+     true in `on_bus.rs`, so with ws_bridge on the bus (`WS_BRIDGE_BUS`, the default) neither the joystick path nor
+     the blade dead-man crosses a bridge (5.2). The roll-back is an image without them (the flags are compiled in).
 7. **`manual_velocity_guard`, last, or as part of E4.**
    - Every edge but one leaves the process until E3 and E4: ws_bridge for `/app_joy_cmd` and the clock, twist_mux for
      `/joy_cmd`. The one in-process reader is nav, which also reads `/joy_cmd`. Moving it earlier only adds bridge hops
@@ -820,6 +823,7 @@ What it was asked to provide:
      instance flag `manual_velocity_guard` (false). With steps 6 and 7 on and ws_bridge on the bus, the joystick path
      `/app_joy_cmd` -> manual guard -> `/joy_cmd` (nav in-process, twist_mux on DDS until E4) and the clock to the app
      cross no bridge; with ws_bridge on r2r, `/app_joy_cmd` comes in from DDS (R V 1, the guard's reader).
+   - **On** with step 6 and E3.2 (above): the instance flag `manual_velocity_guard` is true.
 
 **Not in E2:**
 

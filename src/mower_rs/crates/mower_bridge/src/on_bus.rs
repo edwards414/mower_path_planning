@@ -6,14 +6,15 @@
 //! before E2, and with every flag false it starts no bridge at all.
 //!
 //! E2 steps 6 and 7, the drivetrain (mower_base, pid_autotune and the two
-//! guards), merge with their flags false: those modules keep their r2r IO
-//! next to the bus IO and pick one at start by their own flag
-//! ([`instance_on_bus`]), so that the owner switches the drivetrain over
-//! after a supervised test, with nothing else changed.
+//! guards), merged with their flags false (#81, #82) and are on now, with
+//! ws_bridge's bus backend (E3.2), after the owner's supervised test. Those
+//! modules still have their r2r IO next to the bus IO and pick one at start
+//! by their own flag ([`instance_on_bus`]); flipping a flag back to false is
+//! the way back (a new image: the flags are compiled in).
 
 /// One flag per module of the manifest, in its order.
 pub const ON_BUS: &[(&str, bool)] = &[
-    ("base", false),
+    ("base", true),
     ("status", true),
     // Both guards. Each also has a flag of its own (INSTANCES): they move in
     // two steps.
@@ -31,7 +32,7 @@ pub const ON_BUS: &[(&str, bool)] = &[
     ("record", true),
     ("adapter", true),
     ("battery", true),
-    ("pid_autotune", false),
+    ("pid_autotune", true),
     // ws_bridge (step E3): its default backend, r2r. Its flag is RUNTIME's.
     ("bridge", false),
     // E5: born on the bus
@@ -42,7 +43,7 @@ pub const ON_BUS: &[(&str, bool)] = &[
 /// move in different steps: an instance is on the bus when its module's flag
 /// or its own is set. The final guard moves in E2 step 6, with mower_base and
 /// pid_autotune, the manual guard in step 7 (docs/BUS_TOPICS.md section 6).
-pub const INSTANCES: &[(&str, bool)] = &[("velocity_command_guard", false), ("manual_velocity_guard", false)];
+pub const INSTANCES: &[(&str, bool)] = &[("velocity_command_guard", true), ("manual_velocity_guard", true)];
 
 /// The modules whose flag mower_rsd sets when it starts, from how it runs
 /// them, rather than here: ws_bridge, whose backend is chosen at run time

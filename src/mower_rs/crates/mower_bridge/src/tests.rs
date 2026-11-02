@@ -54,6 +54,22 @@ fn e4_plan(on: &[&str], e4: &[&str]) -> Result<Plan, PlanError> {
 /// pid_autotune.
 const E2_ON: [&str; 10] = ["status", "imu", "gps", "localize", "map", "coverage", "nav", "record", "adapter", "battery"];
 
+/// What E2 steps 6 and 7 switched on in on_bus.rs (with E3.2): mower_base,
+/// pid_autotune and both guards' instances.
+const DRIVETRAIN: [&str; 4] = ["base", "pid_autotune", "velocity_command_guard", "manual_velocity_guard"];
+
+/// on_bus.rs's flags as E2 merged them, the drivetrain's false, with the
+/// run-time flags `on_now` (ws_bridge's backend) set too: the state each step
+/// test starts from.
+fn e2_flags<'a>(on_now: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
+    move |id| (on_bus(id) && !DRIVETRAIN.contains(&id)) || on_now.contains(&id)
+}
+
+/// The production plan with [`e2_flags`].
+fn e2_plan_with(on_now: &[&str]) -> Plan {
+    plan(&Running::rsd(&PRODUCTION_MODULES, e2_flags(on_now)), &production_remaps()).unwrap()
+}
+
 fn lines(on: &[&str]) -> Vec<String> {
     production_plan(on).unwrap_or_else(|e| panic!("{on:?}: {e}")).lines()
 }
@@ -961,20 +977,21 @@ fn assert_same_lines(got: &[String], expected: &[&str], what: &str) {
     assert_eq!(got, expected, "{what}: the order");
 }
 
-/// With ws_bridge's flag false, the production plan is E2's line for line,
-/// whether ws_bridge runs in mower_rsd (rust_bridge:=true) or does not
+/// With ws_bridge's flag false and the drivetrain's flags as E2 merged them
+/// ([`e2_flags`]), the production plan is E2's line for line, whether
+/// ws_bridge runs in mower_rsd (rust_bridge:=true) or does not
 /// (rust_bridge:=false: the Python rosbridge, or the separate binary). The
 /// `bridge` module and the recorder's nodes outside add no declaration
-/// while nothing of theirs is on the bus. A later flag flip (E2 steps 6 and
-/// 7) changes this plan on purpose, and the snapshot with it.
+/// while nothing of theirs is on the bus. Steps 6 and 7 changed mower_rsd's
+/// plan on purpose: `the_production_plan_has_the_drivetrain_on_the_bus`.
 #[test]
 fn with_ws_bridge_off_the_production_plan_is_e2_s_line_for_line() {
     let remaps = production_remaps();
-    let in_rsd = rsd_plan(&PRODUCTION_MODULES, &remaps).unwrap();
+    let in_rsd = e2_plan_with(&[]);
     assert_same_lines(&in_rsd.lines(), &E2_PRODUCTION_PLAN, "ws_bridge in mower_rsd, on r2r");
     assert_eq!(in_rsd.notes, [E2_PRODUCTION_NOTE]);
     let without: Vec<&str> = PRODUCTION_MODULES.iter().copied().filter(|id| *id != "bridge").collect();
-    let elsewhere = rsd_plan(&without, &remaps).unwrap();
+    let elsewhere = plan(&Running::rsd(&without, e2_flags(&[])), &remaps).unwrap();
     assert_same_lines(&elsewhere.lines(), &E2_PRODUCTION_PLAN, "ws_bridge not in mower_rsd");
     assert_eq!(elsewhere.notes, [E2_PRODUCTION_NOTE]);
 }
@@ -1049,13 +1066,14 @@ fn the_bridge_module_is_ws_bridge_yaml_s_allow_list() {
     assert!(!subscribed.contains("/gps/fix"));
 }
 
-/// E3.1's switch: ws_bridge on the bus. The names the app uses that only DDS
-/// has (the guards, mower_base, pid_autotune, coverage's parameter node,
-/// the recorder) are bridged for it, with the QoS ws_bridge's r2r endpoints
-/// had: 5 from_ros, 4 to_ros, 4 service_from_ros. Nothing else changes.
+/// E3.1's switch: ws_bridge on the bus, with the drivetrain on r2r (E2's
+/// flags). The names the app uses that only DDS has (the guards,
+/// mower_base, pid_autotune, coverage's parameter node, the recorder) are
+/// bridged for it, with the QoS ws_bridge's r2r endpoints had: 5 from_ros,
+/// 4 to_ros, 4 service_from_ros. Nothing else changes.
 #[test]
 fn ws_bridge_on_the_bus_adds_the_thirteen_names_only_dds_has() {
-    let on = rsd_plan_with(&PRODUCTION_MODULES, &["bridge"], &production_remaps()).unwrap();
+    let on = e2_plan_with(&["bridge"]);
     let lines = on.lines();
     let removed: Vec<&str> = E2_PRODUCTION_PLAN.iter().copied().filter(|l| !lines.iter().any(|g| g == l)).collect();
     assert!(removed.is_empty(), "{removed:#?}");
@@ -1093,7 +1111,10 @@ fn ws_bridge_on_the_bus_adds_the_thirteen_names_only_dds_has() {
 #[test]
 fn the_run_time_flags_are_ws_bridge_s_alone() {
     let remaps = production_remaps();
-    assert_eq!(rsd_plan_with(&PRODUCTION_MODULES, &[] as &[&str], &remaps).unwrap().lines(), E2_PRODUCTION_PLAN);
+    assert_eq!(
+        rsd_plan_with(&PRODUCTION_MODULES, &[] as &[&str], &remaps).unwrap().lines(),
+        rsd_plan(&PRODUCTION_MODULES, &remaps).unwrap().lines()
+    );
     let e = rsd_plan_with(&PRODUCTION_MODULES, &["base"], &remaps).unwrap_err();
     assert_eq!(e.problems, ["base: its flag is on_bus.rs's, not set at run time"]);
     // the bus bridge module's arguments carry them
@@ -1177,7 +1198,7 @@ fn ws_bridge_standalone_carries_every_name_it_reaches() {
 /// them.
 #[test]
 fn steps_6_and_7_after_e3_leave_the_recorder_s_names_and_set_parameters_bridged() {
-    let e3 = rsd_plan_with(&PRODUCTION_MODULES, &["bridge"], &production_remaps()).unwrap().lines();
+    let e3 = e2_plan_with(&["bridge"]).lines();
     let all = lines(&MODULES.iter().map(|m| m.id).collect::<Vec<_>>());
     let gone: Vec<&String> = e3.iter().filter(|l| !all.contains(l)).collect();
     let came: Vec<&String> = all.iter().filter(|l| !e3.contains(l)).collect();
@@ -1517,7 +1538,7 @@ fn a_module_s_test_checks_its_endpoints_against_the_manifest() {
 
 
 /// E2 step 6: mower_base, pid_autotune and the final guard on the bus (their
-/// flags, which stay false until the owner's supervised test), ws_bridge on
+/// flags, from E2's [`e2_flags`]; on in on_bus.rs since E3.2), ws_bridge on
 /// r2r and on the bus. The drivetrain edge `/drivetrain_guarded_cmd_vel`, the
 /// side channels and the base's outputs to its in-process readers no longer
 /// come in from DDS; what the three modules write goes out for DDS readers
@@ -1564,8 +1585,8 @@ fn step_6_takes_the_drivetrain_edge_into_the_process() {
         ("ws_bridge on r2r", &[] as &[&str], &[] as &[&str], &ws_r2r_came[..]),
         ("ws_bridge on the bus", &["bridge"][..], &ws_bus_gone[..], &[][..]),
     ] {
-        let before = rsd_plan_with(&PRODUCTION_MODULES, on_now, &production_remaps()).unwrap();
-        let flags = |id: &str| on_bus_with(on_now)(id) || step6(id);
+        let before = e2_plan_with(on_now);
+        let flags = |id: &str| e2_flags(on_now)(id) || step6(id);
         let after = plan(&Running::rsd(&PRODUCTION_MODULES, flags), &production_remaps()).unwrap();
         let (before, lines) = (before.lines(), after.lines());
         let mut gone: Vec<&str> = before.iter().map(String::as_str).filter(|l| !lines.iter().any(|g| g == l)).collect();
@@ -1588,7 +1609,7 @@ fn step_6_takes_the_drivetrain_edge_into_the_process() {
     // with E4's mux in the process (rust_mux), the mux -> final guard edge is in-process too: its output goes out
     // for DDS readers only
     let with_mux: Vec<&str> = PRODUCTION_MODULES.iter().copied().chain(["mux"]).collect();
-    let flags = |id: &str| on_bus(id) || step6(id);
+    let flags = |id: &str| e2_flags(&[])(id) || step6(id);
     let lines = plan(&Running::rsd(&with_mux, flags), &production_remaps()).unwrap().lines();
     let guard_input: Vec<&String> = lines.iter().filter(|l| l.contains(" /cmd_vel_guard_input ")).collect();
     assert_eq!(guard_input, ["to_ros /cmd_vel_guard_input geometry_msgs/msg/TwistStamped R V 1"]);
@@ -1675,7 +1696,7 @@ fn every_combination_of_the_drivetrain_s_flags_plans_but_a_split_led_command() {
     let drivetrain = ["base", "pid_autotune", "velocity_command_guard", "manual_velocity_guard", "bridge"];
     for bits in 0u32..(1 << drivetrain.len()) {
         let set = |id: &str| drivetrain.iter().position(|d| *d == id).is_some_and(|n| bits & (1 << n) != 0);
-        let flags = |id: &str| on_bus(id) || set(id);
+        let flags = |id: &str| e2_flags(&[])(id) || set(id);
         let refused = set("base") && !set("pid_autotune");
         match plan(&Running::rsd(&PRODUCTION_MODULES, flags), &production_remaps()) {
             Ok(_) => assert!(!refused, "{bits:#07b}: planned with the LED writers split"),
@@ -1718,8 +1739,8 @@ fn step_7_takes_the_joystick_path_into_the_process() {
             &[][..],
         ),
     ] {
-        let flags6 = |id: &str| on_bus_with(on_now)(id) || step6(id);
-        let flags7 = |id: &str| on_bus_with(on_now)(id) || step7(id);
+        let flags6 = |id: &str| e2_flags(on_now)(id) || step6(id);
+        let flags7 = |id: &str| e2_flags(on_now)(id) || step7(id);
         let before = plan(&Running::rsd(&PRODUCTION_MODULES, flags6), &production_remaps()).unwrap().lines();
         let after = plan(&Running::rsd(&PRODUCTION_MODULES, flags7), &production_remaps()).unwrap();
         let lines = after.lines();
@@ -1742,11 +1763,45 @@ fn step_7_takes_the_joystick_path_into_the_process() {
         }
     }
     // steps 6 and 7 together are the module flag `guards` with base and pid_autotune
-    let instances = plan(&Running::rsd(&PRODUCTION_MODULES, |id| on_bus(id) || step7(id)), &production_remaps()).unwrap();
+    let instances = plan(&Running::rsd(&PRODUCTION_MODULES, |id| e2_flags(&[])(id) || step7(id)), &production_remaps()).unwrap();
     let module = production_plan(&[
         "battery", "status", "map", "record", "adapter", "imu", "gps", "localize", "coverage", "nav", "base",
         "pid_autotune", "guards",
     ])
     .unwrap();
     assert_eq!(instances.lines(), module.lines());
+}
+
+/// E2 steps 6 and 7 are switched on in on_bus.rs (with E3.2, after the
+/// owner's supervised test): mower_rsd's production plan is E2's with the
+/// drivetrain moved, whichever backend ws_bridge runs, and so is the robot's
+/// (the bag module in the set, RUST_RECORDER). The counts are what the bus
+/// bridge logs at start ("mower_bridge: N to_ros, ..."), which the on-robot
+/// check reads.
+#[test]
+fn the_production_plan_has_the_drivetrain_on_the_bus() {
+    for id in DRIVETRAIN {
+        assert!(on_bus(id), "{id}");
+    }
+    for node in ["mower_base", "pid_autotune", "velocity_command_guard", "manual_velocity_guard"] {
+        assert!(instance_on_bus(node), "{node}");
+    }
+    let remaps = production_remaps();
+    let robot = with_e4(&["bag"]);
+    let counts = |p: &Plan| {
+        let n = |d: &str| p.lines().iter().filter(|l| l.starts_with(&format!("{d} "))).count();
+        [n("to_ros"), n("from_ros"), n("service_to_ros"), n("service_from_ros"), n("action_to_ros"), n("action_from_ros")]
+    };
+    for (what, set, on_now, want) in [
+        ("main's set, ws_bridge on r2r", &PRODUCTION_MODULES[..], &[] as &[&str], [72, 8, 45, 0, 2, 0]),
+        ("main's set, ws_bridge on the bus", &PRODUCTION_MODULES[..], &["bridge"][..], [76, 8, 45, 3, 2, 0]),
+        ("the robot's set, ws_bridge on r2r", &robot[..], &[][..], [78, 9, 48, 0, 2, 0]),
+        ("the robot's set, ws_bridge on the bus", &robot[..], &["bridge"][..], [82, 5, 48, 1, 2, 0]),
+    ] {
+        let now = rsd_plan_with(set, on_now, &remaps).unwrap();
+        let moved = |id: &str| e2_flags(on_now)(id) || DRIVETRAIN.contains(&id);
+        assert_eq!(now.lines(), plan(&Running::rsd(set, moved), &remaps).unwrap().lines(), "{what}");
+        assert_eq!(now.notes, [E2_PRODUCTION_NOTE], "{what}");
+        assert_eq!(counts(&now), want, "{what}");
+    }
 }
