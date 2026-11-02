@@ -76,8 +76,19 @@ pub struct Config {
     /// sample is taken while it is not. The Python path_record_node has no
     /// such gate.
     pub require_rtk_fixed: bool,
-    /// How old (by when it arrived) the latest `/fix` may be and still count.
+    /// How old (by when it arrived) the latest `/fix` may be and still count;
+    /// the latest `/odometry/gps` too, for `require_datum`.
     pub rtk_fix_max_age_s: f64,
+    /// A zone, risk zone or channel starts only once navsat's datum is
+    /// locked (owner, 2026-11-02): RTK fixed alone leaves a window, up to one
+    /// fix period or navsat's 3 s `delay` after a restart, in which the map
+    /// EKF publishes but the map frame is not anchored to the earth yet. The
+    /// signal is a fresh `/odometry/gps`: navsat_transform (the Rust port and
+    /// the C++ node alike) publishes it only once its transform is good, one
+    /// per fix, and stops when a restarted navsat has none again. Checked
+    /// after RTK fixed; the start only, not the samples. The Python
+    /// path_record_node has no such gate.
+    pub require_datum: bool,
 }
 
 /// Service reply: (success, message).
@@ -89,6 +100,8 @@ pub struct Recorder {
     mono: Box<dyn Fn() -> Mono + Send>,
     /// The latest `/fix`: its status and when it arrived.
     last_fix: Option<(i8, Mono)>,
+    /// When the latest `/odometry/gps` arrived (navsat's datum is locked).
+    last_gps_odometry: Option<Mono>,
     /// Since when sampling has waited for RTK fixed, while a recording runs.
     rtk_paused_since: Option<Mono>,
     pub datum: Option<Datum>,
@@ -141,6 +154,7 @@ impl Recorder {
             now,
             mono: Box::new(move || clock.mono()),
             last_fix: None,
+            last_gps_odometry: None,
             rtk_paused_since: None,
             datum: None,
             active_site: None,
@@ -264,6 +278,48 @@ impl Recorder {
             None => Ok(()),
             Some(why) => Err(format!("RTK 尚未 fixed，無法開始 {} 記錄（{why}）", requested.label())),
         }
+    }
+
+    // ── datum gate ─────────────────────────────────────────────────────────
+
+    /// `/odometry/gps`: remember when it arrived (`at`, taken before the
+    /// caller waited for the recorder).
+    pub fn on_gps_odometry(&mut self, at: Mono) {
+        self.last_gps_odometry = Some(at);
+    }
+
+    /// Why navsat's datum is not known to be locked now; `None` when the
+    /// latest `/odometry/gps` is at most `rtk_fix_max_age_s` old, and always
+    /// with `require_datum` off.
+    pub fn datum_not_locked(&self) -> Option<String> {
+        if !self.cfg.require_datum {
+            return None;
+        }
+        let Some(at) = self.last_gps_odometry else {
+            return Some("尚未收到 navsat 的 /odometry/gps".into());
+        };
+        let age_s = (self.mono)().saturating_duration_since(at).as_secs_f64();
+        if age_s > self.cfg.rtk_fix_max_age_s {
+            Some(format!("navsat /odometry/gps 已 {age_s:.1} s 未更新"))
+        } else {
+            None
+        }
+    }
+
+    /// Refuse a zone, risk-zone or channel recording before navsat's datum
+    /// is locked: until then the map frame is not anchored to the earth.
+    pub fn check_datum_start(&self, requested: Kind) -> Result<(), String> {
+        match self.datum_not_locked() {
+            None => Ok(()),
+            Some(why) => Err(format!("datum 尚未鎖定，無法開始 {} 記錄（{why}）", requested.label())),
+        }
+    }
+
+    /// Both conditions of a start, RTK fixed first and the datum second:
+    /// the reply names the first that fails.
+    pub fn check_fix_and_datum_start(&self, requested: Kind) -> Result<(), String> {
+        self.check_rtk_start(requested)?;
+        self.check_datum_start(requested)
     }
 
     /// Whether sampling waits for RTK fixed now (a recording runs and the
@@ -1552,9 +1608,10 @@ mod tests {
             polygon_simplify_dist: 0.1,
             max_site_datum_distance_m: 100.0,
             robot_pose_max_age_s: 1.0,
-            // the gate has tests of its own (rtk_gate below)
+            // the gates have tests of their own (rtk_gate below)
             require_rtk_fixed: false,
             rtk_fix_max_age_s: 1.0,
+            require_datum: false,
         };
         Recorder::new(cfg, Box::new(|| stamp(&Clock::system())))
     }
@@ -1737,9 +1794,10 @@ mod persistence_rules {
             polygon_simplify_dist: 0.1,
             max_site_datum_distance_m: 100.0,
             robot_pose_max_age_s: 1.0,
-            // the gate has tests of its own (rtk_gate below)
+            // the gates have tests of their own (rtk_gate below)
             require_rtk_fixed: false,
             rtk_fix_max_age_s: 1.0,
+            require_datum: false,
         };
         let mut r = Recorder::new(cfg, Box::new(|| stamp(&Clock::system())));
         r.restore_startup_persistence(&Quiet);
@@ -1875,7 +1933,8 @@ mod persistence_rules {
 /// Zone recording needs RTK fixed (owner, 2026-11-02, after zone 1 was
 /// recorded outdoors without a fix): a zone, risk zone or channel starts only
 /// on a fresh RTK fixed `/fix`, and while the fix is not RTK fixed no sample
-/// is taken; the recording runs on and samples again once it is.
+/// is taken; the recording runs on and samples again once it is. A start also
+/// needs navsat's datum locked (a fresh `/odometry/gps`), checked second.
 #[cfg(test)]
 mod rtk_gate {
     use super::*;
@@ -1928,7 +1987,7 @@ mod rtk_gate {
 
     /// A recorder on a manual clock (stamps and `/fix` ages both), with its
     /// work files, at a first pose at the origin.
-    fn rig(name: &str, require_rtk_fixed: bool, log: &Log) -> Rig {
+    fn rig(name: &str, require_rtk_fixed: bool, require_datum: bool, log: &Log) -> Rig {
         let dir = std::env::temp_dir().join(format!("mower_record_rtk_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1943,6 +2002,7 @@ mod rtk_gate {
             robot_pose_max_age_s: 1.0,
             require_rtk_fixed,
             rtk_fix_max_age_s: 1.0,
+            require_datum,
         };
         let (clock, manual) = Clock::manual(mower_bus::Time::from_ns(1_800_000_000_000_000_000));
         let (stamps, ages) = (clock.clone(), clock.clone());
@@ -1984,7 +2044,7 @@ mod rtk_gate {
     #[test]
     fn a_start_needs_a_fresh_rtk_fixed_fix() {
         let log = Log::default();
-        let mut g = rig("start", true, &log);
+        let mut g = rig("start", true, false, &log);
         let refused = |kind: &str, why: &str| Err(format!("RTK 尚未 fixed，無法開始 {kind} 記錄（{why}）"));
         assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "尚未收到 GPS /fix"));
         g.r.on_fix(-1, g.clock.mono());
@@ -2001,7 +2061,7 @@ mod rtk_gate {
         g.manual.advance(Duration::from_millis(100));
         assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "GPS /fix 已 1.1 s 未更新"));
         // require_rtk_fixed off: no /fix needed at all
-        let off = rig("start_off", false, &log);
+        let off = rig("start_off", false, false, &log);
         assert_eq!(off.r.check_rtk_start(Kind::Zone), Ok(()));
     }
 
@@ -2012,7 +2072,7 @@ mod rtk_gate {
     #[test]
     fn samples_pause_without_rtk_fixed_and_resume_with_it() {
         let log = Log::default();
-        let mut g = rig("pause", true, &log);
+        let mut g = rig("pause", true, false, &log);
         g.r.on_fix(2, g.clock.mono());
         g.r.check_rtk_start(Kind::Zone).unwrap();
         assert!(g.r.start_zone(&log).0);
@@ -2064,7 +2124,7 @@ mod rtk_gate {
     #[test]
     fn a_channel_end_point_needs_rtk_fixed_too() {
         let log = Log::default();
-        let mut g = rig("channel", true, &log);
+        let mut g = rig("channel", true, false, &log);
         g.r.on_fix(2, g.clock.mono());
         assert!(g.r.start_channel(&log).0);
         g.tick(1.0, Some(2), &log);
@@ -2081,5 +2141,72 @@ mod rtk_gate {
         assert_eq!(g.r.cancel(&log), Some(Kind::Channel));
         assert!(!g.r.rtk_paused());
         assert_eq!(log.rtk().last().map(String::as_str), Some("I 記錄結束時 RTK 仍未 fixed（已暫停取樣 0.1 s）"));
+    }
+
+    fn rtk_refused(kind: &str, why: &str) -> Result<(), String> {
+        Err(format!("RTK 尚未 fixed，無法開始 {kind} 記錄（{why}）"))
+    }
+
+    fn datum_refused(kind: &str, why: &str) -> Result<(), String> {
+        Err(format!("datum 尚未鎖定，無法開始 {kind} 記錄（{why}）"))
+    }
+
+    /// A start also needs navsat's datum locked (require_datum; owner,
+    /// 2026-11-02): an `/odometry/gps` at most `rtk_fix_max_age_s` old. RTK
+    /// fixed is checked first and the datum second, and the reply names the
+    /// first that fails.
+    #[test]
+    fn a_start_needs_the_datum_locked_after_rtk_fixed() {
+        let log = Log::default();
+        let mut g = rig("datum", true, true, &log);
+        // neither: RTK fixed is named
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "尚未收到 GPS /fix"));
+        // RTK fixed, navsat not locked yet: the datum is named
+        g.r.on_fix(2, g.clock.mono());
+        for kind in [Kind::Zone, Kind::Risk, Kind::Channel] {
+            assert_eq!(g.r.check_rtk_start(kind), Ok(()));
+            assert_eq!(g.r.check_fix_and_datum_start(kind), datum_refused(kind.label(), "尚未收到 navsat 的 /odometry/gps"));
+        }
+        // navsat publishes: both hold
+        g.r.on_gps_odometry(g.clock.mono());
+        for kind in [Kind::Zone, Kind::Risk, Kind::Channel] {
+            assert_eq!(g.r.check_fix_and_datum_start(kind), Ok(()));
+        }
+        // navsat stops (restarted, no transform again) while /fix comes on:
+        // 1.0 s still counts, 1.1 s does not
+        g.manual.advance(Duration::from_millis(1000));
+        g.r.on_fix(2, g.clock.mono());
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), Ok(()), "1.0 s old is still fresh");
+        g.manual.advance(Duration::from_millis(100));
+        g.r.on_fix(2, g.clock.mono());
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Risk), datum_refused("risk", "navsat /odometry/gps 已 1.1 s 未更新"));
+        // both fail: RTK fixed is still the one named
+        g.r.on_fix(0, g.clock.mono());
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Channel), rtk_refused("channel", "GPS status=0，RTK fixed 為 2"));
+        // RTK fails, the datum holds: RTK fixed
+        g.r.on_gps_odometry(g.clock.mono());
+        assert_eq!(g.r.check_datum_start(Kind::Zone), Ok(()));
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "GPS status=0，RTK fixed 為 2"));
+        g.r.on_fix(2, g.clock.mono());
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), Ok(()));
+    }
+
+    /// Each gate has its own switch: off, it holds without its input.
+    #[test]
+    fn each_start_condition_can_be_switched_off() {
+        let log = Log::default();
+        // require_datum off: RTK fixed alone, no /odometry/gps
+        let mut no_datum = rig("datum_off", true, false, &log);
+        assert_eq!(no_datum.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "尚未收到 GPS /fix"));
+        no_datum.r.on_fix(2, no_datum.clock.mono());
+        assert_eq!(no_datum.r.check_fix_and_datum_start(Kind::Zone), Ok(()));
+        // require_rtk_fixed off: the datum alone, no /fix
+        let mut no_rtk = rig("rtk_off", false, true, &log);
+        assert_eq!(no_rtk.r.check_fix_and_datum_start(Kind::Risk), datum_refused("risk", "尚未收到 navsat 的 /odometry/gps"));
+        no_rtk.r.on_gps_odometry(no_rtk.clock.mono());
+        assert_eq!(no_rtk.r.check_fix_and_datum_start(Kind::Risk), Ok(()));
+        // both off: no input at all
+        let none = rig("both_off", false, false, &log);
+        assert_eq!(none.r.check_fix_and_datum_start(Kind::Channel), Ok(()));
     }
 }

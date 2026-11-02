@@ -164,6 +164,7 @@ fn battery_status_map_record_and_adapter() {
             "from_ros /nav_operation_active std_msgs/msg/Bool R TL 1",
             "from_ros /odom_slow nav_msgs/msg/Odometry R V 10",
             "from_ros /odometry/global_slow nav_msgs/msg/Odometry R V 10",
+            "from_ros /odometry/gps nav_msgs/msg/Odometry R V 10",
             "to_ros /recorded_path nav_msgs/msg/Path R V 10",
             "to_ros /risk_map nav_msgs/msg/OccupancyGrid R TL 1",
             "to_ros /risk_map_inflated nav_msgs/msg/OccupancyGrid R TL 1",
@@ -230,6 +231,7 @@ fn and_imu_gps_and_localize() {
             "from_ros /gps/filtered sensor_msgs/msg/NavSatFix BE V 5",
             "from_ros /imu/data sensor_msgs/msg/Imu BE V 5",
             "from_ros /odometry/global_slow nav_msgs/msg/Odometry R V 10",
+            "from_ros /odometry/gps nav_msgs/msg/Odometry R V 10",
             "service_from_ros /toLL robot_localization/srv/ToLL",
         ]
     );
@@ -267,7 +269,7 @@ fn the_readme_counts_the_declarations_of_each_step() {
     let step3 = ["battery", "status", "map", "record", "adapter"];
     assert_eq!(count(&[]), [0, 0, 0, 0]);
     assert_eq!(count(&step3[..2]), [6, 7, 3, 0]);
-    assert_eq!(count(&step3), [39, 11, 28, 2]);
+    assert_eq!(count(&step3), [39, 12, 28, 2]);
     assert_eq!(count(&[&step3[..], &["imu", "gps", "localize"]].concat()), [48, 9, 32, 1]);
 }
 

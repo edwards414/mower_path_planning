@@ -404,6 +404,9 @@ pub static MODULES: &[Module] = &[
                 subscribes::<Bool>("/nav_operation_active", R_TL_1),
                 // the RTK fixed gate of a recording (require_rtk_fixed)
                 subscribes::<NavSatFix>("/fix", BE_V_5),
+                // its datum gate (require_datum): navsat publishes this only
+                // once its datum is locked
+                subscribes::<Odometry>("/odometry/gps", R_V_10),
                 serves::<Trigger::Service>("/record_zone_start"),
                 serves::<Trigger::Service>("/record_zone_end"),
                 serves::<Trigger::Service>("/risk_zone_start"),
