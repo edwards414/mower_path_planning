@@ -156,7 +156,7 @@ Phase 0 做完先量一次，作為 Rust 階段的比較基準。
 ### 7.5 真機切換紀錄與一個教訓
 
 - 2026-09-19：`RUST_STATUS=true`（映像 197bf89）→ `robot_status` 4.3–4.8%（取代 Python 三節點約 30%）。`RUST_ADAPTER=true`、`RUST_IMU=true`（映像 97d0256）：adapter 正常（robot_pose 4.6 Hz、zone_summaries 1.9 Hz、coverage_settings 1 Hz）、IMU 10.1 Hz、stamp 間隔 100 ± 7 ms。
-- **教訓：r2r 的 `spin_once` 在 wait set 為空時立刻返回。** `mower_imu` 沒有訂閱 / timer / service，spin 迴圈變成 busy loop，真機量到 84% CPU；`mower_ws_bridge` 在還沒有客戶端訂閱時也會如此。修法：IMU 不 spin（發布不需要 spin，主執行緒只等訊號）；bridge 用一個私有 `~/wake` topic 讓 wait set 永不為空、命令送達時發一筆喚醒 spin（idle 1.38% → 0.25%），並在關閉時先停掉 node 執行緒再離開（否則 rmw 的解構會跟還在 `rcl_wait` 的執行緒撞在一起，glibc mutex assertion abort）。已修（IMU 在容器裡 10 Hz 輸入下 0.9%），真機的 `RUST_IMU` 先關回 false，等修好的映像上線再開。
+- **教訓：r2r 的 `spin_once` 在 wait set 為空時立刻返回。** `mower_imu` 沒有訂閱 / timer / service，spin 迴圈變成 busy loop，真機量到 84% CPU；`mower_ws_bridge` 在還沒有客戶端訂閱時也會如此。修法：IMU 不 spin（發布不需要 spin，主執行緒只等訊號）；bridge 用一個私有 `~/wake` topic 讓 wait set 永不為空、命令送達時發一筆喚醒 spin（idle 1.38% → 0.25%），並在關閉時先停掉 node 執行緒再離開（否則 rmw 的解構會跟還在 `rcl_wait` 的執行緒撞在一起，glibc mutex assertion abort）。已修（IMU 在容器裡 10 Hz 輸入下 0.9%），真機的 `RUST_IMU` 先關回 false，等修好的映像上線再開。2026-11-02 同一個問題又出現在 `mower_nav`：`nav_backend: nav_core` 時 node 上沒有 nav2 的 client，spin 執行緒在真機吃滿一顆核心（mower_rsd 116% vs nav2 設定 36.5%）；改成 nav_core 時不 spin，`mower_nav/tests/idle_cpu.rs` 量閒置 CPU。
 - 每個 process 的 CPU 仍以真機 30 s 取樣為準（`/tmp/cpu_sample.sh`）。
 
 ### 7.6 Python 端再兩刀（2026-09-19）
