@@ -25,7 +25,8 @@
 //! r2r node stays for the parameters, the log and the graph, and for nav2
 //! until E9: the `navigate_to_pose` / `follow_path` action clients, the
 //! `bt_navigator/get_state` client and nav2's `/rosout` warnings, so it is
-//! still spun.
+//! still spun with `nav2`; with `nav_core` it holds none of them and is never
+//! spun (an empty wait set would make the spin loop a busy one).
 
 pub mod core_backend;
 mod geometry;
@@ -2134,15 +2135,21 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
 
     // ---- spin until SIGINT / SIGTERM, or until the nav_core runtime stops --
     // The bus needs no spinning; the node still does, for nav2's clients.
+    // With nav_core it has no subscriptions, services, timers or clients, and
+    // r2r's spin_once returns at once on an empty wait set, a busy loop (a
+    // whole core on the robot, 2026-11-02): the node is then kept alive until
+    // the end, never spun, as mower_imu keeps its own.
     let running = Arc::new(AtomicBool::new(true));
-    let spin = {
+    let spin = if matches!(ctx.backend, Backend::Nav2 { .. }) {
         let running = running.clone();
-        tokio::task::spawn_blocking(move || {
+        Some(tokio::task::spawn_blocking(move || {
             while running.load(Ordering::Relaxed) {
                 node.spin_once(Duration::from_millis(20));
             }
             drop(node);
-        })
+        }))
+    } else {
+        None
     };
     let stopped = tokio::select! {
         _ = m.shutdown.wait() => None,
@@ -2150,7 +2157,9 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     };
     ctx.exiting.store(true, Ordering::Relaxed);
     running.store(false, Ordering::Relaxed);
-    let _ = spin.await;
+    if let Some(spin) = spin {
+        let _ = spin.await;
+    }
     match stopped {
         // mower_rsd closes the module's scope, so twist_mux's lock goes stale
         // (locked) and the action servers go with it; it starts the module
