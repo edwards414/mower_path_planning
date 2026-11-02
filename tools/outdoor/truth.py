@@ -271,15 +271,31 @@ def loc(run, obs_name='loc.jsonl'):
     rot = math.pi / 2 - datum['bearing_rad']
     tyaw = np.unwrap(np.radians([d['yaw_deg'] for d in truth])) - rot
     est = [d for d in by.get('/odometry/global', []) if isinstance(d.get('x'), float)]
-    et = np.array([d['t'] for d in est])
+    # the estimate's own stamp (the EKF's time of validity), not when the
+    # observer got it: during an in-place turn 0.1 s of latency is 4 deg
+    et = np.array([d['s'] / 1e9 if d.get('s') else d['t'] for d in est])
     ex, ey, eyaw = (np.array([d[k] for d in est]) for k in ('x', 'y', 'yaw'))
     err = np.hypot(ex - interp(et, tt, tx), ey - interp(et, tt, ty))
     herr = np.abs((eyaw - interp(et, tt, tyaw) + math.pi) % (2 * math.pi) - math.pi)
     # GNSS mode at each estimate, from the fault log (default fixed)
     faults = [f for f in load_jsonl(os.path.join(run, 'obs', 'faults.jsonl')) if f.get('k') == 'gps_mode']
-    mode = np.array(['fixed'] * len(et), dtype=object)
+    label = np.array(['fixed'] * len(et), dtype=object)
     for f in faults:
-        mode[et >= f['t']] = f['v'].split(':')[0]
+        label[et >= f['t']] = f['v'].split(':')[0]
+    # the mode is what /fix said (status 2 = RTK fixed); when it is not
+    # fixed, the fault file's label, or 'reacquiring' after an unplug
+    fx = by.get('/fix', [])
+    ft = np.array([d['t'] for d in fx])
+    fst = np.array([d.get('st', -1) for d in fx])
+    mode = label.copy()
+    if len(ft):
+        idx = np.searchsorted(ft, et) - 1
+        fixed_now = (idx >= 0) & (fst[np.clip(idx, 0, None)] == 2) & (et - ft[np.clip(idx, 0, None)] < 0.6)
+        for i in range(len(et)):
+            if fixed_now[i]:
+                mode[i] = 'fixed'
+            elif label[i] == 'fixed':
+                mode[i] = 'not_fixed(reacq/gap)'
     gone = [f for f in load_jsonl(os.path.join(run, 'obs', 'faults.jsonl')) if f.get('k') in ('imu_gone', 'hub_gone', 'sensors_mute', 'gps_gone')]
     out['pos_err_m_by_mode'] = {}
     for md in sorted(set(mode)):

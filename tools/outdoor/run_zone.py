@@ -55,6 +55,12 @@ def main():
         p.wait()
         open(os.path.join(d, 'zone.out'), 'w').writelines(lines)
         sh('docker', 'cp', f'{cid("sim")}:{ZONES}', os.path.join(d, 'zone_list.json'))
+        sh('docker', 'exec', obs, 'pkill', '-INT', '-f', '/to/observe.py', check=False)
+        sh('docker', 'exec', obs, 'pkill', '-f', '/to/faults.py', check=False)
+        time.sleep(3)
+        # before any power kill: the observer shares the sim's network
+        # namespace and does not survive it
+        od('collect', d)
         if args.power_kill:
             sim = cid('sim')
             t = time.time()
@@ -66,11 +72,8 @@ def main():
             r = subprocess.run(['docker', 'exec', cl, 'python3', '/rt/probe_app.py', 'ws://sim:9090', '8'],
                                capture_output=True, text=True)
             open(os.path.join(d, 'probe_after_restart.txt'), 'w').write(r.stdout + r.stderr)
-        else:
-            sh('docker', 'exec', obs, 'pkill', '-INT', '-f', '/to/observe.py', check=False)
-            sh('docker', 'exec', obs, 'pkill', '-f', '/to/faults.py', check=False)
-        time.sleep(3)
-        od('collect', d)
+            with open(os.path.join(d, 'stack_after_restart.log'), 'w') as f:
+                subprocess.run(['docker', 'logs', '-t', sim], stdout=f, stderr=subprocess.STDOUT)
     finally:
         od('down', check=False)
     r = subprocess.run([sys.executable, os.path.join(HERE, 'truth.py'), 'zone', d], capture_output=True, text=True)

@@ -61,15 +61,16 @@ quota_of() {  # CPU level -> cpu_quota in us per 10 ms period
 }
 
 wait_ready() {  # the app contract through the gate, unshaped, up to $1 s
-  local deadline=$((SECONDS + ${1:-240})) base=()
+  local deadline=$((SECONDS + ${1:-240})) base=() out="$RUNS/.ready/$OD.txt"
+  mkdir -p "$RUNS/.ready"
   [ -f "$repo/tools/outdoor/fixtures/sim_app_baseline.json" ] && base=(--baseline /to/fixtures/sim_app_baseline.json)
   while [ $SECONDS -lt $deadline ]; do
-    if docker exec "$(cid client)" python3 /rt/probe_app.py ws://sim:9090 8 ${base[@]+"${base[@]}"} >/tmp/outdoor-ready-$OD.txt 2>&1; then
+    if docker exec "$(cid client)" python3 /rt/probe_app.py ws://sim:9090 8 ${base[@]+"${base[@]}"} >"$out" 2>&1; then
       log "ready after $SECONDS s (probe_app OK)"; return 0
     fi
     sleep 5
   done
-  tail -5 /tmp/outdoor-ready-$OD.txt >&2
+  tail -5 "$out" >&2
   die "not ready"
 }
 
