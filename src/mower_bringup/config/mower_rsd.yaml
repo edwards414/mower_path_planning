@@ -155,6 +155,12 @@ path_record_node:
     save_dir: zone_record
     sites_dir: ~/.mower/sites
     robot_pose_source_topic: /odometry/global_slow
+    # A zone, risk zone or channel starts only while the latest /fix is RTK
+    # fixed (status 2) and at most rtk_fix_max_age_s old, and takes samples
+    # only while it stays so (owner, 2026-11-02). Both are the code's
+    # defaults; false lets a robot without RTK record again.
+    require_rtk_fixed: true
+    rtk_fix_max_age_s: 1.0
 
 # --- adapter (rust_adapter) --------------------------------------------------
 flutter_adapter:

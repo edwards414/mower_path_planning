@@ -20,6 +20,11 @@ pub const LINE_STRIP: i32 = 4;
 pub const ADD: i32 = 0;
 pub const DELETEALL: i32 = 3;
 
+/// `NavSatStatus.STATUS_GBAS_FIX`: what mower_gps (and the sim) put in
+/// `/fix` while the carrier solution is fixed, i.e. RTK fixed. RTK float and
+/// a plain 3D fix are both 0 (`STATUS_FIX`), no fix is -1.
+pub const STATUS_GBAS_FIX: i8 = 2;
+
 pub const ZONE_STYLE: ((f64, f64, f64, f64), f64) = ((0.6, 0.0, 1.0, 0.5), 0.02);
 pub const RISK_STYLE: ((f64, f64, f64, f64), f64) = ((1.0, 0.0, 0.0, 0.8), 0.03);
 pub const CHANNEL_EDIT_STYLE: ((f64, f64, f64, f64), f64) = ((0.0, 0.7, 1.0, 0.8), 0.03);
@@ -65,6 +70,14 @@ pub struct Config {
     pub polygon_simplify_dist: f64,
     pub max_site_datum_distance_m: f64,
     pub robot_pose_max_age_s: f64,
+    /// A zone, risk zone or channel is recorded only on RTK fixed (owner,
+    /// 2026-11-02, after a zone recorded without a fix had to be deleted): a
+    /// start is refused unless the latest `/fix` is fixed and fresh, and no
+    /// sample is taken while it is not. The Python path_record_node has no
+    /// such gate.
+    pub require_rtk_fixed: bool,
+    /// How old (by when it arrived) the latest `/fix` may be and still count.
+    pub rtk_fix_max_age_s: f64,
 }
 
 /// Service reply: (success, message).
@@ -73,6 +86,11 @@ pub type Reply = (bool, String);
 pub struct Recorder {
     pub cfg: Config,
     now: Box<dyn Fn() -> Time + Send>,
+    mono: Box<dyn Fn() -> Mono + Send>,
+    /// The latest `/fix`: its status and when it arrived.
+    last_fix: Option<(i8, Mono)>,
+    /// Since when sampling has waited for RTK fixed, while a recording runs.
+    rtk_paused_since: Option<Mono>,
     pub datum: Option<Datum>,
     pub active_site: Option<String>,
     pub manifest_blocked: Option<String>,
@@ -117,9 +135,13 @@ fn empty_path(frame: &str) -> PathMsg {
 impl Recorder {
     pub fn new(cfg: Config, now: Box<dyn Fn() -> Time + Send>) -> Self {
         let frame = cfg.frame_id.clone();
+        let clock = Clock::system();
         Recorder {
             cfg,
             now,
+            mono: Box::new(move || clock.mono()),
+            last_fix: None,
+            rtk_paused_since: None,
             datum: None,
             active_site: None,
             manifest_blocked: None,
@@ -143,6 +165,13 @@ impl Recorder {
             channel_list: MarkerArray::default(),
             channel_path: empty_path(&frame),
         }
+    }
+
+    /// The monotonic time the `/fix` ages are measured on (the module's
+    /// clock; the system's by default).
+    pub fn with_mono(mut self, mono: Box<dyn Fn() -> Mono + Send>) -> Self {
+        self.mono = mono;
+        self
     }
 
     fn now(&self) -> Time {
@@ -197,6 +226,81 @@ impl Recorder {
             out.warn("機器人位置不可用: 尚未收到或已過期");
         }
         None
+    }
+
+    // ── RTK fixed gate ─────────────────────────────────────────────────────
+
+    /// `/fix`: remember its status and when it arrived (`at`, taken before
+    /// the caller waited for the recorder).
+    pub fn on_fix(&mut self, status: i8, at: Mono) {
+        self.last_fix = Some((status, at));
+    }
+
+    /// Why the latest `/fix` is not RTK fixed and fresh; `None` when it is,
+    /// and always with `require_rtk_fixed` off.
+    pub fn rtk_not_fixed(&self) -> Option<String> {
+        if !self.cfg.require_rtk_fixed {
+            return None;
+        }
+        let Some((status, at)) = self.last_fix else {
+            return Some("尚未收到 GPS /fix".into());
+        };
+        let age_s = (self.mono)().saturating_duration_since(at).as_secs_f64();
+        if age_s > self.cfg.rtk_fix_max_age_s {
+            Some(format!("GPS /fix 已 {age_s:.1} s 未更新"))
+        } else if status == -1 {
+            Some("GPS 無定位".into())
+        } else if status != STATUS_GBAS_FIX {
+            Some(format!("GPS status={status}，RTK fixed 為 {STATUS_GBAS_FIX}"))
+        } else {
+            None
+        }
+    }
+
+    /// Refuse a zone, risk-zone or channel recording without RTK fixed:
+    /// their geometry is mowed, avoided or driven later.
+    pub fn check_rtk_start(&self, requested: Kind) -> Result<(), String> {
+        match self.rtk_not_fixed() {
+            None => Ok(()),
+            Some(why) => Err(format!("RTK 尚未 fixed，無法開始 {} 記錄（{why}）", requested.label())),
+        }
+    }
+
+    /// Whether sampling waits for RTK fixed now (a recording runs and the
+    /// gate is closed).
+    #[cfg(test)]
+    fn rtk_paused(&self) -> bool {
+        self.rtk_paused_since.is_some()
+    }
+
+    /// The sampler's gate while recording: true when a sample may be taken.
+    /// The recording keeps running without RTK fixed; each outage is logged
+    /// once when it starts and once, with its length, when it ends.
+    fn rtk_gate(&mut self, out: &dyn Outputs) -> bool {
+        let label = self.active_kind().map_or("", Kind::label);
+        match (self.rtk_not_fixed(), self.rtk_paused_since) {
+            (None, None) => true,
+            (Some(_), Some(_)) => false,
+            (Some(why), None) => {
+                self.rtk_paused_since = Some((self.mono)());
+                out.warn(&format!("RTK 未 fixed（{why}），暫停 {label} 取樣；記錄仍進行中，fixed 恢復後繼續"));
+                false
+            }
+            (None, Some(since)) => {
+                self.rtk_paused_since = None;
+                let paused_s = (self.mono)().saturating_duration_since(since).as_secs_f64();
+                out.info(&format!("RTK 恢復 fixed，繼續 {label} 取樣（暫停 {paused_s:.1} s）"));
+                true
+            }
+        }
+    }
+
+    /// A recording ended or was cancelled during an outage: close it.
+    fn end_rtk_pause(&mut self, out: &dyn Outputs) {
+        if let Some(since) = self.rtk_paused_since.take() {
+            let paused_s = (self.mono)().saturating_duration_since(since).as_secs_f64();
+            out.info(&format!("記錄結束時 RTK 仍未 fixed（已暫停取樣 {paused_s:.1} s）"));
+        }
     }
 
     /// 0.5 s until the first pose: clear stale RViz markers, publish lists.
@@ -313,6 +417,9 @@ impl Recorder {
         if !self.initialized {
             return true;
         }
+        if !self.rtk_gate(out) {
+            return true;
+        }
         let Some(pos) = self.robot_pos(out) else { return true };
         let now = self.now();
         if self.recording_zone {
@@ -389,6 +496,7 @@ impl Recorder {
     pub fn start_zone(&mut self, out: &dyn Outputs) -> Reply {
         out.info("記錄區域起始點");
         self.recording_zone = true;
+        self.rtk_paused_since = None;
         self.zone_id += 1;
         self.path = empty_path(&self.cfg.frame_id);
         if let Some(pos) = self.robot_pos(out) {
@@ -417,6 +525,7 @@ impl Recorder {
             return Err(msg);
         }
         self.recording_zone = false;
+        self.end_rtk_pause(out);
         self.zone_marker = None;
         self.path = empty_path(&self.cfg.frame_id);
         self.last_robot_pos = None;
@@ -428,6 +537,7 @@ impl Recorder {
     pub fn start_risk(&mut self, out: &dyn Outputs) -> Reply {
         out.info("開始記錄風險區域");
         self.recording_risk = true;
+        self.rtk_paused_since = None;
         self.risk_id += 1;
         self.risk_path = empty_path(&self.cfg.frame_id);
         if let Some(pos) = self.robot_pos(out) {
@@ -454,6 +564,7 @@ impl Recorder {
             return Err(msg);
         }
         self.recording_risk = false;
+        self.end_rtk_pause(out);
         out.risk_list(&self.risk_list);
         self.risk_marker = None;
         self.risk_path = empty_path(&self.cfg.frame_id);
@@ -465,6 +576,7 @@ impl Recorder {
     pub fn start_channel(&mut self, out: &dyn Outputs) -> Reply {
         out.info("開始記錄 chennal 路徑");
         self.recording_channel = true;
+        self.rtk_paused_since = None;
         self.channel_id += 1;
         self.channel_path = empty_path(&self.cfg.frame_id);
         self.channel_path.header.stamp = self.now();
@@ -481,7 +593,9 @@ impl Recorder {
         if !self.recording_channel {
             return Err("沒有正在進行的 chennal 路徑記錄".into());
         }
-        if let Some(pos) = self.robot_pos(out) {
+        // The end point is a sample too: only on RTK fixed.
+        let end_pos = if self.rtk_not_fixed().is_none() { self.robot_pos(out) } else { None };
+        if let Some(pos) = end_pos {
             if let Some(last) = self.channel_path.poses.last() {
                 let dx = pos.pose.position.x - last.pose.position.x;
                 let dy = pos.pose.position.y - last.pose.position.y;
@@ -502,6 +616,7 @@ impl Recorder {
             return Err(msg);
         }
         self.recording_channel = false;
+        self.end_rtk_pause(out);
         out.channel_list(&self.channel_list);
         self.channel_path = empty_path(&self.cfg.frame_id);
         self.last_robot_pos = None;
@@ -533,6 +648,7 @@ impl Recorder {
             out.channel_path(&self.channel_path);
             cancelled = Some(Kind::Channel);
         }
+        self.end_rtk_pause(out);
         self.last_robot_pos = None;
         cancelled
     }
@@ -1436,6 +1552,9 @@ mod tests {
             polygon_simplify_dist: 0.1,
             max_site_datum_distance_m: 100.0,
             robot_pose_max_age_s: 1.0,
+            // the gate has tests of its own (rtk_gate below)
+            require_rtk_fixed: false,
+            rtk_fix_max_age_s: 1.0,
         };
         Recorder::new(cfg, Box::new(|| stamp(&Clock::system())))
     }
@@ -1618,6 +1737,9 @@ mod persistence_rules {
             polygon_simplify_dist: 0.1,
             max_site_datum_distance_m: 100.0,
             robot_pose_max_age_s: 1.0,
+            // the gate has tests of its own (rtk_gate below)
+            require_rtk_fixed: false,
+            rtk_fix_max_age_s: 1.0,
         };
         let mut r = Recorder::new(cfg, Box::new(|| stamp(&Clock::system())));
         r.restore_startup_persistence(&Quiet);
@@ -1747,5 +1869,217 @@ mod persistence_rules {
         let err = blocked.edit(&Quiet, "add", "zone", 0, &[(5.0, 0.0), (9.0, 0.0), (9.0, 4.0)]).unwrap_err();
         assert_eq!(err, "無法編輯任務幾何：持久化場地狀態未就緒（場地檔「ghost」不存在），請先使用 /site_op load 重新載入場地");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// Zone recording needs RTK fixed (owner, 2026-11-02, after zone 1 was
+/// recorded outdoors without a fix): a zone, risk zone or channel starts only
+/// on a fresh RTK fixed `/fix`, and while the fix is not RTK fixed no sample
+/// is taken; the recording runs on and samples again once it is.
+#[cfg(test)]
+mod rtk_gate {
+    use super::*;
+    use mower_bus::ManualClock;
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct Log {
+        paths: RefCell<Vec<Vec<f64>>>,
+        lines: RefCell<Vec<String>>,
+    }
+
+    impl Outputs for Log {
+        fn recorded_path(&self, p: &PathMsg) { self.paths.borrow_mut().push(p.poses.iter().map(|q| q.pose.position.x).collect()); }
+        fn zone_marker(&self, _: &Marker) {}
+        fn zone_list(&self, _: &MarkerArray) {}
+        fn risk_marker(&self, _: &Marker) {}
+        fn risk_list(&self, _: &MarkerArray) {}
+        fn channel_path(&self, p: &PathMsg) { self.paths.borrow_mut().push(p.poses.iter().map(|q| q.pose.position.x).collect()); }
+        fn channel_list(&self, _: &MarkerArray) {}
+        fn site_list(&self, _: &str) {}
+        fn info(&self, m: &str) { self.lines.borrow_mut().push(format!("I {m}")); }
+        fn warn(&self, m: &str) { self.lines.borrow_mut().push(format!("W {m}")); }
+        fn error(&self, m: &str) { self.lines.borrow_mut().push(format!("E {m}")); }
+    }
+
+    impl Log {
+        fn rtk(&self) -> Vec<String> {
+            self.lines.borrow().iter().filter(|l| l.contains("RTK")).cloned().collect()
+        }
+
+        fn last_path(&self) -> Vec<f64> {
+            self.paths.borrow().last().cloned().unwrap_or_default()
+        }
+    }
+
+    struct Rig {
+        r: Recorder,
+        clock: Clock,
+        manual: ManualClock,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// A recorder on a manual clock (stamps and `/fix` ages both), with its
+    /// work files, at a first pose at the origin.
+    fn rig(name: &str, require_rtk_fixed: bool, log: &Log) -> Rig {
+        let dir = std::env::temp_dir().join(format!("mower_record_rtk_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = Config {
+            frame_id: "map".into(),
+            save_dir: dir.join("zone_record").to_string_lossy().into_owned(),
+            sites_dir: dir.join("sites").to_string_lossy().into_owned(),
+            min_dist: 0.05,
+            min_dt: 0.0,
+            polygon_simplify_dist: 0.1,
+            max_site_datum_distance_m: 100.0,
+            robot_pose_max_age_s: 1.0,
+            require_rtk_fixed,
+            rtk_fix_max_age_s: 1.0,
+        };
+        let (clock, manual) = Clock::manual(mower_bus::Time::from_ns(1_800_000_000_000_000_000));
+        let (stamps, ages) = (clock.clone(), clock.clone());
+        let mut r = Recorder::new(cfg, Box::new(move || stamp(&stamps))).with_mono(Box::new(move || ages.mono()));
+        r.restore_startup_persistence(log);
+        let mut rig = Rig { r, clock, manual, dir };
+        rig.pose(0.0);
+        assert!(rig.r.try_initialize(log));
+        rig
+    }
+
+    impl Rig {
+        /// The robot at (x, 0) or (x, 1), zigzagging so that the polygon
+        /// keeps its vertices.
+        fn pose(&mut self, x: f64) {
+            let mut p = PoseStamped::default();
+            p.header.stamp = stamp(&self.clock);
+            p.header.frame_id = "map".into();
+            p.pose.position.x = x;
+            p.pose.position.y = (x as i64 % 2) as f64;
+            p.pose.orientation.w = 1.0;
+            self.r.on_pose_source("map", "base_footprint", p);
+        }
+
+        /// One 10 Hz tick with the robot at x: a `/fix` of `fix`'s
+        /// status if any, the pose, the sampler, then 100 ms pass.
+        fn tick(&mut self, x: f64, fix: Option<i8>, log: &Log) {
+            if let Some(status) = fix {
+                self.r.on_fix(status, self.clock.mono());
+            }
+            self.pose(x);
+            assert!(self.r.sample(log), "still recording");
+            self.manual.advance(Duration::from_millis(100));
+        }
+    }
+
+    /// A start needs the latest `/fix` to be RTK fixed (status 2) and at
+    /// most `rtk_fix_max_age_s` old, for all three kinds.
+    #[test]
+    fn a_start_needs_a_fresh_rtk_fixed_fix() {
+        let log = Log::default();
+        let mut g = rig("start", true, &log);
+        let refused = |kind: &str, why: &str| Err(format!("RTK 尚未 fixed，無法開始 {kind} 記錄（{why}）"));
+        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "尚未收到 GPS /fix"));
+        g.r.on_fix(-1, g.clock.mono());
+        assert_eq!(g.r.check_rtk_start(Kind::Risk), refused("risk", "GPS 無定位"));
+        // RTK float and a plain 3D fix are both status 0 on /fix
+        g.r.on_fix(0, g.clock.mono());
+        assert_eq!(g.r.check_rtk_start(Kind::Channel), refused("channel", "GPS status=0，RTK fixed 為 2"));
+        g.r.on_fix(2, g.clock.mono());
+        for kind in [Kind::Zone, Kind::Risk, Kind::Channel] {
+            assert_eq!(g.r.check_rtk_start(kind), Ok(()));
+        }
+        g.manual.advance(Duration::from_millis(1000));
+        assert_eq!(g.r.check_rtk_start(Kind::Zone), Ok(()), "1.0 s old is still fresh");
+        g.manual.advance(Duration::from_millis(100));
+        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "GPS /fix 已 1.1 s 未更新"));
+        // require_rtk_fixed off: no /fix needed at all
+        let off = rig("start_off", false, &log);
+        assert_eq!(off.r.check_rtk_start(Kind::Zone), Ok(()));
+    }
+
+    /// While recording, a fix that is not RTK fixed (or one that stopped
+    /// coming) pauses the sampling, logged once when it starts and once with
+    /// its length when it ends; the recording runs on and only fixed samples
+    /// make the zone.
+    #[test]
+    fn samples_pause_without_rtk_fixed_and_resume_with_it() {
+        let log = Log::default();
+        let mut g = rig("pause", true, &log);
+        g.r.on_fix(2, g.clock.mono());
+        g.r.check_rtk_start(Kind::Zone).unwrap();
+        assert!(g.r.start_zone(&log).0);
+        g.tick(1.0, Some(2), &log);
+        g.tick(2.0, Some(2), &log);
+        assert_eq!(g.r.path.poses.len(), 2);
+        // float: no sample, one warning
+        for x in [3.0, 4.0, 5.0] {
+            g.tick(x, Some(0), &log);
+        }
+        assert!(g.r.recording() && g.r.rtk_paused());
+        assert_eq!(g.r.path.poses.len(), 2);
+        // fixed again: sampling resumes where the robot is now
+        g.tick(6.0, Some(2), &log);
+        assert!(!g.r.rtk_paused());
+        assert_eq!(log.last_path(), [1.0, 2.0, 6.0]);
+        // the fix stops coming: fresh for 1.0 s, then stale
+        for x in [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0] {
+            g.tick(x, None, &log);
+        }
+        assert!(!g.r.rtk_paused());
+        g.tick(17.0, None, &log);
+        g.tick(18.0, None, &log);
+        assert!(g.r.rtk_paused());
+        assert_eq!(log.last_path(), [1.0, 2.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
+        // ended during the outage: the outage closes with the recording
+        assert_eq!(g.r.end_zone(&log), Ok("成功記錄區域結束點 #1".to_string()));
+        assert!(!g.r.rtk_paused());
+        assert_eq!(
+            log.rtk(),
+            [
+                "W RTK 未 fixed（GPS status=0，RTK fixed 為 2），暫停 zone 取樣；記錄仍進行中，fixed 恢復後繼續",
+                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 0.3 s）",
+                "W RTK 未 fixed（GPS /fix 已 1.1 s 未更新），暫停 zone 取樣；記錄仍進行中，fixed 恢復後繼續",
+                "I 記錄結束時 RTK 仍未 fixed（已暫停取樣 0.2 s）",
+            ]
+        );
+        // a new recording starts with no outage of the last one
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_risk(&log).0);
+        g.tick(19.0, Some(2), &log);
+        assert!(!g.r.rtk_paused());
+        assert_eq!(g.r.risk_path.poses.len(), 1);
+        assert_eq!(log.rtk().len(), 4);
+    }
+
+    /// A channel's end point is a sample too: not added without RTK fixed;
+    /// a cancel during an outage closes it.
+    #[test]
+    fn a_channel_end_point_needs_rtk_fixed_too() {
+        let log = Log::default();
+        let mut g = rig("channel", true, &log);
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_channel(&log).0);
+        g.tick(1.0, Some(2), &log);
+        g.r.on_fix(0, g.clock.mono());
+        g.pose(5.0);
+        assert!(g.r.end_channel(&log).is_ok());
+        let ends: Vec<f64> = g.r.channel_list.markers[0].points.iter().map(|p| p.x).collect();
+        assert_eq!(ends, [0.0, 1.0]);
+
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_channel(&log).0);
+        g.tick(2.0, Some(1), &log);
+        assert!(g.r.rtk_paused());
+        assert_eq!(g.r.cancel(&log), Some(Kind::Channel));
+        assert!(!g.r.rtk_paused());
+        assert_eq!(log.rtk().last().map(String::as_str), Some("I 記錄結束時 RTK 仍未 fixed（已暫停取樣 0.1 s）"));
     }
 }
