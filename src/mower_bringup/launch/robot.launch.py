@@ -212,7 +212,8 @@ def _rust_daemon_node(context):
         ]
         # ws_bridge_bus:=true -- ws_bridge on mower_bus instead of on an r2r
         # node of its own (step E3); mower_rsd then plans the bus bridge for
-        # it. Off by default: nothing is added, and the door is today's.
+        # it. On by default since E3.2; false adds nothing, and the door is
+        # the r2r one of E3.1 and before.
         if _truthy(LaunchConfiguration('ws_bridge_bus').perform(context)):
             bridge_args += ['--backend', 'bus']
         arguments += ['--module-args', ' '.join(bridge_args)]
@@ -641,12 +642,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ws_bridge_bus',
-            default_value='false',
+            default_value='true',
             description='mower_ws_bridge on mower_bus (--backend bus) instead '
                         'of on an r2r node of its own: the same door, frames '
                         'and texts, with the names only DDS has carried by the '
-                        'bus bridge. Needs rust_bridge; false is the roll-back, '
-                        'no new image needed.',
+                        'bus bridge. On since E3.2; needs rust_bridge; false '
+                        'is the roll-back, no new image needed.',
         ),
         DeclareLaunchArgument(
             'rust_base',

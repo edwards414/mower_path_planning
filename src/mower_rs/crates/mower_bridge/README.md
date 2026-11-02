@@ -109,7 +109,8 @@ conversion. A flag says "this module's code uses the bus"; a module of steps 1-5
 - **Set at run time:** `RUNTIME` lists the modules whose flag mower_rsd sets when it starts, from how it runs them:
   ws_bridge, whose backend is a module argument (`--backend bus`, robot.launch.py's `ws_bridge_bus`). It is the app's
   only door, the in-app update's included, so it moves back without a new image. Its flag in `ON_BUS` stays false,
-  the default backend's.
+  the binary's own default backend (r2r); the launch passes `--backend bus` by default since E3.2
+  (`WS_BRIDGE_BUS=false` is the way back).
 - **Where mower_rsd uses it:** the bus bridge's plan (`rsd_plan_with`), which the bridge gets in its arguments
   (`rsd_args`: the ids of `--modules`, then `--on-bus bridge`), and the manifest check (`on_bus_with`). Any other id
   there is refused.
@@ -177,12 +178,12 @@ each with its flag; every other instance is elsewhere, on DDS.
 | + map, record, adapter | 39 | 12 | 28 | 2 |
 | + imu, gps, localize | 48 | 9 | 32 | 1 |
 
-- **ws_bridge on the bus** (E3.1, `ws_bridge_bus:=true`) adds the 13 names the app uses that only DDS has, and changes
-  nothing else: `from_ros` of `/manual_command_clock` (`R V 10`), `/pid_autotune/status`, `/mower_recorder/status` and
-  `/mower_recorder/bags` (`R TL 10`) and `/mower_recorder/command_result` (`R V 10`); `to_ros` of `/app_joy_cmd`, the
-  servo and blade commands and `/mower_recorder/command` (`R V 10`); `service_from_ros` of `/pid_autotune`,
-  `/boustrophedon_coverage/set_parameters` and the recorder's start and stop. With ws_bridge on r2r, or not in
-  mower_rsd, the plan is E2's line for line.
+- **ws_bridge on the bus** (E3.1, `ws_bridge_bus:=true`; the default since E3.2) adds the 13 names the app uses that
+  only DDS has, and changes nothing else: `from_ros` of `/manual_command_clock` (`R V 10`), `/pid_autotune/status`,
+  `/mower_recorder/status` and `/mower_recorder/bags` (`R TL 10`) and `/mower_recorder/command_result` (`R V 10`);
+  `to_ros` of `/app_joy_cmd`, the servo and blade commands and `/mower_recorder/command` (`R V 10`); `service_from_ros`
+  of `/pid_autotune`, `/boustrophedon_coverage/set_parameters` and the recorder's start and stop. With ws_bridge on r2r,
+  or not in mower_rsd, the plan is E2's line for line.
 - **E2 step 6** (base, pid_autotune, the final guard; `step_6_takes_the_drivetrain_edge_into_the_process`):
   - in from DDS no longer: the base's `/odom`, `/odom_slow`, `/mower_base/telemetry`, `/mower_base/firmware_info` (for
     the modules on the bus), and with ws_bridge on the bus its `/pid_autotune/status` and `/pid_autotune`;

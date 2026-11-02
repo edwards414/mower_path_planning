@@ -9,9 +9,9 @@
 #
 # A switch is absolute, never cumulative: .env is rebuilt from the pre-test
 # backup each time and NAV_COMPOSITION, RUST_DAEMON, RUST_BASE, RUST_LOCALIZE,
-# RUST_NAV_CORE, RUST_MUX, RUST_STATIC_TF and RUST_RECORDER are always written
-# (the last six false unless given as KEY=VAL), so a flag from an earlier call
-# cannot stick.
+# RUST_NAV_CORE, RUST_MUX, RUST_STATIC_TF, RUST_RECORDER and WS_BRIDGE_BUS are
+# always written (the last seven false unless given as KEY=VAL), so a flag
+# from an earlier call cannot stick.
 # The branch compose is required: main's may not pass them through and compose
 # silently ignores .env keys it does not reference. After `up` the container's
 # launch arguments are checked and the script waits until the expected base
@@ -39,6 +39,13 @@
 # container then sleeps): once up, the module must run and no Python
 # recorder_manager may; `up` recreates the recorder container too. For the
 # owner's supervised recording test (E5-3b) before it becomes the default.
+#
+# WS_BRIDGE_BUS=true (E3: mower_ws_bridge on mower_bus, compose's default
+# since E3.2) needs RUST_BRIDGE=true in the backup .env, or there is no Rust
+# ws_bridge to move and nothing is checked; once up, the bridge module (or,
+# with RUST_DAEMON=false, the mower_ws_bridge binary) must run `--backend bus`
+# exactly when it is true. It is the app's only door: switch it only while
+# LAN SSH works. Not written false, the robot's door is the r2r one of E3.1.
 #
 # RUST_NAV_CORE=true (mower_nav_core instead of nav2) needs RUST_DAEMON=true
 # and RUST_LOCALIZE=true RUST_NAV=true given here, as robot.launch.py does, or
@@ -68,7 +75,7 @@ MARKER=ROSFREE_TEST_ACTIVE
 PASSTHROUGH=('nav_composition:=${NAV_COMPOSITION' 'rust_daemon:=${RUST_DAEMON' 'rust_mux:=${RUST_MUX'
              'rust_base:=${RUST_BASE' 'rust_localize:=${RUST_LOCALIZE'
              'rust_nav_core:=${RUST_NAV_CORE' 'rust_static_tf:=${RUST_STATIC_TF'
-             'rust_recorder:=${RUST_RECORDER')
+             'rust_recorder:=${RUST_RECORDER' 'ws_bridge_bus:=${WS_BRIDGE_BUS')
 DRIVERS='ros2_control_node|mower_base|mower_localize|mower_rsd|ekf_node|navsat_transform_node'
 # nav2: one component container (NAV_COMPOSITION=true) or one process per
 # server; none of them may run with RUST_NAV_CORE=true.
@@ -136,11 +143,25 @@ show_effective() {
     "MOWER_GIT_SHA=$(env_of MOWER_GIT_SHA "$CENV" | or_none '<unset>')"
   printf '== launch arguments:'
   for k in nav_composition rust_base rust_localize rust_daemon rust_nav rust_nav_core rust_mux rust_static_tf \
-           rust_recorder; do
+           rust_recorder rust_bridge ws_bridge_bus rust_status rust_pid_autotune; do
     printf ' %s=%s' "$k" "$(cmd_arg $k | or_none '<not passed>')"
   done
   echo " MOWER_FIRMWARE_SYNC=$(env_of MOWER_FIRMWARE_SYNC "$CENV" | or_none '<unset>')"
-  echo "== .env: $(sudo grep -E '^(IMAGE_TAG|NAV_COMPOSITION|RUST_BASE|RUST_LOCALIZE|RUST_DAEMON|RUST_NAV|RUST_NAV_CORE|RUST_MUX|RUST_STATIC_TF|RUST_RECORDER|MOWER_FIRMWARE_SYNC)=' .env | tr '\n' ' ')"
+  echo "== .env: $(sudo grep -E '^(IMAGE_TAG|NAV_COMPOSITION|RUST_BASE|RUST_LOCALIZE|RUST_DAEMON|RUST_NAV|RUST_NAV_CORE|RUST_MUX|RUST_STATIC_TF|RUST_RECORDER|RUST_BRIDGE|WS_BRIDGE_BUS|RUST_STATUS|RUST_PID_AUTOTUNE|MOWER_FIRMWARE_SYNC)=' .env | tr '\n' ' ')"
+}
+
+# E3: ws_bridge's backend, from the full command lines in the container: the
+# bridge module's arguments (mower_rsd) or the binary's (mower_ws_bridge,
+# RUST_DAEMON=false). "bus", "r2r", or "none" without a Rust ws_bridge
+# (RUST_BRIDGE=false: the Python rosbridge).
+ws_backend() {
+  local args
+  # docker top needs the pid column in -o; it is dropped here
+  args=$({ sudo docker top "$CID" -o pid,args 2>/dev/null || true; } | awk 'NR > 1 { $1 = ""; print substr($0, 2) }' |
+    grep -E '(^|/)(mower_rsd|mower_ws_bridge)( |$)' || true)
+  if ! grep -qE '(^|/)mower_ws_bridge( |$)|--modules ([^ ]*,)?bridge(,| |$)' <<<"$args"; then echo none
+  elif grep -q -- '--backend bus' <<<"$args"; then echo bus
+  else echo r2r; fi
 }
 
 # "<pid> <executable> [<mower_rsd modules>]" for every process in the container.
@@ -277,6 +298,7 @@ if [ "${1:-}" = status ]; then
   inspect_container
   show_effective
   show_procs "$(procs)"
+  echo "== ws_bridge backend: $(ws_backend)"
   restarts=$(log_restarts)
   echo "== base/localization restarts in this container's log: $(grep -c . <<<"$restarts" || true)"
   tail -3 <<<"$restarts" | sed '/^$/d; s/^/  /'
@@ -337,14 +359,15 @@ grep -qE 'image: \$\{IMAGE_REPO:-[^}]+\}:\$\{IMAGE_TAG' "$CF" ||
 
 declare -A SET=([IMAGE_TAG]=$TAG [NAV_COMPOSITION]=$NC [RUST_DAEMON]=$RD
                 [RUST_BASE]=false [RUST_LOCALIZE]=false [RUST_NAV_CORE]=false [RUST_MUX]=false
-                [RUST_STATIC_TF]=false [RUST_RECORDER]=false)
-ORDER=(IMAGE_TAG NAV_COMPOSITION RUST_DAEMON RUST_BASE RUST_LOCALIZE RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER)
+                [RUST_STATIC_TF]=false [RUST_RECORDER]=false [WS_BRIDGE_BUS]=false)
+ORDER=(IMAGE_TAG NAV_COMPOSITION RUST_DAEMON RUST_BASE RUST_LOCALIZE RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER
+       WS_BRIDGE_BUS)
 for kv in "$@"; do
   [[ $kv =~ ^([A-Z][A-Z0-9_]*)=(.*)$ && $kv != *$'\n'* ]] || die "not KEY=VAL: '$kv'"
   k=${BASH_REMATCH[1]} v=${BASH_REMATCH[2]}
   case $k in
     IMAGE_TAG|NAV_COMPOSITION|RUST_DAEMON) die "$k is a positional argument" ;;
-    RUST_*|NAV_*) bool "$k" "$v" ;;
+    RUST_*|NAV_*|WS_BRIDGE_BUS) bool "$k" "$v" ;;
     # 0 = skip, 1 = the image's default flasher, python / rust = that one
     # (utils/firmware-sync; an image without the switch takes both as 1)
     MOWER_FIRMWARE_SYNC) [[ $v =~ ^(0|1|python|rust)$ ]] ||
@@ -475,11 +498,20 @@ compose_up
 inspect_container
 show_effective
 [ "$IMAGE" = "$REPO:$TAG" ] || die "container runs $IMAGE, not $REPO:$TAG"
-for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER; do
+for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER WS_BRIDGE_BUS; do
   v=$(cmd_arg "${k,,}")
   [ "$v" = "${SET[$k]}" ] || die "container got ${k,,}:=${v:-<not passed>}, asked for ${SET[$k]}"
 done
 wait_for_drivers "${SET[RUST_BASE]}" "${SET[RUST_LOCALIZE]}" "$RD" "${SET[RUST_NAV_CORE]}" strict \
   "${SET[RUST_MUX]}" "${SET[RUST_STATIC_TF]}" "${SET[RUST_RECORDER]}"
+# E3: the door's backend as asked (none: RUST_BRIDGE is off in the backup .env)
+ws=$(ws_backend)
+echo "== ws_bridge backend: $ws"
+if [ "$ws" != none ]; then
+  want=$([ "${SET[WS_BRIDGE_BUS]}" = true ] && echo bus || echo r2r)
+  [ "$ws" = "$want" ] || die "ws_bridge runs its $ws backend, WS_BRIDGE_BUS=${SET[WS_BRIDGE_BUS]} asks for $want"
+elif [ "${SET[WS_BRIDGE_BUS]}" = true ]; then
+  echo "WARNING: WS_BRIDGE_BUS=true but no Rust ws_bridge runs (RUST_BRIDGE is off): it changes nothing" >&2
+fi
 PHASE=verified
 echo SWITCH_OK
