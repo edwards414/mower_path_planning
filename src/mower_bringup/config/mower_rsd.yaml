@@ -125,6 +125,16 @@ ekf_filter_node_map:
     # (the default on ekf_filter_node_odom: nothing throttles /odometry/local).
     odometry_slow_topic: /odometry/global_slow
     odometry_slow_rate_hz: 5.0
+navsat_transform:
+  ros__parameters:
+    # Lock the datum only on an RTK fixed fix (status 2), not on the first
+    # fix of any status as upstream does (default false): outdoors on
+    # 2026-11-02 the map origin moved 0.9 m between restarts of a robot
+    # standing still. Without RTK fixed there is no datum, so no map
+    # position; /datum (a manual datum) is not gated. The C++
+    # navsat_transform never reads this file: with rust_localize:=false the
+    # datum is not gated.
+    datum_requires_rtk_fixed: true
 
 # --- map (rust_map) ----------------------------------------------------------
 map_manage:

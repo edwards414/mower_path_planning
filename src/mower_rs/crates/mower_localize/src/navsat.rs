@@ -25,7 +25,7 @@ use mower_bus::Qos;
 use mower_localize_core::config::NavSatSettings;
 use mower_localize_core::navsat::NavSatTransformCore;
 use mower_localize_core::tf::{Quaternion, Vector3};
-use mower_rs_common::{ModuleCtx, ModuleResult};
+use mower_rs_common::{params, ModuleCtx, ModuleResult};
 use r2r::geographic_msgs::msg::GeoPoint;
 use r2r::geometry_msgs::msg::Point;
 use r2r::nav_msgs::msg::Odometry as ROdometry;
@@ -50,6 +50,15 @@ const FIX_TOPIC: &str = "gps/fix";
 const IMU_TOPIC: &str = "imu";
 const GPS_ODOM_TOPIC: &str = "odometry/gps";
 const FILTERED_GPS_TOPIC: &str = "gps/filtered";
+
+/// The one key this port reads that robot_localization has none of: lock the
+/// datum only on an RTK fixed fix (`NavSatTransformCore::
+/// datum_requires_rtk_fixed`). Off by default, as upstream; mower_rsd.yaml
+/// turns it on for the robot. Like the EKFs' slow-copy keys it is taken out
+/// before the resolver sees the section and reported on the parameter
+/// services with the rest. The C++ node never reads mower_rsd.yaml, so with
+/// rust_localize:=false the datum is not gated.
+const DATUM_RTK_KEY: &str = "datum_requires_rtk_fixed";
 
 struct Nav {
     core: NavSatTransformCore,
@@ -104,9 +113,12 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
 /// parameters it has set itself.
 pub(crate) async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let logger = node.logger().to_string();
+    let datum_requires_rtk_fixed = params::bool(&node, DATUM_RTK_KEY, false);
     // The node's section of dual_ekf_navsat_params.yaml, resolved as the
     // `NavSatTransform` constructor reads it.
-    let resolved = NavSatSettings::from_params(&m.node_name, &paramsrv::overrides(&node))?;
+    let mut section = paramsrv::overrides(&node);
+    section.remove(DATUM_RTK_KEY);
+    let resolved = NavSatSettings::from_params(&m.node_name, &section)?;
     for w in &resolved.warnings {
         r2r::log_warn!(&logger, "{w}");
     }
@@ -114,10 +126,9 @@ pub(crate) async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult 
     let frequency = resolved.settings.frequency;
     let delay = resolved.settings.delay;
 
-    let nav = Arc::new(Mutex::new(Nav {
-        core: NavSatTransformCore::new(cfg.clone()),
-        tf_revision: None,
-    }));
+    let mut core = NavSatTransformCore::new(cfg.clone());
+    core.datum_requires_rtk_fixed = datum_requires_rtk_fixed;
+    let nav = Arc::new(Mutex::new(Nav { core, tf_revision: None }));
 
     // What takes from the readers and serves the services. Bus readers and
     // services queue from the moment they exist, but nothing is taken from
@@ -163,12 +174,22 @@ pub(crate) async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult 
         // `gps/fix` is best-effort sensor data, like the driver publishes it.
         let mut stream = m.bus.subscribe::<RNavSatFix>(&m.resolve_topic(FIX_TOPIC)?, input_qos())?;
         let nav = nav.clone();
+        let logger = logger.clone();
         deferred.push(async move {
+            let mut waiting_logged = false;
             while let Some(msg) = stream.next().await {
                 let converted = conv::fix_in(&msg);
                 let mut n = nav.lock().await;
                 n.sync_transforms();
                 n.core.gps_fix_callback(&converted);
+                if !waiting_logged && n.core.fixes_ignored_for_datum() > 0 {
+                    waiting_logged = true;
+                    r2r::log_info!(
+                        &logger,
+                        "Waiting for RTK fixed (status 2) to lock the datum; fixes of status {} are not used for it",
+                        converted.status
+                    );
+                }
             }
         }.boxed());
     }
@@ -305,6 +326,7 @@ pub(crate) async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult 
 
     let mut advertised: Vec<paramsrv::Param> =
         resolved.parameters.iter().map(|(name, v)| paramsrv::from_core(name, v)).collect();
+    advertised.push(paramsrv::boolean(DATUM_RTK_KEY, datum_requires_rtk_fixed));
     // rclcpp declares it on every node; the resolver refused anything but false.
     if advertised.iter().all(|p| p.name != "use_sim_time") {
         advertised.push(paramsrv::boolean("use_sim_time", false));
@@ -382,6 +404,13 @@ pub(crate) async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult 
                     n.core.utm_zone,
                     if n.core.northp { "N" } else { "S" }
                 );
+                if datum_requires_rtk_fixed && !n.core.manual_datum() {
+                    r2r::log_info!(
+                        &logger,
+                        "Datum locked on an RTK fixed fix ({} fixes before it were not RTK fixed)",
+                        n.core.fixes_ignored_for_datum()
+                    );
+                }
                 if cfg.broadcast_cartesian_transform {
                     let mut t = n.core.cartesian_world_transform;
                     if cfg.zero_altitude {
@@ -523,6 +552,8 @@ mod tests {
         world: &'static str,
         base: &'static str,
         k: i64,
+        /// The fixes' `status.status`: 0 (STATUS_FIX) unless a test sets it.
+        status: i8,
     }
 
     impl Inputs {
@@ -535,6 +566,7 @@ mod tests {
                 world,
                 base,
                 k: 0,
+                status: 0,
             }
         }
 
@@ -557,7 +589,7 @@ mod tests {
             let mut fix = RNavSatFix::default();
             fix.header.stamp = stamp;
             fix.header.frame_id = self.base.to_string();
-            fix.status.status = 0; // STATUS_FIX
+            fix.status.status = self.status;
             fix.latitude = lat;
             fix.longitude = lon;
             fix.altitude = 50.0;
@@ -755,6 +787,54 @@ mod tests {
                 ]
             );
             assert_eq!(services[0].ros_type.as_deref(), Some("robot_localization/srv/SetDatum"));
+            navsat.stop().await;
+        });
+    }
+
+    /// `datum_requires_rtk_fixed` (mower_rsd.yaml sets it for the robot):
+    /// fixes that are not RTK fixed never lock the datum, however long they
+    /// come; the first RTK fixed one does, and the datum is where it was.
+    #[test]
+    fn with_datum_requires_rtk_fixed_only_an_rtk_fixed_fix_locks_the_datum() {
+        testing::run(async {
+            let Some(ctx) = testing::context() else { return };
+            const WORLD: &str = "map_navsat_rtk_test";
+            let navsat = Navsat::start(&ctx, "/navsat_rtk_test", &[
+                ("delay", r2r::ParameterValue::Double(0.0)),
+                ("frequency", r2r::ParameterValue::Double(30.0)),
+                ("broadcast_cartesian_transform", r2r::ParameterValue::Bool(true)),
+                (DATUM_RTK_KEY, r2r::ParameterValue::Bool(true)),
+            ]);
+            navsat.armed().await;
+            let mut inputs = Inputs::new(&navsat.feeder, WORLD, "base_navsat_rtk_test");
+            let to_ll = navsat.feeder.client::<ToLL::Request, ToLL::Response>("/toLL").unwrap();
+            let tick = |inputs: &mut Inputs, lat: f64| {
+                inputs.publish(0.0, 0.0, lat, 120.5387);
+            };
+            // 3D and float (status 0), 3 m north of the antenna: 3 s of ticks
+            for _ in 0..90 {
+                tick(&mut inputs, 23.6950 + 3.0 / 110_800.0);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                navsat.manual.advance(Duration::from_secs_f64(1.0 / 30.0));
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            assert!(tfbus::last_set(WORLD, CARTESIAN_FRAME).is_none(), "a datum without RTK fixed");
+            let ll = answer(to_ll.request(&ToLL::Request::default()).unwrap()).await.ll_point;
+            assert_eq!((ll.latitude, ll.longitude), (0.0, 0.0), "no datum yet");
+
+            // RTK fixed: the next tick locks the datum on it
+            inputs.status = 2;
+            let mut ticks = 0;
+            while tfbus::last_set(WORLD, CARTESIAN_FRAME).is_none() {
+                assert!(ticks < 300, "no datum within 300 ticks of RTK fixed");
+                tick(&mut inputs, 23.6950);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                navsat.manual.advance(Duration::from_secs_f64(1.0 / 30.0));
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                ticks += 1;
+            }
+            let ll = answer(to_ll.request(&ToLL::Request::default()).unwrap()).await.ll_point;
+            assert!((ll.latitude - 23.6950).abs() < 1e-7 && (ll.longitude - 120.5387).abs() < 1e-7, "{ll:?}");
             navsat.stop().await;
         });
     }
