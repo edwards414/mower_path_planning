@@ -202,9 +202,10 @@ def generate_launch_description():
 
     declare_ws_bridge_bus = DeclareLaunchArgument(
         'ws_bridge_bus',
-        default_value='false',
+        default_value='true',
         description='The mower_rs WebSocket bridge on mower_bus (--backend '
-                    'bus) instead of on an r2r node of its own.',
+                    'bus) instead of on an r2r node of its own; on since '
+                    'E3.2, false is the roll-back.',
     )
 
     declare_rust_adapter = DeclareLaunchArgument(

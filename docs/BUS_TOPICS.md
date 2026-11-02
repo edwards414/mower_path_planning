@@ -91,6 +91,10 @@ references are to their own repositories, at the commits named in 1.4.
 
 So a topic between a module on the bus and the app needs a bus/DDS bridge until E3.
 
+Since E3.2, `WS_BRIDGE_BUS` is on by default: ws_bridge runs on the bus and reads and writes the modules' names
+in-process. Its "until E3" ends below (5.3) are then done. The bus→DDS faces stay, for DDS tools and probes (E3
+design D3: no pruning in E3). `WS_BRIDGE_BUS=false` brings the r2r door and these bridge ends back.
+
 ### 1.3 Notation
 
 **QoS.**
@@ -404,10 +408,12 @@ until E3:
 | `/mower_base/servo_command`, `/mower_base/blade_command` | ws_bridge publishes them; mower_base reads them |
 
 So do E3 before the moves in steps 6 and 7. Then neither the joystick path nor the blade dead-man crosses a bridge.
+E3.2 turns ws_bridge's bus backend on by default, so with steps 6 and 7 on this holds.
 
 ### 5.3 Ends that stay on DDS, and until when
 
-**Until E3 (ws_bridge).**
+**Until E3 (ws_bridge).** Done with E3.2 while `WS_BRIDGE_BUS` is on, the default: ws_bridge reads and writes these
+names on the bus. The bus→DDS faces stay (E3 design D3) and the DDS→bus ones exist only while a DDS writer does.
 
 - *bus→DDS:*
   - `/manual_command_clock`, `/zone_sequence_status`, `/site_list`

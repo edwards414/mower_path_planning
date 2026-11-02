@@ -50,10 +50,11 @@ def generate_launch_description():
     rust_bridge = LaunchConfiguration('rust_bridge')
     ws_bridge_bus_arg = DeclareLaunchArgument(
         'ws_bridge_bus',
-        default_value='false',
+        default_value='true',
         description='The mower_rs WebSocket bridge on mower_bus (--backend '
-                    'bus): its binary then runs next to a bus bridge of its '
-                    'own, which carries its names to DDS',
+                    'bus, on since E3.2): its binary then runs next to a bus '
+                    'bridge of its own, which carries its names to DDS; '
+                    'false is the roll-back',
     )
     ws_bridge_bus = LaunchConfiguration('ws_bridge_bus')
     rust_agent_arg = DeclareLaunchArgument(
@@ -175,7 +176,7 @@ def generate_launch_description():
             '--port', LaunchConfiguration('port'),
             '--loopback-port', '9091',
             '--policy', ws_bridge_policy,
-            # r2r, the default, unless ws_bridge_bus:=true
+            # bus, the default since E3.2, unless ws_bridge_bus:=false
             '--backend', PythonExpression([
                 "'bus' if '", ws_bridge_bus, "'.lower() in ", _TRUE,
                 " else 'r2r'",

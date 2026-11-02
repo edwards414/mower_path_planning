@@ -783,11 +783,13 @@ gate (401 without headers / replayed nonce / bad MAC, accepted with a valid
 hand-shake and the latched `/robot/online` delivered immediately).
 
 Step E3 adds a second backend, `--backend bus` (robot.launch.py
-`ws_bridge_bus:=true`, `WS_BRIDGE_BUS` in `.env`; off by default): the same
-door on mower_bus, with the names only DDS has carried by the bus bridge
-(`mower_bridge`, module `bridge`). The frames are those of the golden corpus
-in `crates/mower_ws_bridge/tests/golden`, which r2r's untyped path also
-gives.
+`ws_bridge_bus:=true`, `WS_BRIDGE_BUS` in `.env`; on by default since E3.2):
+the same door on mower_bus, with the names only DDS has carried by the bus
+bridge (`mower_bridge`, module `bridge`). The frames are those of the golden
+corpus in `crates/mower_ws_bridge/tests/golden`, which r2r's untyped path
+also gives. `WS_BRIDGE_BUS=false` in `.env` is the roll-back to the r2r
+backend, with no new image; it needs SSH to the robot, since ws_bridge is the
+in-app update's door too. The r2r backend goes in E3.4.
 
 ## mower_record
 

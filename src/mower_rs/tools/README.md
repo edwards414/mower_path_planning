@@ -317,6 +317,14 @@ ssh cat@<robot> 'sudo docker rmi docker.io/fxrbindi/mower_path_planning:rosfree-
 - `status` shows the build, the launch arguments, the drivers and the
   base/localization restarts in the running container's log so far. Run it
   again right before driving: `SWITCH_OK` only covers its 30 s window.
+- `WS_BRIDGE_BUS` (E3: ws_bridge on mower_bus, compose's default since E3.2)
+  is written on every switch too, `false` unless given, so a test runs the
+  r2r door unless it asks for the bus one. With `RUST_BRIDGE=true` in the
+  backup `.env` the switch fails unless the bridge module (or the
+  `mower_ws_bridge` binary with `RUST_DAEMON=false`) runs `--backend bus`
+  exactly when `WS_BRIDGE_BUS=true`; with `RUST_BRIDGE=false` there is no Rust
+  ws_bridge and it only warns. `status` prints the backend. It is the app's
+  only door: switch it only while LAN SSH works.
 - For the first `RUST_BASE` / `RUST_LOCALIZE` runs keep `NAV_COMPOSITION=false`
   (the second argument): composed nav2 has never navigated on the robot
   either, and a failure should have one suspect.

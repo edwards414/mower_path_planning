@@ -302,17 +302,17 @@ def test_rust_daemon_runs_the_enabled_modules_in_one_process():
         assert "'rust_daemon'" in text, launch.name
 
 
-def test_ws_bridge_bus_is_a_run_time_switch_that_is_off_by_default(monkeypatch):
+def test_ws_bridge_bus_is_a_run_time_switch_that_is_on_by_default(monkeypatch):
     """ws_bridge_bus:=true (WS_BRIDGE_BUS) moves mower_ws_bridge onto
     mower_bus (--backend bus), and the bus bridge then carries the names only
     DDS has for it. It is the app's only door, the in-app update included,
-    so it is a launch switch, off unless .env says otherwise, and the
-    roll-back needs no new image. Off, mower_rsd's command line is today's."""
+    so it is a launch switch, on since E3.2 unless .env says false, and the
+    roll-back needs no new image. Off, mower_rsd's command line is E3.1's."""
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
     mission = MISSION_LAUNCH.read_text(encoding='utf-8')
     rosbridge = ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
     for text in (robot, mission, rosbridge):
-        assert re.search(r"'ws_bridge_bus',\n\s+default_value='false',", text)
+        assert re.search(r"'ws_bridge_bus',\n\s+default_value='true',", text)
     block = robot.split("if 'bridge' in modules:", 1)[1].split(
         "if 'agent' in modules:", 1)[0]
     assert ("if _truthy(LaunchConfiguration('ws_bridge_bus')"
@@ -320,13 +320,22 @@ def test_ws_bridge_bus_is_a_run_time_switch_that_is_off_by_default(monkeypatch):
     assert "bridge_args += ['--backend', 'bus']" in block
     assert "'ws_bridge_bus': ws_bridge_bus," in robot
     assert "'ws_bridge_bus': LaunchConfiguration('ws_bridge_bus')," in mission
-    # the separate binary (rust_daemon:=false): r2r unless the switch is on
+    # the separate binary (rust_daemon:=false): bus unless the switch is off
     assert "'--backend', PythonExpression([" in rosbridge
     assert "\"'bus' if '\", ws_bridge_bus" in rosbridge
-    assert 'ws_bridge_bus:=${WS_BRIDGE_BUS:-false}' in \
+    assert 'ws_bridge_bus:=${WS_BRIDGE_BUS:-true}' in \
         DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    assert re.search(r'^WS_BRIDGE_BUS=false$',
+    assert re.search(r'^WS_BRIDGE_BUS=true$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
+    # switch.sh writes it on every switch (false unless given), passes it
+    # through the branch compose, and checks the backend the door runs
+    switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
+    passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
+                            re.M | re.S).group(1)
+    assert "'ws_bridge_bus:=${WS_BRIDGE_BUS'" in passthrough
+    assert '[WS_BRIDGE_BUS]=false' in switch
+    assert "elif grep -q -- '--backend bus' <<<\"$args\"; then echo bus" in switch
+    assert 'die "ws_bridge runs its $ws backend' in switch
     # the Rust side reads the same argument: mower_rsd for the bus bridge's
     # plan, the binary for its runner (mower_rsd's
     # ws_bridge_is_on_the_bus_with_its_bus_backend, mower_ws_bridge's
@@ -514,7 +523,8 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
         assert text in lawan, text
     assert '[RUST_NAV_CORE]=false' in switch
     assert ('for k in NAV_COMPOSITION RUST_BASE RUST_LOCALIZE RUST_DAEMON '
-            'RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER; do') in switch
+            'RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER '
+            'WS_BRIDGE_BUS; do') in switch
 
     # the behavioural half needs ROS launch (not in the python-tests job)
     pytest.importorskip('launch')
