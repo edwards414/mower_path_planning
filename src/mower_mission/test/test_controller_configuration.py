@@ -1541,6 +1541,38 @@ def test_mower_camera_exposes_only_required_protocols():
     assert 'whip' not in production.lower()
 
 
+def test_front_camera_runs_on_demand():
+    # deploy/mediamtx.yml's runOnDemand tells host/mower-camera.sh through a
+    # file in a directory compose bind-mounts from the host: touched once a
+    # second while a reader wants `front`, removed when MediaMTX stops it.
+    import yaml
+    demand = '/run/mower-camera/demand'
+    front = yaml.safe_load(DEPLOY_MEDIAMTX.read_text(encoding='utf-8'))['paths']['front']
+    assert front['source'] == 'publisher'
+    command = front['runOnDemand']
+    assert command.startswith("sh -c '") and command.count(demand) == 2
+    assert f'trap "rm -f {demand}; exit 0" INT TERM' in command
+    assert f'while :; do touch {demand}; sleep 1; done' in command
+    # a first reader waits for the camera: under mower_agent's 10 s WHEP relay
+    # timeout (HTTP_RELAY_TIMEOUT_S) and the app's 12 s signalling timeout
+    assert front['runOnDemandStartTimeout'] == '8s'
+    assert front['runOnDemandCloseAfter'] == '15s'
+    services = yaml.safe_load(DEPLOY_COMPOSE.read_text(encoding='utf-8'))['services']
+    assert '/run/mower-camera:/run/mower-camera' in services['mediamtx']['volumes']
+    camera = (SRC_DIR.parent / 'deploy/host/mower-camera.sh').read_text(encoding='utf-8')
+    assert f'DEMAND_FILE=${{DEMAND_FILE:-{demand}}}' in camera
+    assert 'on_demand=$(env_get CAMERA_ON_DEMAND 1)' in camera
+    # a file older than 5 s is gone (MediaMTX killed or restarted)
+    assert '[ $(($(date +%s) - m)) -le 5 ]' in camera
+    # a recording is no reader, and a reader that came while a recording had
+    # the camera on started no runOnDemand: both come from the loopback API
+    assert 'api "/v3/config/paths/get/$path" | grep -Eq \'"record": *true\'' in camera
+    assert 'body=$(api "/v3/paths/get/$path")' in camera
+    assert 'MEDIAMTX_API=${MEDIAMTX_API:-http://127.0.0.1:9997}' in camera
+    assert re.search(r'^CAMERA_ON_DEMAND=1$', ENV_EXAMPLE.read_text(encoding='utf-8'),
+                     flags=re.MULTILINE)
+
+
 def test_real_robot_health_gate_is_enabled_by_default():
     for path in (ROBOT_LAUNCH, MISSION_LAUNCH):
         source = path.read_text(encoding='utf-8')

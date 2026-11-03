@@ -65,3 +65,15 @@ paths:
   #     -preset ultrafast -tune zerolatency -pix_fmt yuv420p -f rtsp rtsp://localhost:8554/front
   front:
     source: publisher
+    # On demand (host/mower-camera.sh, CAMERA_ON_DEMAND): while a reader wants
+    # the path, this command touches the demand file once a second (compose
+    # bind-mounts /run/mower-camera from the host) and the host service runs
+    # the camera. MediaMTX stops it (SIGINT) runOnDemandCloseAfter after the
+    # last reader left, it removes the file, and the camera stops. A first
+    # reader waits up to runOnDemandStartTimeout for the stream: under
+    # mower_agent's 10 s WHEP relay timeout and the app's 12 s.
+    runOnDemand: >-
+      sh -c 'trap "rm -f /run/mower-camera/demand; exit 0" INT TERM;
+      while :; do touch /run/mower-camera/demand; sleep 1; done'
+    runOnDemandStartTimeout: 8s
+    runOnDemandCloseAfter: 15s

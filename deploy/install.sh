@@ -116,7 +116,7 @@ echo "   enabled mower.service (stack on boot), mower-host-request.path (app-tri
 echo "           mower-update.timer (hourly channel check, MOWER_AUTO_UPDATE=0 in .env disables),"
 echo "           mower-update-check.timer (registry check every 5 min -> /robot/info update.available),"
 echo "           mower-link-status.service (LTE/Wi-Fi signal -> link_status.json for /robot/telemetry),"
-echo "           mower-camera.service (front USB camera -> MPP H.264 -> mediamtx, CAMERA_* in .env),"
+echo "           mower-camera.service (front USB camera -> MPP H.264 -> mediamtx on demand, CAMERA_* in .env),"
 echo "           mower-lte.service (EC25 QMI dial-up, wwan0 fallback uplink at metric 200, MOWER_LTE_* in .env)"
 
 echo "== docker"

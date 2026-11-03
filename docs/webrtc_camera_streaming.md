@@ -14,10 +14,12 @@ separate from rosbridge control/status traffic.
 ```text
 USB camera (/dev/video0, MJPG)
   │ host service mower-camera.service (deploy/host/mower-camera.sh):
-  │ Rockchip MPP hardware JPEG decode + H.264 encode, published continuously
+  │ Rockchip MPP hardware JPEG decode + H.264 encode, published on demand
+  │ (while a reader wants `front` or MediaMTX records it; CAMERA_ON_DEMAND)
   ▼
 Mower MediaMTX (deploy/mediamtx.yml): rtsp://127.0.0.1:8554/front, path
-`front` with `source: publisher`, re-served over WebRTC/WHEP on :8889
+`front` with `source: publisher` and a `runOnDemand` that tells the host
+service through /run/mower-camera/demand, re-served over WebRTC/WHEP on :8889
   │
   ├─ same Wi-Fi: app -> http://<robot-ip>:8889/front/whep,
   │              media direct on UDP 8189
@@ -37,6 +39,15 @@ directly, otherwise the backend relay (docs/BACKEND_ARCHITECTURE.md).
 - `deploy/host/mower-camera.sh` + `mower-camera.service` (host, not the
   container: the MPP libraries and `/dev/mpp_service` live there) publish the
   feed. The MediaMTX container needs no camera device.
+- On demand: the camera runs while it is wanted, so an idle robot does not
+  capture and encode for nobody. Wanted: a reader asked for `front`
+  (`runOnDemand` touches `/run/mower-camera/demand` once a second until
+  MediaMTX stops it, `runOnDemandCloseAfter` 15 s after the last reader), the
+  path has readers, or MediaMTX records it (a recorder run: a recording is no
+  reader). The first viewer waits about 2 s for the camera; MediaMTX holds the
+  WHEP answer up to `runOnDemandStartTimeout` 8 s, inside mower_agent's 10 s
+  relay timeout and the app's 12 s. A run's video starts when the camera does,
+  so the recorder's start reply may still say the camera has no picture.
 - `deploy/mediamtx.yml` is the one MediaMTX config for every robot (WHEP :8889,
   WebRTC media UDP 8189, API bound to 127.0.0.1:9997).
 - `mower_agent` forwards only `/<path>/whep` signaling and refreshes the TURN
@@ -59,6 +70,7 @@ On the robot, set any of these in `/opt/mower/.env` and restart
 | `CAMERA_BPS` | `2000000` | H.264 bit rate (CBR) |
 | `CAMERA_GOP` | `10` | frames between key frames |
 | `CAMERA_RTSP_URL` | `rtsp://127.0.0.1:8554/front` | where MediaMTX accepts the publish |
+| `CAMERA_ON_DEMAND` | `1` | `1`: only while wanted (above); `0`: all the time |
 
 Without a camera, publish a test pattern from the host (the command is in the
 comment of `deploy/mediamtx.yml`). The `lavfi` `runOnDemand` recipe in the
