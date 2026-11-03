@@ -109,6 +109,8 @@ sudo docker compose -f /opt/mower/docker-compose.yaml exec lawan_node bash -lc \
 
 前鏡頭：主機端 `mower-camera.service`（`host/mower-camera.sh`）用 GStreamer 從 `/dev/video0` 抓 MJPG，
 交給 Rockchip VPU 硬體解 JPEG、硬體編 H.264（約佔一核的 2%），以 RTSP 發布進 mediamtx 容器，App 再以 WebRTC/WHEP 讀。
+相機只在需要時開（`CAMERA_ON_DEMAND=1`，預設）：有人看（App 的 WHEP）或錄製中（MediaMTX 錄 `front`）才跑，
+最後一個人離開 15 秒後關；第一個看的人要等約 2 秒。`CAMERA_ON_DEMAND=0` 恢復一直開。
 參數在 `.env` 的 `CAMERA_*`。相機在暗處會因自動曝光掉到約 5 fps，戶外正常。
 
 影像：同一個 Wi-Fi 時 App 直接拉 `http://<robot-ip>:8889/front/whep`；跨網路時 WHEP 訊令經 `../backend/` 轉到機器人上的
