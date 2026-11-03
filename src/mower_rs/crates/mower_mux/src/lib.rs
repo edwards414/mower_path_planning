@@ -1,7 +1,7 @@
 //! twist_mux, the velocity multiplexer in front of the final guard, as a
 //! module of mower_rsd (step E4 of docs/ROS_FREE_PLAN.md): module `mux`,
-//! node `twist_mux`, launch switch `rust_mux` (compose `RUST_MUX`, off by
-//! default and only with `rust_daemon`).
+//! node `twist_mux`, launch switch `rust_mux` (compose `RUST_MUX`, on by
+//! default since E4-5, and only with `rust_daemon`).
 //!
 //! - [`core`]: twist_mux 4.5.0's selection rules, a pure function of when
 //!   each input and lock last had a message.

@@ -18,7 +18,7 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
 - **Today:** battery, status, map, record, adapter, imu, gps, localize, coverage and nav are on the bus (E2 steps
   1-5), and so are base, pid_autotune and the final guard (step 6) and the manual guard (step 7), whose flags are on
   since E3.2; they still have their r2r IO next to the bus IO ("The flags"). ws_bridge is in the manifest (step E3),
-  on the bus by default since E3.2 (`ws_bridge_bus`). E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both off by default,
+  on the bus by default since E3.2 (`ws_bridge_bus`). E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both on by default since E4-5,
   are born on the bus and replace the outside twist_mux and robot_state_publisher when they run; so is E5's `bag`
   (`rust_recorder`, off by default; E5-3a, idle only), which replaces the outside Python recorder.
 

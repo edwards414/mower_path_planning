@@ -31,8 +31,8 @@ services:
       - MANUAL_GUARD_TIMEOUT_S=${MANUAL_GUARD_TIMEOUT_S:-}
       - FINAL_GUARD_TIMEOUT_S=${FINAL_GUARD_TIMEOUT_S:-}
       - RUST_RECORDER=${RUST_RECORDER:-true}
-      - RUST_MUX=${RUST_MUX:-false}
-      - RUST_STATIC_TF=${RUST_STATIC_TF:-false}
+      - RUST_MUX=${RUST_MUX:-true}
+      - RUST_STATIC_TF=${RUST_STATIC_TF:-true}
     volumes:
       - sim_ctl:/tmp/mower_sim
       - ../../tools/ab/fixtures:/fixtures:ro

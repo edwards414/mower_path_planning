@@ -123,8 +123,9 @@ taken one IMU heading yet and the map frame comes out turned by up to the
 robot's heading (120 deg by default). Missions still run (the zones turn
 with it), but the satellite underlay is off. `docker compose restart sim`
 starts again. It is the production stack's own race, the same with the
-Python fakes; E4, which brings robot_state_publisher into the process,
-should remove it.
+Python fakes. Since E4-5 an image starts robot_state_publisher as mower_rsd's
+static_tf module by default (`rust_static_tf`), and localize waits for its
+`/tf_static`, so an image of E4-5 or later does not have it.
 
 ## What it is not
 

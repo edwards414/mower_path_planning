@@ -132,5 +132,5 @@ exec setpriv --reuid=1000 --regid=1000 --init-groups \
   rust_daemon:="${RUST_DAEMON:-true}" \
   rust_nav_core:="${RUST_NAV_CORE:-false}" \
   rust_recorder:="${RUST_RECORDER:-true}" \
-  rust_mux:="${RUST_MUX:-false}" \
-  rust_static_tf:="${RUST_STATIC_TF:-false}"
+  rust_mux:="${RUST_MUX:-true}" \
+  rust_static_tf:="${RUST_STATIC_TF:-true}"
