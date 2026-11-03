@@ -584,7 +584,7 @@ pub static MODULES: &[Module] = &[
         }],
     },
     Module {
-        // E5 (rust_recorder, off by default): mower_recorder's three nodes,
+        // E5 (rust_recorder, on by default since E5-7): mower_recorder's three nodes,
         // their endpoints as recorder_manager_node.py, bag_store_node.py and
         // graph_snapshot_node.py make them (rclpy's depth 10 is R V 10, their
         // _latched() R TL 1; the /fix reader has depth 1). Born on the bus.
@@ -689,7 +689,7 @@ pub static OUTSIDE: &[Outside] = &[
     Outside {
         // The Python recorder (recorder_manager_node.py): its status for the
         // app, latched, and the services the app calls through ws_bridge
-        // (docs/BUS_TOPICS.md 2.8, 3.3). rust_recorder (E5, off by default)
+        // (docs/BUS_TOPICS.md 2.8, 3.3). rust_recorder (E5, on by default since E5-7)
         // puts compose's recorder service to sleep and runs the bag module
         // in its place.
         node: "recorder_manager",

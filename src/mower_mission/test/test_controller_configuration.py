@@ -685,28 +685,28 @@ def _compose_service(compose, name):
     return compose.split(f'\n  {name}:\n', 1)[1].split('\n\n  ', 1)[0]
 
 
-def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
+def test_rust_recorder_replaces_the_python_recorder_and_is_on_by_default(
         tmp_path):
-    """rust_recorder:=true (compose RUST_RECORDER, default false; E5-3):
+    """rust_recorder:=true (compose RUST_RECORDER, default true since E5-7):
     mower_rsd's bag module (crates/mower_recorder: recorder_manager,
     bag_store, graph_snapshot) instead of the Python recorder, whose
     container then sleeps, so that /mower_recorder/* has one owner; with
     rust_daemon:=false the mower_recorder binary. Its parameters are what
-    record.launch.py gives the Python nodes. Off by default everywhere: the
-    module waits for the owner's robot checks (E5-3b), and with the switch off nothing
-    runs that did not before and the recorder service runs what it ran."""
+    record.launch.py gives the Python nodes. On by default everywhere (the
+    robot has run it since 2026-10-31); with the switch off nothing runs that
+    did not before and the recorder service runs what it ran."""
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
     mission = MISSION_LAUNCH.read_text(encoding='utf-8')
     compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
     record = RECORD_LAUNCH.read_text(encoding='utf-8')
 
-    # declared off in both launch files, threaded robot -> mission
+    # declared on in both launch files, threaded robot -> mission
     for text in (robot, mission):
         argument = re.search(
             r"DeclareLaunchArgument\(\s*'rust_recorder'(.*?)\n\s*\)", text,
             flags=re.DOTALL)
         assert argument is not None
-        assert "default_value='false'" in argument.group(1)
+        assert "default_value='true'" in argument.group(1)
     mission_include = robot.split("'mission.launch.py')", 1)[1].split(
         '}.items()', 1)[0]
     assert "'rust_recorder': rust_recorder," in mission_include
@@ -770,13 +770,13 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     # compose: lawan_node gets the switch and the recorder's robot id and R2
     # file; the recorder service runs today's launch unless it is on
     lawan = compose.split('  mediamtx:', 1)[0]
-    assert '- rust_recorder:=${RUST_RECORDER:-false}' in lawan
+    assert '- rust_recorder:=${RUST_RECORDER:-true}' in lawan
     assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in lawan
     assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in recorder
     assert '- r2_env_file:=/home/mower/.mower/r2.env' in lawan
     assert '- r2_env_file:=/home/mower/.mower/r2.env' in recorder
-    assert '- RUST_RECORDER=${RUST_RECORDER:-false}' in recorder
-    assert re.search(r'^RUST_RECORDER=false$',
+    assert '- RUST_RECORDER=${RUST_RECORDER:-true}' in recorder
+    assert re.search(r'^RUST_RECORDER=true$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
     service = yaml.safe_load(compose)['services']['recorder']
     command = service['command']
@@ -871,6 +871,18 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
                    'driver': 'gstreamer'},
         'session_file': '/home/mower/.mower/data_collection_session.yaml',
         'upload_policy': 'manual'}
+    # RUST_RECORDER as compose reads it: unset or empty is compose's default,
+    # on (E5-7)
+    for env_text, on in (('IMAGE_TAG=main\n', True),
+                         ('RUST_RECORDER=\n', True),
+                         ('RUST_RECORDER=false\n', False),
+                         ('RUST_RECORDER="on" # the module\n', True)):
+        (tmp_path / 'rec.env').write_text(env_text)
+        rc = subprocess.run(
+            [bash, '-c', 'set -euo pipefail; source funcs.sh; rust_recorder_on'],
+            cwd=tmp_path, env={'PATH': '/usr/bin:/bin',
+                               'env_file': str(tmp_path / 'rec.env')}).returncode
+        assert rc == (0 if on else 1), env_text
     (tmp_path / 'dc.yaml').write_text('services: {}\n')
     for value in spellings + ('"true"', "'on' # the module"):
         if os.geteuid() == 0:
@@ -895,7 +907,7 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     assert "'rust_recorder:=${RUST_RECORDER'" in passthrough
     for text in re.findall(r"'([^']+)'", passthrough):
         assert text in lawan, text
-    assert '[RUST_RECORDER]=false' in switch
+    assert '[RUST_RECORDER]=true' in switch
     assert 'docker compose up -d lawan_node recorder' in switch
     assert 'rsd bag || echo "no mower_rsd running the bag module"' in switch
     assert '! rsd bag || echo "mower_rsd runs the bag module"' in switch

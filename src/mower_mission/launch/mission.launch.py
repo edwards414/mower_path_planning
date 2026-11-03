@@ -334,11 +334,12 @@ def generate_launch_description():
     # nodes as one process (src/mower_rs/crates/mower_recorder), the values
     # record.launch.py gives them and mower_rsd.yaml has for the module bag;
     # compose's recorder service sleeps. Not rust_record (the zone recorder).
-    # It records the default profile from DDS (E5-3b).
+    # It records the default profile from DDS (E5-3b); on by default since
+    # E5-7.
     rust_recorder = LaunchConfiguration('rust_recorder')
     declare_rust_recorder = DeclareLaunchArgument(
         'rust_recorder',
-        default_value='false',
+        default_value='true',
         description='Run the mower_rs (Rust) mower_recorder process '
                     '(recorder_manager, bag_store, graph_snapshot) instead '
                     'of the Python recorder, which then sleeps in its own '

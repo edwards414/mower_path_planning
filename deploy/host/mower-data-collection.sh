@@ -82,9 +82,10 @@ setting() {
   read -r v <<< "$v" || true
   printf '%s' "${v:-${2:-}}"
 }
-# RUST_RECORDER as compose sees it, true in robot.launch.py's _truthy spellings.
+# RUST_RECORDER as compose sees it (unset = true, compose's default since
+# E5-7), true in robot.launch.py's _truthy spellings.
 rust_recorder_on() {
-  case "$(setting RUST_RECORDER | tr '[:upper:]' '[:lower:]')" in true|1|yes|on) return 0 ;; *) return 1 ;; esac
+  case "$(setting RUST_RECORDER true | tr '[:upper:]' '[:lower:]')" in true|1|yes|on) return 0 ;; *) return 1 ;; esac
 }
 # E5-5: the bag module's request file, on the host (the state dir compose
 # mounts at /home/mower/.mower) and what goes in it (paths as the container

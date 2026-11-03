@@ -100,10 +100,12 @@ services:
       - rust_static_tf:=${RUST_STATIC_TF:-true}
       # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
       # Python recorder of the recorder service below, which then sleeps.
-      # Not RUST_RECORD, the zone path recorder. Off until the owner's robot
-      # checks (E5-3b records the default profile; E5-5 data collection, by
-      # mower-data-collection.sh's request file).
-      - rust_recorder:=${RUST_RECORDER:-false}
+      # Not RUST_RECORD, the zone path recorder. On by default since E5-7
+      # (the robot has run it since 2026-10-31): it records the default
+      # profile, and data collection by mower-data-collection.sh's request
+      # file. RUST_RECORDER=false in .env brings the Python recorder back, no
+      # new image needed.
+      - rust_recorder:=${RUST_RECORDER:-true}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour. Default on; RUST_DAEMON=false runs one binary each.
@@ -193,9 +195,10 @@ services:
   # only owner of /mower_recorder/* -- except during a data-collection run:
   # host/mower-data-collection.sh stops this service first and starts it
   # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
-  # RUST_RECORDER=true (_truthy's spellings, robot.launch.py) puts mower_rsd's
-  # bag module in its place: this container then only sleeps, so that
-  # /mower_recorder/* has one owner, and RUST_RECORDER=false brings it back.
+  # RUST_RECORDER=true (_truthy's spellings, robot.launch.py; the default
+  # since E5-7) puts mower_rsd's bag module in its place: this container then
+  # only sleeps, so that /mower_recorder/* has one owner, and
+  # RUST_RECORDER=false brings it back.
   recorder:
     image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-stable}
     pull_policy: missing
@@ -225,7 +228,7 @@ services:
       # Never flash the STM32 from this container (no /dev/stmcom here).
       - MOWER_FIRMWARE_SYNC=0
       # read by the command above: true = the bag module records instead
-      - RUST_RECORDER=${RUST_RECORDER:-false}
+      - RUST_RECORDER=${RUST_RECORDER:-true}
     network_mode: host
     ipc: host
     pid: host

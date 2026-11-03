@@ -615,7 +615,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'rust_recorder',
-            default_value='false',
+            default_value='true',
             description='mower_rsd module bag (mower_rs mower_recorder, nodes '
                         'recorder_manager, bag_store and graph_snapshot) '
                         'instead of the Python recorder of compose\'s recorder '
@@ -623,7 +623,8 @@ def generate_launch_description():
                         'the mower_recorder binary. Not rust_record, the zone '
                         'path recorder. It records the default profile from '
                         'DDS (E5-3b), and data_collection by '
-                        'mower-data-collection.sh\'s request file (E5-5)',
+                        'mower-data-collection.sh\'s request file (E5-5). '
+                        'On by default since E5-7',
         ),
         DeclareLaunchArgument(
             'rust_localize',

@@ -5,9 +5,9 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
 [docs/ROS_FREE_PLAN.md](../../../../docs/ROS_FREE_PLAN.md); not `rust_record` / `RUST_RECORD`, the zone path recorder).
 
 > **E5-3b: it records** the default profile from DDS, as the Python recorder and its `ros2 bag record` children did.
-> The switch stays off by default (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
-> `deploy/.env.example`; `test_controller_configuration.py` keeps it so) until the owner has run the robot checks
-> (below) and E5-7 makes it the default. **E5-5:** data_collection too, by the request file
+> The switch is on by default since E5-7 (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
+> `deploy/.env.example`; `test_controller_configuration.py` keeps it so); the robot has run it since 2026-10-31.
+> **E5-5:** data_collection too, by the request file
 > `~/.mower/recorder_profile.json` that `mower-data-collection.sh start` writes (and `stop` deletes). **E5-6:** the
 > front camera too (`camera_front`, GStreamer through gstreamer-rs, the request's `camera.driver: gstreamer`, which
 > the helper writes by default); `CAMERA_DRIVER=gscam` keeps E5-5's camera-only gscam service.
@@ -55,13 +55,13 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
 
 ## The switch
 
-| Where | Off (default) | On |
+| Where | Off | On (the default since E5-7) |
 |---|---|---|
 | `deploy/docker-compose.yaml` | lawan_node gets `rust_recorder:=false`; the `recorder` service runs `ros2 launch mower_recorder record.launch.py` as before (a `bash -c` in front that `exec`s it) | the `recorder` service sleeps (`sleep infinity`) |
 | `robot.launch.py` | `bag` is not in `--modules` | `bag` last in `--modules`, with the recorder's parameter files |
 | `mission.launch.py` (`rust_daemon:=false`) | nothing | the `mower_recorder` binary (`mower_bridge::module_main("bag", "bag", ...)`: the three nodes and a bridge, `/mower_bus_bridge/bag`) |
 | `deploy/host/mower-data-collection.sh` | as before | `start` writes the request file, `stop` deletes it (E5-5). `CAMERA_DRIVER=gstreamer` (the default, E5-6): nothing else starts, the module runs the camera, and the helper's `ros2` commands run in lawan_node. `CAMERA_DRIVER=gscam`: `start` also starts the camera-only service (`data_collection_camera`, front_camera.launch.py) and `stop` stops it |
-| `src/mower_rs/tools/switch.sh` | written false | written true; the processes checked (the module, no Python recorder_manager) |
+| `src/mower_rs/tools/switch.sh` | written false when given so | written true (unless given false); the processes checked (the module, no Python recorder_manager) |
 
 Roll-back: `RUST_RECORDER=false` in `/opt/mower/.env`, `docker compose up -d`: no new image. It recreates lawan_node,
 so do it with the robot idle.

@@ -4,9 +4,8 @@
 //! `RUST_RECORDER` (step E5 of docs/ROS_FREE_PLAN.md; design D13: `record` is
 //! the zone path recorder's id, `RUST_RECORD` its switch).
 //!
-//! **E5-3b: it records** the default profile from DDS. `RUST_RECORDER`
-//! stays off (it is by default) until the owner's robot checks; the
-//! data_collection profile comes with E5-5.
+//! **E5-3b: it records** the default profile from DDS; data_collection by
+//! the request file (E5-5). `RUST_RECORDER` is on by default since E5-7.
 //!
 //! - [`graph`]: `graph_snapshot`, complete: every 2 s the DDS graph as
 //!   `/graph_snapshot` JSON, the node diff on `/graph_events`, the watch rule
