@@ -1,7 +1,7 @@
 //! robot_state_publisher as a module of mower_rsd (step E4 of
 //! docs/ROS_FREE_PLAN.md): module `static_tf`, node `static_tf_publisher`,
-//! launch switch `rust_static_tf` (compose `RUST_STATIC_TF`, off by default
-//! and only with `rust_daemon`).
+//! launch switch `rust_static_tf` (compose `RUST_STATIC_TF`, on by default
+//! since E4-5, and only with `rust_daemon`).
 //!
 //! It publishes everything rsp 3.3.4 publishes for the robot (decision D2),
 //! from the same `robot_description` (robot.launch.py runs xacro on

@@ -590,12 +590,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'rust_mux',
-            default_value='false',
+            default_value='true',
             description='mower_rsd module mux (mower_rs mower_mux, node '
                         'twist_mux) instead of the C++ twist_mux, on the '
                         'same twist_mux_topics.yaml; only with rust_daemon. '
-                        'It sits on the drive path: the first switch of a '
-                        'robot is a supervised run',
+                        'On by default since E4-5; false = the C++ '
+                        'twist_mux (the roll-back)',
         ),
         DeclareLaunchArgument(
             'rust_imu',
@@ -604,13 +604,14 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'rust_static_tf',
-            default_value='false',
+            default_value='true',
             description='mower_rsd module static_tf (mower_rs '
                         'mower_static_tf, node static_tf_publisher) instead '
                         'of robot_state_publisher, on the same URDF: the '
                         'fixed joints on /tf_static, the wheels on /tf from '
                         '/joint_states, /robot_description; only with '
-                        'rust_daemon',
+                        'rust_daemon. On by default since E4-5; false = '
+                        'robot_state_publisher (the roll-back)',
         ),
         DeclareLaunchArgument(
             'rust_recorder',

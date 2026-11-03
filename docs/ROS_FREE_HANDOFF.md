@@ -243,6 +243,14 @@ oracle 新增 `ros_filter_map_initial_cov.json`（同一組輸入、只差這個
 上機後還沒有試車紀錄。（同日稍晚有人在場上機，做了搖桿、放開即停、兩種拔線，見開頭的 10-08 補；
 其餘項目見本節開頭的表。）
 
+**2026-11-04 補記（E4-5）：`RUST_MUX`、`RUST_STATIC_TF` 預設翻成 true。** compose（`${RUST_MUX:-true}`、
+`${RUST_STATIC_TF:-true}`）、`.env.example` 和 `robot.launch.py` 的預設是 true；`mower.launch.py`、`twist_mux.launch.py`
+自己的預設仍是 false（`robot.launch.py` 明確往下傳；e2-verify 直接用 `mower.launch.py` 起 peer）。兩個都只在
+`RUST_DAEMON=true` 時生效，twist_mux 與 robot_state_publisher 改在 `mower_rsd` 裡跑。回滾是 `.env` 寫 `=false` 加
+`docker compose up -d lawan_node`，不用換映像。業主的機器 2026-11-03 起 `.env` 明寫 `RUST_MUX=true`（有人在場試過搖桿、
+回滾演練）；它的 compose 比 main 舊、仍寫 `${RUST_STATIC_TF:-false}`，OTA 不換 compose，所以 static_tf 要等
+`install.sh` 或 `.env` 明寫才會開。
+
 #### 戶外 GPS／RTK（2026-10-12）
 
 機器在戶外、走 4G。`mower_gps` 有在跑（`/fix` 4 Hz），但開機 17 分鐘內最多 3–5 顆衛星、hAcc 在 7 m 到 1 km 以上之間跳、carrier 一直是 none，

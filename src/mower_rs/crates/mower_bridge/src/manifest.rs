@@ -56,7 +56,7 @@ const NAV_CORE_TF: &str = "nav_backend: nav_core and nav_core.pose_source: tf";
 /// The `-r` rules robot.launch.py passes mower_rsd in production, in argv
 /// order: `_DAEMON_REMAPS` in the order of the modules, then navsat's
 /// `gps/fix` rule with the `gps_fix_topic` the launch file pins. With every
-/// switch on, E4's (off by default) included: a rule scoped to a node of a
+/// switch on, E4's (on by default since E4-5) included: a rule scoped to a node of a
 /// module that does not run names nothing.
 pub const PRODUCTION_REMAPS: &[&str] = &[
     "manual_velocity_guard:cmd_vel_in:=/app_joy_cmd",
@@ -64,7 +64,7 @@ pub const PRODUCTION_REMAPS: &[&str] = &[
     "manual_velocity_guard:command_clock:=/manual_command_clock",
     "velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input",
     "velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel",
-    // rust_mux (E4, off by default): twist_mux.launch.py's /cmd_vel_out rule
+    // rust_mux (E4, on by default since E4-5): twist_mux.launch.py's /cmd_vel_out rule
     "twist_mux:cmd_vel_out:=/cmd_vel_guard_input",
     "imu:imu/data_raw:=imu/data",
     "ekf_filter_node_odom:odometry/filtered:=odometry/local",

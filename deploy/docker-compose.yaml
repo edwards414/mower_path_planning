@@ -71,9 +71,10 @@ services:
       - rust_guards:=${RUST_GUARDS:-false}
       # RUST_MUX (with RUST_DAEMON): mower_rsd's mux module instead of the
       # C++ twist_mux, on the same twist_mux_topics.yaml. It is the drive
-      # path (manual priority, the navigation lock, the safety stop): the
-      # first switch of a robot is a supervised run.
-      - rust_mux:=${RUST_MUX:-false}
+      # path (manual priority, the navigation lock, the safety stop). On by
+      # default since E4-5; RUST_MUX=false in .env is the roll-back, no new
+      # image needed.
+      - rust_mux:=${RUST_MUX:-true}
       - rust_imu:=${RUST_IMU:-false}
       - rust_bridge:=${RUST_BRIDGE:-false}
       # WS_BRIDGE_BUS: mower_ws_bridge (RUST_BRIDGE) on mower_bus instead of
@@ -94,8 +95,9 @@ services:
       - rust_base:=${RUST_BASE:-true}
       - rust_localize:=${RUST_LOCALIZE:-true}
       # RUST_STATIC_TF (with RUST_DAEMON): mower_rsd's static_tf module
-      # instead of robot_state_publisher, on the same URDF.
-      - rust_static_tf:=${RUST_STATIC_TF:-false}
+      # instead of robot_state_publisher, on the same URDF. On by default
+      # since E4-5; RUST_STATIC_TF=false in .env is the roll-back.
+      - rust_static_tf:=${RUST_STATIC_TF:-true}
       # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
       # Python recorder of the recorder service below, which then sleeps.
       # Not RUST_RECORD, the zone path recorder. Off until the owner's robot

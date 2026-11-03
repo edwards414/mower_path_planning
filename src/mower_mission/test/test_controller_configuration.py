@@ -594,7 +594,7 @@ def test_rust_nav_core_swaps_nav2_for_mower_nav_core_and_nothing_else(
 
 
 def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
-    """rust_mux:=true (compose RUST_MUX, default false; E4): mower_rsd's mux
+    """rust_mux:=true (compose RUST_MUX, default true since E4-5): mower_rsd's mux
     module (mower_mux, node twist_mux) instead of the C++ twist_mux, on the
     same twist_mux_topics.yaml and the same output rule. It takes effect only
     with rust_daemon: twist_mux.launch.py starts the C++ node unless both are
@@ -604,13 +604,16 @@ def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
     mower = MOWER_LAUNCH.read_text(encoding='utf-8')
     mux_launch = TWIST_MUX_LAUNCH.read_text(encoding='utf-8')
 
-    # declared off, and threaded down robot -> mower -> twist_mux.launch.py
-    for text in (robot, mower):
+    # declared on in robot.launch.py (E4-5), off in the two included launch
+    # files (robot.launch.py passes it down explicitly; e2-verify starts
+    # mower.launch.py's peers without it), and threaded down robot -> mower
+    # -> twist_mux.launch.py
+    for text, default in ((robot, 'true'), (mower, 'false')):
         argument = re.search(
             r"DeclareLaunchArgument\(\s*'rust_mux'(.*?)\n\s*\)", text,
             flags=re.DOTALL)
         assert argument is not None
-        assert "default_value='false'" in argument.group(1)
+        assert f"default_value='{default}'" in argument.group(1)
     assert "DeclareLaunchArgument('rust_mux', default_value='false')," \
         in mux_launch
     mower_include = robot.split("'mower.launch.py')", 1)[1].split(
@@ -639,12 +642,13 @@ def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
     assert TWIST_MUX_CONFIG.read_text(encoding='utf-8').startswith(
         'twist_mux:\n  ros__parameters:\n')
 
-    # compose and .env, default off
+    # compose and .env, default on since E4-5 (RUST_MUX=false = the roll-back)
     lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
-    assert '- rust_mux:=${RUST_MUX:-false}' in lawan
-    assert re.search(r'^RUST_MUX=false$',
+    assert '- rust_mux:=${RUST_MUX:-true}' in lawan
+    assert re.search(r'^RUST_MUX=true$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
-    # switch.sh writes it every time, passes it, and checks the processes
+    # switch.sh writes it every time (false unless given: an A/B names what
+    # it switches), passes it, and checks the processes
     switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
     passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
                             re.M | re.S).group(1)
@@ -935,7 +939,7 @@ def test_production_twist_mux_config_never_meets_the_degenerate_rules():
 
 
 def test_rust_static_tf_replaces_robot_state_publisher_only_inside_the_daemon():
-    """rust_static_tf:=true (compose RUST_STATIC_TF, default false; E4):
+    """rust_static_tf:=true (compose RUST_STATIC_TF, default true since E4-5):
     mower_rsd's static_tf module (mower_static_tf, node static_tf_publisher)
     instead of robot_state_publisher, on the same URDF (robot.launch.py makes
     it with mower.launch.py's xacro call) and publishing what rsp publishes.
@@ -944,12 +948,14 @@ def test_rust_static_tf_replaces_robot_state_publisher_only_inside_the_daemon():
     then, so every spelling starts one of the two."""
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
     mower = MOWER_LAUNCH.read_text(encoding='utf-8')
-    for text in (robot, mower):
+    # on in robot.launch.py (E4-5), off in mower.launch.py, which gets it
+    # from robot.launch.py
+    for text, default in ((robot, 'true'), (mower, 'false')):
         argument = re.search(
             r"DeclareLaunchArgument\(\s*'rust_static_tf'(.*?)\n\s*\)", text,
             flags=re.DOTALL)
         assert argument is not None
-        assert "default_value='false'" in argument.group(1)
+        assert f"default_value='{default}'" in argument.group(1)
     mower_include = robot.split("'mower.launch.py')", 1)[1].split(
         '}.items()', 1)[0]
     assert "'rust_static_tf': rust_static_tf," in mower_include
@@ -974,8 +980,8 @@ def test_rust_static_tf_replaces_robot_state_publisher_only_inside_the_daemon():
     # tests/module_table.rs
     assert '"crates/mower_static_tf"' in MOWER_RS_CARGO.read_text(encoding='utf-8')
     lawan = DEPLOY_COMPOSE.read_text(encoding='utf-8').split('  mediamtx:', 1)[0]
-    assert '- rust_static_tf:=${RUST_STATIC_TF:-false}' in lawan
-    assert re.search(r'^RUST_STATIC_TF=false$',
+    assert '- rust_static_tf:=${RUST_STATIC_TF:-true}' in lawan
+    assert re.search(r'^RUST_STATIC_TF=true$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
     switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
     passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,

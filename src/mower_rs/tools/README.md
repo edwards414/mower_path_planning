@@ -325,6 +325,9 @@ ssh cat@<robot> 'sudo docker rmi docker.io/fxrbindi/mower_path_planning:rosfree-
   exactly when `WS_BRIDGE_BUS=true`; with `RUST_BRIDGE=false` there is no Rust
   ws_bridge and it only warns. `status` prints the backend. It is the app's
   only door: switch it only while LAN SSH works.
+- `RUST_MUX` and `RUST_STATIC_TF` (E4, compose's defaults since E4-5) are
+  written the same way, `false` unless given: a switch to a test config runs
+  the C++ twist_mux and robot_state_publisher unless it names them.
 - For the first `RUST_BASE` / `RUST_LOCALIZE` runs keep `NAV_COMPOSITION=false`
   (the second argument): composed nav2 has never navigated on the robot
   either, and a failure should have one suspect.

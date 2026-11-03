@@ -148,7 +148,7 @@ const MODULES: &[Module] = &[
         ],
     },
     Module {
-        // twist_mux (E4, rust_mux, off by default): between the two guards,
+        // twist_mux (E4, rust_mux, on by default since E4-5): between the two guards,
         // it reads the manual guard's output and feeds the final guard. Born
         // on the bus; rust_daemon:=false runs the C++ twist_mux.
         id: "mux",
@@ -166,7 +166,7 @@ const MODULES: &[Module] = &[
         instances: &[Instance { node: "gps", run: |c, m| Box::pin(mower_gps::run(c, m)) }],
     },
     Module {
-        // robot_state_publisher (E4, rust_static_tf, off by default): before
+        // robot_state_publisher (E4, rust_static_tf, on by default since E4-5): before
         // localize, whose instances wait for its /tf_static
         // (`waits_for_static_tf`). Born on the bus; rust_daemon:=false runs
         // the C++ rsp.

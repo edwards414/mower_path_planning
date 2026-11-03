@@ -17,9 +17,9 @@ references are to their own repositories, at the commits named in 1.4.
 ## At a glance
 
 - **15 modules, 18 node instances, 17 r2r nodes** run in `mower_rsd` in production. `mower_agent` has no node.
-- **78 topics** have an endpoint in a typed module. The bridge alone adds 5 more. E4's mux module (`rust_mux`, off by
-  default) adds `/diagnostics` and a production reader of `/nav_cmd_vel`, its static_tf module
-  (`rust_static_tf`, off by default) `/robot_description`: 81. E5's bag module (`rust_recorder`, off by default;
+- **78 topics** have an endpoint in a typed module. The bridge alone adds 5 more. E4's mux module (`rust_mux`, on by
+  default since E4-5) adds `/diagnostics` and a production reader of `/nav_cmd_vel`, its static_tf module
+  (`rust_static_tf`, on by default since E4-5) `/robot_description`: 81. E5's bag module (`rust_recorder`, off by default;
   E5-3a, branch `feat/e5-3a-bag`) adds the recorder's own seven (`/mower_recorder/{status,bags,command,command_result,
   fault}`, `/graph_snapshot`, `/graph_events`): 88.
 - **19 topics never leave the process** (5.1). Another **14 have no consumer on the robot** (rviz or the optional data
@@ -427,7 +427,9 @@ names on the bus. The bus→DDS faces stay (E3 design D3) and the DDS→bus ones
   `/mower_recorder/*` ones.
 - `/rosapi/topics` lists only what is visible on DDS (3.3).
 
-**Until E4 (twist_mux, robot_state_publisher).**
+**Until E4 (twist_mux, robot_state_publisher).** Done with E4-5 while `RUST_MUX` and `RUST_STATIC_TF` are on (with
+`RUST_DAEMON`), the default: what is left then is in the two "With E4-…" items below. The faces listed first are those
+of the roll-back (either switch false in `.env`).
 
 - *bus→DDS:* `/joy_cmd`, `/navigation_safety_stop`, `/navigation_coordinator_lock`, `/joint_states`; with *nav_core*,
   also `/nav_cmd_vel`.
