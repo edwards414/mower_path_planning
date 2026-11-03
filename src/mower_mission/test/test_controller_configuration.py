@@ -199,8 +199,13 @@ def test_controller_and_hardware_fail_closed_on_stale_or_invalid_commands():
 @pytest.mark.parametrize(
     'config', (REAL_CONTROLLER, DESCRIPTION_CONTROLLER)
 )
-def test_controller_safety_zero_crosses_rate_limiter_within_one_cycle(config):
-    """Keep the controller cycle from stretching a guard stop by ~0.5 s."""
+def test_controller_ramps_a_stop_from_full_speed_within_0_2_s(config):
+    """A stop is a ramp, not a step, and never longer than 0.2 s.
+
+    Longer than one controller cycle, so a stop does not slam the wheel
+    motors and gearboxes; at most 0.2 s from full speed, so a guard's zero
+    still stops the robot within 5 cm of a one-cycle stop.
+    """
     update_period_s = 1.0 / float(_scalar(config, 'update_rate'))
     for axis in ('linear.x', 'angular.z'):
         max_velocity = float(_scalar(config, f'{axis}.max_velocity'))
@@ -213,8 +218,11 @@ def test_controller_safety_zero_crosses_rate_limiter_within_one_cycle(config):
         )
         assert max_deceleration < 0.0
         assert max_deceleration_reverse > 0.0
-        assert abs(max_deceleration) * update_period_s >= max_velocity
-        assert max_deceleration_reverse * update_period_s >= abs(min_velocity)
+        for stop_s in (
+            max_velocity / abs(max_deceleration),
+            abs(min_velocity) / max_deceleration_reverse,
+        ):
+            assert update_period_s < stop_s <= 0.2 + 1e-9, (axis, stop_s)
 
     source = config.read_text(encoding='utf-8')
     # Jazzy activates limits from finite values; do not restore deprecated

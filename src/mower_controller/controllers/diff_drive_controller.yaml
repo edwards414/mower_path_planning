@@ -40,17 +40,18 @@ diff_controller:
     linear.x.min_velocity: -0.5
     linear.x.max_acceleration: 1.0
     linear.x.max_acceleration_reverse: -1.0
-    # A safety zero must not spend another ~0.5 s in the controller limiter.
-    # At 25 Hz these bounds can remove the full configured speed in one cycle.
-    linear.x.max_deceleration: -25.0
-    linear.x.max_deceleration_reverse: 25.0
+    # Every stop ramps from full speed to 0 in 0.2 s (5 cycles at 25 Hz), not
+    # in one step, which slammed the wheel motors and gearboxes; at most 5 cm
+    # more to a stop from 0.5 m/s. mower_base's built-in defaults are this file.
+    linear.x.max_deceleration: -2.5
+    linear.x.max_deceleration_reverse: 2.5
 
     angular.z.max_velocity: 1.0
     angular.z.min_velocity: -1.0
     angular.z.max_acceleration: 2.0
     angular.z.max_acceleration_reverse: -2.0
-    angular.z.max_deceleration: -50.0
-    angular.z.max_deceleration_reverse: 50.0
+    angular.z.max_deceleration: -5.0
+    angular.z.max_deceleration_reverse: 5.0
 
 joint_state_broadcaster:
   ros__parameters: {}

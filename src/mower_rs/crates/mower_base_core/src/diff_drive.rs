@@ -436,15 +436,22 @@ impl DiffDrive {
         // else: NaNs in the message, reference interfaces left alone.
     }
 
-    /// Brake the way a cmd_vel timeout brakes (reference 0, then through
-    /// the limiter), for [`crate::cycle::BaseCycle`]'s arm latch. A NaN
-    /// reference ("no command since activation") is left NaN, so the
+    /// Stop at once, for [`crate::cycle::BaseCycle`]'s arm latch: reference 0
+    /// and the limiter's history 0, so this cycle commands 0 whatever the
+    /// deceleration limit. A commanded stop (a zero, a cmd_vel timeout) ramps
+    /// down at `max_deceleration`; a disarm does not, because it follows a
+    /// fault after which the wheels may already be stopped (an STM32 restart,
+    /// or its own command timeout behind a lead that is out) and the tail of
+    /// a ramp would reach them as a kick the moment the board hears us again.
+    /// A NaN reference ("no command since activation") is left NaN, so the
     /// wheels stay at their activation zero and /odom starts exactly when
     /// upstream would start it.
     pub fn hold_zero(&mut self) {
         if self.ref_linear.is_finite() && self.ref_angular.is_finite() {
             self.ref_linear = 0.0;
             self.ref_angular = 0.0;
+            self.prev_front = [0.0, 0.0];
+            self.prev_back = [0.0, 0.0];
         }
     }
 
