@@ -865,9 +865,14 @@ pub fn production_diff_drive() -> DiffDriveParams {
             max_velocity: 0.5,
             max_acceleration: 1.0,
             max_acceleration_reverse: -1.0,
-            // A safety zero must not spend another ~0.5 s in the limiter.
-            max_deceleration: -25.0,
-            max_deceleration_reverse: 25.0,
+            // Every stop (stick let go, a guard's zero, cmd_vel_timeout, the
+            // arm latch) ramps down over at most 0.2 s from full speed
+            // (5 cycles at 25 Hz) instead of one step, which slammed the
+            // wheel motors and gearboxes: 0.5 m/s / 2.5 m/s^2. It adds at most
+            // 5 cm to a stop from full speed. A serial fault still stops at
+            // once, and the STM32's own 300 ms timeout cuts the wheels.
+            max_deceleration: -2.5,
+            max_deceleration_reverse: 2.5,
             min_jerk: f64::NAN,
             max_jerk: f64::NAN,
         },
@@ -879,8 +884,9 @@ pub fn production_diff_drive() -> DiffDriveParams {
             max_velocity: 1.0,
             max_acceleration: 2.0,
             max_acceleration_reverse: -2.0,
-            max_deceleration: -50.0,
-            max_deceleration_reverse: 50.0,
+            // 1.0 rad/s to 0 in 0.2 s, as linear
+            max_deceleration: -5.0,
+            max_deceleration_reverse: 5.0,
             min_jerk: f64::NAN,
             max_jerk: f64::NAN,
         },
@@ -1521,9 +1527,14 @@ mod tests {
         assert_eq!(p.pose_covariance_diagonal, [0.0; 6]);
         assert_eq!(p.linear.max_velocity, 0.5);
         assert_eq!(p.linear.max_acceleration, 1.0);
-        assert_eq!(p.linear.max_deceleration, -25.0);
+        assert_eq!(p.linear.max_deceleration, -2.5);
         assert_eq!(p.angular.max_velocity, 1.0);
-        assert_eq!(p.angular.max_deceleration, -50.0);
+        assert_eq!(p.angular.max_deceleration, -5.0);
+        // a stop from full speed takes 0.2 s, both axes, both directions
+        for l in [&p.linear, &p.angular] {
+            assert!((l.max_velocity / -l.max_deceleration - 0.2).abs() < 1e-9);
+            assert!((-l.min_velocity / l.max_deceleration_reverse - 0.2).abs() < 1e-9);
+        }
         // The limiters must be constructible with those bounds.
         p.linear.limiter().expect("linear limiter");
         p.angular.limiter().expect("angular limiter");

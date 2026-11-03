@@ -5,7 +5,8 @@
 //!
 //! Everything runs with the production controller parameters
 //! (`mower_controller/controllers/diff_drive_controller.yaml`: open loop,
-//! 0.25 s timeout, -25 / -50 deceleration), which is what the robot runs.
+//! 0.25 s timeout, -2.5 / -5 deceleration: every stop ramps from full speed
+//! to 0 in 0.2 s), which is what the robot runs.
 
 use mower_base_core::cycle::{
     BaseConfig, BaseCycle, DisarmReason, Event, ResetSignature, StopEdge, Stream, TxFrame,
@@ -57,8 +58,8 @@ fn production() -> BaseConfig {
             base_frame_id: "base_footprint".to_string(),
             pose_covariance_diagonal: [0.0; 6],
             twist_covariance_diagonal: [0.0; 6],
-            linear: axis(0.5, 1.0, 25.0),
-            angular: axis(1.0, 2.0, 50.0),
+            linear: axis(0.5, 1.0, 2.5),
+            angular: axis(1.0, 2.0, 5.0),
             ..DiffDriveParams::mower()
         },
         ..BaseConfig::default()
@@ -188,6 +189,50 @@ impl Rig {
 
 fn all_zero(frames: &[(i16, i16)]) -> bool {
     frames.iter().all(|w| *w == (0, 0))
+}
+
+// ---- stops ---------------------------------------------------------------
+
+/// Letting go of the stick at full speed, any direction, ramps the wheels
+/// down over 0.2 s (5 cycles at 2.5 m/s^2 or 5 rad/s^2) instead of dropping
+/// them to 0 in one cycle, which slammed the motors and gearboxes. The
+/// guards' zeros (a rejection, their receipt watchdog) are the same zero.
+#[test]
+fn letting_go_at_full_speed_ramps_to_zero_in_0_2_s() {
+    // full speed in permille: 0.5 m/s is 915 (0.09 m wheels, 58 rpm);
+    // 1 rad/s turns the wheels at -/+320 (0.35 m apart)
+    for ((linear, angular), full) in [
+        ((0.5, 0.0), (915, 915)),
+        ((-0.5, 0.0), (-915, -915)),
+        ((0.0, 1.0), (-320, 320)),
+        ((0.0, -1.0), (320, -320)),
+    ] {
+        let mut rig = Rig::new(production());
+        rig.release(true);
+        let moving = rig.run(50, Some((linear, angular)), true);
+        assert_eq!(*moving.last().unwrap(), full, "at full speed");
+        let stop = rig.run(10, Some((0.0, 0.0)), true);
+        // a fifth of full speed off each cycle, 0 on the fifth (0.2 s)
+        for (k, w) in stop[..4].iter().enumerate() {
+            let left = full.0 as f64 * (4 - k) as f64 / 5.0;
+            let right = full.1 as f64 * (4 - k) as f64 / 5.0;
+            assert!((w.0 as f64 - left).abs() <= 1.0 && (w.1 as f64 - right).abs() <= 1.0, "{stop:?}");
+        }
+        assert!(all_zero(&stop[4..]), "{stop:?}");
+        assert!(!rig.base.holds(Stream::CmdVel), "a stop is not a disarm");
+    }
+}
+
+/// From part speed the ramp is shorter: the same deceleration, so 0.2 m/s
+/// stops in 2 cycles (80 ms).
+#[test]
+fn a_stop_from_part_speed_ramps_at_the_same_rate() {
+    let mut rig = Rig::new(production());
+    rig.release(true);
+    rig.run(50, Some((0.2, 0.0)), true);
+    let stop = rig.run(5, Some((0.0, 0.0)), true);
+    assert_eq!(stop[0], (183, 183));
+    assert!(all_zero(&stop[1..]), "{stop:?}");
 }
 
 // ---- the arm latch -------------------------------------------------------
@@ -333,7 +378,7 @@ fn feedback_loss_after_presence_disarms() {
     let lost = rig.run(20, Some((0.4, 0.0)), false);
     // 0.5 s timeout: cycles 1..=12 are at most 480 ms without a frame
     assert!(lost[..12].iter().all(|w| w.0 > 600), "{lost:?}");
-    assert_eq!(lost[12], (0, 0), "braked on the cycle the loss is seen (-25 m/s^2)");
+    assert_eq!(lost[12], (0, 0), "braked on the cycle the loss is seen: a disarm does not ramp");
     assert!(all_zero(&lost[12..]));
     assert!(matches!(rig.events[0], Event::FeedbackLost { age_s } if (age_s - 0.52).abs() < 1e-9));
     assert_eq!(rig.events[1], Event::Disarmed(DisarmReason::FeedbackLost));
@@ -2048,7 +2093,11 @@ fn a_backward_step_does_not_extend_the_last_command() {
         wheels(&TxFrame { bytes: run[k - 1].0.clone(), frames: vec![] })
     };
     assert!(permille(&stepped, 57).0 > 500, "0.24 s after the last message");
-    assert_eq!(permille(&stepped, 58), (0, 0), "0.28 s after it: timed out, braked");
+    // 0.28 s after it: timed out, and the limiter takes 0.3 m/s down at
+    // 2.5 m/s^2, 0.1 m/s (183 permille) a cycle
+    assert_eq!(permille(&stepped, 58), (366, 366), "timed out, braking");
+    assert_eq!(permille(&stepped, 59), (183, 183));
+    assert_eq!(permille(&stepped, 60), (0, 0), "stopped 0.36 s after the last message");
     for k in 1..=80 {
         assert_eq!(permille(&steady, k), permille(&stepped, k), "cycle {k}");
     }

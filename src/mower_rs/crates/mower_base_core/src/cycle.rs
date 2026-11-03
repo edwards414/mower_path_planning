@@ -836,8 +836,9 @@ impl BaseCycle {
     /// * [`DisarmReason::BoardReset`] — the STM32 restarted
     ///   ([`ResetSignature`]).
     ///
-    /// While cmd_vel is held the controller reference is forced to zero
-    /// (braking through the limiter, exactly like a cmd_vel timeout); while
+    /// While cmd_vel is held the controller reference is forced to zero at
+    /// once, not ramped down at the deceleration limit as a cmd_vel timeout
+    /// is ([`DiffDrive::hold_zero`]); while
     /// wheel_override is held its requests are not applied, and an override
     /// that was running is dropped at the disarm. Each stream is re-armed
     /// by its own stop edge *after* the disarm, and only once that edge is

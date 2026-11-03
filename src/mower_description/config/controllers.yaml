@@ -48,21 +48,21 @@ diff_drive_controller:
     # Jazzy 使用 stamped Twist；與 Nav2 及真機安全鏈一致
     use_stamped_vel: true
 
-    # 與真機限速一致。正常加速維持平順；安全零速可在 50 Hz 的下一個
-    # controller update 內越過 limiter，避免 watchdog 後再多滑行約 0.5 秒。
+    # 與真機限速一致。正常加速維持平順；任何停車（放開搖桿、guard 零速、
+    # cmd_vel 逾時）都在 0.2 秒內從最高速斜坡降到 0，不再一步歸零傷馬達。
     linear.x.max_velocity: 0.5
     linear.x.min_velocity: -0.5
     linear.x.max_acceleration: 1.0
     linear.x.max_acceleration_reverse: -1.0
-    linear.x.max_deceleration: -25.0
-    linear.x.max_deceleration_reverse: 25.0
+    linear.x.max_deceleration: -2.5
+    linear.x.max_deceleration_reverse: 2.5
 
     angular.z.max_velocity: 1.0
     angular.z.min_velocity: -1.0
     angular.z.max_acceleration: 2.0
     angular.z.max_acceleration_reverse: -2.0
-    angular.z.max_deceleration: -50.0
-    angular.z.max_deceleration_reverse: 50.0
+    angular.z.max_deceleration: -5.0
+    angular.z.max_deceleration_reverse: 5.0
 
     # TF 發布設定：關閉 diff_drive_controller 的 TF 發布！
     # ekf_filter_node_odom (publish_tf: true) 是唯一的 odom → base_footprint TF 來源

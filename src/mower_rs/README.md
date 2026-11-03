@@ -212,8 +212,9 @@ Three deliberate differences from the C++ chain, the first two for the
 restart this node gets and the chain never had:
 
 * **The arm latch.** After every (re)activation, and on each of the losses
-  below, the cmd_vel reference is held at zero (the limiter brakes it as a
-  cmd_vel timeout would) until cmd_vel shows a stop edge that is
+  below, the cmd_vel reference is held at zero, at once and not ramped
+  (the tail of a ramp would reach wheels that the fault may already have
+  stopped as a kick), until cmd_vel shows a stop edge that is
   **sustained**: the stream carries no non-zero command for
   `latch_release_s` (0.5 s) — finite 0/0 commands, nothing at all, or
   both — see "the release window" below. `wheel_override` gets the same
@@ -406,7 +407,12 @@ Frames on the wire, unchanged: 0x01 every cycle with the firmware's own
 0x86 SHUTDOWN_REQUESTED (and then `shutdown_command`), 0x06 once at start-up.
 `cmd_vel_timeout` (0.25 s) zeroes the *reference* and the limiter ramps the
 command down at `max_deceleration` — the ramp is the safety-zero, the
-command is never dropped in one step.
+command is never dropped in one step. In production that is 2.5 m/s² and
+5 rad/s²: every commanded stop (the stick let go, a guard's zero,
+`cmd_vel_timeout`) takes full speed to 0 in 0.2 s (5 cycles), which spares
+the wheel motors and gearboxes a one-cycle stop and adds at most 5 cm to a
+stop from 0.5 m/s. A disarm of the arm latch and a serial fault still stop
+at once.
 
 The parameter defaults are `mower_controller/controllers/diff_drive_controller.yaml`,
 the file the robot actually launches, **not**
