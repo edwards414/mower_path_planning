@@ -5,6 +5,7 @@ removed in E5-7; read them, and the design's citations of them, at bf19e6c) as t
 [docs/ROS_FREE_PLAN.md](../../../../docs/ROS_FREE_PLAN.md); not `rust_record` / `RUST_RECORD`, the zone path recorder).
 
 > **E5-3b: it records** the default profile from DDS, as the Python recorder and its `ros2 bag record` children did.
+> **E5-4:** a name every writer of which is on the bus in this process comes from the bus (`source: auto`).
 > The switch is on by default since E5-7 (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
 > `deploy/.env.example`; `test_controller_configuration.py` keeps it so), and off means no recorder; the robot has
 > run it since 2026-10-31.
@@ -43,8 +44,33 @@ removed in E5-7; read them, and the design's citations of them, at bf19e6c) as t
   `mower_snapshot_recorder`: D12), discovery every 100 ms as rosbag2's, a name subscribed once it has a writer and one
   type, with `reader_qos` (the override, else adapted to the offers), the offers and the type hash taken then; every
   message to the group's `Feed` with rmw's receive and source times (vendor/r2r patch 3, every ready message taken at
-  a wakeup); hidden names never; a name in two groups subscribed once. The writer threads (`bag-full`,
+  a wakeup); hidden names never; a name in two groups subscribed once, except a latched one (`/tf_static`), which has
+  a reader per group so that each takes the whole replay, as each `ros2 bag record` did. The writer threads (`bag-full`,
   `bag-snapshot`, niced) are `mower_recorder_core::recording`'s.
+- **Bus taps (E5-4, `source: auto`, mower_rsd.yaml's default; `dds` is E5-3's):** mower_rsd puts the process's set in
+  front of the module's arguments (`--rsd-process`, `mower_bridge::process_args`), and `mower_bridge::RecordSources`
+  says which names have every writer on the bus here (design 3.5; standalone, only the module's own; nav2's
+  `/diagnostics` writer is in the manifest for this). Such a name is tapped on the group's scope (named as its node,
+  which mower_rsd's manifest check skips: `RECORDER_TAPS`) once the bus has a writer, unless DDS shows a writer that is
+  not the bridge's (nav2's `/plan`, which the manifest does not list) or its type is not in `mower_schema`: then DDS,
+  as before. That look is made once, before the tap: a DDS-only writer that comes later is not recorded (the design's
+  A8).
+  - **The bytes:** `mower_cdr::to_vec` of the bus value (`ErasedMsg: Serialize`, mower_bus's serde view), padded
+    to 4: rmw's own bytes (tests/module.rs holds them to `to_serialized_bytes`, NaN included). A value r2r refuses
+    (a fixed array's length, a bound, a NUL) is skipped and counted, as the bridge's `to_ros` drops it.
+  - **The times:** `log_time` when the tap's thread (`bag-tap-<group>`) took it (rosbag2's receive time),
+    `publish_time` the bus publish instant (`ErasedMsg::published`, the bus clock; E8 5.8 #2).
+  - **The metadata:** the type hash from `mower_schema`; `offered_qos_profiles` one per bus writer (D3), in node
+    order, each as rmw reports a writer's QoS (keep last, its depth, reliability and durability, every duration
+    infinite, automatic liveliness).
+  - **The tap's QoS:** history = the override's depth, else the deepest transient-local writer's (what the bridge's
+    one DDS writer keeps, so the latched replay is rosbag2's); transient local as rosbag2 adapts it; a queue of 4096
+    apart from that (`subscribe_erased_with`).
+  - **The stop:** the tap thread takes what its taps still hold before their scope closes, so a sample published
+    before the stop is in the bag; the group's log line at the end counts the samples taken, the values refused,
+    and any lost to a full tap queue.
+  - **G3** (`dds_shadow_dir`, empty in production): the same run also records the bus names from DDS into
+    `<dir>/<run>/<group dir>`, for e2-verify's comparison.
 - **The rear light (design D5)** goes out with path_record_node's through the bridge, to mower_base's r2r reader
   (R TL 8). A source's "recording" holds the overlay 6 s; the 2 s refresh keeps it on while a run records.
 - **One owner (design 4.2, R6):** each instance looks 2 s after its start and every 10 s for a DDS server of
@@ -70,6 +96,11 @@ Roll-back: an image from before E5-7 (`mower-update.sh --tag <previous>`); the m
 Python recorder also needs a compose that has the `recorder` service, and `RUST_RECORDER=false`. On this image
 `RUST_RECORDER=false` only turns recording off.
 
+Roll-back of the bus taps alone (E5-4, design 4.8): a copy of `mower_rsd.yaml` under `~/.mower` whose
+`recorder_manager` section says `source: dds`, passed to robot.launch.py as `rust_daemon_params_file:=` (lawan_node's
+command in compose): every name then comes from DDS again, as E5-3b recorded it. Any other value is logged and taken
+as `dds`.
+
 ## Tests
 
 - `tests/module.rs` (ROS domain 105, rmw_cyclonedds): the three instances on a manual clock, each of the above, a run
@@ -83,7 +114,10 @@ Python recorder also needs a compose that has the `recorder` service, and `RUST_
   calibration. E5-6 (`--features camera`, needs GStreamer's base and good plugins): `camera_front` on a
   `videotestsrc` pipeline from a request file (its three nodes, frames that are JPEGs, the stamps, F3's CameraInfo,
   the QoS, both transforms; gone with the file). `mower_camera`'s own tests: the stamp formula and the calibration
-  file as camera_info_manager reads it.
+  file as camera_info_manager reads it. E5-4: the bus names tapped (G3 in miniature: the tap's bytes, rmw's and the
+  bridge's DDS samples all equal, a refused value skipped on both sides, the latched layer, log times within 5 ms
+  at the median, the type hash and the offers, a bus name another DDS writer writes kept on DDS), `source: dds` with
+  no tap, the groups' nodes being `RECORDER_TAPS`, a latched name in two groups replayed to both.
 - `tests/r2r_patch3.rs` (domain 104): vendor/r2r's patch 3 on DDS (VENDORED.md).
 
 ## data_collection (E5-5)
@@ -144,8 +178,6 @@ Python recorder also needs a compose that has the `recorder` service, and `RUST_
 
 ## What comes after E5-6
 
-- **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces
-  (branch `feat/e5-4-bus-taps`, paused).
 - **E5-7c:** rosbag2 and gscam leave the runtime apt lock: done.
 - **E5-7:** the default and the removal of the Python recorder (and of gscam's compose service): done. `mower_bag`
   (`mower_recorder_core::cli`) is mower-bag's `upload` and `verify`, for `mower-data-collection.sh`. The request's

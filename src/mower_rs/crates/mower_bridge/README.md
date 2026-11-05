@@ -275,6 +275,21 @@ say so.
 - **In a module's tests:** `mower_bridge::coverage::assert_in_manifest(&m)` checks what the module made on its scope
   `m.bus` (other scopes are the test's), resolving the manifest's names with `m`'s rules, and `gaps_of(&m)` returns the
   lines.
+- **Skipped:** the bridge's own scope, and (E5-4) the recorder's taps (`RECORDER_TAPS`: the groups' scopes, named as
+  their nodes), which read names every writer of which is on the bus here and so need nothing planned.
+
+## The recorder's sources (E5-4)
+
+The bag module takes a topic from the bus instead of DDS when every writer of it is on the bus in this process (E5
+design 3.5): `RecordSources::new(&running, &remaps)`, from the same manifest, flags and rules as the policy. A name
+with any writer that is not (outside, on an r2r node, an instance that does not run here) or no writer the manifest
+knows is `Dds`. `tests.rs` holds the default profile's names to it, with E4 and E2 step 6 flipping them. mower_rsd
+gives the bag module its set in front of its arguments (`process_args`, `--rsd-process <ids> <run-time flags>`);
+`running_here` reads them back, and standalone, where there are none, the module is alone on its bus. The manifest's
+OUTSIDE lists the writers modules depend on, not every writer of every name (nav2's `/plan`), so the recorder also
+looks at DDS before it taps a name, and keeps it on DDS when a writer other than the bridge's is there. That look is
+made once: a writer that matters for the bags and can come up after the recorder starts belongs in OUTSIDE (nav2's
+`/diagnostics`, next to the mux module's).
 
 ## Moving a module
 

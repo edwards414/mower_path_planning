@@ -1217,3 +1217,103 @@ fn readers_racing_publishes_drops_and_scope_closes_always_end_and_keep_order() {
         blocking.join().unwrap();
     }
 }
+
+// ---- E5-4: the recorder's taps --------------------------------------------
+
+/// Each publish is stamped with the bus clock's wall time, and a message
+/// from history keeps the stamp of its own publish.
+#[test]
+fn an_erased_reader_gets_each_publish_stamp_and_history_keeps_its_own() {
+    let t0 = mower_bus::Time::from_ns(1_793_000_000_000_000_000);
+    let (clock, hand) = mower_bus::Clock::manual(t0);
+    let bus = Bus::with_clock(clock);
+    assert_eq!(bus.clock().now(), t0);
+    let s = bus.scope("writer");
+    let latched = s.publisher::<Pose>("/stamped/latched", Qos::latched().keep_last(2)).unwrap();
+    let live = s.publisher::<Pose>("/stamped/live", Qos::default()).unwrap();
+    latched.publish(&pose(1.0)).unwrap();
+    hand.advance(Duration::from_millis(5));
+    latched.publish(&pose(2.0)).unwrap();
+    hand.advance(Duration::from_millis(5));
+    let r = bus.scope("tap");
+    let mut late = r.subscribe_erased("/stamped/latched", Qos::latched().keep_last(10)).unwrap();
+    let mut now = r.subscribe_erased("/stamped/live", Qos::default()).unwrap();
+    live.publish(&pose(3.0)).unwrap();
+    let stamps: Vec<i64> = std::iter::from_fn(|| late.try_recv().ok()).map(|m| m.published().ns() - t0.ns()).collect();
+    assert_eq!(stamps, vec![0, 5_000_000], "history: each its own publish's");
+    let m = now.try_recv().unwrap();
+    assert_eq!(m.published().ns() - t0.ns(), 10_000_000);
+    // a typed reader of the same name is not affected
+    let mut typed = r.subscribe::<Pose>("/stamped/live", Qos::default()).unwrap();
+    live.publish(&pose(4.0)).unwrap();
+    assert_eq!(typed.try_recv().unwrap().x, 4.0);
+    // the system clock unless the bus was made with another
+    let system = Bus::new().scope("w");
+    let p = system.publisher::<Pose>("/stamped/system", Qos::default()).unwrap();
+    let mut e = system.subscribe_erased("/stamped/system", Qos::default()).unwrap();
+    let before = mower_bus::Time::from_system(std::time::SystemTime::now());
+    p.publish(&pose(5.0)).unwrap();
+    let after = mower_bus::Time::from_system(std::time::SystemTime::now());
+    let at = e.try_recv().unwrap().published();
+    assert!(before <= at && at <= after);
+}
+
+/// `subscribe_erased_with`: the history a transient-local reader takes is its
+/// depth, the queue its capacity.
+#[test]
+fn a_reader_with_a_capacity_takes_its_depth_of_history_and_queues_more() {
+    let bus = Bus::new();
+    let s = bus.scope("writer");
+    let p = s.publisher::<Pose>("/cap", Qos::latched().keep_last(5)).unwrap();
+    for i in 0..5 {
+        p.publish(&pose(i as f64)).unwrap();
+    }
+    let r = bus.scope("tap");
+    let mut tap = r.subscribe_erased_with("/cap", Qos::latched().keep_last(2), 100).unwrap();
+    let mut plain = r.subscribe_erased("/cap", Qos::latched().keep_last(2)).unwrap();
+    for i in 5..55 {
+        p.publish(&pose(i as f64)).unwrap();
+    }
+    let x = |m: mower_bus::ErasedMsg| m.downcast::<Pose>().unwrap().x;
+    let got: Vec<f64> = std::iter::from_fn(|| tap.try_recv().ok()).map(x).collect();
+    assert_eq!(got, (3..55).map(f64::from).collect::<Vec<_>>(), "2 of history, then all 50");
+    assert_eq!(tap.dropped(), 0);
+    let kept: Vec<f64> = std::iter::from_fn(|| plain.try_recv().ok()).map(x).collect();
+    assert_eq!(kept, vec![53.0, 54.0], "a plain reader's queue is its depth");
+    assert_eq!(plain.dropped(), 50);
+    // introspection shows the QoS it asked for
+    let info = bus.topic("/cap").unwrap();
+    assert_eq!(info.subscriber_qos, vec![Qos::latched().keep_last(2), Qos::latched().keep_last(2)]);
+    // a capacity under the depth is the depth
+    let mut small = r.subscribe_erased_with("/cap", Qos::latched().keep_last(3), 1).unwrap();
+    assert_eq!(std::iter::from_fn(|| small.try_recv().ok()).count(), 3);
+}
+
+/// An `ErasedMsg` is `Serialize` as its value is: any serde serializer
+/// takes it, `serde_json` giving what `to_json` gives.
+#[test]
+fn an_erased_message_serializes_as_its_value() {
+    let bus = Bus::new();
+    let s = bus.scope("s");
+    let p = s.publisher::<Pose>("/ser", Qos::default()).unwrap();
+    let mut e = s.subscribe_erased("/ser", Qos::default()).unwrap();
+    p.publish(&Pose { x: f64::from_bits(0x3ff8_0000_0000_0001), frame_id: "map".into() }).unwrap();
+    let m = e.try_recv().unwrap();
+    assert_eq!(serde_json::to_value(&m).unwrap(), m.to_json().unwrap());
+    let direct = serde_json::to_string(&*m.downcast::<Pose>().unwrap()).unwrap();
+    assert_eq!(serde_json::to_string(&m).unwrap(), direct, "the same serializer calls as the value's own");
+}
+
+/// `recv_timeout` on an erased reader, for a tap's std thread.
+#[test]
+fn an_erased_reader_blocks_in_recv_timeout_until_a_publish() {
+    let bus = Bus::new();
+    let s = bus.scope("s");
+    let p = s.publisher::<Pose>("/blocking", Qos::default()).unwrap();
+    let mut e = s.subscribe_erased("/blocking", Qos::default()).unwrap();
+    assert_eq!(e.recv_timeout(Duration::from_millis(10)).unwrap_err(), RecvError::Timeout);
+    let t = thread::spawn(move || e.recv_timeout(Duration::from_secs(5)).map(|m| m.downcast::<Pose>().unwrap().x));
+    thread::sleep(Duration::from_millis(20));
+    p.publish(&pose(7.0)).unwrap();
+    assert_eq!(t.join().unwrap(), Ok(7.0));
+}

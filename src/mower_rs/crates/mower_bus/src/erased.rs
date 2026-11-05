@@ -12,31 +12,44 @@ use std::task::{Context, Poll};
 use futures::Stream;
 
 use crate::codec::{AnyMsg, Codec};
-use crate::topic::{Reader, Writer};
-use crate::{BusError, Message, PublisherChanges, Qos, RecvError, Scope};
+use crate::topic::{Reader, Stamped, Writer};
+use crate::{BusError, Message, PublisherChanges, Qos, RecvError, Scope, Time};
 
-pub(crate) fn subscribe(scope: &Scope, name: &str, qos: Qos) -> Result<ErasedSubscriber, BusError> {
-    Ok(ErasedSubscriber { reader: Reader::open(scope, name, qos, None)? })
+/// `capacity`: [`Scope::subscribe_erased_with`]'s queue bound.
+pub(crate) fn subscribe(scope: &Scope, name: &str, qos: Qos, capacity: Option<usize>) -> Result<ErasedSubscriber, BusError> {
+    Ok(ErasedSubscriber { reader: Reader::open_with(scope, name, qos, None, capacity)? })
 }
 
 pub(crate) fn publisher(scope: &Scope, name: &str, qos: Qos) -> Result<JsonPublisher, BusError> {
     Ok(JsonPublisher { writer: Writer::open(scope, name, qos, None)? })
 }
 
-/// One message whose type only its codec knows.
+/// One message whose type only its codec knows, with the instant it was
+/// published.
+///
+/// It is `serde::Serialize` as its value is, through the codec, so any serde
+/// serializer takes it without a copy: `mower_cdr::to_vec` makes the CDR
+/// rosbag2 records (E5-4), `serde_json` the JSON of [`ErasedMsg::to_json`].
 #[derive(Clone)]
 pub struct ErasedMsg {
     value: AnyMsg,
     codec: Codec,
+    published: Time,
 }
 
 impl ErasedMsg {
-    pub(crate) fn new(value: AnyMsg, codec: Codec) -> Self {
-        ErasedMsg { value, codec }
+    pub(crate) fn new(value: AnyMsg, codec: Codec, published: Time) -> Self {
+        ErasedMsg { value, codec, published }
     }
 
     pub fn type_name(&self) -> &'static str {
         self.codec.type_name
+    }
+
+    /// When it was published: the bus clock's wall time, read by the
+    /// publish (for a message from history, by its own publish).
+    pub fn published(&self) -> Time {
+        self.published
     }
 
     /// Serialize with serde (README.md: that is the layout the app gets).
@@ -51,6 +64,15 @@ impl ErasedMsg {
     /// The message itself, without a copy, if it is a `T`.
     pub fn downcast<T: Message>(&self) -> Option<Arc<T>> {
         self.value.clone().downcast::<T>().ok()
+    }
+}
+
+impl serde::Serialize for ErasedMsg {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match (self.codec.serialize)(self.value.as_ref()) {
+            Some(value) => erased_serde::serialize(value, serializer),
+            None => Err(serde::ser::Error::custom(format!("{}: value/codec type mismatch", self.codec.type_name))),
+        }
     }
 }
 
@@ -81,6 +103,13 @@ impl ErasedSubscriber {
         Some(self.wrap(value))
     }
 
+    /// Block the calling thread up to `timeout` for the next message, as
+    /// [`crate::Subscriber::recv_timeout`]. For dedicated std threads.
+    pub fn recv_timeout(&mut self, timeout: std::time::Duration) -> Result<ErasedMsg, RecvError> {
+        let value = self.reader.recv_timeout(timeout)?;
+        Ok(self.wrap(value))
+    }
+
     pub fn try_recv(&mut self) -> Result<ErasedMsg, RecvError> {
         let value = self.reader.try_recv()?;
         Ok(self.wrap(value))
@@ -107,9 +136,9 @@ impl ErasedSubscriber {
     /// A channel carries messages only once a typed endpoint has fixed its
     /// type (a `JsonPublisher` cannot publish before), so a reader that
     /// attached earlier finds the codec by the time its first message comes.
-    fn wrap(&self, value: AnyMsg) -> ErasedMsg {
+    fn wrap(&self, (value, published): Stamped) -> ErasedMsg {
         let codec = *self.reader.channel().codec().expect("a message on a channel whose type is not fixed");
-        ErasedMsg::new(value, codec)
+        ErasedMsg::new(value, codec, published)
     }
 }
 

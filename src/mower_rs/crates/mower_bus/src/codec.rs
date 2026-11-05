@@ -10,6 +10,11 @@ use crate::Message;
 /// Shared form of a message whose type is known only to its codec.
 pub(crate) type AnyMsg = Arc<dyn Any + Send + Sync>;
 
+/// A value of a codec's type as serde sees it, behind any serializer
+/// (E5-4: CDR for the recorder, `mower_cdr`; E8's replay; the JSON of
+/// `to_json` is one such serializer).
+pub(crate) type AsSerialize = for<'a> fn(&'a (dyn Any + Send + Sync)) -> Option<&'a dyn erased_serde::Serialize>;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Codec {
     pub type_id: TypeId,
@@ -19,6 +24,9 @@ pub(crate) struct Codec {
     pub to_json: fn(&(dyn Any + Send + Sync)) -> Option<Result<serde_json::Value, String>>,
     /// Deserialize JSON into a value of this codec's type.
     pub from_json: fn(serde_json::Value) -> Result<AnyMsg, String>,
+    /// The value as `erased_serde::Serialize`, for any serde serializer.
+    /// `None` if `value` is of another type.
+    pub serialize: AsSerialize,
 }
 
 impl Codec {
@@ -28,6 +36,7 @@ impl Codec {
             type_name: std::any::type_name::<T>(),
             to_json: |value| value.downcast_ref::<T>().map(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
             from_json: |json| serde_json::from_value::<T>(json).map(|v| Arc::new(v) as AnyMsg).map_err(|e| e.to_string()),
+            serialize: |value| value.downcast_ref::<T>().map(|v| v as &dyn erased_serde::Serialize),
         }
     }
 
@@ -64,5 +73,9 @@ mod tests {
         assert_eq!(back.downcast_ref::<Pose>(), Some(&Pose { x: 1.5, frame_id: "map".into() }));
         assert!((c.to_json)(&String::from("no")).is_none());
         assert!((c.from_json)(serde_json::json!({"x": "not a number"})).is_err());
+        // the serde view is the value's own: what any serializer gets
+        let viewed = (c.serialize)(value.as_ref()).unwrap();
+        assert_eq!(serde_json::to_value(viewed).unwrap(), serde_json::json!({"x": 1.5, "frame_id": "map"}));
+        assert!((c.serialize)(&String::from("no")).is_none());
     }
 }

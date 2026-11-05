@@ -19,7 +19,10 @@
 //!   start, stop, snapshot, the 2 s status and rear light with the disk guard,
 //!   MediaMTX, `run_metadata.yaml`, the parameter dump, the fault.
 //! - [`sources`]: a run's DDS subscriptions, a thread and a node per group
-//!   (`mower_full_recorder`, ...; design D12), found as rosbag2 finds them.
+//!   (`mower_full_recorder`, ...; design D12), found as rosbag2 finds them;
+//!   E5-4 (`source: auto`): the names every writer of which is on the bus
+//!   here, tapped on the bus instead (`mower_cdr`'s bytes, the bus publish
+//!   instant).
 //! - [`owner`]: one owner of `/mower_recorder/*` (design 4.2, R6): while a
 //!   DDS server of `/mower_recorder/start` that is not a bus bridge's exists
 //!   (an image from before E5-7 next to this one), none of the three serves

@@ -3,7 +3,7 @@ name = "mower_recorder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "mower_recorder's three nodes (recorder_manager, bag_store, graph_snapshot) as mower_rsd's module bag, behind rust_recorder (docs/ROS_FREE_PLAN.md step E5; E5-3b: the default profile from DDS)"
+description = "mower_recorder's three nodes (recorder_manager, bag_store, graph_snapshot) as mower_rsd's module bag, behind rust_recorder (docs/ROS_FREE_PLAN.md step E5; E5-3b: the default profile from DDS; E5-4: the bus names from the bus)"
 
 [lib]
 path = "src/lib.rs"
@@ -24,18 +24,19 @@ futures.workspace = true
 mower_bridge = { path = "../mower_bridge" }
 mower_bus = { path = "../mower_bus" }
 mower_camera = { path = "../mower_camera" }
+# E5-4: a bus tap's CDR (rosbag2's bytes from the bus value) and type hash
+mower_cdr = { path = "../mower_cdr" }
 mower_mcap = { path = "../mower_mcap" }
 mower_pyfmt = { path = "../mower_pyfmt" }
 mower_recorder_core = { path = "../mower_recorder_core" }
 mower_rs_common = { path = "../mower_rs_common" }
+mower_schema = { path = "../mower_schema" }
 r2r.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 # tests/module.rs: the rear light as mower_base reads it
 mower_base = { path = "../mower_base" }
-# tests/r2r_patch3.rs: the type hashes rosbag2 wrote (E5-1's table)
-mower_schema = { path = "../mower_schema" }
 # tests/module.rs: the URDF of mower_recorder_core's extrinsics vectors (E5-5)
 serde_json.workspace = true
 # tests/module.rs: the bags read back (mower_mcap's own test reader)

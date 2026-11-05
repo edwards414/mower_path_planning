@@ -87,6 +87,12 @@ use mower_rs_common::{ModuleCtx, ModuleResult, Remaps, Shutdown};
 /// The bus bridge's module id: not for `--modules`, started when needed.
 const BUS_BRIDGE: &str = "bus_bridge";
 
+/// (E5-4) The modules whose arguments start with the process's set and
+/// run-time flags (`mower_bridge::process_args`): the recorder, which takes
+/// a topic from the bus when every writer of it is on the bus here (E5
+/// design 3.5), by the rule the bridge plans with.
+const PROCESS_ARGS: &[&str] = &["bag"];
+
 type BoxFut = Pin<Box<dyn Future<Output = ModuleResult> + Send>>;
 type Runner = fn(r2r::Context, ModuleCtx) -> BoxFut;
 
@@ -734,18 +740,21 @@ fn main() -> ExitCode {
         }
         for id in &args.modules {
             let module = MODULES.iter().find(|m| m.id == *id).expect("checked in parse_args");
-            let extra: Vec<String> = args
-                .module_args
-                .iter()
-                .filter(|(mid, _)| mid == id)
-                .flat_map(|(_, v)| v.clone())
-                .collect();
+            let mut extra: Vec<String> = if PROCESS_ARGS.contains(&module.id) {
+                mower_bridge::process_args(&args.modules, &on_now)
+            } else {
+                Vec::new()
+            };
+            extra.extend(args.module_args.iter().filter(|(mid, _)| mid == id).flat_map(|(_, v)| v.clone()));
             add(module, extra);
         }
         // An endpoint a module makes on the bus that the manifest does not
         // have is a name nothing bridges: say so, with a bridge or without.
         let running = mower_bridge::Running::rsd(&args.modules, mower_bridge::on_bus_with(&on_now));
-        let bridge_scopes = vec![mower_bridge::NODE.to_string()];
+        // the bridge's own scope, and the recorder's taps (E5-4), which read
+        // names that need nothing from DDS
+        let bridge_scopes: Vec<String> =
+            std::iter::once(mower_bridge::NODE).chain(mower_bridge::RECORDER_TAPS.iter().copied()).map(str::to_string).collect();
         tokio::spawn(mower_bridge::coverage::watch(bus.clone(), running, remaps.clone(), bridge_scopes, |gap| {
             eprintln!("[mower_rsd] bus bridge: {gap}")
         }));

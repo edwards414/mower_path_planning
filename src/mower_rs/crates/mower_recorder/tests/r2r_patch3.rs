@@ -385,6 +385,16 @@ fn the_endpoints_carry_their_type_hash() {
         let _text = peer.with(|n| n.create_publisher::<Text>("/e5p3/hash/text", reliable(1)).unwrap());
         let _bool = peer.with(|n| n.subscribe::<Bool>("/e5p3/hash/bool", reliable(1)).unwrap());
         let _fix = peer.with(|n| n.create_publisher::<r2r::sensor_msgs::msg::NavSatFix>("/e5p3/hash/fix", reliable(1)).unwrap());
+        // the node's own endpoints reach its graph cache a moment later (a
+        // workspace run under load once found /fix's still missing)
+        eventually("the three endpoints in the graph", || {
+            peer.with(|n| {
+                !n.get_publishers_info_by_topic("/e5p3/hash/text", false).unwrap().is_empty()
+                    && !n.get_subscriptions_info_by_topic("/e5p3/hash/bool", false).unwrap().is_empty()
+                    && !n.get_publishers_info_by_topic("/e5p3/hash/fix", false).unwrap().is_empty()
+            })
+        })
+        .await;
         let writer = peer.with(|n| n.get_publishers_info_by_topic("/e5p3/hash/text", false).unwrap());
         let reader = peer.with(|n| n.get_subscriptions_info_by_topic("/e5p3/hash/bool", false).unwrap());
         let fix = peer.with(|n| n.get_publishers_info_by_topic("/e5p3/hash/fix", false).unwrap());

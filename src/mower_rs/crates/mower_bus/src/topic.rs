@@ -33,6 +33,12 @@
 //! - a message travels as the `AnyMsg` its publisher made, so typed readers
 //!   `downcast` it back without a copy and erased readers wrap the same `Arc`
 //!   with the channel's codec;
+//! - (E5-4) each publish is stamped with the bus clock's wall time, read
+//!   before the channel's lock, and the stamp travels with the message into
+//!   history and every queue: an erased reader gets it as
+//!   `ErasedMsg::published` (the recorder's `publish_time`), a typed reader
+//!   never sees it. An erased reader can have a queue longer than the
+//!   history it takes on joining (`subscribe_erased_with`);
 //! - a publish takes the channel's lock, numbers the message, retains it if
 //!   its writer is transient-local and pushes it into every reader's inbox
 //!   (each behind its own short lock). Pushing under the channel's lock is
@@ -62,7 +68,11 @@ use futures::Stream;
 
 use crate::codec::{AnyMsg, Codec};
 use crate::wake::UserCode;
-use crate::{ros_type_name, BusError, Message, Qos, RecvError, Scope, TopicInfo};
+use crate::{ros_type_name, BusError, Clock, Message, Qos, RecvError, Scope, Time, TopicInfo};
+
+/// A queued message and the instant it was published (the bus clock's wall
+/// time).
+pub(crate) type Stamped = (AnyMsg, Time);
 
 /// The topic half of the bus registry: one channel per name.
 ///
@@ -74,9 +84,20 @@ pub(crate) struct Registry {
     channels: Mutex<BTreeMap<String, Arc<Channel>>>,
     /// Writer ids, unique per bus: how a publish finds its writer's history.
     next_writer: AtomicU64,
+    /// What publishes are stamped with (the system clock unless the bus was
+    /// made `with_clock`).
+    clock: Clock,
 }
 
 impl Registry {
+    pub(crate) fn with_clock(clock: Clock) -> Self {
+        Registry { clock, ..Registry::default() }
+    }
+
+    pub(crate) fn clock(&self) -> &Clock {
+        &self.clock
+    }
+
     pub(crate) fn info(&self) -> Vec<TopicInfo> {
         // The map is sorted by name. Copy it out so that a busy channel does
         // not hold up endpoint creation on other names.
@@ -94,7 +115,7 @@ impl Registry {
         if let Some(channel) = channels.get(name) {
             return Arc::clone(channel);
         }
-        let channel = Arc::new(Channel::new(name));
+        let channel = Arc::new(Channel::new(name, self.clock.clone()));
         channels.insert(name.to_string(), Arc::clone(&channel));
         channel
     }
@@ -190,25 +211,25 @@ impl<T: Message> Subscriber<T> {
 
     /// The next message; `None` once the scope is closed.
     pub async fn recv(&mut self) -> Option<Arc<T>> {
-        std::future::poll_fn(|cx| self.reader.poll_recv(cx)).await.map(downcast::<T>)
+        std::future::poll_fn(|cx| self.reader.poll_recv(cx)).await.map(|(msg, _)| downcast::<T>(msg))
     }
 
     /// The next queued message without waiting: `Empty` or `Closed` if none.
     pub fn try_recv(&mut self) -> Result<Arc<T>, RecvError> {
-        self.reader.try_recv().map(downcast::<T>)
+        self.reader.try_recv().map(|(msg, _)| downcast::<T>(msg))
     }
 
     /// Block the calling thread up to `timeout` for the next message:
     /// `Timeout` or `Closed` if none. For dedicated std threads; never call
     /// it from async code.
     pub fn recv_timeout(&mut self, timeout: Duration) -> Result<Arc<T>, RecvError> {
-        self.reader.recv_timeout(timeout).map(downcast::<T>)
+        self.reader.recv_timeout(timeout).map(|(msg, _)| downcast::<T>(msg))
     }
 
     /// Drain the queue and return the newest message in it, if any. Does not
     /// wait. The skipped ones do not count as dropped.
     pub fn latest(&mut self) -> Option<Arc<T>> {
-        self.reader.latest().map(downcast::<T>)
+        self.reader.latest().map(|(msg, _)| downcast::<T>(msg))
     }
 
     /// Messages lost to a full queue since this reader was created.
@@ -246,7 +267,7 @@ impl<T: Message> Stream for Subscriber<T> {
     type Item = Arc<T>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Arc<T>>> {
-        self.get_mut().reader.poll_recv(cx).map(|msg| msg.map(downcast::<T>))
+        self.get_mut().reader.poll_recv(cx).map(|msg| msg.map(|(msg, _)| downcast::<T>(msg)))
     }
 }
 
@@ -290,6 +311,8 @@ pub(crate) struct Channel {
     /// Fixed by the first typed endpoint, never changed afterwards. Read
     /// without the lock: erased readers wrap every message with it.
     codec: OnceLock<Codec>,
+    /// The bus's: what a publish is stamped with.
+    clock: Clock,
     state: Mutex<ChannelState>,
 }
 
@@ -390,12 +413,13 @@ struct WriterEntry {
 
 struct History {
     depth: usize,
-    msgs: VecDeque<(u64, AnyMsg)>,
+    /// (number, publish stamp, message)
+    msgs: VecDeque<(u64, Time, AnyMsg)>,
 }
 
 impl Channel {
-    fn new(name: &str) -> Self {
-        Channel { name: name.to_string(), codec: OnceLock::new(), state: Mutex::new(ChannelState::default()) }
+    fn new(name: &str, clock: Clock) -> Self {
+        Channel { name: name.to_string(), codec: OnceLock::new(), clock, state: Mutex::new(ChannelState::default()) }
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -523,7 +547,7 @@ impl Channel {
             if let Some(i) = state.writers.iter().position(|writer| writer.id == id) {
                 let removed = state.writers.remove(i);
                 // Its history is freed with the rest, with no lock held.
-                for (_, msg) in removed.history.into_iter().flat_map(|history| history.msgs) {
+                for (_, _, msg) in removed.history.into_iter().flat_map(|history| history.msgs) {
                     after.release.push(msg);
                 }
                 state.writers_changed(&mut after);
@@ -538,6 +562,9 @@ impl Channel {
     /// registered, i.e. its scope has closed.
     fn publish(&self, writer: u64, msg: AnyMsg) -> bool {
         let now = Instant::now();
+        // Before the lock, as `now`: a racing publish may be stamped earlier
+        // and still come later in the channel's order.
+        let at = self.clock.now();
         let mut after = AfterUnlock::new();
         {
             let mut guard = lock(&self.state);
@@ -551,16 +578,16 @@ impl Channel {
             state.last_published = state.last_published.max(Some(now));
             if let Some(history) = &mut entry.history {
                 if history.msgs.len() >= history.depth {
-                    if let Some((_, oldest)) = history.msgs.pop_front() {
+                    if let Some((_, _, oldest)) = history.msgs.pop_front() {
                         after.release.push(oldest);
                     }
                 }
-                history.msgs.push_back((state.published, Arc::clone(&msg)));
+                history.msgs.push_back((state.published, at, Arc::clone(&msg)));
             }
             // Still under the channel's lock, so that every reader gets
             // publishes from different threads in the same order.
             for inbox in &state.readers {
-                inbox.push(&msg, &mut after);
+                inbox.push(&msg, at, &mut after);
             }
         }
         after.run();
@@ -584,12 +611,12 @@ fn wake_all(wakers: Vec<Waker>) {
 /// `depth` messages over every writer's history, oldest first in the
 /// channel's publish order. What does not fit is not counted as dropped; it
 /// was never queued for this reader.
-fn retained(writers: &[WriterEntry], depth: usize) -> Vec<AnyMsg> {
-    let mut all: Vec<&(u64, AnyMsg)> =
+fn retained(writers: &[WriterEntry], depth: usize) -> Vec<Stamped> {
+    let mut all: Vec<&(u64, Time, AnyMsg)> =
         writers.iter().filter_map(|writer| writer.history.as_ref()).flat_map(|history| &history.msgs).collect();
-    all.sort_unstable_by_key(|(n, _)| *n);
+    all.sort_unstable_by_key(|(n, _, _)| *n);
     let skip = all.len().saturating_sub(depth);
-    all[skip..].iter().map(|(_, msg)| Arc::clone(msg)).collect()
+    all[skip..].iter().map(|(_, at, msg)| (Arc::clone(msg), *at)).collect()
 }
 
 /// One reader's KEEP_LAST queue and what wakes it.
@@ -597,7 +624,11 @@ pub(crate) struct Inbox {
     /// The reader's scope name and QoS, for introspection.
     scope: String,
     qos: Qos,
+    /// The history a transient-local reader takes on joining: its QoS depth.
     depth: usize,
+    /// The queue's bound: the depth, or more for a reader made with a
+    /// capacity of its own (`subscribe_erased_with`).
+    capacity: usize,
     queue: Mutex<Queue>,
     /// Signals the thread waiting in `recv_timeout`, if there is one.
     ready: Condvar,
@@ -605,7 +636,7 @@ pub(crate) struct Inbox {
 
 #[derive(Default)]
 struct Queue {
-    msgs: VecDeque<AnyMsg>,
+    msgs: VecDeque<Stamped>,
     dropped: u64,
     closed: bool,
     /// The task that last found the queue empty. A push takes it, so a burst
@@ -617,25 +648,28 @@ struct Queue {
 }
 
 impl Inbox {
-    fn new(scope: &str, qos: Qos) -> Self {
+    /// `capacity`: the queue's bound if longer than the depth.
+    fn new(scope: &str, qos: Qos, capacity: Option<usize>) -> Self {
         let depth = qos.effective_depth();
-        Inbox { scope: scope.to_string(), qos, depth, queue: Mutex::new(Queue::default()), ready: Condvar::new() }
+        let capacity = capacity.map_or(depth, |c| c.max(depth));
+        Inbox { scope: scope.to_string(), qos, depth, capacity, queue: Mutex::new(Queue::default()), ready: Condvar::new() }
     }
 
-    /// Queue `msg`, pushing out the oldest message if the queue is full. The
-    /// wake-up and the pushed-out message are left in `after`.
-    fn push(self: &Arc<Self>, msg: &AnyMsg, after: &mut AfterUnlock) {
+    /// Queue `msg`, published at `at`, pushing out the oldest message if the
+    /// queue is full. The wake-up and the pushed-out message are left in
+    /// `after`.
+    fn push(self: &Arc<Self>, msg: &AnyMsg, at: Time, after: &mut AfterUnlock) {
         let mut queue = lock(&self.queue);
         if queue.closed {
             return;
         }
-        if queue.msgs.len() >= self.depth {
-            if let Some(oldest) = queue.msgs.pop_front() {
+        if queue.msgs.len() >= self.capacity {
+            if let Some((oldest, _)) = queue.msgs.pop_front() {
                 after.release.push(oldest);
             }
             queue.dropped += 1;
         }
-        queue.msgs.push_back(Arc::clone(msg));
+        queue.msgs.push_back((Arc::clone(msg), at));
         if let Some(waker) = queue.waker.take() {
             after.wake.push(Wake::Task(waker));
         }
@@ -666,7 +700,7 @@ impl Inbox {
 
 /// What a closed reader leaves: its queued messages and its task's waker.
 struct Discarded {
-    queued: VecDeque<AnyMsg>,
+    queued: VecDeque<Stamped>,
     waker: Option<Waker>,
 }
 
@@ -680,8 +714,15 @@ pub(crate) struct Reader {
 
 impl Reader {
     pub(crate) fn open(scope: &Scope, name: &str, qos: Qos, codec: Option<Codec>) -> Result<Reader, BusError> {
+        Reader::open_with(scope, name, qos, codec, None)
+    }
+
+    /// [`Reader::open`] with a queue of `capacity` (if above the depth).
+    pub(crate) fn open_with(
+        scope: &Scope, name: &str, qos: Qos, codec: Option<Codec>, capacity: Option<usize>,
+    ) -> Result<Reader, BusError> {
         let channel = open_channel(scope, name, codec)?;
-        let inbox = Arc::new(Inbox::new(scope.name(), qos));
+        let inbox = Arc::new(Inbox::new(scope.name(), qos, capacity));
         channel.add_reader(&inbox, qos.is_transient_local());
         // The hook keeps the channel (the registry does anyway) but only a
         // `Weak` inbox: a reader dropped early is not kept alive by it.
@@ -705,7 +746,7 @@ impl Reader {
                     if let Some(waker) = waker {
                         user.wake(waker);
                     }
-                    for msg in queued {
+                    for (msg, _) in queued {
                         user.run(|| drop(msg));
                     }
                 }
@@ -723,7 +764,7 @@ impl Reader {
         &self.channel
     }
 
-    pub(crate) fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<AnyMsg>> {
+    pub(crate) fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Stamped>> {
         let mut queue = lock(&self.inbox.queue);
         if let Some(msg) = queue.msgs.pop_front() {
             return Poll::Ready(Some(msg));
@@ -742,7 +783,7 @@ impl Reader {
         Poll::Pending
     }
 
-    pub(crate) fn try_recv(&mut self) -> Result<AnyMsg, RecvError> {
+    pub(crate) fn try_recv(&mut self) -> Result<Stamped, RecvError> {
         let mut queue = lock(&self.inbox.queue);
         match queue.msgs.pop_front() {
             Some(msg) => Ok(msg),
@@ -751,7 +792,7 @@ impl Reader {
         }
     }
 
-    pub(crate) fn recv_timeout(&mut self, timeout: Duration) -> Result<AnyMsg, RecvError> {
+    pub(crate) fn recv_timeout(&mut self, timeout: Duration) -> Result<Stamped, RecvError> {
         // `None`: too far away to represent, so wait as long as it takes.
         let deadline = Instant::now().checked_add(timeout);
         let mut queue = lock(&self.inbox.queue);
@@ -775,7 +816,7 @@ impl Reader {
         }
     }
 
-    pub(crate) fn latest(&mut self) -> Option<AnyMsg> {
+    pub(crate) fn latest(&mut self) -> Option<Stamped> {
         let mut queue = lock(&self.inbox.queue);
         let newest = queue.msgs.pop_back()?;
         // Skipped messages are freed after the lock is released; the queue

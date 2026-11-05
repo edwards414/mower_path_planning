@@ -265,9 +265,42 @@ struct Outcome {
 ///   5.5 d), except where the bus side of it is writers that never publish,
 ///   or endpoints that are not in production, which are then left out.
 pub fn plan(running: &[Running], remaps: &Remaps) -> Result<Plan, PlanError> {
+    let (names, mut problems) = ends(running, remaps);
+
+    let mut plan = Plan::default();
+    for ((space, name), ends) in &names {
+        let ends: Vec<&End> = ends.iter().collect();
+        let outcome = match same_type(name, &ends) {
+            Err(problem) => Err(problem),
+            Ok(()) => match space {
+                Space::Topic => topic_outcome(name, &ends),
+                Space::Service => service_outcome(name, &ends),
+                Space::Action => action_outcome(name, &ends),
+            },
+        };
+        match outcome {
+            Ok(outcome) => {
+                plan.declarations.extend(outcome.declarations);
+                plan.notes.extend(outcome.notes);
+            }
+            Err(problem) => problems.push(problem),
+        }
+    }
+    if problems.is_empty() {
+        Ok(plan)
+    } else {
+        Err(PlanError { problems })
+    }
+}
+
+/// (namespace, name) -> every endpoint of the world under that name in this
+/// process, and the names that did not resolve.
+type Ends = BTreeMap<(Space, String), Vec<End>>;
+
+fn ends(running: &[Running], remaps: &Remaps) -> (Ends, Vec<String>) {
     let mut problems = Vec::new();
     // (namespace, name) -> every endpoint of that name
-    let mut names: BTreeMap<(Space, String), Vec<End>> = BTreeMap::new();
+    let mut names: Ends = BTreeMap::new();
     for module in MODULES {
         for instance in module.instances {
             let here = running.iter().find(|r| r.instance.node == instance.node);
@@ -298,30 +331,74 @@ pub fn plan(running: &[Running], remaps: &Remaps) -> Result<Plan, PlanError> {
             names.entry((endpoint.kind.space(), endpoint.name.to_string())).or_default().push(end);
         }
     }
+    (names, problems)
+}
 
-    let mut plan = Plan::default();
-    for ((space, name), ends) in &names {
-        let ends: Vec<&End> = ends.iter().collect();
-        let outcome = match same_type(name, &ends) {
-            Err(problem) => Err(problem),
-            Ok(()) => match space {
-                Space::Topic => topic_outcome(name, &ends),
-                Space::Service => service_outcome(name, &ends),
-                Space::Action => action_outcome(name, &ends),
-            },
-        };
-        match outcome {
-            Ok(outcome) => {
-                plan.declarations.extend(outcome.declarations);
-                plan.notes.extend(outcome.notes);
+/// (E5-4) Where the recorder (the `bag` module) takes a topic from in this
+/// process: E5 design 3.5.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordSource {
+    /// Every writer of the name the manifest knows is an instance on the
+    /// bus here (the recorder's own `graph_snapshot` among them): a bus tap
+    /// sees every sample DDS would.
+    Bus,
+    /// Some writer is not on the bus here (outside, on its r2r node, an
+    /// instance that does not run here), or the manifest knows none (a
+    /// tool, `/rosout`, `/diagnostics`): recorded from DDS, as rosbag2 does,
+    /// which also gets the bus writers' samples through the bridge. Why, for
+    /// the log.
+    Dds(String),
+}
+
+/// [`RecordSource`] of every topic of the world, for the instances
+/// `running` of this process: what the recorder decides once per process.
+#[derive(Clone, Debug, Default)]
+pub struct RecordSources {
+    bus: BTreeMap<String, Vec<String>>,
+    dds: BTreeMap<String, String>,
+}
+
+impl RecordSources {
+    /// The rule (design 3.5), a pure function of the manifest, the flags of
+    /// `running` and `remaps`: a name is `Bus` when it has a writer and every
+    /// writer is on the bus here; a writer that never publishes (`silent`)
+    /// or exists only in a mode production lacks (`only`) still counts, so
+    /// that nothing a DDS reader would get is missed.
+    pub fn new(running: &[Running], remaps: &Remaps) -> RecordSources {
+        let (names, _) = ends(running, remaps);
+        let mut out = RecordSources::default();
+        for ((space, name), ends) in &names {
+            if *space != Space::Topic {
+                continue;
             }
-            Err(problem) => problems.push(problem),
+            let writers: Vec<&End> = ends.iter().filter(|e| e.endpoint.kind == Kind::Publish).collect();
+            if writers.is_empty() {
+                continue;
+            }
+            if writers.iter().all(|e| e.on_bus()) {
+                out.bus.insert(name.clone(), writers.iter().map(|e| e.owner.to_string()).collect());
+            } else {
+                let others: Vec<&End> = writers.iter().copied().filter(|e| !e.on_bus()).collect();
+                out.dds.insert(name.clone(), format!("written by {}", owners(&others)));
+            }
+        }
+        out
+    }
+
+    /// Where the recorder takes `name` from.
+    pub fn of(&self, name: &str) -> RecordSource {
+        if self.bus.contains_key(name) {
+            RecordSource::Bus
+        } else if let Some(why) = self.dds.get(name) {
+            RecordSource::Dds(why.clone())
+        } else {
+            RecordSource::Dds("no writer the manifest knows".to_string())
         }
     }
-    if problems.is_empty() {
-        Ok(plan)
-    } else {
-        Err(PlanError { problems })
+
+    /// The bus writers of a `Bus` name, by node.
+    pub fn bus_writers(&self, name: &str) -> Option<&[String]> {
+        self.bus.get(name).map(Vec::as_slice)
     }
 }
 
