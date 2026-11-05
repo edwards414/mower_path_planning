@@ -1201,6 +1201,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_link"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mower_pyfmt",
+ "regex",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "mower_localize"
 version = "0.1.0"
 dependencies = [
@@ -1460,6 +1471,9 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "libc",
+ "mower_link",
+ "mower_pyfmt",
  "serde_json",
  "serde_yaml",
  "sha2",
