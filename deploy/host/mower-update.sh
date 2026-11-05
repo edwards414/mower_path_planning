@@ -24,7 +24,8 @@
 # the CPU is capped (MOWER_UPDATE_MAX_FREQ_KHZ, default 1.0 GHz, 0 = off):
 # those resets came with no kernel error and the journal cut mid-line,
 # a 5 V / USB rail brownout under the pull's load being the working
-# hypothesis. The cap is lifted before the stack restarts.
+# hypothesis. The cap is lifted before the stack restarts. A pull that dies on
+# the network is tried again, up to PULL_ATTEMPTS times.
 #
 # Progress goes to <MOWER_STATE_DIR>/update_status.json (relayed to the app
 # by /robot/info; the base shows the amber orbit while it is pulling or
@@ -38,6 +39,8 @@ MOWER_DIR=${MOWER_DIR:-/opt/mower}
 ENV_FILE="$MOWER_DIR/.env"
 SERVICE=lawan_node
 ROBOT_STATUS_MAX_AGE_S=30
+PULL_ATTEMPTS=3
+PULL_RETRY_DELAY_S=30
 
 tag=""
 force=0
@@ -87,7 +90,10 @@ cap_cpu() {
   [ -n "$MAX_FREQ" ] && [ "$MAX_FREQ" != 0 ] || return 0
   for p in "$CPUFREQ_DIR"/policy*/scaling_max_freq; do
     [ -w "$p" ] || continue
-    old=$(cat "$p" 2>/dev/null) || continue
+    # Go back to the hardware's maximum, not to what scaling_max_freq reads
+    # now: while throttled it reads the thermal limit, and writing that back
+    # held the CPU at 408 MHz until the next reboot (XR-02, 2026-11-04).
+    old=$(cat "${p%/*}/cpuinfo_max_freq" 2>/dev/null) || old=$(cat "$p" 2>/dev/null) || continue
     echo "$MAX_FREQ" > "$p" 2>/dev/null || continue
     cpu_cap_saved="$cpu_cap_saved$p $old"$'\n'
   done
@@ -161,18 +167,21 @@ json_field() {  # file key -> value or empty
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get(sys.argv[2]); print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$1" "$2" 2>/dev/null
 }
 
+robot_is_busy() {
+  local rs="$STATE_DIR/robot_status.json" age
+  [ -f "$rs" ] || return 1
+  age=$(( $(date +%s) - $(json_field "$rs" time || echo 0) ))
+  [ "$age" -le "$ROBOT_STATUS_MAX_AGE_S" ] && [ "$(json_field "$rs" busy)" = "true" ]
+}
+
 if [ "$auto" -eq 1 ]; then
   if [ "${MOWER_AUTO_UPDATE:-1}" = "0" ]; then
     echo "[mower-update] auto update disabled (MOWER_AUTO_UPDATE=0)"
     exit 0
   fi
-  rs="$STATE_DIR/robot_status.json"
-  if [ -f "$rs" ]; then
-    age=$(( $(date +%s) - $(json_field "$rs" time || echo 0) ))
-    if [ "$age" -le "$ROBOT_STATUS_MAX_AGE_S" ] && [ "$(json_field "$rs" busy)" = "true" ]; then
-      echo "[mower-update] robot is busy (moving or navigating), trying again next time"
-      exit 0
-    fi
+  if robot_is_busy; then
+    echo "[mower-update] robot is busy (moving or navigating), trying again next time"
+    exit 0
   fi
 fi
 
@@ -232,16 +241,33 @@ fi
 status pulling "pulling $IMAGE"
 cap_cpu
 # plain docker pull: compose pull happily "skips" when a stale local image
-# exists and the registry says denied
-if ! pull_out=$(docker pull "$IMAGE" 2>&1); then
+# exists and the registry says denied. A network failure is tried again: on
+# weak 4G one pull dies partway and the next gets through, and a timeout there
+# does not mean there is no network (XR-02, 2026-11-04: 10 MB missing).
+attempt=1
+while ! pull_out=$(docker pull "$IMAGE" 2>&1); do
+  echo "[mower-update] pull attempt $attempt of $PULL_ATTEMPTS failed: ${pull_out##*$'\n'}"
+  retry=1
   case "$pull_out" in
-    *denied*|*unauthorized*) hint="$REGISTRY login for root is missing or expired: sudo docker login $REGISTRY" ;;
-    *"no such host"*|*"timeout"*|*"connection refused"*) hint="no network to $REGISTRY" ;;
-    *) hint="${pull_out##*$'\n'}" ;;
+    *denied*|*unauthorized*) retry=0; hint="$REGISTRY login for root is missing or expired: sudo docker login $REGISTRY" ;;
+    *"no such host"*|*"connection refused"*|*"network is unreachable"*) hint="no network to $REGISTRY" ;;
+    *timeout*|*Timeout*|*"deadline exceeded"*|*EOF*|*"connection reset"*) hint="download from $REGISTRY timed out or was cut off (weak network?)" ;;
+    *) retry=0; hint="${pull_out##*$'\n'}" ;;
   esac
-  status failed "pull of $IMAGE failed: $hint"
-  exit 1
-fi
+  if [ "$retry" -eq 0 ] || [ "$attempt" -ge "$PULL_ATTEMPTS" ]; then
+    status failed "pull of $IMAGE failed on attempt $attempt: $hint"
+    exit 1
+  fi
+  uncap_cpu
+  sleep "$PULL_RETRY_DELAY_S"
+  if [ "$auto" -eq 1 ] && robot_is_busy; then
+    status failed "pull of $IMAGE stopped, the robot became busy: $hint"
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  status pulling "pulling $IMAGE (attempt $attempt of $PULL_ATTEMPTS)"
+  cap_cpu
+done
 after=$(image_digest)
 uncap_cpu
 

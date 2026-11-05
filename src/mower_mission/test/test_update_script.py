@@ -28,6 +28,8 @@ FAKE_DOCKER = '''#!/bin/bash
 #   FAKE_PULLED_FILE   written by `pull`; afterwards the local digest is the remote one
 #   FAKE_CPUFREQ       cpufreq dir whose policy0/scaling_max_freq `pull` records
 #   FAKE_PULL_FAIL     1 = `pull` fails like a denied registry
+#   FAKE_PULL_FAILS_FILE  holds how many more `pull`s fail, with FAKE_PULL_ERROR
+#   FAKE_BUSY_STATUS   a `pull` failing that way marks this robot_status.json busy
 #   FAKE_LOG           every call appended here
 echo "$*" >> "${FAKE_LOG:-/dev/null}"
 local_digest=$FAKE_LOCAL_DIGEST
@@ -41,6 +43,12 @@ case "$1 $2" in
   "pull "*)
     [ -n "${FAKE_CPUFREQ:-}" ] && cat "$FAKE_CPUFREQ/policy0/scaling_max_freq" > "$FAKE_CPUFREQ/seen_during_pull"
     [ "${FAKE_PULL_FAIL:-0}" = 1 ] && { echo "Error response from daemon: denied"; exit 1; }
+    if [ -s "${FAKE_PULL_FAILS_FILE:-/nonexistent}" ] && [ "$(cat "$FAKE_PULL_FAILS_FILE")" -gt 0 ]; then
+      echo $(( $(cat "$FAKE_PULL_FAILS_FILE") - 1 )) > "$FAKE_PULL_FAILS_FILE"
+      [ -n "${FAKE_BUSY_STATUS:-}" ] && echo "{\\"busy\\": true, \\"time\\": $(date +%s)}" > "$FAKE_BUSY_STATUS"
+      echo "Error response from daemon: $FAKE_PULL_ERROR"
+      exit 1
+    fi
     [ -n "${FAKE_PULLED_FILE:-}" ] && echo "$FAKE_REMOTE_DIGEST" > "$FAKE_PULLED_FILE"
     echo "Status: Downloaded newer image" ;;
   "compose up") echo "Container lawan_node Started" ;;
@@ -191,4 +199,135 @@ def test_cpu_cap_can_be_switched_off(robot, tmp_path):
     assert res.returncode == 0, res.stderr
     assert 'cpu capped' not in res.stdout
     assert (cpufreq / 'seen_during_pull').read_text().strip() == '1992000'
+    assert _state(state) == 'idle'
+
+
+def test_cpu_goes_back_to_the_hardware_maximum_after_a_throttled_start(robot, tmp_path):
+    """While throttled, scaling_max_freq reads the thermal limit. Writing that
+    back held the CPU at 408 MHz until the next reboot (XR-02, 2026-11-04)."""
+    state, env = robot
+    cpufreq = _cpufreq(tmp_path, env, max_khz='408000')
+    (cpufreq / 'policy0' / 'cpuinfo_max_freq').write_text('1992000\n')
+    res = _run(env)
+    assert res.returncode == 0, res.stderr
+    assert (cpufreq / 'policy0' / 'scaling_max_freq').read_text().strip() == '1992000'
+    assert _state(state) == 'idle'
+
+
+def _message(state):
+    return json.loads((state / 'update_status.json').read_text())['message']
+
+
+def _failing_pulls(tmp_path, env, times, error):
+    """The next `times` pulls die with `error`. `sleep` is faked: it records
+    its argument and the CPU limit during the wait, and nothing really waits."""
+    fails = tmp_path / 'pull_fails'
+    fails.write_text(f'{times}\n')
+    sleeps = tmp_path / 'sleeps'
+    sleep = Path(env['PATH'].split(':')[0]) / 'sleep'
+    sleep.write_text('#!/bin/bash\n'
+                     'echo "$1" >> "$FAKE_SLEEPS"\n'
+                     'cat "$FAKE_CPUFREQ/policy0/scaling_max_freq" > "$FAKE_CPUFREQ/seen_during_wait"\n')
+    sleep.chmod(0o755)
+    env.update(FAKE_PULL_FAILS_FILE=str(fails), FAKE_PULL_ERROR=error, FAKE_SLEEPS=str(sleeps))
+    return sleeps
+
+
+def test_a_pull_cut_off_by_the_network_is_tried_again(robot, tmp_path):
+    state, env = robot
+    cpufreq = _cpufreq(tmp_path, env)
+    sleeps = _failing_pulls(tmp_path, env, 2, 'net/http: TLS handshake timeout')
+    res = _run(env)
+    assert res.returncode == 0, res.stderr
+    assert 'attempt 3 of 3' in res.stdout
+    assert len(_docker_calls(env, 'pull')) == 3
+    assert sleeps.read_text().split() == ['30', '30']
+    assert (cpufreq / 'seen_during_wait').read_text().strip() == '1992000', 'no cap between pulls'
+    assert (cpufreq / 'seen_during_pull').read_text().strip() == '1008000'
+    assert (cpufreq / 'policy0' / 'scaling_max_freq').read_text().strip() == '1992000'
+    assert len(_docker_calls(env, 'compose up')) == 1
+    assert _state(state) == 'idle'
+
+
+@pytest.mark.parametrize('error', [
+    'Get "https://registry-1.docker.io/v2/": net/http: request canceled (Client.Timeout exceeded)',
+    'net/http: TLS handshake timeout',
+    'context deadline exceeded',
+    'unexpected EOF',
+    'read tcp 10.0.0.2:5->1.2.3.4:443: read: connection reset by peer',
+])
+def test_a_download_that_keeps_dying_is_not_reported_as_no_network(robot, tmp_path, error):
+    state, env = robot
+    cpufreq = _cpufreq(tmp_path, env)
+    sleeps = _failing_pulls(tmp_path, env, 3, error)
+    res = _run(env)
+    assert res.returncode == 1
+    assert len(_docker_calls(env, 'pull')) == 3
+    assert len(sleeps.read_text().split()) == 2
+    assert _state(state) == 'failed'
+    assert 'timed out or was cut off' in _message(state)
+    assert 'on attempt 3' in _message(state)
+    assert 'no network' not in _message(state)
+    assert error in res.stdout, 'the real error stays in the journal'
+    assert (cpufreq / 'policy0' / 'scaling_max_freq').read_text().strip() == '1992000'
+
+
+@pytest.mark.parametrize('error', [
+    'dial tcp: lookup registry-1.docker.io: no such host',
+    'dial tcp 1.2.3.4:443: connect: network is unreachable',
+    'dial tcp 1.2.3.4:443: connect: connection refused',
+])
+def test_no_route_to_the_registry_is_reported_as_no_network(robot, tmp_path, error):
+    state, env = robot
+    _cpufreq(tmp_path, env)
+    _failing_pulls(tmp_path, env, 3, error)
+    res = _run(env)
+    assert res.returncode == 1
+    assert len(_docker_calls(env, 'pull')) == 3
+    assert 'no network to' in _message(state)
+
+
+def test_a_refused_login_is_not_tried_again(robot, tmp_path):
+    state, env = robot
+    _cpufreq(tmp_path, env)
+    env['FAKE_PULL_FAIL'] = '1'
+    res = _run(env)
+    assert res.returncode == 1
+    assert len(_docker_calls(env, 'pull')) == 1
+    assert 'docker login' in _message(state)
+
+
+def test_an_unknown_pull_error_is_not_tried_again(robot, tmp_path):
+    state, env = robot
+    _cpufreq(tmp_path, env)
+    _failing_pulls(tmp_path, env, 3, 'no space left on device')
+    res = _run(env)
+    assert res.returncode == 1
+    assert len(_docker_calls(env, 'pull')) == 1
+    assert 'no space left on device' in _message(state)
+
+
+def test_a_scheduled_update_stops_trying_once_the_robot_is_busy(robot, tmp_path):
+    state, env = robot
+    cpufreq = _cpufreq(tmp_path, env)
+    _failing_pulls(tmp_path, env, 3, 'unexpected EOF')
+    env['FAKE_BUSY_STATUS'] = str(state / 'robot_status.json')
+    res = _run(env, '--auto')
+    assert res.returncode == 1
+    assert len(_docker_calls(env, 'pull')) == 1
+    assert _state(state) == 'failed'
+    assert 'became busy' in _message(state)
+    assert len(_docker_calls(env, 'compose up')) == 0
+    assert (cpufreq / 'policy0' / 'scaling_max_freq').read_text().strip() == '1992000'
+
+
+def test_an_update_someone_asked_for_keeps_trying_while_the_robot_is_busy(robot, tmp_path):
+    """Like the start of a run: only --auto looks at busy."""
+    state, env = robot
+    _cpufreq(tmp_path, env)
+    _failing_pulls(tmp_path, env, 2, 'unexpected EOF')
+    env['FAKE_BUSY_STATUS'] = str(state / 'robot_status.json')
+    res = _run(env)
+    assert res.returncode == 0, res.stderr
+    assert len(_docker_calls(env, 'pull')) == 3
     assert _state(state) == 'idle'
