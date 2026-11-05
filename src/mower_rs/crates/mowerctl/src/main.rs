@@ -6,8 +6,10 @@
 //! by default, or with `--pair FILE` to the pairing gate (9090) with the
 //! app's HMAC hand-shake, and speaks what the app speaks: `subscribe`,
 //! `call_service`, nothing else. So it sees what that listener's policy
-//! serves (today the app's topics and services), and costs the robot what an
-//! app client costs. It needs no ROS: no DDS participant, no discovery.
+//! serves, and costs the robot what an app client costs. It needs no ROS: no
+//! DDS participant, no discovery. On the loopback listener with its policy
+//! (E8-2) that is everything on the bus, through the bridge's own `/mowerd/*`;
+//! through the gate it is the app's topics and services.
 //!
 //! Read-only by default: no `topic pub`, no `param set`, and `service call`
 //! refuses a service that may change the robot's state unless `--yes` is
@@ -23,15 +25,20 @@
 //! such topic or service on that listener, 4 timed out. `pair` keeps argparse's
 //! 2 for a bad command line.
 
+mod bridge;
 mod cli;
 mod conn;
 #[cfg(test)]
 mod fake_bridge;
 mod format;
 mod gate;
+mod graph;
 mod hz;
 mod link_status;
+mod mowerd;
+mod node;
 mod pair;
+mod param;
 mod ping;
 mod service;
 mod topic;
@@ -75,8 +82,10 @@ mowerctl: look at a running robot through ws_bridge (no ROS needed)
 usage: mowerctl [connection options] <command> [options]
 
 commands:
-  topic list [-v] [--json]          topics the listener serves (-v: with types)
-  topic info NAME [--json]          one topic's type
+  topic list [-v] [--json]          topics on the bus, or that the listener
+                                    serves (-v: with types)
+  topic info NAME [--json]          one topic's type, writers, readers, QoS,
+                                    counters and way to DDS
   topic echo NAME [options]         messages as they arrive, one JSON line each
       -n N            stop after N messages
       --throttle MS   at most one message per MS (done by the bridge)
@@ -85,16 +94,30 @@ commands:
       --yaml          YAML for people instead of JSON lines
       --raw           the frames exactly as received
       --timeout S     give up after S s (exit 4 if fewer than N arrived)
-  topic hz NAME... [options]        receive rate, as `ros2 topic hz` prints it
-      --window N      intervals per statistic (default 10000)
+  topic hz NAME... [options]        rate, from the bus's counters, no reader
+      --jitter        subscribe and report min, max and std dev as well, as
+                      `ros2 topic hz` prints them (where the counters are not
+                      answered, it does so anyway)
+      --window N      messages per statistic (default 10000)
       --duration S    stop after S s (exit 4 if a topic sent nothing)
       --json          one JSON line per report
   service list [--json] [--policy FILE]
-                                    services the listener's policy allows
+                                    services on the bus, or that the
+                                    listener's policy allows
+  service info NAME [--json]        one service's type, server, clients, calls
   service call NAME [ARGS] [--yes] [--raw] [--timeout S]
                                     call one (ARGS: a JSON object, default {});
                                     a service that may change the robot's
                                     state needs --yes
+  node list [-v] [--json]           nodes and their endpoints on the bus
+  module list [--json]              mower_rsd's instances: state, starts, last
+                                    failure
+  bridge [NAME] [--json]            what the bus bridge carries to and from DDS
+  graph [--sample S] [--json]       all of the above at once; --sample adds
+                                    each topic's rate over S s
+  param list NODE [PREFIX...] [--json]
+  param get NODE NAME... [--json]   read a node's parameters (over DDS, until
+                                    E9; only nodes that serve them answer)
   ping [-c N] [-i S]                round trip and the robot's clock offset
   help                              this text
 
@@ -154,6 +177,10 @@ fn run(argv: Vec<String>) -> Result<(), Fail> {
     match command.as_str() {
         "topic" => topic::main(args_with_lead),
         "service" => service::main(args_with_lead),
+        "node" | "module" => node::main(command, args_with_lead),
+        "bridge" => bridge::main(args_with_lead),
+        "graph" => graph::main(args_with_lead),
+        "param" => param::main(args_with_lead),
         "ping" => ping::main(args_with_lead),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -164,8 +191,8 @@ fn run(argv: Vec<String>) -> Result<(), Fail> {
             Ok(())
         }
         "pair" | "link-status" => Err(Fail::usage(format!("{command} needs no connection: no --url, --pair or --timeout"))),
-        // New commands go here. The ones that read the bridge (E8-2's `node`,
-        // `bridge`, `graph`, `param`) parse cli::ConnOpts like the three above.
+        // New commands go here. The ones that read the bridge parse
+        // cli::ConnOpts like the ones above.
         other => Err(Fail::usage(format!("unknown command {other:?}"))),
     }
 }
@@ -215,7 +242,7 @@ mod tests {
 
     #[test]
     fn the_usage_lists_every_command_the_dispatcher_knows() {
-        for c in ["topic list", "topic info", "topic echo", "topic hz", "service list", "service call", "ping", "help", "pair", "link-status"] {
+        for c in ["topic list", "topic info", "topic echo", "topic hz", "service list", "service info", "service call", "node list", "module list", "bridge", "graph", "param list", "param get", "ping", "help", "pair", "link-status"] {
             assert!(USAGE.contains(&format!("  {c}")), "{c} missing from USAGE");
         }
         // no writing commands (E8 design D2)

@@ -1,12 +1,13 @@
 //! `mowerctl topic list | info | echo | hz`.
 //!
-//! What a listener serves is what its policy allows and the graph has:
-//! `/rosapi/topics` (answered by the bridge itself) for `list` and `info`, a
-//! `subscribe` for `echo` and `hz`. Today the loopback listener applies the
-//! public listener's policy, so these are the app's topics. E8-2 gives the
-//! loopback its own policy and the bridge's own introspection (`/mowerd/*`):
-//! `info` then grows writers, readers, QoS and counters, and `hz` a mode that
-//! reads the counters without subscribing.
+//! On the loopback listener with its policy (E8-2), `list` and `info` read
+//! the bus through `/mowerd/topics`: every topic, with its writers, readers,
+//! QoS and counters. `hz` reads the same counters without subscribing unless
+//! `--jitter` is given. `echo` subscribes to whatever the bus knows.
+//!
+//! Anywhere else (`--pair`, an older image, the r2r backend), they fall back
+//! to what the listener's policy allows and the graph has: `/rosapi/topics`
+//! for `list` and `info`, a `subscribe` for `echo` and `hz`.
 
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,8 @@ use serde_json::{json, Value};
 use crate::cli::{self, ConnOpts, DEFAULT_TIMEOUT};
 use crate::conn::{self, subscribe_error, Conn, Frame};
 use crate::format::{self, Out};
-use crate::hz::{Hz, DEFAULT_WINDOW};
+use crate::hz::{Counted, Hz, DEFAULT_WINDOW};
+use crate::mowerd::{self, number, rows, seconds, text, BRIDGE, TOPICS};
 use crate::{block_on, Fail};
 
 /// `args`: the subcommand first, then its arguments (main.rs appends the
@@ -69,9 +71,42 @@ impl List {
         Ok(c)
     }
 
+    /// What `/mowerd/topics` says: the live names; `--json` its text as is.
+    fn print_bus(&self, values: &Value, out: &mut Out) -> Result<(), Fail> {
+        if self.json {
+            return out.line(&values.to_string());
+        }
+        let live = rows(values, "topics").iter().filter(|t| mowerd::is_live(t));
+        if self.types {
+            let lines = live
+                .map(|t| {
+                    vec![
+                        text(t, "name").to_string(),
+                        format!("[{}]", t.get("type").and_then(Value::as_str).unwrap_or("?")),
+                        format!("{} writers", rows(t, "writers").len()),
+                        format!("{} readers", rows(t, "readers").len()),
+                    ]
+                })
+                .collect();
+            for line in mowerd::table(lines) {
+                out.line(&line)?;
+            }
+        } else {
+            for t in live {
+                out.line(text(t, "name"))?;
+            }
+        }
+        Ok(())
+    }
+
     async fn run(self, out: &mut Out) -> Result<(), Fail> {
+        let timeout = self.conn.timeout_or(DEFAULT_TIMEOUT);
         let mut c = Conn::open(&self.conn).await?;
-        let topics = listed(&mut c, self.conn.timeout_or(DEFAULT_TIMEOUT)).await?;
+        if let Some(values) = mowerd::read(&mut c, TOPICS, json!({}), timeout).await? {
+            c.close().await;
+            return self.print_bus(&values, out);
+        }
+        let topics = listed(&mut c, timeout).await?;
         c.close().await;
         if self.json {
             let (names, types): (Vec<_>, Vec<_>) = topics.into_iter().unzip();
@@ -116,9 +151,45 @@ impl Info {
         Ok(c)
     }
 
+    /// What the bus and the bus bridge say about the topic.
+    fn print_bus(&self, values: &Value, bridge: &Value, out: &mut Out) -> Result<(), Fail> {
+        let Some(topic) = rows(values, "topics").iter().find(|t| text(t, "name") == self.name) else {
+            return Err(Fail::missing(format!("{}: no such topic on the bus", self.name)));
+        };
+        let via = mowerd::bridged(bridge, &self.name, mowerd::is_topic_direction);
+        if self.json {
+            let mut doc = topic.clone();
+            doc["bridge"] = via.cloned().unwrap_or(Value::Null);
+            return out.line(&doc.to_string());
+        }
+        out.line(&format!("Topic: {}", self.name))?;
+        out.line(&format!("Type: {}", topic.get("type").and_then(Value::as_str).unwrap_or("?")))?;
+        let age = seconds(topic, "age_s").map(|s| format!(", the last {s:.3} s ago")).unwrap_or_default();
+        out.line(&format!("Published: {}{age}", number(topic, "published")))?;
+        out.line(&format!("Retained: {}", number(topic, "retained")))?;
+        for (title, key) in [("Writers", "writers"), ("Readers", "readers")] {
+            let endpoints = rows(topic, key);
+            out.line(&format!("{title}: {}", endpoints.len()))?;
+            let lines = endpoints.iter().map(|e| vec![format!("  {}", text(e, "scope")), mowerd::qos(e)]).collect();
+            for line in mowerd::table(lines) {
+                out.line(&line)?;
+            }
+        }
+        match via {
+            Some(e) => out.line(&format!("DDS: {}", mowerd::bridge_line(e))),
+            None => out.line("DDS: not bridged"),
+        }
+    }
+
     async fn run(self, out: &mut Out) -> Result<(), Fail> {
+        let timeout = self.conn.timeout_or(DEFAULT_TIMEOUT);
         let mut c = Conn::open(&self.conn).await?;
-        let topics = listed(&mut c, self.conn.timeout_or(DEFAULT_TIMEOUT)).await?;
+        if let Some(values) = mowerd::read(&mut c, TOPICS, mowerd::named(std::slice::from_ref(&self.name)), timeout).await? {
+            let bridge = mowerd::require(&mut c, BRIDGE, json!({}), timeout).await;
+            c.close().await;
+            return self.print_bus(&values, &bridge?, out);
+        }
+        let topics = listed(&mut c, timeout).await?;
         c.close().await;
         let Some((name, ty)) = topics.into_iter().find(|(n, _)| *n == self.name) else {
             return Err(Fail::missing(format!(
@@ -271,17 +342,22 @@ struct HzCmd {
     window: usize,
     duration: Option<Duration>,
     json: bool,
+    jitter: bool,
 }
+
+/// How often the counting mode reads the counters and reports.
+const COUNT_PERIOD: Duration = Duration::from_secs(1);
 
 impl HzCmd {
     fn parse(args: Vec<String>) -> Result<Self, Fail> {
-        let mut c = HzCmd { conn: ConnOpts::default(), names: Vec::new(), window: DEFAULT_WINDOW, duration: None, json: false };
+        let mut c = HzCmd { conn: ConnOpts::default(), names: Vec::new(), window: DEFAULT_WINDOW, duration: None, json: false, jitter: false };
         let mut it = args.into_iter();
         while let Some(a) = it.next() {
             match a.as_str() {
                 "--window" | "-w" => c.window = cli::count(&a, &cli::value(&a, &mut it)?)? as usize,
                 "--duration" => c.duration = Some(cli::seconds(&a, &cli::value(&a, &mut it)?)?),
                 "--json" => c.json = true,
+                "--jitter" => c.jitter = true,
                 _ if c.conn.take(&a, &mut it)? => {}
                 _ if !a.starts_with('-') => {
                     if !c.names.contains(&a) {
@@ -297,8 +373,82 @@ impl HzCmd {
         Ok(c)
     }
 
+    /// The counting mode, from `first`, the counters' first answer: a read
+    /// every `COUNT_PERIOD`, one more at the end of `--duration`. Nothing is
+    /// subscribed to, so nothing about the topics changes.
+    async fn count(self, mut c: Conn, first: Value, out: &mut Out) -> Result<(), Fail> {
+        let timeout = self.conn.timeout_or(DEFAULT_TIMEOUT);
+        let mut stats: Vec<Counted> = self.names.iter().map(|_| Counted::new(self.window)).collect();
+        let feed = |stats: &mut Vec<Counted>, values: &Value| -> Result<(), Fail> {
+            for (name, stat) in self.names.iter().zip(stats.iter_mut()) {
+                match rows(values, "topics").iter().find(|t| text(t, "name") == name) {
+                    Some(t) => stat.on_sample(mowerd::last_published(values, t), number(t, "published")),
+                    None => return Err(subscribe_error(name, "cannot infer type")),
+                }
+            }
+            Ok(())
+        };
+        feed(&mut stats, &first)?;
+        let args = mowerd::named(&self.names);
+        let deadline = self.duration.map(|d| Instant::now() + d);
+        let mut tick = tokio::time::interval(COUNT_PERIOD);
+        tick.tick().await;
+        let several = self.names.len() > 1;
+        let mut sigint = std::pin::pin!(tokio::signal::ctrl_c());
+        let outcome: Result<(), Fail> = 'run: loop {
+            let mut last = false;
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = until(deadline) => last = true,
+                _ = &mut sigint => break 'run Ok(()),
+            }
+            let values = match mowerd::read(&mut c, TOPICS, args.clone(), timeout).await {
+                Ok(Some(values)) => values,
+                Ok(None) => break 'run Err(Fail::connect("/mowerd/topics stopped answering")),
+                Err(e) => break 'run Err(e),
+            };
+            if let Err(e) = feed(&mut stats, &values) {
+                break 'run Err(e);
+            }
+            for (i, s) in stats.iter_mut().enumerate() {
+                let Some(r) = s.report() else { continue };
+                let line = if self.json {
+                    r.json(conn::unix_now(), &self.names[i]).to_string()
+                } else if several {
+                    format!("{}  {}", self.names[i], r.line())
+                } else {
+                    r.line()
+                };
+                if let Err(e) = out.line(&line) {
+                    break 'run Err(e);
+                }
+            }
+            if last {
+                break 'run Ok(());
+            }
+        };
+        c.close().await;
+        outcome?;
+        if self.duration.is_some() {
+            let silent: Vec<&str> = self.names.iter().zip(&stats).filter(|(_, s)| s.messages == 0).map(|(n, _)| n.as_str()).collect();
+            if !silent.is_empty() {
+                return Err(Fail::timeout(format!(
+                    "no message counted on {} (a name that comes from DDS is read only while the bus has a reader of it: try --jitter)",
+                    silent.join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
     async fn run(self, out: &mut Out) -> Result<(), Fail> {
         let mut c = Conn::open(&self.conn).await?;
+        if !self.jitter {
+            let first = mowerd::read(&mut c, TOPICS, mowerd::named(&self.names), self.conn.timeout_or(DEFAULT_TIMEOUT)).await?;
+            if let Some(first) = first {
+                return self.count(c, first, out).await;
+            }
+        }
         let mut ids = Vec::new();
         for name in &self.names {
             ids.push(c.subscribe(name, None).await?);
@@ -348,6 +498,14 @@ impl HzCmd {
             }
         }
         Ok(())
+    }
+}
+
+/// Until `deadline`, or for good without one.
+async fn until(deadline: Option<Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d.into()).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -489,5 +647,70 @@ mod tests {
         assert!((r["rate_hz"].as_f64().unwrap() - 40.0).abs() < 8.0, "{text}");
         assert!(r["window"].as_u64().unwrap() >= 30, "{text}");
         assert!(r["min_s"].as_f64().unwrap() <= r["max_s"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn list_and_info_read_the_bus_where_mowerd_answers() {
+        let b = FakeBridge::loopback();
+        let list = |args: &[&str]| {
+            let (mut out, buf) = Out::buffer();
+            block_on(List::parse(with_url(args, &b.url)).unwrap().run(&mut out)).unwrap();
+            let text = buf.lock().unwrap().clone();
+            text
+        };
+        let names = list(&[]);
+        assert!(names.lines().any(|l| l == "/mower_base/telemetry"), "a name the app cannot see: {names}");
+        assert!(names.lines().any(|l| l == "/fix"), "{names}");
+        let wide = list(&["-v"]);
+        assert!(wide.lines().any(|l| l.starts_with("/fix") && l.contains("[sensor_msgs/msg/NavSatFix]") && l.contains("1 writers") && l.contains("1 readers")), "{wide}");
+        let raw: Value = serde_json::from_str(&list(&["--json"])).unwrap();
+        assert!(raw["uptime_s"].is_number() && raw["topics"].is_array(), "{raw}");
+        assert!(b.seen_ops("subscribe").is_empty());
+
+        let info = |args: &[&str]| {
+            let (mut out, buf) = Out::buffer();
+            let r = block_on(Info::parse(with_url(args, &b.url)).unwrap().run(&mut out));
+            let text = buf.lock().unwrap().clone();
+            (r, text)
+        };
+        let (r, text) = info(&["/fix"]);
+        assert_eq!(r, Ok(()));
+        for line in ["Topic: /fix", "Type: sensor_msgs/msg/NavSatFix", "Writers: 1", "  gps  R V 1", "Readers: 1", "  navsat_transform  R V 5", "DDS: to_ros: forwarded 12, skipped 3 (dds_writer)"] {
+            assert!(text.lines().any(|l| l == line), "{line:?} in {text}");
+        }
+        assert!(text.contains("Published: "), "{text}");
+        let (r, text) = info(&["/mower_base/telemetry", "--json"]);
+        assert_eq!(r, Ok(()));
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((doc["name"].as_str(), doc["bridge"].is_null()), (Some("/mower_base/telemetry"), true));
+        assert_eq!(info(&["/odmo"]).0.unwrap_err().code, crate::EXIT_MISSING);
+    }
+
+    #[test]
+    fn hz_counts_without_subscribing_where_mowerd_answers() {
+        let b = FakeBridge::loopback();
+        let (mut out, buf) = Out::buffer();
+        block_on(HzCmd::parse(with_url(&["/fix", "--duration", "1.5", "--json"], &b.url)).unwrap().run(&mut out)).unwrap();
+        let text = buf.lock().unwrap().clone();
+        let reports: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let r = reports.last().unwrap_or_else(|| panic!("no report: {text:?}"));
+        // the fake's /fix counts at 40 Hz
+        assert!((r["rate_hz"].as_f64().unwrap() - 40.0).abs() < 8.0, "{text}");
+        assert_eq!(r["topic"], "/fix");
+        assert!(b.seen_ops("subscribe").is_empty(), "no reader");
+        // each read asks for the names it wants
+        assert!(b.seen_ops("call_service").iter().all(|d| d["service"] == "/mowerd/topics" && d["args"] == json!({"names": ["/fix"]})));
+
+        // an unknown name, and one that never moves
+        let hz = |args: &[&str]| block_on(HzCmd::parse(with_url(args, &b.url)).unwrap().run(&mut Out::buffer().0));
+        assert_eq!(hz(&["/odmo", "--duration", "0.2"]).unwrap_err().code, crate::EXIT_MISSING);
+        assert_eq!(hz(&["/mower_base/telemetry", "--duration", "0.2"]).unwrap_err().code, crate::EXIT_TIMEOUT);
+
+        // --jitter subscribes, as the mode a rate alone cannot replace
+        let before = b.seen_ops("subscribe").len();
+        let (mut out, buf) = Out::buffer();
+        block_on(HzCmd::parse(with_url(&["/robot/online", "--jitter", "--duration", "1.6", "--json"], &b.url)).unwrap().run(&mut out)).unwrap();
+        assert_eq!(b.seen_ops("subscribe").len(), before + 1);
+        assert!(buf.lock().unwrap().contains("\"min_s\""), "{}", buf.lock().unwrap());
     }
 }

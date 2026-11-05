@@ -5,15 +5,23 @@ A command-line look at a running robot through ws_bridge, without ROS: no
 `ros2 topic hz` or `node list` has caused overruns, `docs/ROS_FREE_PLAN.md`).
 It speaks the rosbridge v2 subset the app speaks, `subscribe` and
 `call_service`, so it sees what the listener's policy serves and costs the
-robot what one more app client costs.
+robot what one more app client costs, or less: `topic hz` reads counters and
+subscribes to nothing.
 
 ```text
 mowerctl topic list [-v] [--json]
 mowerctl topic info NAME [--json]
 mowerctl topic echo NAME [-n N] [--throttle MS] [--field A.B] [--no-arr] [--yaml|--raw] [--timeout S]
-mowerctl topic hz NAME... [--window N] [--duration S] [--json]
+mowerctl topic hz NAME... [--jitter] [--window N] [--duration S] [--json]
 mowerctl service list [--json] [--policy FILE]
+mowerctl service info NAME [--json]
 mowerctl service call NAME [ARGS] [--yes] [--raw] [--timeout S]
+mowerctl node list [-v] [--json]
+mowerctl module list [--json]
+mowerctl bridge [NAME] [--json]
+mowerctl graph [--sample S] [--json]
+mowerctl param list NODE [PREFIX...] [--json]
+mowerctl param get NODE NAME... [--json]
 mowerctl ping [-c N] [-i S]
 mowerctl help
 
@@ -27,9 +35,9 @@ D2): the four topics the app may publish are actuators (`/app_joy_cmd`, the
 blade, the servo, the recorder command), and from a shell they would bypass
 the app's dead-man flow. `service call` reaches only what the policy allows,
 like the app, and calls a service that is not a known query (anything but
-`/rosapi/*`, `/check_nav_status`, `/coverage_progress_status` and parameter
-reads) only with `--yes`: `/system/restart`, `/zone_exec_path` and the rest
-change the robot's state.
+`/rosapi/*`, `/mowerd/*`, `/check_nav_status`, `/coverage_progress_status` and
+parameter reads) only with `--yes`: `/system/restart`, `/zone_exec_path` and
+the rest change the robot's state.
 
 ## Connecting
 
@@ -56,11 +64,46 @@ A slow link drops messages rather than delaying them: ws_bridge queues 512
 frames per client and drops the rest. `--throttle` (done by the bridge)
 keeps `echo` within a link's means.
 
-## What it sees today
+## What it sees
 
-The loopback listener applies the public listener's policy
-(`src/mower_bringup/config/ws_bridge.yaml`), so these are the app's topics
-and services:
+**On the loopback listener** (the default) with the bus backend, which is what
+`robot.launch.py` runs, ws_bridge reads `ws_bridge_loopback.yaml`
+(`--loopback-policy`, E8-2) and answers `/mowerd/{topics,services,actions,
+modules,bridge}` itself, from the bus's introspection and the process's
+registry. No DDS is touched, except as noted below.
+
+| command | where it comes from |
+|---|---|
+| `topic list` | `/mowerd/topics`: the names with a live endpoint on the bus, not only the app's |
+| `topic info` | `/mowerd/topics` and `/mowerd/bridge`: type, each writer and reader with its scope and QoS, retained, published, the age of the last one, and how it crosses to DDS |
+| `topic hz` | the `published` counter every second, timed on the bridge's clock. No reader, no frames. `--jitter` subscribes instead, for min, max and std dev |
+| `topic echo` | a subscribe, to any name the bus knows (a typo is refused and leaves nothing behind) |
+| `service list`, `info` | `/mowerd/services`: type, server, clients, calls, whether the bridge may call it |
+| `node list`, `module list` | `/mowerd/modules`: mower_rsd's supervisor (state, starts, failures, the last failure and when) and each instance's endpoints |
+| `bridge` | `/mowerd/bridge`: every name the bus bridge carries, with its direction and counters |
+| `graph` | all of it in one document; `--sample S` adds each topic's `rate_hz` from the counters over S seconds |
+| `param list`, `get` | the node's own parameter services |
+
+What costs DDS after all, and only while you use it:
+
+- **A name only DDS has:** `topic echo` (or `hz --jitter`) of a name that comes
+  from DDS makes the bus bridge open a DDS reader for as long as the bus has a
+  reader of it. `topic info` shows it as `DDS: from_ros`. Without a reader such a
+  name's counter does not move, so `hz` asks for `--jitter`.
+- **`param`:** parameter services live on r2r nodes until E9. ws_bridge makes an
+  r2r node of its own for the call (`mower_ws_bridge_params`), and it is gone
+  10 s after the last one. Only the nodes that serve parameters answer:
+  `map_manage`, `boustrophedon_coverage`, `ekf_filter_node_odom`,
+  `ekf_filter_node_map`, `navsat_transform`, and the C++ and Python nodes.
+  Anything else exits 3.
+
+Not on the bus, so not shown: names only DDS has, such as nav2's own topics, until
+E9 takes them out (E8 design §2.7). `graph_dump.py` still sees those.
+
+**Anywhere else** (`--pair`, an image from before E8-2, the r2r backend, or
+`rust_daemon:=false`) ws_bridge refuses `/mowerd/*` like any service not allowed,
+and what still works falls back to what the listener's policy allows, the app's
+topics and services:
 
 - `topic list` / `info` ask `/rosapi/topics`, which ws_bridge answers itself:
   the topics that something publishes and the policy allows, with their
@@ -68,18 +111,18 @@ and services:
 - `topic echo` / `hz` subscribe without a type, so ws_bridge looks the type
   up and refuses a name nothing publishes (exit 3) instead of making a
   reader for a typo.
-- `service list` prints what the policy allows. No call of today's bridge
-  lists services, so it reads the policy built into the binary (the
-  `ws_bridge.yaml` of the tree it was built from, which for the image's
-  binary is the image's) or `--policy FILE`; a call shows whether a server
-  is up.
+- `service list` prints what the policy allows: the policy built into the
+  binary (the `ws_bridge.yaml` of the tree it was built from, which for the
+  image's binary is the image's) or `--policy FILE`; a call shows whether a
+  server is up.
+- `service info`, `node list`, `module list`, `bridge` and `graph` exit 3 and say
+  why.
 
-E8-2 gives the loopback listener its own policy (read everything that
-exists, write what the app may) and the bridge's own answers (`/mowerd/*`):
-`topic info` then shows writers, readers, QoS and counters, `hz` reads the
-bus's `published` counters by default (no subscription; `--jitter` for
-the subscribing mode of today), and `node`, `bridge`, `graph` and
-`param list/get` arrive.
+**Writing does not widen.** The loopback policy file has no way to name a topic
+to publish or a service to call beyond parameter reads, so what the listener may
+write stays `ws_bridge.yaml`'s. **`/mowerd/*` and the wider reads exist on that
+listener alone:** it binds 127.0.0.1 only, and neither the public address nor the
+gate on 127.0.0.1:9090, where the relay agent's sessions arrive, can reach them.
 
 ## The host tools
 
@@ -136,12 +179,13 @@ What is different, and why it does not matter:
   people, `--field A.B` that field alone (array indices are numbers),
   `--no-arr` every array as `"<N items>"` (a `/map_grid` message is about
   0.6 MB of JSON).
-- `topic hz`: one line per second, the fields of `ros2 topic hz` (average
-  rate, min, max, std dev, window; receive times, intervals over the last
-  `--window`); the topic name in front with several topics; `--json` one
+- `topic hz`: one line per second, `average rate` and `window` (the messages
+  it spans, at most `--window`); with `--jitter`, the fields of `ros2 topic hz`
+  (average rate, min, max, std dev, window; receive times, intervals over the
+  last `--window`). The topic name in front with several topics; `--json` one
   JSON object per report for scripts.
-- `topic list` / `info` / `service list`: plain columns; `--json` as
-  answered.
+- `topic list` / `info` / `service list` / `info` / `node list` / `module list` /
+  `bridge` / `graph`: plain columns; `--json` as answered.
 - `service call`: the answer's `values`, pretty-printed; `--raw` the whole
   `service_response`.
 
@@ -182,7 +226,8 @@ What is different, and why it does not matter:
 
 `cargo test -p mowerctl` runs the commands against an in-process fake bridge
 (`src/fake_bridge.rs`: ws_bridge's frames and error texts, the gate's MAC
-check) as well as the units: the MAC against the Python vector, the
+check, and `/mowerd/*` from `../mower_ws_bridge/tests/golden/mowerd.json`, the
+file mower_ws_bridge's own test holds the real answers to) as well as the units: the MAC against the Python vector, the
 `ros2 topic hz` arithmetic, a message's bytes taken from the frame as they
 stand (no serde_json feature of its own: those would be unified into the
 image's other binaries).

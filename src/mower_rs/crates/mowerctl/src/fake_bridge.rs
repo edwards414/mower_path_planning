@@ -2,6 +2,11 @@
 //! texts of mower_ws_bridge's client.rs / hub.rs for a few fixed topics and
 //! services, optionally behind the pairing gate's check. It runs on its own
 //! thread and runtime, as the commands under test build theirs.
+//!
+//! `FakeBridge::loopback` also answers `/mowerd/*`, from the file the real
+//! bridge's test holds its own answers to (mower_ws_bridge's
+//! tests/golden/mowerd.json), which ties this crate's parsers to those
+//! answers. It also serves one node's parameter services.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -18,6 +23,53 @@ use crate::gate::Pairing;
 /// The /fix frame of format.rs's byte-identity test, as ws_bridge sends it.
 pub const FIX_FRAME: &str = r#"{"msg":{"altitude":null,"header":{"frame_id":"gps_link","stamp":{"nanosec":4294967,"sec":1761550000}},"latitude":25.033000012345678,"longitude":121.5654,"position_covariance":[0.000196,0.0,0.0],"status":{"service":15,"status":-1}},"op":"publish","topic":"/fix"}"#;
 
+/// What the real bridge answers (mower_ws_bridge's bus_tests.rs checks it).
+const MOWERD: &str = include_str!("../../mower_ws_bridge/tests/golden/mowerd.json");
+
+/// `/mowerd/*`'s answer to a call with `args`, at `elapsed` since the fake
+/// started; `None` for any other name. `/fix`'s counter runs at 40 Hz.
+fn mowerd_answer(service: &str, args: &Value, elapsed: f64) -> Option<Value> {
+    let golden: Value = serde_json::from_str(MOWERD).unwrap();
+    let key = service.strip_prefix("/mowerd/")?;
+    if !matches!(key, "topics" | "services" | "actions" | "modules" | "bridge") {
+        return None;
+    }
+    let mut values = golden[key].clone();
+    if let Some(names) = args.get("names").and_then(Value::as_array) {
+        let rows = values[key].as_array_mut().unwrap();
+        rows.retain(|row| names.contains(&row["name"]));
+    }
+    if key == "topics" {
+        values["uptime_s"] = json!(100.0 + elapsed);
+        for row in values["topics"].as_array_mut().unwrap() {
+            if row["name"] == "/fix" {
+                let counted = (elapsed * 40.0).floor();
+                row["published"] = json!(row["published"].as_u64().unwrap() + counted as u64);
+                row["age_s"] = json!(elapsed - counted / 40.0);
+            }
+        }
+    }
+    Some(values)
+}
+
+/// `/map_manage`'s parameter services.
+fn parameter_answer(service: &str, args: &Value) -> Option<Value> {
+    match service {
+        "/map_manage/list_parameters" => Some(json!({"result": {"names": ["free_space_resolution", "robot_radius"], "prefixes": []}})),
+        "/map_manage/get_parameters" => {
+            let values = args["names"].as_array().unwrap().iter().map(|name| {
+                if name == "robot_radius" {
+                    json!({"type": 3, "double_value": 0.35, "integer_value": 0, "string_value": ""})
+                } else {
+                    json!({"type": 0, "double_value": 0.0, "integer_value": 0, "string_value": ""})
+                }
+            });
+            Some(json!({"values": values.collect::<Vec<_>>()}))
+        }
+        _ => None,
+    }
+}
+
 pub struct FakeBridge {
     pub url: String,
     /// Every frame a client sent, parsed.
@@ -28,6 +80,17 @@ pub struct FakeBridge {
 
 impl FakeBridge {
     pub fn start(gate: Option<Pairing>) -> FakeBridge {
+        Self::spawn(gate, false)
+    }
+
+    /// The loopback listener with its policy: `/mowerd/*` and parameter reads
+    /// are answered.
+    pub fn loopback() -> FakeBridge {
+        Self::spawn(None, true)
+    }
+
+    fn spawn(gate: Option<Pairing>, loopback: bool) -> FakeBridge {
+        let started = std::time::Instant::now();
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         std_listener.set_nonblocking(true).unwrap();
         let url = format!("ws://{}", std_listener.local_addr().unwrap());
@@ -40,7 +103,7 @@ impl FakeBridge {
                 let listener = TcpListener::from_std(std_listener).unwrap();
                 loop {
                     let Ok((stream, _)) = listener.accept().await else { continue };
-                    tokio::spawn(serve(stream, gate.clone(), s.clone(), h.clone()));
+                    tokio::spawn(serve(stream, gate.clone(), s.clone(), h.clone(), loopback.then_some(started)));
                 }
             });
         });
@@ -57,6 +120,7 @@ async fn serve(
     gate: Option<Pairing>,
     seen: Arc<Mutex<Vec<Value>>>,
     headers: Arc<Mutex<Vec<Vec<(String, String)>>>>,
+    loopback: Option<std::time::Instant>,
 ) {
     let check = move |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
         let h: Vec<(String, String)> =
@@ -89,7 +153,12 @@ async fn serve(
         let mut replies: Vec<(Duration, String)> = Vec::new();
         match (doc["op"].as_str(), doc["service"].as_str().or(doc["topic"].as_str())) {
             (Some("call_service"), Some(service)) => {
+                let local = loopback.and_then(|started| {
+                    mowerd_answer(service, &doc["args"], started.elapsed().as_secs_f64()).or_else(|| parameter_answer(service, &doc["args"]))
+                });
                 let answer = match service {
+                    _ if local.is_some() => local.map(Ok),
+                    "/battery_state/list_parameters" if loopback.is_some() => Some(Err(format!("{service}: service unavailable"))),
                     "/rosapi/topics" => Some(Ok(json!({"topics": ["/fix", "/robot/online"], "types": ["sensor_msgs/msg/NavSatFix", "std_msgs/msg/Bool"]}))),
                     "/rosapi/get_time" => {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
