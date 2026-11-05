@@ -117,7 +117,7 @@ design D3: no pruning in E3). `WS_BRIDGE_BUS=false` brings the r2r door and thes
 transient-local reader on a volatile writer. The bus connects such pairs (bus/README:101-106), so a refused pair would
 change behaviour when it moves. There is none (5.5).
 
-**"unconfirmed".** nav2, twist_mux, robot_state_publisher, tf2 and rosbag2 are apt packages in the image. Their QoS is
+**"unconfirmed".** nav2, twist_mux, robot_state_publisher, tf2 and (until E5-7c) rosbag2 are apt packages in the image. Their QoS is
 upstream behaviour that this repo does not contain, and it was not checked here. For step E4, twist_mux 4.5.0,
 robot_state_publisher 3.3.4 and nav2's velocity_smoother were measured in the runtime image, offline
 (`tools/mux_oracle.py`, `tools/rsp_capture.py`, and the E4 design's `ros2 topic info -v`): those cells say

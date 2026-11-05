@@ -9,7 +9,7 @@
 
   <!-- E5-7: the recorder is mower_rsd's bag module (src/mower_rs/crates/
        mower_recorder), which reads config/ from this package's share; the
-       Python nodes and their launch files are gone. What is
+       Python nodes, their launch files, rosbag2 and gscam are gone. What is
        left: mower-check-run (check_run.py, PyYAML; python3-zstandard comes
        with the Dockerfile), which mower-data-collection.sh's smoke and check
        run, and mower-bag (cli.py, boto3), which a robot's helper from before
@@ -19,16 +19,6 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-boto3</exec_depend>
   <exec_depend>ros2run</exec_depend>
-  <!-- E5-7c removes these six. Nothing here uses them since E5-7b; they stay
-       only so that the Dockerfile's runtime apt list stays the same, and with
-       it deploy/image/apt/runtime-apt.lock and the apt layer (245 MB
-       compressed, reused while that list and the lock do not change). -->
-  <exec_depend>ros2bag</exec_depend>
-  <exec_depend>rosbag2_storage_mcap</exec_depend>
-  <exec_depend>rosbag2_compression_zstd</exec_depend>
-  <exec_depend>rosbag2_interfaces</exec_depend>
-  <exec_depend>gscam</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

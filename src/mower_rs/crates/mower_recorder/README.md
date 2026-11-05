@@ -11,8 +11,8 @@ removed in E5-7; read them, and the design's citations of them, at bf19e6c) as t
 > **E5-5:** data_collection too, by the request file
 > `~/.mower/recorder_profile.json` that `mower-data-collection.sh start` writes (and `stop` deletes). **E5-6:** the
 > front camera too (`camera_front`, GStreamer through gstreamer-rs, the request's `camera.driver: gstreamer`, which
-> the helper writes). **E5-7:** gscam's compose service went with the Python recorder; the `gscam` package stays in
-> the image, with nothing that starts it, until E5-7c.
+> the helper writes). **E5-7:** gscam's compose service went with the Python recorder. **E5-7c:** the `gscam` package
+> left the image.
 
 ## What runs
 
@@ -106,7 +106,8 @@ Python recorder also needs a compose that has the `recorder` service, and `RUST_
 - **bag_store** takes the file's `upload_policy` while it is there (said once), its own otherwise.
 - **The camera:** the module's `camera_front` (E5-6, below) when the request says `camera.driver: gstreamer`, as the
   helper's does. `gscam` (a request without the key too) leaves the camera to someone else: until E5-7 that was the
-  data-collection compose's camera-only service; now only a test's pipeline (e2-verify's side W).
+  data-collection compose's camera-only service; now only a test's pipeline (e2-verify's side W, on an image from
+  before E5-7c).
 
 ## The camera (E5-6)
 
@@ -145,7 +146,7 @@ Python recorder also needs a compose that has the `recorder` service, and `RUST_
 
 - **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces
   (branch `feat/e5-4-bus-taps`, paused).
-- **E5-7c:** rosbag2 and gscam leave the runtime apt lock.
+- **E5-7c:** rosbag2 and gscam leave the runtime apt lock: done.
 - **E5-7:** the default and the removal of the Python recorder (and of gscam's compose service): done. `mower_bag`
   (`mower_recorder_core::cli`) is mower-bag's `upload` and `verify`, for `mower-data-collection.sh`. The request's
   `camera.driver: gscam` (nothing starts here, the camera is someone else's) is left for e2-verify's side W.
