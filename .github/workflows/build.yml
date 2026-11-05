@@ -103,9 +103,7 @@ jobs:
         working-directory: src/mower_recorder
         run: |
           python -m pytest -q \
-            test/test_camera_extrinsics.py \
-            test/test_record_profile.py \
-            test/test_video_record.py
+            test/test_camera_extrinsics.py
 
   coverage-core-tests:
     # The coverage planner library (safe-map filter, path validator, A*
@@ -192,7 +190,7 @@ jobs:
         # E5-6: the image builds mower_rsd with the feature `camera`
         # (src/mower_rs/CMakeLists.txt); the workspace test above builds
         # without it, so no other job needs GStreamer's development files.
-        # The packages are the ones the robot image has through gscam
+        # The packages are the ones src/mower_rs/package.xml names
         # (videotestsrc, appsink and videorate in base, jpegenc in good).
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -882,6 +880,37 @@ jobs:
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl"
             test "$(command -v mowerctl)" = /usr/local/bin/mowerctl
             mowerctl help >/dev/null
+            # mower-bag upload and verify, for mower-data-collection.sh (crates/mower_recorder_core)
+            test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_bag"
+            test "$(command -v mower_bag)" = /usr/local/bin/mower_bag
+            mower_bag --help >/dev/null
+            # E5-7: the recorder is the bag module. Its profiles stay in the package,
+            # the Python nodes and their launch files do not
+            share="$(ros2 pkg prefix mower_recorder)/share/mower_recorder"
+            for f in record_topics data_collection data_collection_session qos_overrides camera_front_extrinsics; do
+              test -s "$share/config/$f.yaml"
+            done
+            test ! -e "$share/launch"
+            for n in recorder_manager_node bag_store_node graph_snapshot_node; do
+              test ! -e "$(ros2 pkg prefix mower_recorder)/lib/mower_recorder/$n"
+            done
+            # a stale build/lib in the cache mount would ship these (Dockerfile)
+            for m in recorder_manager_node bag_store_node graph_snapshot_node record_profile video_record camera_launch; do
+              if python3 -c "import mower_recorder.$m" 2>/dev/null; then echo "stale mower_recorder.$m in the image"; exit 1; fi
+            done
+            # what a robot host file from before E5-7 calls in the image, as OTA does
+            # not update those (mower-data-collection.sh upload / verify), and what
+            # the helper calls for smoke and check
+            ros2 run mower_recorder mower-bag --help >/dev/null
+            ros2 run mower_recorder mower-check-run --help >/dev/null
+            # and the commands its other verbs run in lawan_node
+            ros2 topic --help >/dev/null
+            ros2 service --help >/dev/null
+            # the module camera: its pipeline elements come from these plugins (E5-6)
+            gst_dir="/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0"
+            for f in libgstvideo4linux2 libgstvideorate libgstjpeg libgstapp; do
+              test -f "$gst_dir/$f.so" || { echo "missing GStreamer plugin: $f"; exit 1; }
+            done
             test -s "$(ros2 pkg prefix mower_bringup)/share/mower_bringup/config/gps.yaml"
             ros2 launch mower_bringup mower.launch.py --show-args >/tmp/mower_launch_args.txt
             ros2 launch mower_bringup robot.launch.py --show-args >/tmp/robot_launch_args.txt

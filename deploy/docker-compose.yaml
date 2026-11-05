@@ -45,9 +45,7 @@ services:
       - zone_record_dir:=/home/mower/.mower/zone_record
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
-      - record:=false
-      # The recorder's robot id and R2 file, as the recorder service below
-      # gets them: only RUST_RECORDER's bag module reads them here.
+      # The recorder's robot id and R2 file, for RUST_RECORDER's bag module.
       - robot_id:=${MOWER_ROBOT_ID:-mower}
       - r2_env_file:=/home/mower/.mower/r2.env
       # u-blox ZED-F9P driver (mower_rs mower_gps) in this container ->
@@ -98,12 +96,18 @@ services:
       # instead of robot_state_publisher, on the same URDF. On by default
       # since E4-5; RUST_STATIC_TF=false in .env is the roll-back.
       - rust_static_tf:=${RUST_STATIC_TF:-true}
-      # RUST_RECORDER: mower_rsd's bag module (mower_recorder) instead of the
-      # Python recorder of the recorder service below, which then sleeps.
-      # Not RUST_RECORD, the zone path recorder. Off until the owner's robot
-      # checks (E5-3b records the default profile; E5-5 data collection, by
-      # mower-data-collection.sh's request file).
-      - rust_recorder:=${RUST_RECORDER:-false}
+      # RUST_RECORDER: mower_rsd's bag module (mower_recorder), the idle topic
+      # recorder behind the app's 錄話題 button and the 錄製 / Bag page, with
+      # /mower_recorder/start|stop, /status and /bags. Not RUST_RECORD, the
+      # zone path recorder. Nothing is written until someone presses the
+      # button; while it records the rear light breathes red and MediaMTX
+      # records the front camera into <run>/video/ (fMP4, the H.264 stream as
+      # is, ~1 GB/h at CAMERA_BPS 2000000). A run stops by itself under 2 GB
+      # free disk. Data collection goes through it too, by
+      # mower-data-collection.sh's request file. There is no other recorder
+      # since E5-7: RUST_RECORDER=false in .env means none, and rolling back
+      # to the Python one means an image from before it (mower-update.sh --tag).
+      - rust_recorder:=${RUST_RECORDER:-true}
       # RUST_DAEMON puts every module enabled above into one
       # mower_rsd process (one DDS participant); it changes no
       # behaviour. Default on; RUST_DAEMON=false runs one binary each.
@@ -178,56 +182,7 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
       # runOnDemand's demand file for host/mower-camera.sh (tmpfs: none after a boot)
       - /run/mower-camera:/run/mower-camera
-      # The `recorder` service has MediaMTX record the front stream into
-      # <run>/video/ (mower_recorder video_record.py): same path as in that
-      # container, so the recordPath it sends is valid here as well.
+      # The bag module has MediaMTX record the front stream into <run>/video/
+      # (mower_recorder_core::mediamtx): same path as in lawan_node, so the
+      # recordPath it sends is valid here as well.
       - ${MOWER_STATE_DIR:-/home/cat/.mower}/bags:/home/mower/.mower/bags
-
-  # Idle topic recorder behind the app's 錄話題 button: mower_recorder's
-  # always-on profile (record_topics.yaml) with /mower_recorder/start|stop,
-  # /status and /bags (the app's 錄製 / Bag page). autostart:=false, so
-  # nothing is written until someone presses the button; while it records the
-  # rear light breathes red and MediaMTX records the front camera into
-  # <run>/video/ (fMP4, the H.264 stream as is, ~1 GB/h at CAMERA_BPS
-  # 2000000). A run stops by itself under 2 GB free disk. lawan_node keeps record:=false, so this is the
-  # only owner of /mower_recorder/* -- except during a data-collection run:
-  # host/mower-data-collection.sh stops this service first and starts it
-  # again afterwards. Same image as lawan_node, so mower-update.sh updates it.
-  # RUST_RECORDER=true (_truthy's spellings, robot.launch.py) puts mower_rsd's
-  # bag module in its place: this container then only sleeps, so that
-  # /mower_recorder/* has one owner, and RUST_RECORDER=false brings it back.
-  recorder:
-    image: ${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}:${IMAGE_TAG:-stable}
-    pull_policy: missing
-    restart: unless-stopped
-    # `ros2 launch` shuts its nodes down only on SIGINT; on docker's default
-    # SIGTERM a running recording would lose its unfinalized mcap.
-    stop_signal: SIGINT
-    stop_grace_period: 60s
-    command:
-      - bash
-      - -c
-      - 'read -r on <<< "$${RUST_RECORDER:-}"; case "$$on" in [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) exec sleep infinity ;; esac; exec "$$@"'
-      - recorder
-      - ros2
-      - launch
-      - mower_recorder
-      - record.launch.py
-      - robot_id:=${MOWER_ROBOT_ID:-mower}
-      - output_root:=/home/mower/.mower/bags
-      - autostart:=false
-      - r2_env_file:=/home/mower/.mower/r2.env
-      - video_api_url:=http://127.0.0.1:9997
-    environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-17}
-      - MOWER_STATE_DIR=/home/mower/.mower
-      - MOWER_ROBOT_ID=${MOWER_ROBOT_ID:-}
-      # Never flash the STM32 from this container (no /dev/stmcom here).
-      - MOWER_FIRMWARE_SYNC=0
-      # read by the command above: true = the bag module records instead
-      - RUST_RECORDER=${RUST_RECORDER:-false}
-    network_mode: host
-    ipc: host
-    pid: host
-    volumes:
-      - ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower

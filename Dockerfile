@@ -115,8 +115,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 # Do not use --symlink-install here, otherwise the runtime stage will
 # inherit broken links after copying only the install tree.
 # The build tree is a cache and setuptools never prunes build/lib, so a module
-# deleted from mower_mission would still be copied into install/: its Python
-# build dir is rebuilt from scratch (cheap). build/mower_coverage_core and
+# deleted from mower_mission or mower_recorder would still be copied into
+# install/: their Python build dirs are rebuilt from scratch (cheap).
+# build/mower_coverage_core and
 # cargo-target/{release,wheels} are leftovers of the former PyO3/maturin build
 # (mower_rs builds in cargo-target/mower_rs); nothing reads them any more.
 ENV CCACHE_DIR=/root/.ccache \
@@ -128,6 +129,7 @@ RUN --mount=type=cache,target=${WORKSPACE}/build \
     --mount=type=cache,target=/usr/local/cargo/git \
     source /opt/ros/${ROS_DISTRO}/setup.bash \
     && rm -rf ${WORKSPACE}/build/mower_mission/build \
+        ${WORKSPACE}/build/mower_recorder/build \
         ${WORKSPACE}/build/mower_coverage_core \
         ${CARGO_TARGET_DIR}/release ${CARGO_TARGET_DIR}/wheels \
     && colcon build --parallel-workers 4 \
@@ -359,6 +361,9 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/firmware-sync /u
 # The command-line tool (src/mower_rs/crates/mowerctl) on the PATH, for
 # `docker exec mower-lawan_node-1 mowerctl ...`; nothing starts it.
 RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl /usr/local/bin/mowerctl
+# mower-bag's upload and verify (crates/mower_recorder_core), which
+# host/mower-data-collection.sh runs.
+RUN ln -s ${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_bag /usr/local/bin/mower_bag
 # The Rust port of mower_flash.py (src/mower_rs/crates/mower_flash), next to
 # it; firmware-sync runs it by default since E6-5 (MOWER_FIRMWARE_SYNC=python
 # runs the Python one).

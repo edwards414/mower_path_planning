@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Vectors for the extrinsics and data_collection metadata port, written by the
 real Python: mower_recorder's camera_extrinsics.py and record_profile.py as the
-robot image installs them (Python 3.12, PyYAML 6.0.1, xacro).
+robot image installs them (Python 3.12, PyYAML 6.0.1, xacro). E5-7 removed
+record_profile.py: regenerate with an image from before it (bf19e6c).
 
     docker run --rm --network none -v "$PWD/src/mower_rs/crates/mower_recorder_core":/x -v "$PWD/deploy/test/golden/recorder":/golden:ro \\
       --entrypoint bash mower_path_planning:ros-free-test -c \\

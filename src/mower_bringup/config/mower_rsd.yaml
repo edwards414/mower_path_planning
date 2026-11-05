@@ -204,18 +204,16 @@ pid_autotune:
 # No ROS parameters; both are configured with --module-args from
 # rosbridge.launch.py (address, port, policy file, gate and rosbridge URLs).
 
-# --- bag (rust_recorder, off by default) -------------------------------------
+# --- bag (rust_recorder, on by default since E5-7) ---------------------------
 # mower_recorder's three nodes (E5; module bag, crates/mower_recorder), with
-# the values record.launch.py passes them and deploy/docker-compose.yaml's
-# recorder service sets (autostart false, MediaMTX on loopback). The per-robot
-# ones (robot_id, output_root, r2_env_file, the profile file in
-# mower_recorder's share, git_repo_dir) robot.launch.py adds for these nodes
-# from its arguments. RUST_RECORDER stays off until the owner's robot checks
-# (E5-3b records the default profile from DDS).
+# the values the Python recorder had on the robot (autostart false, MediaMTX on
+# loopback). The per-robot ones (robot_id, output_root, r2_env_file, the
+# profile file in mower_recorder's share, git_repo_dir) robot.launch.py adds
+# for these nodes from its arguments. It records the default profile from DDS.
 graph_snapshot:
   ros__parameters:
     period_s: 2.0
-    # without the leading slash, as record.launch.py has them: the fault
+    # without the leading slash, as the Python recorder had them: the fault
     # never fires (docs/BUS_TOPICS.md 5.8 #9), kept as it is
     watch_nodes: [map_manage, boustrophedon_coverage]
     fault_topic: /mower_recorder/fault

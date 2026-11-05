@@ -33,8 +33,10 @@ endif()
 # mower_flash is the STM32 flasher (crates/mower_flash, a port of
 # firmware/tools/mower_flash.py); utils/firmware-sync does not call it yet.
 # mower_recorder is the bag module's three nodes on their own (E5,
-# rust_recorder with rust_daemon:=false; mission.launch.py).
-set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl mower_flash mower_recorder)
+# rust_recorder with rust_daemon:=false; mission.launch.py). mower_bag is
+# mower-bag's upload and verify (crates/mower_recorder_core), which
+# deploy/host/mower-data-collection.sh runs.
+set(MOWER_RS_BINARIES robot_status velocity_command_guard mower_adapter mower_imu mower_ws_bridge mower_record mower_nav mower_battery mower_pid_autotune mower_map mower_coverage mower_agent mower_gps mower_base mower_rsd mower_localize mowerctl mower_flash mower_recorder mower_bag)
 
 add_custom_target(mower_rs_cargo ALL
   COMMAND ${CMAKE_COMMAND} -E env
@@ -43,8 +45,8 @@ add_custom_target(mower_rs_cargo ALL
           --unset=MAKEFLAGS --unset=MFLAGS
           ${CARGO_EXECUTABLE} build --release --locked
           # E5-6: the bag module's camera captures with GStreamer (its
-          # development files come with gscam's dependencies, in the
-          # builder and in the runtime image's lock)
+          # development files are this package's build_depends, in the
+          # builder; the runtime image has the libraries and the plugins)
           --features mower_rsd/camera
           --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
   WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

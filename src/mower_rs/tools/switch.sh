@@ -10,8 +10,9 @@
 # A switch is absolute, never cumulative: .env is rebuilt from the pre-test
 # backup each time and NAV_COMPOSITION, RUST_DAEMON, RUST_BASE, RUST_LOCALIZE,
 # RUST_NAV_CORE, RUST_MUX, RUST_STATIC_TF, RUST_RECORDER and WS_BRIDGE_BUS are
-# always written (the last seven false unless given as KEY=VAL), so a flag
-# from an earlier call cannot stick.
+# always written (the last seven false unless given as KEY=VAL, except
+# RUST_RECORDER: true, compose's default since E5-7), so a flag from an
+# earlier call cannot stick.
 # The branch compose is required: main's may not pass them through and compose
 # silently ignores .env keys it does not reference. After `up` the container's
 # launch arguments are checked and the script waits until the expected base
@@ -35,10 +36,10 @@
 # must run exactly when it does not (checked like the drivers).
 #
 # RUST_RECORDER=true (E5: mower_rsd's bag module, or the mower_recorder
-# binary with RUST_DAEMON=false, instead of the Python recorder, whose
-# container then sleeps): once up, the module must run and no Python
-# recorder_manager may; `up` recreates the recorder container too. For the
-# owner's supervised recording test (E5-3b) before it becomes the default.
+# binary with RUST_DAEMON=false; the default, and the only recorder since
+# E5-7): once up, the module must run and no Python recorder_manager may. A
+# compose from before E5-7 still has the recorder service, whose command reads
+# RUST_RECORDER (it sleeps when on): `up` recreates that container too.
 #
 # WS_BRIDGE_BUS=true (E3: mower_ws_bridge on mower_bus, compose's default
 # since E3.2) needs RUST_BRIDGE=true in the backup .env, or there is no Rust
@@ -115,9 +116,13 @@ refuse_broken() {
 }
 
 compose_up() {
-  local out
-  # the recorder service too: its command reads RUST_RECORDER
-  if ! out=$(sudo docker compose up -d lawan_node recorder 2>&1); then
+  local out services=(lawan_node)
+  # a compose from before E5-7 (restore, a robot still on it): the recorder
+  # service too, its command reads RUST_RECORDER
+  if sudo docker compose config --services 2>/dev/null | grep -qx recorder; then
+    services+=(recorder)
+  fi
+  if ! out=$(sudo docker compose up -d "${services[@]}" 2>&1); then
     echo "$out" >&2
     die "docker compose up failed"
   fi
@@ -224,8 +229,8 @@ proc_problems() {
     ! rsd static_tf || echo "mower_rsd runs the static_tf module"
   fi
   # E5: RUST_RECORDER runs the bag module (in mower_rsd, or the mower_recorder
-  # binary) and the recorder container sleeps; off, neither runs here and the
-  # Python recorder, outside lawan_node, is not checked
+  # binary); off, neither runs. A compose from before E5-7 has the recorder
+  # container, which must sleep with it on
   if truthy "$rec"; then
     if truthy "$daemon"; then rsd bag || echo "no mower_rsd running the bag module"
     else [ "$(n mower_recorder)" -ge 1 ] || echo "mower_recorder not running"; fi
@@ -359,7 +364,7 @@ grep -qE 'image: \$\{IMAGE_REPO:-[^}]+\}:\$\{IMAGE_TAG' "$CF" ||
 
 declare -A SET=([IMAGE_TAG]=$TAG [NAV_COMPOSITION]=$NC [RUST_DAEMON]=$RD
                 [RUST_BASE]=false [RUST_LOCALIZE]=false [RUST_NAV_CORE]=false [RUST_MUX]=false
-                [RUST_STATIC_TF]=false [RUST_RECORDER]=false [WS_BRIDGE_BUS]=false)
+                [RUST_STATIC_TF]=false [RUST_RECORDER]=true [WS_BRIDGE_BUS]=false)
 ORDER=(IMAGE_TAG NAV_COMPOSITION RUST_DAEMON RUST_BASE RUST_LOCALIZE RUST_NAV_CORE RUST_MUX RUST_STATIC_TF RUST_RECORDER
        WS_BRIDGE_BUS)
 for kv in "$@"; do

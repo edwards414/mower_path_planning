@@ -20,7 +20,7 @@ runtime 的 apt 清單由 `rosdep keys --dependency-types=exec` 對 `src/` 全�
    - dpkg `path-exclude` 掉 doc / man / info / locale（保留 copyright）
    - 裝完後 `dpkg --purge --force-depends`：Mesa 軟體 GL + LLVM（`libGL.so` 由 glvnd 保留；headless 不會 render）、ruby（gz-tools-vendor 的 CLI）、sanitizer libs、`libgcc/libstdc++-13-dev`、`libboost-dev`、`proj-data`
    - 刪 `/usr/include`、`/opt/ros/jazzy/include`、cmake 資料與 binary、`*.a`
-4. 故意留著：**VTK**（`python3-opencv` 的 `cv2.so` link 到 `libopencv_viz` → 拿掉就 `import cv2` 失敗；mission 的影像遮罩匯入要用）、**boto3/botocore 97 MB**（recorder 上傳 R2）。
+4. 故意留著：**VTK**（`python3-opencv` 的 `cv2.so` link 到 `libopencv_viz` → 拿掉就 `import cv2` 失敗；mission 的影像遮罩匯入要用）、**boto3/botocore 97 MB**（Python `mower-bag`，機器人 host 上 E5-7 之前的 `mower-data-collection.sh` 還在呼叫；recorder 本身的 R2 上傳在 E5-3a 之後是 Rust）。
 
 ## 怎麼驗證的（改 Dockerfile 後照做）
 

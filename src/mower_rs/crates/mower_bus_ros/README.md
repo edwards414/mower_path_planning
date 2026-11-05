@@ -5,7 +5,7 @@ The bridge between the in-process bus ([`mower_bus`](../mower_bus/README.md)) an
 
 - **Why:** E2 moves each `mower_rsd` module's IO from r2r to the bus, one module at a time. Until the last ROS consumer is
   gone, every topic, service and action that straddles the bus/DDS boundary has to be forwarded. The consumers are nav2 (until
-  E9), twist_mux and robot_state_publisher (E4), the Python recorder (E5) and the app's ws_bridge (E3).
+  E9), twist_mux and robot_state_publisher (E4), the recorder's DDS sources (E5-4, E9) and the app's ws_bridge (E3).
   [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 5.3 lists which names, in which direction, until when.
 - **What it is:** a library. A module gives a `RosBridge` its own r2r node and its bus `Scope`, declares the names, and
   runs it until shutdown. Nothing uses it before E2, so robot behaviour does not change.

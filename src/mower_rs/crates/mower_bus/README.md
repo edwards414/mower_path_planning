@@ -12,8 +12,8 @@ message bus that replaces DDS *between the modules of one process*.
   - a `Clock` that can be driven by hand for tests and replay.
 - **What it depends on:** no r2r and no ROS, so it builds and tests with a plain `cargo test` on any
   host.
-- **Bridging to ROS:** nodes outside the process (nav2, twist_mux, robot_state_publisher, the
-  Python recorder, rviz) keep talking DDS through `mower_bus_ros` until step E9 removes them.
+- **Bridging to ROS:** nodes outside the process (nav2, twist_mux, robot_state_publisher, rviz)
+  keep talking DDS through `mower_bus_ros` until step E9 removes them.
 
 Later steps build on it:
 

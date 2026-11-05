@@ -245,7 +245,7 @@ for path in [] if a.no_real else sorted(glob.glob('/golden/F*/MW-*/**/*.yaml', r
     text = open(path, encoding='utf-8').read()
     if name == 'run_metadata.yaml' or name == 'extrinsics.yaml':
         # yaml.safe_dump(meta, f, allow_unicode=True, sort_keys=False);
-        # calib/extrinsics.yaml has a comment line in front (record_profile.py)
+        # calib/extrinsics.yaml has a comment line in front (record_profile.py at bf19e6c)
         body = text.split('\n', 1)[1] if text.startswith('#') else text
         combo = 'yu'
     elif '/params/' in path:

@@ -2,9 +2,9 @@
 
     /path/to/venv/bin/python -m pytest src/mower_recorder/test -q
 
-Only modules that do not import rclpy are tested here (record_profile,
-camera_extrinsics, run_manifest, check_run, cli upload helpers). Needs
-pytest, PyYAML, mcap, mcap-ros2-support, zstandard, moto, boto3, Pillow.
+The package has no ROS nodes since E5-7 (camera_extrinsics, run_manifest,
+check_run, cli). Needs pytest, PyYAML, mcap, mcap-ros2-support, zstandard,
+moto, boto3, Pillow.
 """
 import os
 import sys

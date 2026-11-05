@@ -111,7 +111,6 @@ exec setpriv --reuid=1000 --regid=1000 --init-groups \
   zone_record_dir:=$STATE/zone_record \
   sites_dir:=$STATE/sites \
   output_root:=$STATE/bags \
-  record:=false \
   enable_gps:="${GPS:-true}" \
   nav_composition:="${NAV_COMPOSITION:-true}" \
   rust_status:="${RUST_STATUS:-true}" \

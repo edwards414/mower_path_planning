@@ -67,8 +67,9 @@ What the app gets:
 | firmware "up to date" | the board reports the image's bundled firmware |
 | front camera | MediaMTX with the repo's `mediamtx.yml`: a `testsrc2` pattern at `:8889/front/whep` |
 
-The recorder page (`/mower_recorder/*`) stays empty: the recorder service is
-not part of the sim.
+The recorder page (`/mower_recorder/*`) is mower_rsd's bag module, as on the
+robot (`rust_recorder`, on by default since E5-7): runs go to the sim's state
+volume, and nothing is uploaded (no `r2.env`).
 
 ## Faults and conditions
 

@@ -25,7 +25,6 @@ REAL_CONTROLLER_LAUNCH = (
 LOCAL_COMPOSE = SRC_DIR.parent / 'docker-compose.yaml'
 DEPLOY_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.yaml'
 DATA_COLLECTION_HELPER = SRC_DIR.parent / 'deploy/host/mower-data-collection.sh'
-DATA_COLLECTION_COMPOSE = SRC_DIR.parent / 'deploy/docker-compose.data-collection.yaml'
 DEPLOY_INSTALL = SRC_DIR.parent / 'deploy/install.sh'
 ROBOT_LAUNCH = SRC_DIR / 'mower_bringup/launch/robot.launch.py'
 DOCKERFILE = SRC_DIR.parent / 'Dockerfile'
@@ -677,36 +676,24 @@ def test_rust_mux_replaces_twist_mux_only_inside_the_daemon():
             assert cpp is not rust, (flag, daemon)
 
 
-RECORD_LAUNCH = SRC_DIR / 'mower_recorder/launch/record.launch.py'
-
-
-def _compose_service(compose, name):
-    """One service's block of a compose file, as text."""
-    return compose.split(f'\n  {name}:\n', 1)[1].split('\n\n  ', 1)[0]
-
-
-def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
-        tmp_path):
-    """rust_recorder:=true (compose RUST_RECORDER, default false; E5-3):
+def test_rust_recorder_is_the_recorder_and_on_by_default(tmp_path):
+    """rust_recorder:=true (compose RUST_RECORDER, default true):
     mower_rsd's bag module (crates/mower_recorder: recorder_manager,
-    bag_store, graph_snapshot) instead of the Python recorder, whose
-    container then sleeps, so that /mower_recorder/* has one owner; with
-    rust_daemon:=false the mower_recorder binary. Its parameters are what
-    record.launch.py gives the Python nodes. Off by default everywhere: the
-    module waits for the owner's robot checks (E5-3b), and with the switch off nothing
-    runs that did not before and the recorder service runs what it ran."""
+    bag_store, graph_snapshot); with rust_daemon:=false the mower_recorder
+    binary. E5-7 removed the Python recorder: with the switch off there is
+    none. Its parameters are the ones the Python recorder ran with on the
+    robot (its record.launch.py at bf19e6c and compose's recorder service)."""
     robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
     mission = MISSION_LAUNCH.read_text(encoding='utf-8')
     compose = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    record = RECORD_LAUNCH.read_text(encoding='utf-8')
 
-    # declared off in both launch files, threaded robot -> mission
+    # declared on in both launch files, threaded robot -> mission
     for text in (robot, mission):
         argument = re.search(
             r"DeclareLaunchArgument\(\s*'rust_recorder'(.*?)\n\s*\)", text,
             flags=re.DOTALL)
         assert argument is not None
-        assert "default_value='false'" in argument.group(1)
+        assert "default_value='true'" in argument.group(1)
     mission_include = robot.split("'mission.launch.py')", 1)[1].split(
         '}.items()', 1)[0]
     assert "'rust_recorder': rust_recorder," in mission_include
@@ -724,9 +711,10 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     # each runs): mower_rsd's tests/module_table.rs and tests/source_rules.rs
     assert '"crates/mower_recorder"' in MOWER_RS_CARGO.read_text(
         encoding='utf-8')
-    assert 'mower_recorder' in re.search(
+    binaries = re.search(
         r'^set\(MOWER_RS_BINARIES (.*)\)$',
         MOWER_RS_CMAKE.read_text(encoding='utf-8'), re.M).group(1).split()
+    assert 'mower_recorder' in binaries
     # the binary: switch on and daemon off, never `name=` (it would rename
     # all three nodes)
     node = mission.split('mower_recorder_rs = Node(', 1)[1].split(
@@ -736,29 +724,25 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     assert 'name=' not in node
     assert 'mower_recorder_rs,' in mission
 
-    # record.launch.py's values: mower_rsd.yaml for the module, the binary's
-    # dict for rust_daemon:=false
+    # the Python recorder's values: mower_rsd.yaml for the module, the
+    # binary's dict for rust_daemon:=false
     import yaml
     sections = yaml.safe_load(MOWER_RSD_PARAMS.read_text(encoding='utf-8'))
     graph = sections['graph_snapshot']['ros__parameters']
     manager = sections['recorder_manager']['ros__parameters']
     store = sections['bag_store']['ros__parameters']
-    watch = ast.literal_eval(
-        re.search(r'watch_nodes = (\[.*?\])', record).group(1))
-    dumps = ast.literal_eval(re.search(
-        r"'params_dump_nodes': (\[.*?\]),", record, re.S).group(1))
+    watch = ['map_manage', 'boustrophedon_coverage']
     assert graph == {'period_s': 2.0, 'watch_nodes': watch,
                      'fault_topic': '/mower_recorder/fault'}
-    assert watch == ['map_manage', 'boustrophedon_coverage']
-    assert manager['params_dump_nodes'] == dumps
+    assert manager['params_dump_nodes'] == ['/boustrophedon_coverage',
+                                            '/map_manage']
     assert manager['fault_topic'] == '/mower_recorder/fault'
     assert manager['gps_topic'] == '/fix'
     assert manager['min_free_mb'] == 2048
+    assert manager['autostart'] is False
+    assert manager['video_api_url'] == 'http://127.0.0.1:9997'
     assert store == {'upload_policy': 'wifi_or_dock',
                      'wifi_interfaces': ['wlan0'], 'dock_topic': ''}
-    recorder = _compose_service(compose, 'recorder')
-    assert '- autostart:=false' in recorder and manager['autostart'] is False
-    assert f"- video_api_url:={manager['video_api_url']}" in recorder
     for text in ("'watch_nodes': ['map_manage', 'boustrophedon_coverage'],",
                  "'params_dump_nodes': ['/boustrophedon_coverage', "
                  "'/map_manage'],",
@@ -768,91 +752,62 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
         assert text in node, text
 
     # compose: lawan_node gets the switch and the recorder's robot id and R2
-    # file; the recorder service runs today's launch unless it is on
+    # file; no recorder service any more
+    services = yaml.safe_load(compose)['services']
+    assert 'recorder' not in services
+    assert 'mower_recorder' not in str(services['mediamtx'].get('command'))
     lawan = compose.split('  mediamtx:', 1)[0]
-    assert '- rust_recorder:=${RUST_RECORDER:-false}' in lawan
+    assert '- rust_recorder:=${RUST_RECORDER:-true}' in lawan
     assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in lawan
-    assert '- robot_id:=${MOWER_ROBOT_ID:-mower}' in recorder
     assert '- r2_env_file:=/home/mower/.mower/r2.env' in lawan
-    assert '- r2_env_file:=/home/mower/.mower/r2.env' in recorder
-    assert '- RUST_RECORDER=${RUST_RECORDER:-false}' in recorder
-    assert re.search(r'^RUST_RECORDER=false$',
+    assert re.search(r'^RUST_RECORDER=true$',
                      ENV_EXAMPLE.read_text(encoding='utf-8'), re.M)
-    service = yaml.safe_load(compose)['services']['recorder']
-    command = service['command']
-    assert command[:2] == ['bash', '-c'] and command[3] == 'recorder'
-    assert command[4:] == [
-        'ros2', 'launch', 'mower_recorder', 'record.launch.py',
-        'robot_id:=${MOWER_ROBOT_ID:-mower}',
-        'output_root:=/home/mower/.mower/bags', 'autostart:=false',
-        'r2_env_file:=/home/mower/.mower/r2.env',
-        'video_api_url:=http://127.0.0.1:9997'], 'the launch as before'
-    assert service['stop_signal'] == 'SIGINT'
     assert 'def _truthy(value):\n    return value.strip().lower() in ' \
         "{'true', '1', 'yes', 'on'}" in robot
 
     def truthy(value):
         return value.strip().lower() in {'true', '1', 'yes', 'on'}
 
-    # the script as the container runs it: compose's $$ is a $; it sleeps
-    # exactly when robot.launch.py puts the module in the set
-    import shutil
-    import subprocess
-    script = command[2].replace('$$', '$')
-    assert '${' not in command[2].replace('$${', '')
-    stub = tmp_path / 'bin'
-    stub.mkdir()
-    (stub / 'sleep').write_text('#!/bin/sh\necho SLEPT "$@"\n')
-    (stub / 'sleep').chmod(0o755)
-    bash = shutil.which('bash')
     spellings = ('true', 'True', ' on', 'ON', 'yes', '1', 'false', 'FALSE',
                  '0', 'off', 'no', 'maybe', '')
-    for value in spellings:
-        out = subprocess.run(
-            [bash, '-c', script, 'recorder', 'echo', 'LAUNCHED'],
-            env={'PATH': f'{stub}:/usr/bin:/bin', 'RUST_RECORDER': value},
-            capture_output=True, text=True, check=True).stdout.strip()
-        assert out == ('SLEPT infinity' if truthy(value) else 'LAUNCHED'), \
-            repr(value)
 
-    # mower-data-collection.sh (E5-5): with it on, start writes the bag
-    # module's request file and starts only the camera, stop deletes the
-    # file; the commands and their output are the same either way (here the
-    # root check, first)
+    # mower-data-collection.sh: start writes the bag module's request file,
+    # stop deletes it; no container of its own, its commands run in lawan_node
+    # (here the root check, first)
+    import shutil
+    import subprocess
+    bash = shutil.which('bash')
     helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
     start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
     stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
     assert start.startswith('    need_root\n')
-    module, rest = start.split('    if module_camera; then\n', 1)[1].split(
-        '    elif rust_recorder_on; then\n', 1)
-    rust, python = rest.split('    else\n', 1)
-    # E5-6: the module's camera (CAMERA_DRIVER=gstreamer): the request file
-    # alone; E5-5's gscam: the request file and the camera-only service
-    assert 'write_request' in module and 'compose' not in module
-    assert rust.index('write_request') < rust.index('compose up -d "$svc"')
-    assert 'stack stop recorder' in python and 'stack' not in rust
-    assert stop.index('compose down') < stop.index('rm -f "$request"')
-    assert 'module_camera || compose down' in stop
+    assert start.index('if ! rust_recorder_on') < start.index(
+        'systemctl stop mower-update.timer') < start.index(
+        'systemctl stop mower-camera.service') < start.index('write_request')
+    assert 'stack ' not in start and 'compose up -d' not in start
+    assert 'recorder' not in stop.replace('/mower_recorder/stop', '')
+    assert stop.index('rm -f "$request"') < stop.index(
+        'systemctl start mower-camera.service')
+    assert 'data-collection.yaml' not in helper
     # in lawan_node, ROS sourced by hand: its entrypoint syncs the firmware
-    lawan_ros = helper.split('if module_camera; then\n  #', 1)[1].split('\nfi\n', 1)[0]
+    lawan_ros = helper.split('\nros() {\n', 1)[1].split('\n}\n', 1)[0]
     assert 'stack exec -T lawan_node bash -c' in lawan_ros
     assert 'docker-entrypoint' not in lawan_ros
-    assert 'svc=data_collection_camera\n  profile_args=(--profile camera_only)' \
-        in helper
-    dc_compose = yaml.safe_load(DATA_COLLECTION_COMPOSE.read_text(
-        encoding='utf-8'))['services']
-    camera = dc_compose['data_collection_camera']
-    assert camera['profiles'] == ['camera_only']
-    assert camera['command'][:4] == ['ros2', 'launch', 'mower_recorder',
-                                     'front_camera.launch.py']
-    assert 'profiles' not in dc_compose['data_collection']
-    for key in ('environment', 'volumes', 'devices', 'network_mode'):
-        assert camera[key] == dc_compose['data_collection'][key], key
+    # upload and verify: the Rust CLI, in lawan_node or in a one-off of it that
+    # stays off the firmware; smoke and check: mower-check-run (design D9)
+    transfer = helper.split('\n  upload|verify)\n', 1)[1].split('\n    ;;\n', 1)[0]
+    assert 'ros mower_bag --env-file "$r2_env" "${args[@]}"' in transfer
+    assert ('stack run --rm --no-deps -T -e MOWER_FIRMWARE_SYNC=0 lawan_node '
+            'mower_bag --env-file "$r2_env" "${args[@]}"') in transfer
+    assert 'mower-bag' not in helper
+    assert 'mower_bag' in binaries
+    assert 'ros ros2 run mower_recorder mower-check-run "$run"' in helper
+    assert '/usr/local/bin/mower_bag' in DOCKERFILE.read_text(encoding='utf-8')
     # the request file as write_request makes it from the settings (the
     # helper's functions, sourced): what mower_recorder_core's dc_request
     # parses, with compose's paths and the camera's arguments
     funcs = helper[helper.index('setting() {'):helper.index(
-        'if rust_recorder_on; then\n  svc=')]
+        '# lawan_node\'s environment by hand')]
     (tmp_path / 'funcs.sh').write_text(funcs)
     (tmp_path / 'req.env').write_text(
         f'MOWER_STATE_DIR={tmp_path}\nCAMERA_SIZE="640x480" # a comment\n'
@@ -871,7 +826,18 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
                    'driver': 'gstreamer'},
         'session_file': '/home/mower/.mower/data_collection_session.yaml',
         'upload_policy': 'manual'}
-    (tmp_path / 'dc.yaml').write_text('services: {}\n')
+    # RUST_RECORDER as compose reads it: unset or empty is compose's default,
+    # on
+    for env_text, on in (('IMAGE_TAG=main\n', True),
+                         ('RUST_RECORDER=\n', True),
+                         ('RUST_RECORDER=false\n', False),
+                         ('RUST_RECORDER="on" # the module\n', True)):
+        (tmp_path / 'rec.env').write_text(env_text)
+        rc = subprocess.run(
+            [bash, '-c', 'set -euo pipefail; source funcs.sh; rust_recorder_on'],
+            cwd=tmp_path, env={'PATH': '/usr/bin:/bin',
+                               'env_file': str(tmp_path / 'rec.env')}).returncode
+        assert rc == (0 if on else 1), env_text
     for value in spellings + ('"true"', "'on' # the module"):
         if os.geteuid() == 0:
             # as root, start would go on and really stop the host's services
@@ -881,22 +847,22 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
         done = subprocess.run(
             [bash, str(DATA_COLLECTION_HELPER), 'start'],
             env={'PATH': '/usr/bin:/bin', 'ENV_FILE': str(env_file),
-                 'DC_COMPOSE_FILE': str(tmp_path / 'dc.yaml'),
                  'MAIN_COMPOSE_FILE': str(tmp_path / 'none.yaml')},
             capture_output=True, text=True)
         assert done.returncode == 1, repr(value)
         assert done.stderr.strip() == 'run with sudo', repr(value)
 
-    # switch.sh writes it every time, passes it, recreates the recorder
-    # container and checks the processes
+    # switch.sh writes it every time, passes it and checks the processes; the
+    # recorder container only where the compose it runs on still has one
     switch = (SRC_DIR / 'mower_rs/tools/switch.sh').read_text(encoding='utf-8')
     passthrough = re.search(r'^PASSTHROUGH=\((.*?)\)$', switch,
                             re.M | re.S).group(1)
     assert "'rust_recorder:=${RUST_RECORDER'" in passthrough
     for text in re.findall(r"'([^']+)'", passthrough):
         assert text in lawan, text
-    assert '[RUST_RECORDER]=false' in switch
-    assert 'docker compose up -d lawan_node recorder' in switch
+    assert '[RUST_RECORDER]=true' in switch
+    assert 'docker compose up -d lawan_node recorder' not in switch
+    assert 'docker compose config --services' in switch
     assert 'rsd bag || echo "no mower_rsd running the bag module"' in switch
     assert '! rsd bag || echo "mower_rsd runs the bag module"' in switch
 
@@ -909,15 +875,65 @@ def test_rust_recorder_replaces_the_python_recorder_and_is_off_by_default(
     robot_module = _load_launch_module(ROBOT_LAUNCH)
     mission_module = _load_launch_module(MISSION_LAUNCH)
     assert robot_module._DAEMON_MODULES[-1] == ('bag', 'rust_recorder')
-    # exactly one recorder for every spelling: the module, the binary, or
-    # the recorder service's Python one (which sleeps on the switch alone)
+    # one recorder for every spelling of the switch on, none with it off: the
+    # module or the binary
     for flag in spellings:
         for daemon in spellings:
             binary = mission_module._rust_binary_alone(flag, daemon).evaluate(
                 LaunchContext())
             module = robot_module._truthy(flag) and robot_module._truthy(daemon)
-            python = not truthy(flag)
-            assert [binary, module, python].count(True) == 1, (flag, daemon)
+            assert [binary, module].count(True) == (1 if truthy(flag) else 0), \
+                (flag, daemon)
+
+
+def test_host_files_older_than_the_image_keep_working():
+    """OTA updates only the image; the robot's host files change only when
+    someone runs deploy/install.sh by hand. What the installed files of
+    2026-11-04 call in the image, from commits 4ad5e86 (docker-compose.yaml),
+    ef963c2 (docker-compose.data-collection.yaml) and 573fe94
+    (mower-data-collection.sh), has to stay, with RUST_RECORDER=true in .env.
+    With RUST_RECORDER=false their recorder and data_collection services run
+    launch files E5-7 removed: that is accepted, the roll-back is the previous
+    image. The image's smoke test in build.yml runs the two ros2 run lines."""
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    declared = set(re.findall(r"DeclareLaunchArgument\(\s*'(\w+)'", robot))
+    # lawan_node's command at 4ad5e86
+    old_arguments = {
+        'use_sim_time', 'rosbridge_address', 'zone_record_dir', 'sites_dir',
+        'output_root', 'record', 'robot_id', 'r2_env_file', 'enable_gps',
+        'nav_composition', 'rust_status', 'rust_adapter', 'rust_record',
+        'rust_nav', 'rust_battery', 'rust_pid_autotune', 'rust_map',
+        'rust_agent', 'rust_guards', 'rust_mux', 'rust_imu', 'rust_bridge',
+        'ws_bridge_bus', 'rust_base', 'rust_localize', 'rust_static_tf',
+        'rust_recorder', 'rust_daemon', 'rust_nav_core'}
+    # record:=false reaches nothing: ros2 launch ignores an argument no file
+    # declares, the launch file must not make it a condition again
+    assert old_arguments - declared == {'record'}
+    assert "LaunchConfiguration('record')" not in robot
+    assert "LaunchConfiguration('record')" not in MISSION_LAUNCH.read_text(
+        encoding='utf-8')
+    # the old helper's upload and verify (ros2 run mower_recorder mower-bag
+    # --env-file ... upload --all --root ... | verify <run>) and its smoke and
+    # check (mower-check-run), through the image's entrypoint
+    recorder = SRC_DIR / 'mower_recorder'
+    setup = (recorder / 'setup.py').read_text(encoding='utf-8')
+    assert "'mower-bag = mower_recorder.cli:main'," in setup
+    assert "'mower-check-run = mower_recorder.check_run:main'," in setup
+    assert '$base/lib/mower_recorder' in (recorder / 'setup.cfg').read_text(
+        encoding='utf-8')
+    package = (recorder / 'package.xml').read_text(encoding='utf-8')
+    for key in ('python3-boto3', 'python3-yaml', 'ros2run'):
+        assert f'<exec_depend>{key}</exec_depend>' in package, key
+    cli = (recorder / 'mower_recorder/cli.py').read_text(encoding='utf-8')
+    for text in ("add_argument('--env-file'", "'--all'", "'--root'"):
+        assert text in cli, text
+    # the old recorder service's command with RUST_RECORDER=true is bash and
+    # sleep through the entrypoint; what the module reads stays in the share
+    assert (SRC_DIR.parent / 'utils/docker-entrypoint.sh').is_file()
+    assert "glob('config/*.yaml')" in setup
+    for name in ('record_topics', 'qos_overrides', 'data_collection',
+                 'data_collection_session', 'camera_front_extrinsics'):
+        assert (recorder / f'config/{name}.yaml').is_file(), name
 
 
 def test_production_twist_mux_config_never_meets_the_degenerate_rules():
@@ -1338,42 +1354,37 @@ def test_compose_persists_field_data_and_passes_absolute_paths():
         assert 'output_root:=/home/mower/.mower/bags' in source
         assert 'restart: unless-stopped' in source
         assert 'stop_grace_period: 60s' in source
-        assert 'record:=false' in source
+        assert not re.search(r'^\s+- record:=', source, re.M)
 
 
 def test_robot_stack_runs_an_idle_recorder_for_the_app():
-    """The app's 錄話題 button calls /mower_recorder/start|stop: a recorder
-    service waits for it (autostart off), finalizes its mcap on `docker
-    stop`, never flashes the STM32, and is the only owner of
-    /mower_recorder/* -- lawan_node keeps record:=false and the
-    data-collection helper takes the recorder down for its own run."""
+    """The app's 錄話題 button calls /mower_recorder/start|stop: the bag module
+    in lawan_node waits for it (autostart off) and is the only owner of
+    /mower_recorder/* (compose has no other recorder since E5-7; a data
+    collection hands it another profile, deploy/host/mower-data-collection.sh)."""
+    import yaml
     source = DEPLOY_COMPOSE.read_text(encoding='utf-8')
-    recorder = source.split('\n  recorder:\n', 1)[1]
-    for line in ('- mower_recorder', '- record.launch.py', '- autostart:=false',
-                 '- output_root:=/home/mower/.mower/bags',
-                 'stop_signal: SIGINT', 'restart: unless-stopped',
-                 '- MOWER_FIRMWARE_SYNC=0', 'network_mode: host', 'ipc: host',
-                 '- ${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower'):
-        assert line in recorder, line
-    assert '/dev:/dev' not in recorder
-    assert 'record:=false' in source.split('  mediamtx:', 1)[0]
+    services = yaml.safe_load(source)['services']
+    assert set(services) == {'lawan_node', 'mediamtx'}
+    lawan = services['lawan_node']
+    assert '- output_root:=/home/mower/.mower/bags' in source
+    assert lawan['stop_grace_period'] == '60s'
+    assert '${MOWER_STATE_DIR:-/home/cat/.mower}:/home/mower/.mower' in lawan['volumes']
+    # the module's camera during a data collection (E5-6)
+    assert 'c 81:* rmw' in lawan['device_cgroup_rules']
+    sections = yaml.safe_load(MOWER_RSD_PARAMS.read_text(encoding='utf-8'))
+    assert sections['recorder_manager']['ros__parameters']['autostart'] is False
     # front camera: MediaMTX records into <run>/video/, which it must see at
     # the same path as the recorder does
-    assert '- video_api_url:=http://127.0.0.1:9997' in recorder
-    mediamtx = source.split('\n  mediamtx:\n', 1)[1].split('\n  recorder:\n', 1)[0]
-    assert '- ${MOWER_STATE_DIR:-/home/cat/.mower}/bags:/home/mower/.mower/bags' in mediamtx
-
-    helper = DATA_COLLECTION_HELPER.read_text(encoding='utf-8')
-    start = helper.split('\n  start)\n', 1)[1].split('\n    ;;\n', 1)[0]
-    stop = helper.split('\n  stop)\n', 1)[1].split('\n    ;;\n', 1)[0]
-    assert start.index('stack stop recorder') < start.index(
-        '      compose up -d\n')
-    assert 'stack up -d recorder' in stop
-    assert stop.index('compose down') < stop.index('stack up -d recorder')
+    assert '${MOWER_STATE_DIR:-/home/cat/.mower}/bags:/home/mower/.mower/bags' \
+        in services['mediamtx']['volumes']
 
     install = DEPLOY_INSTALL.read_text(encoding='utf-8')
     assert 'host/mower-data-collection.sh" /opt/mower/host/' in install
-    assert 'docker-compose.data-collection.yaml" /opt/mower/' in install
+    # the old file goes, or `docker compose -f` on it could still find a service
+    assert 'rm -f /opt/mower/docker-compose.data-collection.yaml' in install
+    assert 'docker-compose.data-collection.yaml" /opt/mower/' not in install
+    assert not (SRC_DIR.parent / 'deploy/docker-compose.data-collection.yaml').exists()
 
 
 def test_manual_guard_allows_the_relay_round_trip_and_nothing_else_does():
@@ -1411,7 +1422,6 @@ def test_robot_launch_forwards_all_persistent_directory_arguments():
         'zone_record_dir',
         'sites_dir',
         'output_root',
-        'record',
         'robot_id',
         'r2_env_file',
         'git_repo_dir',

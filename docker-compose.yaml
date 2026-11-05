@@ -20,7 +20,6 @@ services:
       - zone_record_dir:=/home/mower/.mower/zone_record
       - sites_dir:=/home/mower/.mower/sites
       - output_root:=/home/mower/.mower/bags
-      - record:=false
       # Bench setup without the u-blox receiver; with one on /dev/gps_rtk
       # set enable_gps:=true.
       - enable_gps:=false

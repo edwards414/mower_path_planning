@@ -30,11 +30,10 @@ def _rust_binary(flag, rust_daemon):
 
 
 def _rust_binary_alone(flag, rust_daemon):
-    """The separate binary of a module whose fallback runs outside this launch
-    (the recorder's: compose's recorder service, which sleeps on the switch
-    alone): switch on and daemon off in robot.launch.py's _truthy spellings,
-    so that exactly one of mower_rsd's module, this binary and the fallback
-    runs, whatever the spelling."""
+    """The separate binary of a module without a fallback (the recorder's):
+    switch on and daemon off in robot.launch.py's _truthy spellings, so that
+    with the switch on exactly one of mower_rsd's module and this binary runs,
+    whatever the spelling."""
     return IfCondition(PythonExpression([
         "'", flag, "'.strip().lower() in ", _TRUE,
         " and '", rust_daemon, "'.strip().lower() not in ", _TRUE,
@@ -284,14 +283,10 @@ def generate_launch_description():
     )
 
     # ── Bag recorder ─────────────────────────────────────────────────────────
-    # Recording is opt-in until a retention or working R2 upload policy is
-    # configured; otherwise an unattended process can fill the mower disk.
-    record = LaunchConfiguration('record')
-    declare_record = DeclareLaunchArgument(
-        'record',
-        default_value='false',
-        description='Opt in to mission recording (requires retention/upload)',
-    )
+    # The recorder is mower_rsd's bag module (rust_recorder, below); these
+    # are its per-robot values. The Python recorder that record:=true
+    # included is gone since E5-7: the robot's older compose still passes
+    # record:=false, an unknown argument now, which ros2 launch ignores.
     robot_id = LaunchConfiguration('robot_id')
     declare_robot_id = DeclareLaunchArgument('robot_id', default_value='mower')
     output_root = LaunchConfiguration('output_root')
@@ -307,42 +302,18 @@ def generate_launch_description():
     declare_git_repo_dir = DeclareLaunchArgument(
         'git_repo_dir', default_value='')
 
-    # Gracefully skip if mower_recorder isn't built.
-    recorder_entries = []
-    try:
-        recorder_entries.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(
-                    get_package_share_directory('mower_recorder'),
-                    'launch', 'record.launch.py',
-                )
-            ),
-            condition=IfCondition(record),
-            launch_arguments={
-                'robot_id': robot_id,
-                'output_root': output_root,
-                'autostart': 'true',
-                'r2_env_file': r2_env_file,
-                'git_repo_dir': git_repo_dir,
-                'gps_topic': gps_fix_topic,
-            }.items(),
-        ))
-    except Exception:
-        pass
-
     # rust_recorder:=true with rust_daemon:=false (E5): mower_recorder's three
     # nodes as one process (src/mower_rs/crates/mower_recorder), the values
-    # record.launch.py gives them and mower_rsd.yaml has for the module bag;
-    # compose's recorder service sleeps. Not rust_record (the zone recorder).
-    # It records the default profile from DDS (E5-3b).
+    # mower_rsd.yaml has for the module bag. Not rust_record (the zone
+    # recorder). It records the default profile from DDS.
     rust_recorder = LaunchConfiguration('rust_recorder')
     declare_rust_recorder = DeclareLaunchArgument(
         'rust_recorder',
-        default_value='false',
+        default_value='true',
         description='Run the mower_rs (Rust) mower_recorder process '
-                    '(recorder_manager, bag_store, graph_snapshot) instead '
-                    'of the Python recorder, which then sleeps in its own '
-                    'container; with rust_daemon, mower_rsd\'s bag module',
+                    '(recorder_manager, bag_store, graph_snapshot), the '
+                    'recorder; with rust_daemon, mower_rsd\'s bag module; '
+                    'false runs none',
     )
     recorder_config = PathJoinSubstitution(
         [FindPackageShare('mower_recorder'), 'config'])
@@ -689,7 +660,6 @@ def generate_launch_description():
         declare_rust_base,
         declare_rust_localize,
         declare_auto_coverage,
-        declare_record,
         declare_robot_id,
         declare_output_root,
         declare_r2_env_file,
@@ -697,7 +667,6 @@ def generate_launch_description():
         rosbridge_launch,
         odom_throttle,
         global_odom_throttle,
-        *recorder_entries,
         mower_recorder_rs,
         path_record_node,
         mower_record_rs,
