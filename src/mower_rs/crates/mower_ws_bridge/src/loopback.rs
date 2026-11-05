@@ -237,8 +237,9 @@ impl Loopback {
     }
 
     /// The supervisor's slots, with each instance's endpoints on the bus; the
-    /// scopes no slot names are listed too (a standalone binary has no
-    /// supervisor; `LOOPBACK_SCOPE` while a debugging reader lives).
+    /// scopes no slot names are listed too: a standalone binary has no
+    /// supervisor, `LOOPBACK_SCOPE` is there while a debugging reader lives,
+    /// and a recorder group's (`mower_bridge::RECORDER_TAPS`) while it taps.
     fn modules(&self) -> Value {
         let mut counts = self.endpoint_counts();
         let rows: Vec<Value> = self

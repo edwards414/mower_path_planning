@@ -1656,8 +1656,7 @@ async fn the_loopback_listener_writes_what_the_public_policy_writes_and_nothing_
 async fn parameter_reads_take_real_names_only() {
     let robot = Robot::with_the_shipped_policy().await;
     let mut local = robot.client(&robot.loopback).await;
-    // (a NUL in a name is `is_ros_name`'s test: this file's clients keep it off
-    // the socket, because client.rs's log line of a refused name panics on it)
+    // (a NUL in a name is `is_ros_name`'s test)
     for bad in ["/a b/get_parameters", "//get_parameters", "/1a/list_parameters", "/get_parameters"] {
         local.call("c", bad, json!({})).await;
         assert_eq!(local.recv().await, answer("c", bad, json!(format!("service {bad} is not allowed")), false));

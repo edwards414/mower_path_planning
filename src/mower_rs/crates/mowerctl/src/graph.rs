@@ -28,9 +28,10 @@ pub fn main(args: Vec<String>) -> Result<(), Fail> {
     Cmd::parse(args).and_then(|c| block_on(c.run(&mut Out::stdout())))
 }
 
-/// Each topic's rate between two `/mowerd/topics` answers: the messages
-/// between them over the time between the latest of each (`last_published`).
-fn rates(first: &Value, second: &Value) -> BTreeMap<String, f64> {
+/// Each topic's messages between two `/mowerd/topics` answers, and its rate:
+/// those messages over the time between the latest of each answer
+/// (`last_published`).
+fn rates(first: &Value, second: &Value) -> BTreeMap<String, (u64, f64)> {
     let before: BTreeMap<&str, (u64, f64)> =
         rows(first, "topics").iter().map(|t| (text(t, "name"), (number(t, "published"), mowerd::last_published(first, t)))).collect();
     let started = seconds(first, "uptime_s").unwrap_or(0.0);
@@ -39,7 +40,7 @@ fn rates(first: &Value, second: &Value) -> BTreeMap<String, f64> {
         .map(|t| {
             let (count, since) = before.get(text(t, "name")).copied().unwrap_or((0, started));
             let (messages, dt) = (number(t, "published").saturating_sub(count), mowerd::last_published(second, t) - since);
-            (text(t, "name").to_string(), if dt > 0.0 { messages as f64 / dt } else { 0.0 })
+            (text(t, "name").to_string(), (messages, if dt > 0.0 { messages as f64 / dt } else { 0.0 }))
         })
         .collect()
 }
@@ -97,8 +98,10 @@ impl Cmd {
         Ok(())
     }
 
-    /// One document: `/mowerd/*`'s answers under their names, with `rate_hz`
-    /// on each topic when sampled.
+    /// One document: `/mowerd/*`'s answers under their names, with `messages`
+    /// (in the sample) and `rate_hz` on each topic when sampled. A `messages` of
+    /// 0 says the counter did not move, so `rate_hz` says nothing: a name that
+    /// comes from DDS counts only while the bus has a reader of it.
     async fn gather(&self, c: &mut Conn, timeout: Duration) -> Result<Value, Fail> {
         let mut topics = mowerd::require(c, TOPICS, json!({}), timeout).await?;
         if let Some(sample) = self.sample {
@@ -108,7 +111,8 @@ impl Cmd {
             topics = second;
             if let Some(rows) = topics.get_mut("topics").and_then(Value::as_array_mut) {
                 for t in rows {
-                    if let Some(rate) = found.get(text(t, "name")) {
+                    if let Some((messages, rate)) = found.get(text(t, "name")).copied() {
+                        t["messages"] = json!(messages);
                         t["rate_hz"] = json!(rate);
                     }
                 }
@@ -151,11 +155,11 @@ mod tests {
         let a = json!({"uptime_s": 10.0, "topics": [{"name": "/a", "published": 100, "age_s": 0.0}, {"name": "/b", "published": 5, "age_s": 3.0}, {"name": "/slow", "published": 1, "age_s": 0.5}]});
         let b = json!({"uptime_s": 12.0, "topics": [{"name": "/a", "published": 120, "age_s": 0.0}, {"name": "/b", "published": 5, "age_s": 5.0}, {"name": "/new", "published": 4, "age_s": 0.0}, {"name": "/slow", "published": 2, "age_s": 0.5}]});
         let r = rates(&a, &b);
-        assert_eq!(r["/a"], 10.0);
-        assert_eq!(r["/b"], 0.0);
-        assert_eq!(r["/new"], 2.0);
+        assert_eq!(r["/a"], (20, 10.0));
+        assert_eq!(r["/b"], (0, 0.0));
+        assert_eq!(r["/new"], (4, 2.0));
         // one message 2 s after the last, whatever the two reads missed: 0.5 Hz
-        assert_eq!(r["/slow"], 0.5);
+        assert_eq!(r["/slow"], (1, 0.5));
     }
 
     #[test]
@@ -174,6 +178,9 @@ mod tests {
         let fix = rows(&doc, "topics").iter().find(|t| text(t, "name") == "/fix").unwrap();
         // the fake's /fix counts at 40 Hz
         assert!((seconds(fix, "rate_hz").unwrap() - 40.0).abs() < 15.0, "{fix}");
+        assert!(number(fix, "messages") > 0, "{fix}");
+        let still = rows(&doc, "topics").iter().find(|t| text(t, "name") == "/mower_base/telemetry").unwrap();
+        assert_eq!(number(still, "messages"), 0, "{still}");
         assert!(b.seen_ops("subscribe").is_empty());
 
         let (mut out, buf) = Out::buffer();
