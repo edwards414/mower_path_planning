@@ -73,6 +73,8 @@ sudo docker compose -f /opt/mower/docker-compose.yaml logs -f lawan_node
 | `ntpsec-mower.conf` | 裝成 `ntpsec.service.d/10-mower.conf`，拿掉 ntpsec 的啟動次數限制。RTC 沒電池，冷開機時間是 2025-06-26，只能靠 ntpd 校正；開機時 DHCP hook 在幾秒內 try-restart 它 5 次以上就被 systemd 判定失敗、整次開機都不再啟動，時鐘錯了 app 的 HMAC（±60 s）、後台與 ghcr.io 的 TLS 全部失敗 |
 | `mower-lte.service` | `host/mower-lte.sh`：用 QMI 對 4G 模組撥號（Quectel EC25 或 SIMCom SIM7600G-H；APN `MOWER_LTE_APN`），`wwan0` 走 DHCP，default route metric `MOWER_LTE_METRIC`（預設 200，有線 / Wi-Fi 是 100，所以只有它們斷了才走 4G）。每 5 s 檢查連線，掉線或模組重新列舉就重撥（重撥本身約 30 s，期間 App、relay、SSH 全部不通）。訊號強度由 `mower-link-status.py` 從 `/dev/lte_at` 讀（udev 規則認 EC25 與 SIM7600），App 遙測看得到。SIM 不能鎖 PIN（`AT+CLCK="SC",0,"<pin>"` 關掉一次即可） |
 
+`~/.mower` 屬於機器人使用者，容器也會寫它，所以以 root 跑的工具把裡面的內容當成外部輸入：shell 工具在那裡的讀寫都以該目錄擁有者的身分執行（`setpriv`，util-linux），`mower-link-status.py` 與 `mower-pair` 則經由開好的目錄與檔案 fd 寫入，不跟隨連結。
+
 ## 裝置名（`udev/99-mower.rules`）
 
 | 名稱 | 硬體 |

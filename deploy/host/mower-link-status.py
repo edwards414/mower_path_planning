@@ -164,16 +164,29 @@ def ifaces():
 
 
 def write(state_dir):
+    """This service runs as root and the state dir is the robot user's: all of it
+    goes through the open directory and the open file, no link is followed and
+    nothing is done by a name after the name could have changed."""
     doc = {'time': int(time.time()), 'lte': lte(), 'wifi': wifi(), 'ifaces': ifaces()}
-    tmp = os.path.join(state_dir, 'link_status.json.tmp')
-    with open(tmp, 'w') as f:
-        json.dump(doc, f)
-    os.replace(tmp, os.path.join(state_dir, 'link_status.json'))
+    dir_fd = os.open(state_dir.rstrip('/') or ('/' if state_dir else '.'),
+                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        st = os.stat(state_dir)
-        os.chown(os.path.join(state_dir, 'link_status.json'), st.st_uid, st.st_gid)
-    except OSError:
-        pass
+        try:
+            os.unlink('link_status.json.tmp', dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        fd = os.open('link_status.json.tmp', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o666, dir_fd=dir_fd)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(doc, f)
+            try:
+                st = os.fstat(dir_fd)
+                os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            except OSError:
+                pass
+        os.replace('link_status.json.tmp', 'link_status.json', src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
     return doc
 
 

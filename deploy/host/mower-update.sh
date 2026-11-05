@@ -79,6 +79,25 @@ IMAGE_REPO=${IMAGE_REPO:-docker.io/fxrbindi/mower_path_planning}
 REGISTRY=${IMAGE_REPO%%/*}
 IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
 mkdir -p "$STATE_DIR"
+
+# The state dir belongs to the robot user and the container writes it, so a root
+# script treats what is there as input and does not touch it as root: a read or
+# write there runs as the directory's owner, with none of root's environment,
+# and a file written that way needs no chown. A directory root itself owns has
+# no other writer, and a person's run as that owner has nothing to give up.
+as_state_owner() {
+  local who
+  if [ "$EUID" -ne 0 ]; then "$@"; return; fi
+  # The owner of the name first; of what it points at only if root made the name.
+  who=$(stat -c '%u:%g' "$STATE_DIR") || return 1
+  [ "${who%%:*}" != 0 ] || who=$(stat -Lc '%u:%g' "$STATE_DIR") || return 1
+  if [ "${who%%:*}" = 0 ]; then "$@"; return; fi
+  setpriv --reuid="${who%%:*}" --regid="${who##*:}" --clear-groups env -i PATH="$PATH" "$@"
+}
+state_write() {  # name, the contents on stdin: a temporary file, then a rename
+  as_state_owner sh -c 'umask 022; set -C; rm -f "$1/$2.tmp" && cat > "$1/$2.tmp" && mv -f "$1/$2.tmp" "$1/$2"' sh "$STATE_DIR" "$1"
+}
+
 # CPU cap while pulling (kHz; RK3568 OPPs: 408 600 816 1008 1200 1416 1608
 # 1800 1992 MHz). MOWER_CPUFREQ_DIR is for the tests.
 MAX_FREQ=${MOWER_UPDATE_MAX_FREQ_KHZ:-1008000}
@@ -115,18 +134,19 @@ trap uncap_cpu EXIT
 # short by a reboot or a power cut left update_status.json at "pulling"
 # forever, and every later run (timer, app) refused to start (lubancat,
 # 2026-10-07: stuck from 17:57 across two reboots). The file only tells the
-# app what is going on; the lock dies with the process.
-exec 9>"$STATE_DIR/.update.lock"
+# app what is going on; the lock dies with the process. It is opened for reading,
+# which is all flock needs, so opening it changes nothing whatever the name is.
+as_state_owner sh -c '[ -f "$1" ] && [ ! -L "$1" ] && exit 0
+  if [ -e "$1" ] || [ -L "$1" ]; then rm -f "$1"; fi; set -C; : > "$1"' sh "$STATE_DIR/.update.lock" 2>/dev/null
+exec 9<"$STATE_DIR/.update.lock"
 if ! flock -n 9; then
   echo "[mower-update] an update is already in progress (another mower-update.sh holds the lock)"
   exit 0
 fi
 
 status() {  # state message
-  local tmp="$STATE_DIR/update_status.json.tmp"
-  printf '{"state":"%s","message":"%s","tag":"%s","time":%s}\n' "$1" "${2//\"/\\\"}" "$IMAGE_TAG" "$(date +%s)" > "$tmp" \
-    && mv -f "$tmp" "$STATE_DIR/update_status.json"
-  chown --reference="$STATE_DIR" "$STATE_DIR/update_status.json" 2>/dev/null || true
+  printf '{"state":"%s","message":"%s","tag":"%s","time":%s}\n' "$1" "${2//\"/\\\"}" "$IMAGE_TAG" "$(date +%s)" \
+    | state_write update_status.json
   echo "[mower-update] $1: $2"
 }
 
@@ -147,31 +167,31 @@ service_runs_tagged_image() {
 }
 
 write_image_json() {
-  local id digest tmp="$STATE_DIR/image.json.tmp"
+  local id digest
   id=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
   digest=$(image_digest)
   printf '{"image":"%s","tag":"%s","digest":"%s","id":"%s","pulled_at":%s}\n' \
-    "$IMAGE" "$IMAGE_TAG" "${digest#*@}" "$id" "$(date +%s)" > "$tmp" && mv -f "$tmp" "$STATE_DIR/image.json"
-  chown --reference="$STATE_DIR" "$STATE_DIR/image.json" 2>/dev/null || true
+    "$IMAGE" "$IMAGE_TAG" "${digest#*@}" "$id" "$(date +%s)" | state_write image.json
 }
 
 write_check_json() {  # remote_digest error
-  local tmp="$STATE_DIR/update_check.json.tmp"
   printf '{"time":%s,"tag":"%s","image":"%s","remote_digest":"%s","local_digest":"%s","error":"%s"}\n' \
-    "$(date +%s)" "$IMAGE_TAG" "$IMAGE" "$1" "$(image_digest | sed 's/.*@//')" "${2//\"/\\\"}" > "$tmp" \
-    && mv -f "$tmp" "$STATE_DIR/update_check.json"
-  chown --reference="$STATE_DIR" "$STATE_DIR/update_check.json" 2>/dev/null || true
+    "$(date +%s)" "$IMAGE_TAG" "$IMAGE" "$1" "$(image_digest | sed 's/.*@//')" "${2//\"/\\\"}" \
+    | state_write update_check.json
 }
 
 json_field() {  # file key -> value or empty
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get(sys.argv[2]); print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$1" "$2" 2>/dev/null
+  [ -f "$1" ] || return 1
+  as_state_owner python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d.get(sys.argv[2]); print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$1" "$2" 2>/dev/null
 }
 
 robot_is_busy() {
-  local rs="$STATE_DIR/robot_status.json" age
+  local rs="$STATE_DIR/robot_status.json" t
   [ -f "$rs" ] || return 1
-  age=$(( $(date +%s) - $(json_field "$rs" time || echo 0) ))
-  [ "$age" -le "$ROBOT_STATUS_MAX_AGE_S" ] && [ "$(json_field "$rs" busy)" = "true" ]
+  t=$(json_field "$rs" time) || return 1
+  # Only digits are a time, read as decimal: anything else is no time, so not busy.
+  case "$t" in ''|*[!0123456789]*) return 1 ;; esac
+  [ "$(( $(date +%s) - 10#$t ))" -le "$ROBOT_STATUS_MAX_AGE_S" ] && [ "$(json_field "$rs" busy)" = "true" ]
 }
 
 if [ "$auto" -eq 1 ]; then
