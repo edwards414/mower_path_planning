@@ -68,8 +68,28 @@ struct BusInner {
 }
 
 impl Bus {
+    /// A bus whose publishes are stamped with the system clock.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A bus whose publishes are stamped with `clock`'s wall time
+    /// ([`ErasedMsg::published`]): a replay on a [`ManualClock`] (E8) makes
+    /// its bus with that clock.
+    pub fn with_clock(clock: Clock) -> Self {
+        Bus {
+            inner: Arc::new(BusInner {
+                topics: topic::Registry::with_clock(clock),
+                services: service::Registry::default(),
+                actions: action::Registry::default(),
+                next_scope: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    /// The clock publishes are stamped with.
+    pub fn clock(&self) -> &Clock {
+        self.inner.topics.clock()
     }
 
     /// A new, open scope. `name` is the module's node name; it only labels
@@ -415,7 +435,17 @@ impl Scope {
     /// A reader of topic `name` that does not know its type (README.md,
     /// "Erased access"). Works before any typed endpoint has fixed the type.
     pub fn subscribe_erased(&self, name: &str, qos: Qos) -> Result<ErasedSubscriber, BusError> {
-        erased::subscribe(self, name, qos)
+        erased::subscribe(self, name, qos, None)
+    }
+
+    /// [`Scope::subscribe_erased`] with a queue of `capacity` messages,
+    /// separate from `qos.depth`: a transient-local reader still takes at
+    /// most `qos.depth` messages of history when it joins, and then queues up
+    /// to `capacity` (at least the depth) before the oldest is dropped. The
+    /// recorder's taps (E5-4): rosbag2's history (the override depth) with a
+    /// queue a writer thread can fall behind on.
+    pub fn subscribe_erased_with(&self, name: &str, qos: Qos, capacity: usize) -> Result<ErasedSubscriber, BusError> {
+        erased::subscribe(self, name, qos, Some(capacity))
     }
 
     /// A writer on topic `name` that takes JSON. Creating it works before the

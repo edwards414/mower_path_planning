@@ -317,6 +317,14 @@ impl Manual {
     }
 }
 
+/// The system clock: what a [`crate::Bus`] stamps publishes with unless it
+/// was made [`crate::Bus::with_clock`].
+impl Default for Clock {
+    fn default() -> Self {
+        Clock::system()
+    }
+}
+
 impl Clock {
     /// Wall time from `SystemTime`, `mono` from `Instant`. Only async sleeps
     /// and ticks that have to wait need a tokio runtime (with time enabled):

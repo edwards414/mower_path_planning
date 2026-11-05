@@ -133,6 +133,10 @@ loop {
   `Subscriber::dropped()`.
 - Nothing else is ever dropped. `reliability` is kept for introspection and for the ROS bridge's
   QoS, but has no effect inside the process.
+- (E5-4) An erased reader made with `scope.subscribe_erased_with(name, qos, capacity)` queues up to
+  `capacity` messages (at least its depth), while a transient-local one still takes only `qos.depth`
+  of history when it joins: the recorder's taps keep rosbag2's history with a queue a writer thread
+  can fall behind on.
 
 **Late joiners (TRANSIENT_LOCAL)**
 - History belongs to each *writer*, as in DDS. A writer is a publisher together with its clones.
@@ -381,12 +385,22 @@ For components that learn topic names and types at run time: ws_bridge (the app'
 subscribe / publish / call_service), the recorder and `mowerctl`.
 
 - **Codec:** every typed endpoint registers a codec for its type when it creates the channel. The
-  codec is a set of `fn` pointers monomorphized over `T`: `to_json`, `from_json` and the type
-  name.
+  codec is a set of `fn` pointers monomorphized over `T`: `to_json`, `from_json`, the serde view
+  (E5-4, below) and the type name.
 - **`scope.subscribe_erased(name, qos)`** yields `ErasedMsg`s:
   - `to_json()` serializes on the subscriber's side, so a publisher never pays for JSON nobody
     reads;
-  - `downcast::<T>()` returns the `Arc<T>` without a copy.
+  - `downcast::<T>()` returns the `Arc<T>` without a copy;
+  - (E5-4) it is `serde::Serialize` as its value is: the codec has a fourth pointer, the value as
+    `erased_serde::Serialize`, so any serde serializer takes a bus message without knowing its
+    type. The recorder writes rosbag2's CDR with `mower_cdr::to_vec(ros_type, &msg)`; E8's replay
+    can do the same. `serde_json` gives what `to_json()` gives;
+  - (E5-4) `published()` is when it was published: every publish is stamped with the bus clock's
+    wall time (`Clock::now`), read once before the channel's lock, and the stamp travels with the
+    message into history and every queue, so a message from history keeps its own. Typed readers
+    never see it. The bus's clock is the system clock unless the bus was made
+    `Bus::with_clock(clock)` (a replay's `ManualClock`); `bus.clock()` returns it.
+  - `recv_timeout(d)`, as a typed reader's, for a std thread.
 - **`scope.publisher_json(name, qos)`** decodes with the channel's codec and publishes. It is an
   error until some typed endpoint has fixed the type.
 - **`scope.call_json(name, json)`** decodes the request with the service's codec, calls, and

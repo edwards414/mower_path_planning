@@ -8,6 +8,10 @@ description = "In-process typed publish/subscribe, services, type-erased JSON ac
 # No r2r, no ROS: builds and tests with a plain `cargo test` on any host. The
 # DDS side of the process lives in mower_bus_ros.
 [dependencies]
+# E5-4: the codec's serde view of a value (`ErasedMsg: Serialize`), so that
+# any serializer (the recorder's CDR, E8's replay) takes a bus message
+# without a per-type list. dtolnay's; serde_core and typeid only.
+erased-serde = "0.4"
 futures.workspace = true
 # Structural pinning for Clock::timeout without `unsafe`; already in the lock
 # through tokio and futures.
