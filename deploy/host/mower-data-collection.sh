@@ -64,10 +64,27 @@ rust_recorder_on() {
 }
 # The bag module's request file, on the host (the state dir compose mounts at
 # /home/mower/.mower) and what goes in it (paths as the container sees them).
-request=$(setting MOWER_STATE_DIR /home/cat/.mower)/recorder_profile.json
+STATE_DIR=$(setting MOWER_STATE_DIR /home/cat/.mower)
+request=$STATE_DIR/recorder_profile.json
+# The state dir belongs to the robot user and the container writes it, so a root
+# script treats what is there as input and does not touch it as root: a read or
+# write there runs as the directory's owner, with none of root's environment,
+# and a file written that way needs no chown. A directory root itself owns has
+# no other writer, and a person's run as that owner has nothing to give up.
+as_state_owner() {
+  local who
+  if [ "$EUID" -ne 0 ]; then "$@"; return; fi
+  # The owner of the name first; of what it points at only if root made the name.
+  who=$(stat -c '%u:%g' "$STATE_DIR") || return 1
+  [ "${who%%:*}" != 0 ] || who=$(stat -Lc '%u:%g' "$STATE_DIR") || return 1
+  if [ "${who%%:*}" = 0 ]; then "$@"; return; fi
+  setpriv --reuid="${who%%:*}" --regid="${who##*:}" --clear-groups env -i PATH="$PATH" "$@"
+}
+state_write() {  # name, the contents on stdin: a temporary file, then a rename
+  as_state_owner sh -c 'umask 022; set -C; rm -f "$1/$2.tmp" && cat > "$1/$2.tmp" && mv -f "$1/$2.tmp" "$1/$2"' sh "$STATE_DIR" "$1"
+}
 json_str() { local v=$1; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '"%s"' "$v"; }
 write_request() {
-  local tmp="$request.tmp"
   {
     printf '{"profile": "data_collection", "camera": {'
     printf '"camera_device": %s, ' "$(json_str "$(setting CAMERA_DEVICE /dev/video0)")"
@@ -78,9 +95,7 @@ write_request() {
     printf '"driver": "gstreamer"}, '
     printf '"session_file": "/home/mower/.mower/data_collection_session.yaml", '
     printf '"upload_policy": %s}\n' "$(json_str "$(setting DATA_COLLECTION_UPLOAD_POLICY wifi_or_dock)")"
-  } > "$tmp"
-  chmod 644 "$tmp"
-  mv -f "$tmp" "$request"
+  } | state_write recorder_profile.json
 }
 # lawan_node's environment by hand: its entrypoint would sync the firmware
 ros() {
@@ -154,7 +169,7 @@ case "${1:-}" in
     if running; then
       ros ros2 service call /mower_recorder/stop std_srvs/srv/Trigger | tail -1 || true
     fi
-    rm -f "$request"                        # the module's default profile again
+    as_state_owner rm -f "$request" || true # the module's default profile again
     sleep 3                                 # camera_front sees that within 2 s and frees /dev/video0
     systemctl start mower-camera.service
     if grep -q '^timer=active' "$state" 2>/dev/null; then

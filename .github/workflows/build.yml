@@ -87,6 +87,7 @@ jobs:
             test/test_coverage_progress_tracker.py \
             test/test_firmware_sync_wrapper.py \
             test/test_flutter_adapter_dto.py \
+            test/test_host_state_dir.py \
             test/test_image_mask_import.py \
             test/test_lte_uplink.py \
             test/test_update_script.py \
@@ -97,6 +98,12 @@ jobs:
             test/test_robot_info.py \
             test/test_site_store.py \
             test/test_time_sync_gate.py
+
+      # The host tools run as root on the robot, so these run as root too: owners,
+      # and the user each write in the state dir runs as.
+      - name: Run the host state dir tests as root
+        working-directory: src/mower_mission
+        run: sudo env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider test/test_host_state_dir.py
 
       # The rest of mower_recorder's tests need mcap / moto / boto3 (bags, R2).
       - name: Run ROS-free mower_recorder tests

@@ -22,6 +22,11 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "run with sudo" >&2
   exit 1
 fi
+# the host scripts read and write the state dir as its owner
+if ! command -v setpriv >/dev/null 2>&1; then
+  echo "setpriv not found (util-linux)" >&2
+  exit 1
+fi
 state_dir="$home/.mower"
 
 echo "== /opt/mower (user=$user state=$state_dir)"
@@ -110,6 +115,8 @@ else
 fi
 systemctl enable --now mower-update-check.timer >/dev/null
 systemctl enable --now mower-link-status.service >/dev/null
+# enable --now leaves a running service on the script it started with
+systemctl restart mower-link-status.service
 systemctl enable --now mower-camera.service >/dev/null
 systemctl enable --now mower-lte.service >/dev/null
 echo "   enabled mower.service (stack on boot), mower-host-request.path (app-triggered update/restart/poweroff),"

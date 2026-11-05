@@ -88,9 +88,23 @@ def lan_address() -> str:
             pass
 
 
+def open_dir(path: str) -> int:
+    """The directory itself, not what a link of that name points at.
+
+    This tool runs as root and the state dir is the robot user's: reading and
+    writing there go through this and the open file, so no link is followed and
+    nothing is done by a name after the name could have changed."""
+    return os.open(path.rstrip('/') or ('/' if path else '.'), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
 def load(path: str):
     try:
-        with open(path) as f:
+        dir_fd = open_dir(os.path.dirname(path))
+        try:
+            fd = os.open(os.path.basename(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+        finally:
+            os.close(dir_fd)
+        with os.fdopen(fd) as f:
             data = json.load(f)
         if isinstance(data, dict) and data.get('robot_id') and data.get('secret'):
             return data
@@ -101,17 +115,27 @@ def load(path: str):
 
 def save(path: str, data: dict, owner: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(data, f, indent=2)
-        f.write('\n')
-    os.chmod(tmp, 0o600)
+    name = os.path.basename(path)
+    tmp = name + '.tmp'
+    dir_fd = open_dir(os.path.dirname(path))
     try:
-        pw = pwd.getpwnam(owner)
-        os.chown(tmp, pw.pw_uid, pw.pw_gid)
-    except (KeyError, PermissionError):
-        pass
-    os.replace(tmp, path)
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
+            os.fchmod(f.fileno(), 0o600)
+            try:
+                pw = pwd.getpwnam(owner)
+                os.fchown(f.fileno(), pw.pw_uid, pw.pw_gid)
+            except (KeyError, PermissionError):
+                pass
+        os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def pair_url(identity: dict, relay: str, lan: str) -> str:
