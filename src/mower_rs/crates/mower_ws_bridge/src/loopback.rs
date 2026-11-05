@@ -323,6 +323,9 @@ struct ParamState {
     /// Moves with every call that ends, so that only the last one's retiring
     /// counts.
     generation: u64,
+    /// The module is ending: no node may start behind its back, because rmw
+    /// aborts a process that exits with a thread in `rcl_wait`.
+    closed: bool,
 }
 
 fn lock(state: &Mutex<ParamState>) -> MutexGuard<'_, ParamState> {
@@ -343,6 +346,9 @@ impl ParamReads {
             return Err(format!("{service}: service unavailable"));
         };
         let mut state = lock(&self.state);
+        if state.closed {
+            return Err(format!("{service}: service unavailable"));
+        }
         if state.hub.is_none() {
             let node = r2r::Node::create(context.clone(), PARAM_NODE, &self.namespace).map_err(|e| format!("{service}: {e:?}"))?;
             state.hub = Some(R2rHub::start(node).map_err(|e| format!("{service}: {e}"))?);
@@ -353,7 +359,9 @@ impl ParamReads {
     }
 
     /// One call less. The hub goes `PARAM_LINGER` after the last call, unless
-    /// another came meanwhile; its node's thread is joined off the runtime.
+    /// another came meanwhile. Its node's thread is joined off the runtime
+    /// and under the lock, so that neither a new read nor the module's end
+    /// finds a node half gone (a join takes at most one 100 ms spin).
     fn leave(&self) {
         let generation = {
             let mut state = lock(&self.state);
@@ -364,24 +372,24 @@ impl ParamReads {
         let (state, logger) = (self.state.clone(), self.logger.clone());
         tokio::spawn(async move {
             tokio::time::sleep(PARAM_LINGER).await;
-            let retired = {
+            let _ = tokio::task::spawn_blocking(move || {
                 let mut state = lock(&state);
                 if state.calls == 0 && state.generation == generation {
-                    state.hub.take()
-                } else {
-                    None
+                    if let Some(hub) = state.hub.take() {
+                        hub.shutdown();
+                        r2r::log_info!(&logger, "parameter reads: node {} gone", PARAM_NODE);
+                    }
                 }
-            };
-            if let Some(hub) = retired {
-                let _ = tokio::task::spawn_blocking(move || hub.shutdown()).await;
-                r2r::log_info!(&logger, "parameter reads: node {} gone", PARAM_NODE);
-            }
+            })
+            .await;
         });
     }
 
+    /// The module ends: the node goes now and no read starts another.
     fn shutdown(&self) {
-        let hub = lock(&self.state).hub.take();
-        if let Some(hub) = hub {
+        let mut state = lock(&self.state);
+        state.closed = true;
+        if let Some(hub) = state.hub.take() {
             hub.shutdown();
         }
     }
