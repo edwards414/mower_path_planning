@@ -1,11 +1,13 @@
-//! mower_recorder's three rclpy nodes (`src/mower_recorder/mower_recorder/
-//! {recorder_manager,bag_store,graph_snapshot}_node.py`) as one module of
-//! `mower_rsd`: module `bag`, launch switch `rust_recorder`, compose
-//! `RUST_RECORDER` (step E5 of docs/ROS_FREE_PLAN.md; design D13: `record` is
-//! the zone path recorder's id, `RUST_RECORD` its switch).
+//! The recorder: mower_recorder's three rclpy nodes (`src/mower_recorder/
+//! mower_recorder/{recorder_manager,bag_store,graph_snapshot}_node.py`, which
+//! E5-7 removed; read them at bf19e6c) as one module of `mower_rsd`: module
+//! `bag`, launch switch `rust_recorder`, compose `RUST_RECORDER` (step E5 of
+//! docs/ROS_FREE_PLAN.md; design D13: `record` is the zone path recorder's
+//! id, `RUST_RECORD` its switch).
 //!
-//! **E5-3b: it records** the default profile from DDS; data_collection by
-//! the request file (E5-5). `RUST_RECORDER` is on by default since E5-7.
+//! It records the default profile from DDS (E5-3b), data_collection by the
+//! request file (E5-5). `RUST_RECORDER` is on by default; off, there is no
+//! recorder.
 //!
 //! - [`graph`]: `graph_snapshot`, complete: every 2 s the DDS graph as
 //!   `/graph_snapshot` JSON, the node diff on `/graph_events`, the watch rule
@@ -20,8 +22,8 @@
 //!   (`mower_full_recorder`, ...; design D12), found as rosbag2 finds them.
 //! - [`owner`]: one owner of `/mower_recorder/*` (design 4.2, R6): while a
 //!   DDS server of `/mower_recorder/start` that is not a bus bridge's exists
-//!   (the Python recorder), none of the three serves its endpoints, and each
-//!   says so in an ERROR.
+//!   (an image from before E5-7 next to this one), none of the three serves
+//!   its endpoints, and each says so in an ERROR.
 //!
 //! Everything a node writes or answers is `mower_recorder_core`'s, byte for
 //! byte the Python's; this crate wires it to the bus, the r2r nodes and the

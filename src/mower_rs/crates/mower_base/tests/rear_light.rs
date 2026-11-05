@@ -1,5 +1,5 @@
-//! The rear light end to end: `/mower_base/rear_light` on DDS, as path_record_node (through the bus bridge) and
-//! mower_recorder write it, to the 0x03 frame mower_base writes the STM32, its overlay byte the `REAR_RECORDING`
+//! The rear light end to end: `/mower_base/rear_light` on DDS, as path_record_node and the bag module write it
+//! (through the bus bridge), to the 0x03 frame mower_base writes the STM32, its overlay byte the `REAR_RECORDING`
 //! bit while a recorder records, as `mower_hardware::MowerSystem` set it.
 //!
 //! - **The board** is a pty that only records what mower_base writes: the LED path needs no feedback.

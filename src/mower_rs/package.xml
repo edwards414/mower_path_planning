@@ -34,8 +34,7 @@
   <!-- E5-6: the bag module's camera (mower_camera, feature camera, which
        CMakeLists.txt builds with): GStreamer's development files to build
        it, its base and good plugins (v4l2src, jpeg, videorate, appsink) to
-       run it. gscam (mower_recorder) brings the same today; these stay when
-       it goes (E5-7). -->
+       run it. -->
   <build_depend>libgstreamer1.0-dev</build_depend>
   <build_depend>libgstreamer-plugins-base1.0-dev</build_depend>
   <exec_depend>gstreamer1.0-plugins-base</exec_depend>

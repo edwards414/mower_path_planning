@@ -89,9 +89,10 @@
 //! DDS graph: with the final guard and pid_autotune on the bus too they are
 //! those modules themselves, and a writer outside comes in through the
 //! bridge's `from_ros_mirrored`, which exists only while DDS shows one. On
-//! the bus the node keeps the parameters, the log, the graph and, until E5,
-//! the rear light's reader (path_record_node writes it on the bus,
-//! mower_recorder on DDS), which it is spun for.
+//! the bus the node keeps the parameters, the log, the graph and the rear
+//! light's reader (the module path_record_node and the bag module write it on
+//! the bus and it goes out; the rclpy path_record_node, RUST_RECORD=false, on
+//! DDS), which it is spun for.
 
 pub mod requests;
 
@@ -1201,11 +1202,11 @@ async fn run_io(mut node: r2r::Node, m: ModuleCtx, on_bus: bool) -> ModuleResult
             forward_blade(sub, slots.clone(), logger.clone());
         }
     }
-    // The rear light stays on the r2r node on either IO, until E5 (mower_bridge's
-    // manifest, stays_on_r2r): path_record_node writes it on the bus,
-    // mower_recorder on DDS, and one r2r reader hears both. QoS(8)
-    // transient_local reliable, as mower_hardware: the recorders' latched
-    // values reach a restarted driver.
+    // The rear light stays on the r2r node on either IO (mower_bridge's
+    // manifest, stays_on_r2r): the modules write it on the bus and it goes out,
+    // the rclpy path_record_node (RUST_RECORD=false) on DDS, and one r2r reader
+    // hears both. QoS(8) transient_local reliable, as mower_hardware: the
+    // recorders' latched values reach a restarted driver.
     let rear_light_on = !rear_light_topic.is_empty();
     if rear_light_on {
         let sub = node.subscribe::<StringMsg>(

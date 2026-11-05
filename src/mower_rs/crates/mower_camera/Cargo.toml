@@ -9,7 +9,7 @@ description = "The data-collection front camera without gscam (E5-6): a GStreame
 # The GStreamer capture (gstreamer-rs). Off by default, so that a plain
 # `cargo build` / `cargo test` needs no GStreamer development files; the
 # robot image builds mower_rsd with it (src/mower_rs/CMakeLists.txt), and
-# the libraries come with gscam's dependencies in the runtime image.
+# the libraries come with the plugin packages src/mower_rs/package.xml names.
 gst = ["dep:gstreamer", "dep:gstreamer-app"]
 
 [dependencies]

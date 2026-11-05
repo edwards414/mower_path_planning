@@ -74,8 +74,7 @@ _DAEMON_MODULES = (
     ('pid_autotune', 'rust_pid_autotune'),
     ('bridge', 'rust_bridge'),
     ('agent', 'rust_agent'),
-    # E5: mower_recorder's three nodes (crates/mower_recorder); off by
-    # default, and compose's recorder service sleeps when it is on
+    # E5: the recorder, mower_recorder's three nodes (crates/mower_recorder)
     ('bag', 'rust_recorder'),
 )
 
@@ -245,11 +244,10 @@ def _rust_daemon_node(context):
         # node name, so the two muxes have one configuration
         parameters.append(os.path.join(bringup, 'config', 'twist_mux_topics.yaml'))
     if 'bag' in modules:
-        # rust_recorder:=true (E5): what deploy/docker-compose.yaml's recorder
-        # service passes record.launch.py and record.launch.py its nodes,
-        # from this launch's arguments (compose gives lawan_node the same
-        # robot_id and r2_env_file); the fixed values are mower_rsd.yaml's.
-        # Node-scoped and after the yaml, like the zone recorder's.
+        # rust_recorder:=true (E5): the recorder's per-robot values, from this
+        # launch's arguments (compose gives lawan_node robot_id and
+        # r2_env_file); the fixed values are mower_rsd.yaml's. Node-scoped and
+        # after the yaml, like the zone recorder's.
         recorder_config = os.path.join(
             get_package_share_directory('mower_recorder'), 'config')
         output_root = LaunchConfiguration('output_root').perform(context)
@@ -330,7 +328,6 @@ def generate_launch_description():
     zone_record_dir = LaunchConfiguration('zone_record_dir')
     sites_dir = LaunchConfiguration('sites_dir')
     output_root = LaunchConfiguration('output_root')
-    record = LaunchConfiguration('record')
     robot_id = LaunchConfiguration('robot_id')
     r2_env_file = LaunchConfiguration('r2_env_file')
     git_repo_dir = LaunchConfiguration('git_repo_dir')
@@ -403,7 +400,6 @@ def generate_launch_description():
             'zone_record_dir': zone_record_dir,
             'sites_dir': sites_dir,
             'output_root': output_root,
-            'record': record,
             'robot_id': robot_id,
             'r2_env_file': r2_env_file,
             'git_repo_dir': git_repo_dir,
@@ -471,11 +467,6 @@ def generate_launch_description():
             'output_root',
             default_value='~/mower_bags',
             description='Persistent rosbag output directory',
-        ),
-        DeclareLaunchArgument(
-            'record',
-            default_value='false',
-            description='Opt in to mission recording after retention setup',
         ),
         DeclareLaunchArgument(
             'robot_id',
@@ -617,14 +608,13 @@ def generate_launch_description():
             'rust_recorder',
             default_value='true',
             description='mower_rsd module bag (mower_rs mower_recorder, nodes '
-                        'recorder_manager, bag_store and graph_snapshot) '
-                        'instead of the Python recorder of compose\'s recorder '
-                        'service, which then sleeps; with rust_daemon:=false '
-                        'the mower_recorder binary. Not rust_record, the zone '
-                        'path recorder. It records the default profile from '
-                        'DDS (E5-3b), and data_collection by '
-                        'mower-data-collection.sh\'s request file (E5-5). '
-                        'On by default since E5-7',
+                        'recorder_manager, bag_store and graph_snapshot), the '
+                        'recorder; with rust_daemon:=false the mower_recorder '
+                        'binary, and false runs none (the Python recorder is '
+                        'gone since E5-7). Not rust_record, the zone path '
+                        'recorder. It records the default profile from DDS, '
+                        'and data_collection by mower-data-collection.sh\'s '
+                        'request file',
         ),
         DeclareLaunchArgument(
             'rust_localize',

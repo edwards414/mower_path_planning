@@ -572,11 +572,10 @@ fn rsp_is_left_out_while_static_tf_runs_and_utm_alone_brings_nothing_in() {
 
 /// E5-3a: the bag module (`rust_recorder`) in the production process. Its
 /// three nodes' writers go out (the status and the bag list R TL 1, so that
-/// ws_bridge on r2r picks a latched reader as for the Python recorder), the
-/// app's commands come in from ws_bridge on r2r, and its three services are
-/// served on DDS. Nothing goes: the Python recorder's endpoints, which the
-/// plan had as writers and servers on DDS, leave it (`replaced_by`), and the
-/// status, the fault and `/fix` are in-process. The rear light keeps its one
+/// ws_bridge on r2r picks a latched reader, as it did for the Python
+/// recorder), the app's commands come in from ws_bridge on r2r, and its three
+/// services are served on DDS. Nothing goes: the status, the fault and `/fix`
+/// are in-process. The rear light keeps its one
 /// line: the module's writer joins path_record_node's on the bus and both go
 /// out to mower_base's r2r reader (design D5).
 #[test]
@@ -608,13 +607,11 @@ fn the_bag_module_s_lines_in_the_production_plan() {
     assert_eq!(why(&after, "/mower_base/rear_light"), "from path_record_node, recorder_manager");
     assert!(after_lines.contains(&"to_ros /mower_base/rear_light std_msgs/msg/String R TL 1".to_string()));
     assert_eq!(why(&after, "/mower_recorder/command"), "for bag_store, from mower_ws_bridge (r2r)");
-    // nothing of the Python recorder's is planned for with the module
-    assert!(after.declarations.iter().all(|d| !d.why.contains("(outside)") || !d.name.contains("recorder")), "{:#?}", after.declarations);
     // and every set with or without it plans as before (every_combination_...)
 }
 
 /// With ws_bridge on the bus as well (E3.2), the app's recorder names are
-/// in-process: of the five names ws_bridge took from the Python recorder on
+/// in-process: of the five names ws_bridge takes from a recorder elsewhere on
 /// DDS, none comes in, and they go out instead, for DDS tools and the graph.
 #[test]
 fn with_ws_bridge_on_the_bus_the_recorder_s_names_are_in_process() {
@@ -637,22 +634,16 @@ fn with_ws_bridge_on_the_bus_the_recorder_s_names_are_in_process() {
     assert!(both.contains(&"service_to_ros /mower_recorder/start std_srvs/srv/Trigger".to_string()));
 }
 
-/// The Python recorder's two nodes leave the plan while the bag module runs
-/// in the process (its binary included), and only then.
+/// The Python recorder is gone (E5-7): nothing outside writes or serves a
+/// recorder name, so ws_bridge alone reads the module's binary (rust_daemon
+/// off), and next to the module reads the module in-process.
 #[test]
-fn the_python_recorder_is_left_out_while_the_bag_module_runs() {
-    let marked: BTreeSet<(&str, &str)> = OUTSIDE
-        .iter()
-        .flat_map(|o| o.endpoints.iter().filter_map(move |e| e.replaced_by.map(|id| (o.node, id))))
-        .collect();
-    assert!(marked.contains(&("recorder_manager", "bag")) && marked.contains(&("bag_store", "bag")), "{marked:?}");
-    let everything = |o: &&Outside| o.node == "recorder_manager" || o.node == "bag_store";
-    assert!(OUTSIDE.iter().filter(everything).flat_map(|o| o.endpoints).all(|e| e.replaced_by == Some("bag")));
-    // ws_bridge alone reads the Python's status...
+fn only_the_bag_module_owns_the_recorder_s_names() {
+    assert!(!OUTSIDE.iter().any(|o| o.node == "recorder_manager" || o.node == "bag_store"));
+    assert!(!OUTSIDE.iter().flat_map(|o| o.endpoints).any(|e| e.name.starts_with("/mower_recorder/") || e.name == "/mower_base/rear_light"));
     let ws = Running::standalone("bridge", "mower_ws_bridge").unwrap();
     let p = plan(&ws, &production_remaps()).unwrap();
-    assert!(p.declarations.iter().any(|d| d.name == "/mower_recorder/status" && d.why.contains("recorder_manager (outside)")));
-    // ...and with the module next to it, the module's
+    assert!(p.declarations.iter().any(|d| d.name == "/mower_recorder/status" && d.why.contains("recorder_manager (not here)")));
     let mut both = ws.clone();
     both.extend(Running::rsd(&["bag"], |_| true));
     let p = plan(&both, &production_remaps()).unwrap();
@@ -1100,9 +1091,9 @@ fn ws_bridge_on_the_bus_adds_the_thirteen_names_only_dds_has() {
     // whom each is for, and from where
     let why = |name: &str| on.declarations.iter().find(|d| d.name == name).unwrap().why.clone();
     assert_eq!(why("/pid_autotune/status"), "for mower_ws_bridge, from pid_autotune (r2r)");
-    // the bag module (E5) is not in the set: the Python recorder's writer, and
-    // the module's as a writer elsewhere (its binary, rust_daemon:=false)
-    assert_eq!(why("/mower_recorder/status"), "for mower_ws_bridge, from recorder_manager (not here), recorder_manager (outside)");
+    // the bag module (E5) is not in the set: a writer elsewhere (its binary,
+    // rust_daemon:=false)
+    assert_eq!(why("/mower_recorder/status"), "for mower_ws_bridge, from recorder_manager (not here)");
     assert_eq!(why("/boustrophedon_coverage/set_parameters"), "for mower_ws_bridge, served by boustrophedon_coverage (r2r)");
     assert_eq!(why("/app_joy_cmd"), "from mower_ws_bridge");
 }
@@ -1190,8 +1181,9 @@ fn ws_bridge_standalone_carries_every_name_it_reaches() {
 /// E2 steps 6 and 7 after E3: base, pid_autotune and the guards on the bus as
 /// well. ws_bridge's names that only DDS had are then in the process: the
 /// from_ros of /manual_command_clock and /pid_autotune/status and the
-/// service_from_ros of /pid_autotune go. The recorder's six and
-/// set_parameters stay (until E5, and until the parameter services move).
+/// service_from_ros of /pid_autotune go. The recorder's six stay (without the
+/// bag module in the set, this test's) and so does set_parameters (until the
+/// parameter services move).
 /// So do the to_ros of the three command topics: ws_bridge writes them on
 /// the bus, and the policy gives every topic written on the bus a DDS face
 /// (README.md, "The policy"), which carries nothing while no DDS node reads
@@ -1324,8 +1316,8 @@ fn the_manifest_is_consistent() {
     for ((_, name), nodes) in servers {
         assert_eq!(nodes.len(), 1, "{name} is served by {nodes:?}");
     }
-    // an outside server a module replaces (E5: the Python recorder's) is
-    // that module's to serve: the two are never in one plan
+    // an outside server a module replaces is that module's to serve: the
+    // two are never in one plan
     for o in OUTSIDE {
         for e in o.endpoints.iter().filter(|e| matches!(e.kind, Kind::Serve | Kind::ServeAction)) {
             let Some(id) = e.replaced_by else { continue };

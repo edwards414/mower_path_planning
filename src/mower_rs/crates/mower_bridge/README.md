@@ -20,7 +20,7 @@ Phase E; [`docs/BUS_TOPICS.md`](../../../../docs/BUS_TOPICS.md) section 6, step 
   since E3.2; they still have their r2r IO next to the bus IO ("The flags"). ws_bridge is in the manifest (step E3),
   on the bus by default since E3.2 (`ws_bridge_bus`). E4's mux (`rust_mux`) and static_tf (`rust_static_tf`), both on by default since E4-5,
   are born on the bus and replace the outside twist_mux and robot_state_publisher when they run; so is E5's `bag`
-  (`rust_recorder`, on by default since E5-7), which replaces the outside Python recorder.
+  (`rust_recorder`, on by default), the only recorder since E5-7 removed the Python one.
 
 ## The manifest
 
@@ -50,26 +50,26 @@ holds the nodes they depend on.
       ws_bridge): listed so that the plan names its server (E3 decision 9).
     - nav's clients of nav2, until E9: `/bt_navigator/get_state` and the actions `/navigate_to_pose` and
       `/follow_path`, next to nav2 outside the process.
-    - mower_base's `/mower_base/rear_light` reader, until E5-7: path_record_node writes the name on the bus and the
-      Python recorder_manager on DDS, and one r2r reader hears both; a bus reader would need the name both ways. With
-      the bag module both writers are on the bus and go out together.
+    - mower_base's `/mower_base/rear_light` reader: the modules' writers (path_record_node, recorder_manager) are on
+      the bus and go out together, the rclpy path_record_node (`rust_record` off) writes on DDS, and one r2r reader
+      hears both; a bus reader would need the name both ways. E5-7 took the Python recorder off DDS; the mark goes
+      with `rust_record`'s fallback.
   - `silent`: a writer that is made and never publishes: mower_base's `/tf` (`enable_odom_tf` is false). Coverage's
     `/free_space_inflated` and `/risk_map_inflated` were (BUS_TOPICS.md 5.8 #2) until step 5 dropped them.
   - `only`: not in production. nav's `nav_core` backend (robot.launch.py `rust_nav_core:=true`, CI's
     `nav_core_check.py`), with `/tf` and `/tf_static` for `nav_core.pose_source: tf`.
-  - `replaced_by`: an outside node's endpoint that a module of `mower_rsd` takes the place of (E4, E5). While that
-    module runs in the process, robot.launch.py does not start the node (the Python recorder's container sleeps),
-    and the policy leaves the endpoint out. An outside server so marked is the module's to serve too, never both.
+  - `replaced_by`: an outside node's endpoint that a module of `mower_rsd` takes the place of (E4). While that
+    module runs in the process, robot.launch.py does not start the node, and the policy leaves the endpoint out. An
+    outside server so marked is the module's to serve too, never both.
   - `unread_on_bus`: a writer off the bus whose samples no bus reader needs: on its own it brings its name in from DDS
     no more. navsat's `utm` frame on `/tf_static`, once static_tf writes that name on the bus (E4's option A): the EKFs
     do not need `utm`, so `/tf_static` only goes out, and DDS still sees two latched depth-1 writers, the bridge's and
     navsat's.
 - **Outside** (BUS_TOPICS.md 5.3, "DDS→bus"), each with the step that removes it: twist_mux's `/cmd_vel_guard_input`
   (E4), robot_state_publisher's `/tf_static` and `/tf` (E4), nav2's `/rosout`, `/bt_navigator/get_state` and two
-  actions (E9), the two teleop nodes (off by default), and the Python recorder (E5, `replaced_by("bag")`):
-  `recorder_manager`'s status, its `/mower_recorder/start`, `/stop` and `/snapshot` and its `/mower_base/rear_light`,
-  and `bag_store`'s bag list and command answers. Their QoS is upstream behaviour, unconfirmed (BUS_TOPICS.md 1.3), except the recorder's, which its
-  code sets, and twist_mux's and robot_state_publisher's, which were measured for E4.
+  actions (E9), and the two teleop nodes (off by default). The Python recorder's rows left with it (E5-7). Their QoS
+  is upstream behaviour, unconfirmed (BUS_TOPICS.md 1.3), except twist_mux's and robot_state_publisher's, which were
+  measured for E4.
 - **ws_bridge** (`bridge`): every name of its allow-list (`mower_bringup/config/ws_bridge.yaml`), `topics_sub`'s globs
   expanded to the names a module or a node outside writes (28, read `R TL 10`), `topics_pub` (4, written `R V 10`) and
   the services (32, called). `the_bridge_module_is_ws_bridge_yaml_s_allow_list` keeps the two in step, the yaml's
@@ -208,7 +208,8 @@ each with its flag; every other instance is elsewhere, on DDS.
   `/app_joy_cmd` comes in (R V 1), with ws_bridge on the bus `/manual_command_clock` no longer does. Steps 6 and 7
   together plan as the module flag `guards` with base and pid_autotune.
 - **E2 steps 6 and 7 after it** take the guards' and pid_autotune's names into the process. What stays for ws_bridge
-  is the recorder's six (until E5), `set_parameters` (until the parameter services move), and the `to_ros` of the
+  is the recorder's six (without the bag module in the set: its binary, `rust_daemon:=false`), `set_parameters`
+  (until the parameter services move), and the `to_ros` of the
   three command topics: ws_bridge writes them on the bus, and every topic written on the bus gets its DDS face.
 - **E4-3, the mux** in the production set (`rust_mux`): three lines more, `from_ros /nav_cmd_vel` (nav2's
   velocity_smoother, `R V 1`), `to_ros /cmd_vel_guard_input` (to the final guard on r2r, `R V 1`) and `to_ros
@@ -222,10 +223,9 @@ each with its flag; every other instance is elsewhere, on DDS.
 - **E5-3a, the bag module** in the production set (`rust_recorder`; `the_bag_module_s_lines_in_the_production_plan`):
   ten lines more and none less. `to_ros` of `/mower_recorder/status` and `/bags` (`R TL 1`), `/command_result`,
   `/mower_recorder/fault`, `/graph_snapshot` and `/graph_events` (`R V 10`), `from_ros /mower_recorder/command`
-  (ws_bridge on r2r, `R V 10`), `service_to_ros` of start, stop and snapshot. The Python recorder's endpoints leave
-  the plan (`replaced_by`); the rear light keeps its one `to_ros` line, now from path_record_node and
-  recorder_manager. With ws_bridge on the bus too the five names it took from the Python recorder on DDS are
-  in-process (`with_ws_bridge_on_the_bus_the_recorder_s_names_are_in_process`).
+  (ws_bridge on r2r, `R V 10`), `service_to_ros` of start, stop and snapshot. The rear light keeps its one `to_ros`
+  line, now from path_record_node and recorder_manager. With ws_bridge on the bus too the five names it takes from
+  a recorder elsewhere on DDS are in-process (`with_ws_bridge_on_the_bus_the_recorder_s_names_are_in_process`).
 - Without E4's and E5's modules in the set, the plan is E2's line for line, as above.
 
 - **Refused:** of all 16384 combinations of the E2 and E3 flags with the production set, for each set of E4 and E5

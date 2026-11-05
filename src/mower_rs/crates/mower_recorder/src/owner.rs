@@ -1,9 +1,10 @@
-//! One owner of `/mower_recorder/*` (design 4.2, R6). The Python recorder
-//! (deploy/docker-compose.yaml's `recorder` service, or a data-collection
-//! run) and this module must not both serve the app's recorder endpoints:
-//! two latched statuses, two bag lists, two answers to a command.
+//! One owner of `/mower_recorder/*` (design 4.2, R6). Another recorder (the
+//! Python one, E5-7 removed it from this image, of an older image in a
+//! container on the same graph) and this module must not both serve the app's
+//! recorder endpoints: two latched statuses, two bag lists, two answers to a
+//! command.
 //!
-//! The Python recorder is recognised by its server of
+//! It is recognised by its server of
 //! `/mower_recorder/start`: a DDS server of that name that is not a bus
 //! bridge's (this module's own reaches DDS through the bridge). Each of the
 //! three instances looks [`SETTLE`] after its start and every [`PERIOD`]
@@ -90,8 +91,7 @@ impl Owner {
                         r2r::log_error!(
                             &self.logger,
                             "{} is served on DDS by {}, not through this module's bus bridge: another recorder owns \
-                             /mower_recorder/* (the Python recorder: RUST_RECORDER=true puts deploy/docker-compose.yaml's \
-                             recorder service to sleep, and mower-data-collection.sh refuses to start while it is on). \
+                             /mower_recorder/* (a Python recorder, from an image older than E5-7: stop that container). \
                              Not serving {} while it is there; looking again every {} s.",
                             self.service,
                             others.join(", "),

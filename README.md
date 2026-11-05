@@ -37,7 +37,7 @@ legacy ROS node names and service names remain for compatibility; see
 | `mower_description` | URDF/Xacro robot description and mesh assets |
 | `mower_teleop` | Keyboard and joystick teleoperation helpers |
 | `mower_qt` | PyQt operator panel and STM32 UART monitor |
-| `mower_recorder` | Field bag recorder: curated rosbag2 (mcap) + graph snapshot + run metadata, driven from the app |
+| `mower_recorder` | The field bag recorder's profiles and Python tools (`mower-check-run`, `mower-bag`); the recorder itself (curated MCAP + graph snapshot + run metadata, driven from the app) is `mower_rsd`'s `bag` module |
 | `wit_ros2_imu` | WIT IMU ROS 2 node |
 | `turtlebot3_mapviz` | Mapviz support package |
 
@@ -183,9 +183,9 @@ The runtime Docker image and both robot Compose files use this entry point.
 Compose stores active geometry, named sites, and recorder bags in the
 `mower_data` named volume under `/home/mower/.mower`; container replacement or
 image pulls therefore do not erase field data. Back up that Docker volume as
-part of robot maintenance. Recording is opt-in (`record:=false` by default)
-until retention/upload and disk-space monitoring are configured; Compose gives
-an enabled recorder 60 seconds to flush during shutdown.
+part of robot maintenance. The recorder (`mower_rsd`'s `bag` module) writes
+nothing until someone starts a run, stops a run by itself under 2 GB free disk,
+and has the 60 seconds Compose gives `lawan_node` to flush during shutdown.
 
 Mission-map edits and navigation share a fail-closed operation lease. If a
 service reports that acquiring or releasing this guard is unconfirmed, first

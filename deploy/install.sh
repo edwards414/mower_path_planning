@@ -33,9 +33,9 @@ rm -rf /opt/mower/gps
 install -m 755 "$here/host/mower-update.sh" "$here/host/mower-host-request.sh" "$here/host/mower-link-status.py" "$here/host/mower-camera.sh" \
   "$here/host/mower-lte.sh" "$here/host/mower-lte-dhcp.sh" /opt/mower/host/
 install -m 755 "$here/host/mower-pair" /opt/mower/host/
-# Data collection (docs/資料收集錄製程序.md): a separate compose project; its
-# helper also stops / restarts the stack's recorder service around a run.
-install -m 644 "$here/docker-compose.data-collection.yaml" /opt/mower/
+# Data collection (docs/資料收集錄製程序.md): the helper hands mower_rsd's bag
+# module the profile; its own compose project is gone since E5-7.
+rm -f /opt/mower/docker-compose.data-collection.yaml
 install -m 755 "$here/host/mower-data-collection.sh" /opt/mower/host/
 ln -sf /opt/mower/host/mower-pair /usr/local/bin/mower-pair
 if [ ! -f /opt/mower/.env ]; then

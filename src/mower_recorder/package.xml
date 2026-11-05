@@ -3,31 +3,32 @@
 <package format="3">
   <name>mower_recorder</name>
   <version>0.0.0</version>
-  <description>Field bag recorder: curated rosbag2(mcap) + graph snapshot + run metadata</description>
+  <description>The bag recorder's profiles (config/, read by mower_rsd's bag module) and its Python tools: mower-check-run and mower-bag</description>
   <maintainer email="edwards940428@gmail.com">fxrbindi</maintainer>
   <license>Apache-2.0</license>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>ament_index_python</exec_depend>
+  <!-- E5-7: the recorder is mower_rsd's bag module (src/mower_rs/crates/
+       mower_recorder), which reads config/ from this package's share; the
+       Python nodes and their launch files are gone. What is
+       left: mower-check-run (check_run.py, PyYAML; python3-zstandard comes
+       with the Dockerfile), which mower-data-collection.sh's smoke and check
+       run, and mower-bag (cli.py, boto3), which a robot's helper from before
+       E5-7 runs for upload and verify (OTA does not update host files), both
+       with ros2 run. The GStreamer plugins the module's camera needs are
+       mower_rs's. -->
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-boto3</exec_depend>
+  <exec_depend>ros2run</exec_depend>
+  <!-- E5-7c removes these six. Nothing here uses them since E5-7b; they stay
+       only so that the Dockerfile's runtime apt list stays the same, and with
+       it deploy/image/apt/runtime-apt.lock and the apt layer (245 MB
+       compressed, reused while that list and the lock do not change). -->
   <exec_depend>ros2bag</exec_depend>
   <exec_depend>rosbag2_storage_mcap</exec_depend>
   <exec_depend>rosbag2_compression_zstd</exec_depend>
   <exec_depend>rosbag2_interfaces</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>python3-boto3</exec_depend>
-  <!-- data_collection profile (launch/data_collection.launch.py, P-097):
-       gscam 2.0.2 (Jazzy binary) does not pull the GStreamer plugins it needs
-       (v4l2src = plugins-good, videorate = plugins-base). -->
   <exec_depend>gscam</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>xacro</exec_depend>
-  <exec_depend>mower_description</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

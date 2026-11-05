@@ -1,16 +1,18 @@
 # mower_recorder
 
-mower_recorder's three rclpy nodes (`src/mower_recorder/mower_recorder/{recorder_manager,bag_store,graph_snapshot}_node.py`)
-as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST_RECORDER` (step E5 of
+The recorder: mower_recorder's three rclpy nodes (`src/mower_recorder/mower_recorder/{recorder_manager,bag_store,graph_snapshot}_node.py`,
+removed in E5-7; read them, and the design's citations of them, at bf19e6c) as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST_RECORDER` (step E5 of
 [docs/ROS_FREE_PLAN.md](../../../../docs/ROS_FREE_PLAN.md); not `rust_record` / `RUST_RECORD`, the zone path recorder).
 
 > **E5-3b: it records** the default profile from DDS, as the Python recorder and its `ros2 bag record` children did.
 > The switch is on by default since E5-7 (`robot.launch.py`, `mission.launch.py`, `deploy/docker-compose.yaml`,
-> `deploy/.env.example`; `test_controller_configuration.py` keeps it so); the robot has run it since 2026-10-31.
+> `deploy/.env.example`; `test_controller_configuration.py` keeps it so), and off means no recorder; the robot has
+> run it since 2026-10-31.
 > **E5-5:** data_collection too, by the request file
 > `~/.mower/recorder_profile.json` that `mower-data-collection.sh start` writes (and `stop` deletes). **E5-6:** the
 > front camera too (`camera_front`, GStreamer through gstreamer-rs, the request's `camera.driver: gstreamer`, which
-> the helper writes by default); `CAMERA_DRIVER=gscam` keeps E5-5's camera-only gscam service.
+> the helper writes). **E5-7:** gscam's compose service went with the Python recorder; the `gscam` package stays in
+> the image, with nothing that starts it, until E5-7c.
 
 ## What runs
 
@@ -46,25 +48,27 @@ as the module `bag` of `mower_rsd`: launch switch `rust_recorder`, compose `RUST
 - **The rear light (design D5)** goes out with path_record_node's through the bridge, to mower_base's r2r reader
   (R TL 8). A source's "recording" holds the overlay 6 s; the 2 s refresh keeps it on while a run records.
 - **One owner (design 4.2, R6):** each instance looks 2 s after its start and every 10 s for a DDS server of
-  `/mower_recorder/start` that is not a bus bridge's (the Python recorder). While there is one it holds none of its
+  `/mower_recorder/start` that is not a bus bridge's (a Python recorder from an image older than E5-7, in a container
+  on the same graph). While there is one it holds none of its
   endpoints, and says so in an ERROR; when it is gone it serves.
-- **Parameters** are what record.launch.py gives the Python nodes: the fixed ones in `mower_rsd.yaml`, the per-robot
+- **Parameters** are what record.launch.py gave the Python nodes: the fixed ones in `mower_rsd.yaml`, the per-robot
   ones (`robot_id`, `output_root`, `r2_env_file`, the profile in mower_recorder's share, `git_repo_dir`) from
   robot.launch.py's arguments. The three r2r nodes have no parameter services (as the other modules); the Python
-  nodes' do.
+  nodes' did.
 
 ## The switch
 
 | Where | Off | On (the default since E5-7) |
 |---|---|---|
-| `deploy/docker-compose.yaml` | lawan_node gets `rust_recorder:=false`; the `recorder` service runs `ros2 launch mower_recorder record.launch.py` as before (a `bash -c` in front that `exec`s it) | the `recorder` service sleeps (`sleep infinity`) |
+| `deploy/docker-compose.yaml` | lawan_node gets `rust_recorder:=false`: no recorder | the module. A robot's compose from before E5-7 still has the `recorder` service, which sleeps with the switch on (off, it crash-loops: its launch file is gone) |
 | `robot.launch.py` | `bag` is not in `--modules` | `bag` last in `--modules`, with the recorder's parameter files |
 | `mission.launch.py` (`rust_daemon:=false`) | nothing | the `mower_recorder` binary (`mower_bridge::module_main("bag", "bag", ...)`: the three nodes and a bridge, `/mower_bus_bridge/bag`) |
-| `deploy/host/mower-data-collection.sh` | as before | `start` writes the request file, `stop` deletes it (E5-5). `CAMERA_DRIVER=gstreamer` (the default, E5-6): nothing else starts, the module runs the camera, and the helper's `ros2` commands run in lawan_node. `CAMERA_DRIVER=gscam`: `start` also starts the camera-only service (`data_collection_camera`, front_camera.launch.py) and `stop` stops it |
+| `deploy/host/mower-data-collection.sh` | `start` refuses | `start` writes the request file, `stop` deletes it (E5-5); nothing else starts, the module runs the camera (E5-6), and the helper's commands run in lawan_node |
 | `src/mower_rs/tools/switch.sh` | written false when given so | written true (unless given false); the processes checked (the module, no Python recorder_manager) |
 
-Roll-back: `RUST_RECORDER=false` in `/opt/mower/.env`, `docker compose up -d`: no new image. It recreates lawan_node,
-so do it with the robot idle.
+Roll-back: an image from before E5-7 (`mower-update.sh --tag <previous>`); the module runs there as it does here. Its
+Python recorder also needs a compose that has the `recorder` service, and `RUST_RECORDER=false`. On this image
+`RUST_RECORDER=false` only turns recording off.
 
 ## Tests
 
@@ -100,9 +104,9 @@ so do it with the robot idle.
   `/camera/front/image_raw/compressed`, `camera_info` and `/tf_static` from DDS, and the run gets spec 1.6's
   `run_metadata.yaml` and `calib/` (`dc_metadata`). The file's going brings the default profile back.
 - **bag_store** takes the file's `upload_policy` while it is there (said once), its own otherwise.
-- **The camera:** the module's `camera_front` (E5-6, below) when the request says `camera.driver: gstreamer`;
-  otherwise gscam, the data-collection compose's `data_collection_camera` (front_camera.launch.py: gscam and the two
-  static TFs), in the profile `camera_only`, which the helper starts by name.
+- **The camera:** the module's `camera_front` (E5-6, below) when the request says `camera.driver: gstreamer`, as the
+  helper's does. `gscam` (a request without the key too) leaves the camera to someone else: until E5-7 that was the
+  data-collection compose's camera-only service; now only a test's pipeline (e2-verify's side W).
 
 ## The camera (E5-6)
 
@@ -129,23 +133,27 @@ so do it with the robot idle.
   stamped when published, with the values static_transform_publisher parsed from `repr(round(v, 9))`.
 - **The build:** GStreamer is behind the cargo feature `camera` (`mower_rsd/camera`, `mower_recorder/camera`,
   `mower_camera/gst`). The image builds `mower_rsd` with it (`src/mower_rs/CMakeLists.txt`); its libraries and
-  plugins are already in the image (gscam's). Built without it, a request for the camera is refused in the log
+  plugins are in the image (this package's `exec_depend`s in `src/mower_rs/package.xml`). Built without it, a request for the camera is refused in the log
   ("this build has no camera"), once per request.
 - **The checks (e2-verify):** `camproof`: gscam and `camera_front` on the same deterministic pipeline give the same
   JPEG bytes frame for frame, the same stamp steps, the same CameraInfo and the same publisher QoS. `record W F3` with
   `E5_CAMERA=gstreamer`: the Python recorder and the module record the module's camera identically; against E5-5's
   gscam run the camera bag's QoS, types, CameraInfo and both camera transforms are the same (stamps aside).
-- **Roll-back:** `CAMERA_DRIVER=gscam` in `/opt/mower/.env` (E5-5's camera-only service), no new image.
+- **Roll-back:** an image from before E5-7 (`CAMERA_DRIVER=gscam` went with the camera-only service).
 
 ## What comes after E5-6
 
 - **E5-4:** bus taps (`source: auto`) for the names whose writers are all in the process, instead of their DDS faces
   (branch `feat/e5-4-bus-taps`, paused).
-- **E5-7:** the default and the removal of the Python recorder (and of gscam's compose service).
+- **E5-7c:** rosbag2 and gscam leave the runtime apt lock.
+- **E5-7:** the default and the removal of the Python recorder (and of gscam's compose service): done. `mower_bag`
+  (`mower_recorder_core::cli`) is mower-bag's `upload` and `verify`, for `mower-data-collection.sh`. The request's
+  `camera.driver: gscam` (nothing starts here, the camera is someone else's) is left for e2-verify's side W.
 
 ## Turning it on (the owner, on the robot)
 
 1. R10: one upload of a Rust-recorded run to the real R2 (`upload_now` from the app with `RUST_RECORDER=true` in a
-   test window, or `mower-bag upload` of a copied run), then `mower-bag verify` and the GrassVision worker on it.
+   test window, or `mower-data-collection.sh upload`, or `mower-bag upload` of a copied run), then `mower-bag verify`
+   and the GrassVision worker on it.
 2. A supervised recording test with the switch on (`tools/switch.sh ... RUST_RECORDER=true`): start and stop from
    the app, the rear light, the bag list and `mower-check-run` on the run, then `switch.sh restore`.

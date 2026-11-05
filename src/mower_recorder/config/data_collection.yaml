@@ -1,6 +1,7 @@
 # mower_recorder — data_collection profile（實機資料收集：前鏡頭＋定位 → MCAP → R2）
 # 規格：GrassVision workspace doc/Robot_Recording_R2_Pipeline_Spec.md 第 1、2 節
-# 啟動：launch/data_collection.launch.py（現場程序：docs/資料收集錄製程序.md）
+# 啟動：mower-data-collection.sh start 寫 ~/.mower/recorder_profile.json，mower_rsd 的 bag 模組
+#   閒置時套用（E5-5；現場程序：docs/資料收集錄製程序.md）
 # 常駐的 record_topics.yaml 不受影響（app 回放依賴它）。
 profile: data_collection
 

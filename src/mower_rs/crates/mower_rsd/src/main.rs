@@ -237,10 +237,9 @@ const MODULES: &[Module] = &[
         instances: &[Instance { node: "mower_agent", run: |_c, m| Box::pin(mower_agent::run(m)) }],
     },
     Module {
-        // mower_recorder's three nodes (E5, rust_recorder, on by default since E5-7),
-        // as record.launch.py starts them. Born on the bus; with the switch
-        // off the Python recorder of compose's recorder service runs, and
-        // its recording reads DDS (E5-3b).
+        // mower_recorder's three nodes (E5, rust_recorder), the recorder since
+        // the Python one went (E5-7): with the switch off there is none. Born
+        // on the bus; its recording reads DDS (E5-3b).
         id: "bag",
         switch: "rust_recorder",
         instances: &[

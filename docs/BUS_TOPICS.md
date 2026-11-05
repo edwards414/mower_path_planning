@@ -67,13 +67,15 @@ references are to their own repositories, at the commits named in 1.4.
 - **nav2's `docking_server`** has parameters (nav2_params:240-301), but it is in neither the lifecycle list nor the
   component list, so it never loads.
 
-**`recorder` container** (compose:159-187). It runs mower_recorder's `graph_snapshot`, `recorder_manager` and
-`bag_store` (record.launch.py:62-106), all rclpy. These are the only Python ROS nodes on the robot.
+**`recorder` container** (compose:159-187), which is how this inventory found the recorder: mower_recorder's
+`graph_snapshot`, `recorder_manager` and `bag_store` (record.launch.py:62-106), all rclpy. E5-7 removed them, the
+container, record.launch.py and record_profile: the recorder is mower_rsd's module `bag`, and this file's citations of
+the Python are to bf19e6c.
 
 - While a recording runs, `recorder_manager` adds a `ros2 bag record` process (record_profile:109-120) and calls
   `ros2 param dump` (recorder_manager:399-404). `autostart:=false` (compose:174), so nothing records until someone
   presses the app's button.
-- A data-collection session (`deploy/docker-compose.data-collection.yaml`) records a few more topics
+- A data-collection session (the module's request file; until E5-7 `deploy/docker-compose.data-collection.yaml`) records a few more topics
   (data_collection.yaml:12-28). It is named below where it is the only consumer.
 
 **RMW.** CycloneDDS, graph on loopback (Dockerfile:266-269).
@@ -145,13 +147,13 @@ Each citation is `alias:line`.
 | `robot.launch.py`, `mower.launch.py`, `twist_mux.launch.py` | `src/mower_bringup/launch/` |
 | `mission.launch.py` | `src/mower_mission/launch/` |
 | `navigation.launch.py` | `src/mower_nav2/launch/` |
-| `record.launch.py` | `src/mower_recorder/launch/` |
+| `record.launch.py` | `src/mower_recorder/launch/` at bf19e6c (E5-7 removed it) |
 | `mower_rsd.yaml`, `gps.yaml`, `ws_bridge.yaml`, `twist_mux_topics.yaml` | `src/mower_bringup/config/` |
 | `nav2_params` | `src/mower_nav2/config/nav2_no_map_params.yaml` |
 | `ekf_params` | `src/mower_nav2/config/dual_ekf_navsat_params.yaml` |
 | `record_topics.yaml`, `qos_overrides.yaml`, `data_collection.yaml` | `src/mower_recorder/config/` |
-| `recorder_manager`, `bag_store`, `graph_snapshot` | `src/mower_recorder/mower_recorder/<name>_node.py` |
-| `record_profile` | `src/mower_recorder/mower_recorder/record_profile.py` |
+| `recorder_manager`, `bag_store`, `graph_snapshot` | `src/mower_recorder/mower_recorder/<name>_node.py` at bf19e6c (E5-7 removed them) |
+| `record_profile` | `src/mower_recorder/mower_recorder/record_profile.py` at bf19e6c (E5-7 removed it) |
 | `compose`, `Dockerfile` | `deploy/docker-compose.yaml`, `Dockerfile` |
 | `PLAN`, `HANDOFF`, `REFACTOR` | `docs/ROS_FREE_PLAN.md`, `docs/ROS_FREE_HANDOFF.md`, `docs/RUST_REFACTOR_PLAN.md` |
 | `probe_app.py`, `datum_check.py` | `src/mower_rs/tools/` |
@@ -188,7 +190,7 @@ Each citation is `alias:line`.
 | `/mower_base/wheel_override` | `String`, JSON | `pid_autotune`, `BE V 1` (mower_pid_autotune:809, 839) | `mower_base`, `BE V 1` (mower_base:905, 1058) | — | during a session; unknown | no | in-process only; base asks the graph whether it has a publisher (mower_base:175-185, 1185-1188) |
 | `/mower_base/servo_command` | `String`, JSON | Studio through ws_bridge, `R V 10` (mower_ws_bridge/hub:417; ws_bridge.yaml:32; studio:164, 546) | `mower_base`, `BE V 1` (mower_base:906, 1076) | Studio | per change, debounced 100 ms (studio:546) | no | DDS→bus until E3 |
 | `/mower_base/blade_command` | `String`, JSON | Studio through ws_bridge (ws_bridge.yaml:33; studio:165) | `mower_base`, `BE V 1` (mower_base:907, 1093) | Studio | 5 Hz dead-man while held (studio:162, 574) | no | DDS→bus until E3 (a safety path) |
-| `/mower_base/rear_light` | `String`, JSON | `path_record_node`, `R TL 1`, refreshed every 2 s while recording (mower_record:183-184, 203-207, 277-292); `recorder_manager`, `R TL 1` (recorder_manager:59-63, 83, 145-146) | `mower_base`, `R TL 8`, on its r2r node (mower_base:927, 1114-1119; 5.8 #1) | recorder (writer) | every 2 s while a recording runs | no | the reader stays on r2r until E5: path_record writes on the bus, the recorder on DDS |
+| `/mower_base/rear_light` | `String`, JSON | `path_record_node`, `R TL 1`, refreshed every 2 s while recording (mower_record:183-184, 203-207, 277-292); `recorder_manager`, `R TL 1` (recorder_manager:59-63, 83, 145-146) | `mower_base`, `R TL 8`, on its r2r node (mower_base:927, 1114-1119; 5.8 #1) | recorder (writer) | every 2 s while a recording runs | no | the reader stays on r2r: with the modules both writers are on the bus and go out; the rclpy path_record_node (`rust_record` off) writes on DDS. Goes with that fallback, not with E5 |
 
 ### 2.3 Sensors and localization
 
@@ -261,9 +263,9 @@ Each citation is `alias:line`.
 
 | Topic | Type | Producers | Consumers | Rate | DDS today | E2 |
 |---|---|---|---|---|---|---|
-| `/mower_recorder/status`, `/mower_recorder/bags` | `String`, JSON | `recorder_manager` and `bag_store`, `R TL 1` (recorder_manager:141-142; bag_store:98-99) | app via ws_bridge (app/recorder_provider:86-88, 114-123); `bag_store` reads the status (bag_store:106-107) | status every 2 s (recorder_manager:148); bags unknown | no | DDS only in E2; DDS→bus from E3 until E5. With E5-3a's bag module (`rust_recorder`, on by default since E5-7) both are written on the bus and go out `R TL 1` |
+| `/mower_recorder/status`, `/mower_recorder/bags` | `String`, JSON | `recorder_manager` and `bag_store`, `R TL 1` (recorder_manager:141-142; bag_store:98-99) | app via ws_bridge (app/recorder_provider:86-88, 114-123); `bag_store` reads the status (bag_store:106-107) | status every 2 s (recorder_manager:148); bags unknown | no | DDS only in E2; DDS→bus from E3 until E5. Since E5-3a's bag module (`rust_recorder`, the only recorder since E5-7) both are written on the bus and go out `R TL 1` |
 | `/mower_recorder/command_result` | `String`, JSON | `bag_store`, `R V 10` (bag_store:100-101) | app (app/recorder_provider:90, 124) | per command | no | same |
-| `/mower_recorder/command` | `String`, JSON | app via ws_bridge (ws_bridge.yaml:31; app/recorder_provider:89, 163) | `bag_store`, `R V 10` (bag_store:103-104) | per button press | no | DDS only in E2; bus→DDS from E3 until E5. With the bag module it comes in from DDS for `bag_store`, or is in-process with ws_bridge on the bus |
+| `/mower_recorder/command` | `String`, JSON | app via ws_bridge (ws_bridge.yaml:31; app/recorder_provider:89, 163) | `bag_store`, `R V 10` (bag_store:103-104) | per button press | no | DDS only in E2; bus→DDS from E3 until E5. Since the bag module it comes in from DDS for `bag_store`, or is in-process with ws_bridge on the bus |
 | `/mower_ws_bridge/wake` | `std_msgs/Empty` | `mower_ws_bridge`, `R V 1` (mower_ws_bridge/hub:208-213) | itself: it interrupts its own `spin_once` | per WebSocket command | no | an r2r artefact; it goes away in E3 |
 
 None of the following has an endpoint in `mower_rsd`:
@@ -336,7 +338,7 @@ therefore finds nothing.
 
 | Service | Server | Clients | E2 |
 |---|---|---|---|
-| `/mower_recorder/start`, `/mower_recorder/stop` (`Trigger`) | `recorder_manager` (recorder_manager:130-133) | app (app/recorder_provider:91-92, 199) | DDS only in E2; E3 proxies them until E5. The bag module (`rust_recorder`, on by default since E5-7) serves them on the bus, `service_to_ros` |
+| `/mower_recorder/start`, `/mower_recorder/stop` (`Trigger`) | `recorder_manager` (recorder_manager:130-133) | app (app/recorder_provider:91-92, 199) | DDS only in E2; E3 proxied them until E5. The bag module (`rust_recorder`, the only recorder since E5-7) serves them on the bus, `service_to_ros` |
 | `/mower_recorder/snapshot` (`Trigger`) | `recorder_manager` (recorder_manager:134-136) | none found | E5; served by the bag module as start and stop |
 | `/rosapi/topics` | emulated by ws_bridge: the DDS graph's topics that match `topics_sub` (mower_ws_bridge/client:149-150, 179-185) | app every 5 s (app/robot_fleet_provider:47, 158); probe_app.py:94 | a topic that leaves DDS also leaves this answer, and probe_app.py fails on it (probe_app.py:134-136) |
 | `/rosapi/get_time` | emulated: the wall clock (mower_ws_bridge/client:151-155) | Studio (studio:486); probe_app.py:39 | — |
@@ -438,7 +440,7 @@ of the roll-back (either switch false in `.env`).
   joints, the wheels' `/tf` from `/joint_states`, `/robot_description`): the owner's decision D2 of the E4 design.
 - **With E4-3's mux** (`rust_mux` with `rust_daemon`): twist_mux is a module of the process. nav2's `/nav_cmd_vel`
   comes in (DDS→bus, `R V 1`), its output `/cmd_vel_guard_input` and `/diagnostics` go out (bus→DDS, `R V 1`, for the
-  final guard until step 6 and the recorder until E5). `/joy_cmd` and the teleop topics come in as before; the lock and
+  final guard until step 6 and the recorder's DDS sources until E5-4). `/joy_cmd` and the teleop topics come in as before; the lock and
   the safety stop are in-process and still go out for the tools. Nav's own nav_core-only `/nav_cmd_vel` stays
   in-process then (mower_bridge README, "The policy").
 - **With E4-4's static_tf** (`rust_static_tf` with `rust_daemon`): robot_state_publisher is a module of the process.
@@ -637,7 +639,7 @@ the launch files set. "default" means nothing overrides the default.
 | `battery_state` | `base_telemetry_topic`, `battery_topic`, `aon_battery_topic` | mower_battery:236-238 | default |
 | `pid_autotune` | `telemetry_topic`, `pid_topic`, `override_topic`, `led_topic`, `status_topic`, `nav_active_topic` | mower_pid_autotune:807-812 | default (mower_rsd.yaml:176-180) |
 | `pid_autotune` | `lock_service` (a service name) | `/mission_operation_lock` (mower_pid_autotune:813) | default |
-| recorder (outside) | `gps_topic`, `fault_topic`, `rear_light_topic` | `/fix`, `/mower_recorder/fault`, `/mower_base/rear_light` (recorder_manager:79-83) | `gps_topic` and `fault_topic` from record.launch.py:87-88; `rear_light_topic` default |
+| recorder (module `bag`; was outside until E5-7) | `gps_topic`, `fault_topic`, `rear_light_topic` | `/fix`, `/mower_recorder/fault`, `/mower_base/rear_light` (recorder_manager:79-83) | `gps_topic` and `fault_topic` from record.launch.py:87-88; `rear_light_topic` default |
 
 Note that `mission.launch.py` passes the old separate binaries some of these values itself (mission.launch.py:329-333,
 425, 519-525). With `rust_daemon` only mower_rsd.yaml applies. Both sources agree today.
@@ -655,8 +657,9 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
      and the recorder (`source` `bag`, "the rear light breathes red", compose:153).
    - mower_base has the reader back, with the C++ semantics (mower_base_core `RearLightSources` and `led_frame`,
      checked against mower_protocol.cpp by the protocol oracle). It stays on the module's r2r node when the base moves
-     (E2 step 6), until E5: path_record writes on the bus and the recorder on DDS, and a bus reader would need the name
-     both ways (5.5 d).
+     (E2 step 6): with the modules both writers are on the bus and go out, the rclpy path_record_node (`rust_record`
+     off) writes on DDS, and a bus reader would need the name both ways (5.5 d). E5-7 took the Python recorder off
+     DDS; the reader moves when that fallback goes.
 2. **Coverage holds silent writers.** It creates publishers on `/free_space_inflated` and `/risk_map_inflated` that never
    publish (`#[allow(dead_code)]`, mower_coverage:442-445). On the bus they are harmless, but they fix the type and show
    up in introspection.
@@ -680,8 +683,8 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
      `/mower_base/servo_command` and `/mower_base/blade_command`.
 6. **`/rosout` loses the logs of moved modules.** A module that drops its r2r node will likely stop appearing in
    `/rosout`. rcl publishes a log to `/rosout` only under a live node's logger name; that is expected, not checked for
-   r2r. The recorder records `/rosout` as "all node + service logs" (record_topics.yaml:45). Keep each moved module's r2r node
-   until E5, or forward its log lines.
+   r2r. The recorder records `/rosout` as "all node + service logs" (record_topics.yaml:45), and the bag module reads it
+   from DDS (E5 design: until a log tap, E9). Keep each moved module's r2r node until then, or forward its log lines.
 7. **The idle drivetrain chain runs at 20 Hz end to end.** The coordinator lock and the safety stop
    (mower_nav:1981-1998) go through twist_mux and then the final guard to the base. In E2 that is two bridge crossings
    per message at 20 Hz, until E4.

@@ -36,10 +36,10 @@
 # must run exactly when it does not (checked like the drivers).
 #
 # RUST_RECORDER=true (E5: mower_rsd's bag module, or the mower_recorder
-# binary with RUST_DAEMON=false, instead of the Python recorder, whose
-# container then sleeps; the default since E5-7): once up, the module must
-# run and no Python recorder_manager may; `up` recreates the recorder
-# container too.
+# binary with RUST_DAEMON=false; the default, and the only recorder since
+# E5-7): once up, the module must run and no Python recorder_manager may. A
+# compose from before E5-7 still has the recorder service, whose command reads
+# RUST_RECORDER (it sleeps when on): `up` recreates that container too.
 #
 # WS_BRIDGE_BUS=true (E3: mower_ws_bridge on mower_bus, compose's default
 # since E3.2) needs RUST_BRIDGE=true in the backup .env, or there is no Rust
@@ -116,9 +116,13 @@ refuse_broken() {
 }
 
 compose_up() {
-  local out
-  # the recorder service too: its command reads RUST_RECORDER
-  if ! out=$(sudo docker compose up -d lawan_node recorder 2>&1); then
+  local out services=(lawan_node)
+  # a compose from before E5-7 (restore, a robot still on it): the recorder
+  # service too, its command reads RUST_RECORDER
+  if sudo docker compose config --services 2>/dev/null | grep -qx recorder; then
+    services+=(recorder)
+  fi
+  if ! out=$(sudo docker compose up -d "${services[@]}" 2>&1); then
     echo "$out" >&2
     die "docker compose up failed"
   fi
@@ -225,8 +229,8 @@ proc_problems() {
     ! rsd static_tf || echo "mower_rsd runs the static_tf module"
   fi
   # E5: RUST_RECORDER runs the bag module (in mower_rsd, or the mower_recorder
-  # binary) and the recorder container sleeps; off, neither runs here and the
-  # Python recorder, outside lawan_node, is not checked
+  # binary); off, neither runs. A compose from before E5-7 has the recorder
+  # container, which must sleep with it on
   if truthy "$rec"; then
     if truthy "$daemon"; then rsd bag || echo "no mower_rsd running the bag module"
     else [ "$(n mower_recorder)" -ge 1 ] || echo "mower_recorder not running"; fi

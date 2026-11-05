@@ -22,6 +22,10 @@ Reads R2 creds from env vars or a .env file (searched: --env-file, ./.env,
   mower-bag rm <run_id> [-y]
   mower-bag upload <run_dir>... | --all [--root DIR]   # manifest last, resumable
   mower-bag verify <run_id>                  # R2 manifest vs objects (sizes)
+
+upload and verify are also mower_bag (Rust, src/mower_rs/crates/
+mower_recorder_core: the same lines and exit codes), which
+mower-data-collection.sh runs on the robot (E5-7).
 """
 import argparse
 import os
@@ -183,7 +187,7 @@ def _pending_runs(root):
 
 
 def cmd_upload(client, cfg, args):
-    """Same upload as bag_store_node (manifest last, resumable), one-shot."""
+    """Same upload as bag_store (manifest last, resumable), one-shot."""
     root = os.path.expanduser(args.root)
     run_dirs = [os.path.abspath(os.path.expanduser(d)) for d in args.run_dirs]
     if args.all:
