@@ -588,7 +588,10 @@ pub static MODULES: &[Module] = &[
         // E5 (rust_recorder): mower_recorder's three nodes, their endpoints as
         // the Python recorder's made them (rclpy's depth 10 is R V 10, their
         // _latched() R TL 1; the /fix reader has depth 1). Born on the bus. Its
-        // recording (E5-3b) reads DDS on r2r nodes of its own, not on the bus.
+        // recording (E5-3b) reads DDS on r2r nodes of its own; with
+        // `source: auto` (E5-4) a name every writer of which is on the bus here
+        // is tapped on the bus instead (`RecordSources`), on scopes the policy
+        // does not plan for (`RECORDER_TAPS`).
         id: "bag",
         instances: &[
             Instance {
@@ -663,11 +666,16 @@ pub static OUTSIDE: &[Outside] = &[
         // rcl's /rosout writer is on every node; mower_nav reads nav2's.
         // velocity_smoother writes /nav_cmd_vel for twist_mux (R V 1,
         // measured): with the mux on the bus it comes in from DDS.
+        // lifecycle_manager_navigation writes /diagnostics next to twist_mux
+        // (R V 1, measured; docs/BUS_TOPICS.md 5.8): no module reads it, but
+        // the recorder must not take the name from the bus alone, whichever
+        // of them starts first (RecordSources, E5 design 3.5).
         node: "nav2",
         until: "E9",
         endpoints: &[
             publishes::<Log>("/rosout", R_TL_1000),
             publishes::<TwistStamped>("/nav_cmd_vel", R_V_1),
+            publishes::<DiagnosticArray>("/diagnostics", R_V_1),
             serves::<GetState::Service>("/bt_navigator/get_state"),
             serves_action::<NavigateToPose::Action>("/navigate_to_pose"),
             serves_action::<FollowPath::Action>("/follow_path"),

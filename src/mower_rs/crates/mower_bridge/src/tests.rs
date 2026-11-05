@@ -1797,3 +1797,161 @@ fn the_production_plan_has_the_drivetrain_on_the_bus() {
         assert_eq!(counts(&now), want, "{what}");
     }
 }
+
+/// The default profile's names (record_topics.yaml, the full group, then the
+/// snapshot group's).
+const DEFAULT_PROFILE: [&str; 35] = [
+    "/adapter/robot_pose", "/adapter/map_datum", "/adapter/coverage_settings", "/adapter/zone_summaries",
+    "/adapter/map_layers/map_grid", "/adapter/map_layers/free_space_inflated", "/adapter/map_layers/risk_map_inflated",
+    "/adapter/map_layers/chennal_map_inflated", "/adapter/marker_layers/coverage_path", "/adapter/marker_layers/zones",
+    "/adapter/marker_layers/channels", "/adapter/marker_layers/connectors", "/adapter/marker_layers/invalid_segments",
+    "/adapter/marker_layers/risk_zones", "/robot/online", "/battery_state", "/aon_battery_state", "/odom", "/tf",
+    "/tf_static", "/cmd_vel", "/fix", "/imu/data", "/mower_base/telemetry", "/risk_map_inflated",
+    "/free_space_inflated", "/navigate_to_pose/_action/feedback", "/navigate_to_pose/_action/status",
+    "/graph_snapshot", "/graph_events", "/diagnostics", "/rosout", "/global_costmap/costmap",
+    "/local_costmap/costmap", "/plan",
+];
+
+fn record_sources(ids: &[&str], on: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let sources = RecordSources::new(&Running::rsd(ids, on), &production_remaps());
+    DEFAULT_PROFILE
+        .iter()
+        .map(|name| match sources.of(name) {
+            RecordSource::Bus => format!("bus {name} ({})", sources.bus_writers(name).unwrap().join(", ")),
+            RecordSource::Dds(why) => format!("dds {name}: {why}"),
+        })
+        .collect()
+}
+
+/// E5 design 3.5 / 1.8's "Source" column for the production process with
+/// the bag module (E2 steps 6-7 on, #109), and how it flips by itself with
+/// E4's modules or a module off the bus: a name the recorder takes from the
+/// bus has no writer anywhere but on the bus here.
+#[test]
+fn the_recorder_takes_from_the_bus_only_names_every_writer_of_which_is_on_the_bus_here() {
+    let ids = with_e4(&["bag"]);
+    let got = record_sources(&ids, &crate::on_bus);
+    let bus: Vec<&str> = got.iter().filter_map(|l| l.strip_prefix("bus ")).map(|l| l.split(' ').next().unwrap()).collect();
+    assert_eq!(
+        bus,
+        [
+            "/adapter/robot_pose", "/adapter/map_datum", "/adapter/coverage_settings", "/adapter/zone_summaries",
+            "/adapter/map_layers/map_grid", "/adapter/map_layers/free_space_inflated",
+            "/adapter/map_layers/risk_map_inflated", "/adapter/map_layers/chennal_map_inflated",
+            "/adapter/marker_layers/coverage_path", "/adapter/marker_layers/zones", "/adapter/marker_layers/channels",
+            "/adapter/marker_layers/connectors", "/adapter/marker_layers/invalid_segments",
+            "/adapter/marker_layers/risk_zones", "/robot/online", "/battery_state", "/aon_battery_state",
+            // mower_base on the bus since E2 step 6 (#109)
+            "/odom", "/fix", "/imu/data", "/mower_base/telemetry", "/risk_map_inflated", "/free_space_inflated",
+            "/graph_snapshot", "/graph_events",
+            // nav's nav_core writer (`only(NAV_CORE)`). With the nav2
+            // backend nav2's planner_server writes it on DDS, which the
+            // manifest does not list (OUTSIDE has the writers modules
+            // depend on): the recorder sees that writer on DDS and takes the
+            // name from there (mower_recorder's sources.rs)
+            "/plan",
+        ],
+        "{got:#?}"
+    );
+    let dds: Vec<&str> = got.iter().filter(|l| l.starts_with("dds ")).map(String::as_str).collect();
+    assert_eq!(
+        dds,
+        [
+            "dds /tf: written by static_tf_publisher (not here), robot_state_publisher (outside)",
+            "dds /tf_static: written by static_tf_publisher (not here), navsat_transform (r2r), robot_state_publisher (outside)",
+            "dds /cmd_vel: no writer the manifest knows",
+            "dds /navigate_to_pose/_action/feedback: no writer the manifest knows",
+            "dds /navigate_to_pose/_action/status: no writer the manifest knows",
+            "dds /diagnostics: written by twist_mux (not here), nav2 (outside)",
+            "dds /rosout: written by nav2 (outside)",
+            "dds /global_costmap/costmap: no writer the manifest knows",
+            "dds /local_costmap/costmap: no writer the manifest knows",
+        ]
+    );
+    // E4's static_tf takes robot_state_publisher's place, so /tf is all on
+    // the bus and /tf_static is left with navsat's r2r writer. twist_mux's
+    // /diagnostics is the mux module's, but nav2's lifecycle manager writes
+    // it too, so it stays on DDS: were it tapped because nav2 had not come up
+    // yet, nav2's samples would be missing for the rest of the run
+    let e4 = with_e4(&["mux", "static_tf", "bag"]);
+    let got = record_sources(&e4, &crate::on_bus);
+    for line in ["dds /tf_static: written by navsat_transform (r2r)", "dds /diagnostics: written by nav2 (outside)"] {
+        assert!(got.iter().any(|l| l == line), "{line} with E4: {got:#?}");
+    }
+    assert!(got.iter().any(|l| l.starts_with("bus /tf (")), "/tf with E4: {got:#?}");
+    // the base back on r2r (E2 step 6's roll-back): /odom and the telemetry
+    // follow it to DDS, and with E4 /tf too
+    let base_off = |id: &str| crate::on_bus(id) && id != "base";
+    let got = record_sources(&with_e4(&["bag"]), &base_off);
+    for line in ["dds /odom: written by mower_base (r2r)", "dds /mower_base/telemetry: written by mower_base (r2r)"] {
+        assert!(got.iter().any(|l| l == line), "{line} with the base on r2r: {got:#?}");
+    }
+    let got = record_sources(&e4, &base_off);
+    assert!(got.iter().any(|l| l == "dds /tf: written by mower_base (r2r)"), "/tf with E4 and the base on r2r: {got:#?}");
+    // the standalone bag binary has only itself on its bus
+    let alone = RecordSources::new(&Running::standalone("bag", "bag").unwrap(), &production_remaps());
+    let alone: Vec<&str> = DEFAULT_PROFILE.iter().copied().filter(|n| alone.of(n) == RecordSource::Bus).collect();
+    assert_eq!(alone, ["/graph_snapshot", "/graph_events"]);
+}
+
+/// data_collection.yaml's names (E5-5), its full group, then its camera
+/// group's: the localize and gps outputs from the bus; the camera from DDS
+/// (E5-6's camera_front publishes on r2r nodes of its own, so the manifest
+/// knows no writer of it), as /tf and /tf_static are.
+#[test]
+fn data_collection_takes_the_localize_and_gps_names_from_the_bus() {
+    let sources = RecordSources::new(&Running::rsd(&with_e4(&["bag"]), crate::on_bus), &production_remaps());
+    let of = |name: &str| match sources.of(name) {
+        RecordSource::Bus => format!("bus {name} ({})", sources.bus_writers(name).unwrap().join(", ")),
+        RecordSource::Dds(why) => format!("dds {name}: {why}"),
+    };
+    let names = [
+        "/tf", "/tf_static", "/imu/data", "/odom", "/fix", "/gps/status", "/odometry/local", "/odometry/global",
+        "/odometry/gps", "/cmd_vel", "/mower_base/telemetry", "/battery_state", "/diagnostics", "/rosout",
+        "/graph_snapshot", "/graph_events", "/camera/front/image_raw/compressed", "/camera/front/camera_info",
+    ];
+    let bus: Vec<String> = names.iter().map(|n| of(n)).filter(|l| l.starts_with("bus ")).collect();
+    assert_eq!(
+        bus,
+        [
+            "bus /imu/data (imu)",
+            "bus /odom (mower_base)",
+            "bus /fix (gps)",
+            "bus /gps/status (gps)",
+            "bus /odometry/local (ekf_filter_node_odom)",
+            "bus /odometry/global (ekf_filter_node_map)",
+            "bus /odometry/gps (navsat_transform)",
+            "bus /mower_base/telemetry (mower_base)",
+            "bus /battery_state (battery_state)",
+            "bus /graph_snapshot (graph_snapshot)",
+            "bus /graph_events (graph_snapshot)",
+        ]
+    );
+    for name in ["/camera/front/image_raw/compressed", "/camera/front/camera_info"] {
+        assert_eq!(of(name), format!("dds {name}: no writer the manifest knows"));
+    }
+}
+
+/// mower_rsd hands the bag module its set and flags in front of its own
+/// arguments; standalone there are none, and the module is alone.
+#[test]
+fn the_bag_module_learns_the_process_from_its_arguments() {
+    let args = process_args(&["gps", "bag", "bridge"], &["bridge"]);
+    assert_eq!(args, ["--rsd-process", "gps,bag,bridge", "bridge"]);
+    let mut with_own = args.clone();
+    with_own.push("--other".into());
+    let (running, rest) = running_here(&with_own, "bag", "bag").unwrap();
+    assert_eq!(rest, ["--other"]);
+    let nodes: Vec<(&str, bool)> = running.iter().map(|r| (r.instance.node, r.on_bus)).collect();
+    assert!(nodes.contains(&("gps", true)) && nodes.contains(&("mower_ws_bridge", true)), "{nodes:?}");
+    assert!(nodes.contains(&("recorder_manager", true)));
+    // the module's four instances (E5-6's camera_front among them)
+    let (running, rest) = running_here(&process_args(&["bag"], &[] as &[&str]), "bag", "bag").unwrap();
+    assert!(rest.is_empty() && running.len() == 4, "{rest:?} {}", running.len());
+    let (alone, _) = running_here(&[], "bag", "bag").unwrap();
+    assert_eq!(
+        alone.iter().map(|r| r.instance.node).collect::<Vec<_>>(),
+        ["graph_snapshot", "recorder_manager", "bag_store", "camera_front"]
+    );
+    assert!(running_here(&["--rsd-process".to_string()], "bag", "bag").is_err());
+}

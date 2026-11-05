@@ -59,6 +59,49 @@ pub fn rsd_args<S: AsRef<str>, T: AsRef<str>>(ids: &[S], on_now: &[T]) -> Vec<St
     args
 }
 
+/// (E5-4) The flag mower_rsd puts in front of the bag module's arguments:
+/// `--rsd-process <ids> <run-time flags>`, comma-separated (`-` for none),
+/// so that the recorder applies the source rule (design 3.5) to the same
+/// set and flags as the bridge.
+pub const PROCESS_FLAG: &str = "--rsd-process";
+
+/// The scopes of the recorder's bus taps (E5-4): one per group, named as the
+/// group's node (`mower_recorder_core::profile`, design D12). Readers the
+/// policy does not plan for (a tapped name has no writer off the bus, so it
+/// needs nothing from DDS), so mower_rsd's manifest check skips them as it
+/// skips the bridge's own.
+pub const RECORDER_TAPS: &[&str] = &["mower_full_recorder", "mower_camera_recorder", "mower_snapshot_recorder"];
+
+/// [`PROCESS_FLAG`] and its two values, for `ids` (`--modules`) and the
+/// run-time flags `on_now`.
+pub fn process_args<S: AsRef<str>, T: AsRef<str>>(ids: &[S], on_now: &[T]) -> Vec<String> {
+    let join = |v: Vec<&str>| if v.is_empty() { "-".to_string() } else { v.join(",") };
+    vec![
+        PROCESS_FLAG.to_string(),
+        join(ids.iter().map(AsRef::as_ref).collect()),
+        join(on_now.iter().map(AsRef::as_ref).collect()),
+    ]
+}
+
+/// The instances of this process as module `id` (instance `node`) sees
+/// them, and its arguments without [`PROCESS_FLAG`]'s: under mower_rsd the
+/// set [`process_args`] gave (as [`rsd_plan_with`] plans it); standalone,
+/// where nothing put the flag in, the module's own binary
+/// ([`Running::standalone`]), whose bus has only the module.
+pub fn running_here(args: &[String], id: &str, node: &str) -> Result<(Vec<Running>, Vec<String>), String> {
+    let Some(i) = args.iter().position(|a| a == PROCESS_FLAG) else {
+        return Ok((Running::standalone(id, node)?, args.to_vec()));
+    };
+    let (Some(ids), Some(on_now)) = (args.get(i + 1), args.get(i + 2)) else {
+        return Err(format!("{PROCESS_FLAG} needs the module ids and the run-time flags"));
+    };
+    let split = |v: &str| -> Vec<String> { if v == "-" { Vec::new() } else { v.split(',').map(str::to_string).collect() } };
+    let (ids, on_now) = (split(ids), split(on_now));
+    let mut rest = args.to_vec();
+    rest.drain(i..i + 3);
+    Ok((Running::rsd(&ids, crate::on_bus_with(&on_now)), rest))
+}
+
 /// What [`rsd_args`] made: the ids, and the run-time flags.
 pub(crate) fn parse_rsd_args(args: &[String]) -> Result<(Vec<String>, Vec<String>), String> {
     let (mut ids, mut on_now) = (Vec::new(), Vec::new());
