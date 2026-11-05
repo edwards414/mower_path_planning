@@ -1,0 +1,1563 @@
+{
+ "about": "G4 link_status.json (E6 design 4.3): deploy/host/mower-link-status.py --once. given.modem: the replies per AT command, bytes as latin-1 characters, several strings 200 ms apart; a command with no entry gets no answer. stdout is --once, file what it wrote; a case that raises leaves the file it found, {\"stale\": true}. mower_link (Rust) is held to these, modulo `raises`, which is only Python saying why it exited 1.",
+ "defaults": {
+  "at_port": "/dev/lte_at",
+  "period_s": 5.0,
+  "skip_ifaces": ["lo", "docker", "veth", "br-", "dummy"],
+  "at_timeout_s": 1.5,
+  "state_dir": "/home/cat/.mower"
+ },
+ "sweeps": {
+  "qcsq_sinr_-2000..=2000": "d0ab0093aa85c1624949093de75fd15cf66dc0c2d4817c210f645267f3c152d5",
+  "cpsi_rsrq_rsrp_sinr_-2000..=2000": "7b5b5db532e22bde2f4e37eb96d12e806663ffc5e75488693a9b0a1c315ecf2d"
+ },
+ "cases": {
+  "ec25": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    },
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"lo\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"127.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"lo\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"192.168.0.113\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"eth0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"wwan0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.64.1.2\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"wwan0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"tailscale0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"100.64.0.7\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"tailscale0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"docker0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.17.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"docker0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"br-1234\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.18.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"br-1234\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"veth99\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"169.254.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"veth99\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"dummy0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"dummy0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}]"
+    },
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n wlan0: 0000   49.  -61.  -256        0      0      0      0     12        0\n"
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [\n  {\n   \"iface\": \"wlan0\",\n   \"link\": 49.0,\n   \"rssi_dbm\": -61.0\n  }\n ],\n \"ifaces\": [\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"192.168.0.113\"\n  },\n  {\n   \"name\": \"wwan0\",\n   \"up\": true,\n   \"addr\": \"10.64.1.2\"\n  },\n  {\n   \"name\": \"tailscale0\",\n   \"up\": true,\n   \"addr\": \"100.64.0.7\"\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [{\"iface\": \"wlan0\", \"link\": 49.0, \"rssi_dbm\": -61.0}], \"ifaces\": [{\"name\": \"eth0\", \"up\": true, \"addr\": \"192.168.0.113\"}, {\"name\": \"wwan0\", \"up\": true, \"addr\": \"10.64.1.2\"}, {\"name\": \"tailscale0\", \"up\": true, \"addr\": \"100.64.0.7\"}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "sim7600": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 20,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,5\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,2,\"46692\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\nERROR\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\nERROR\r\n"],
+     "AT+CPSI?": ["AT+CPSI?\r\r\n+CPSI: LTE,Online,466-92,0x639D,134534710,430,EUTRAN-BAND7,3050,5,5,-103,-998,-722,13\r\n\r\nOK\r\n"]
+    },
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"lo\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"127.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"lo\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"192.168.0.113\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"eth0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"wwan0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.64.1.2\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"wwan0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"tailscale0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"100.64.0.7\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"tailscale0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"docker0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.17.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"docker0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"br-1234\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.18.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"br-1234\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"veth99\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"169.254.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"veth99\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"dummy0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"dummy0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}]"
+    },
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -73,\n  \"csq\": 20,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"46692\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"EUTRAN-BAND7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -99.8,\n  \"sinr_db\": 13.0,\n  \"rsrq_db\": -10.3\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"192.168.0.113\"\n  },\n  {\n   \"name\": \"wwan0\",\n   \"up\": true,\n   \"addr\": \"10.64.1.2\"\n  },\n  {\n   \"name\": \"tailscale0\",\n   \"up\": true,\n   \"addr\": \"100.64.0.7\"\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -73, \"csq\": 20, \"ber\": 99, \"registered\": true, \"operator\": \"46692\", \"tech\": \"LTE\", \"error\": null, \"band\": \"EUTRAN-BAND7\", \"plmn\": \"46692\", \"rsrp_dbm\": -99.8, \"sinr_db\": 13.0, \"rsrq_db\": -10.3}, \"wifi\": [], \"ifaces\": [{\"name\": \"eth0\", \"up\": true, \"addr\": \"192.168.0.113\"}, {\"name\": \"wwan0\", \"up\": true, \"addr\": \"10.64.1.2\"}, {\"name\": \"tailscale0\", \"up\": true, \"addr\": \"100.64.0.7\"}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "no-modem": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"lo\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"127.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"lo\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"192.168.0.113\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"eth0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"wwan0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.64.1.2\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"wwan0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"tailscale0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"100.64.0.7\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"tailscale0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"docker0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.17.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"docker0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"br-1234\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"172.18.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"br-1234\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"veth99\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"169.254.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"veth99\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"dummy0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"10.0.0.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"dummy0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}]"
+    },
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"192.168.0.113\"\n  },\n  {\n   \"name\": \"wwan0\",\n   \"up\": true,\n   \"addr\": \"10.64.1.2\"\n  },\n  {\n   \"name\": \"tailscale0\",\n   \"up\": true,\n   \"addr\": \"100.64.0.7\"\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"eth0\", \"up\": true, \"addr\": \"192.168.0.113\"}, {\"name\": \"wwan0\", \"up\": true, \"addr\": \"10.64.1.2\"}, {\"name\": \"tailscale0\", \"up\": true, \"addr\": \"100.64.0.7\"}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cannot-open": {
+   "given": {
+    "at_port": "directory"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": null,\n  \"csq\": null,\n  \"ber\": null,\n  \"registered\": null,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": \"[Errno 21] Is a directory: '/dev/lte_at'\",\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": null, \"csq\": null, \"ber\": null, \"registered\": null, \"operator\": null, \"tech\": null, \"error\": \"[Errno 21] Is a directory: '/dev/lte_at'\", \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "not-a-tty": {
+   "given": {
+    "at_port": "regular-file"
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "termios.error",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "every-command-errors": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["ERROR\r\n"],
+     "AT+CREG?": ["ERROR\r\n"],
+     "AT+COPS?": ["ERROR\r\n"],
+     "AT+QNWINFO": ["ERROR\r\n"],
+     "AT+QCSQ": ["ERROR\r\n"],
+     "AT+CPSI?": ["ERROR\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": null,\n  \"csq\": null,\n  \"ber\": null,\n  \"registered\": null,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": null,\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": null, \"csq\": null, \"ber\": null, \"registered\": null, \"operator\": null, \"tech\": null, \"error\": null, \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "silent-modem": {
+   "given": {
+    "modem": {}
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": null,\n  \"csq\": null,\n  \"ber\": null,\n  \"registered\": null,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": null,\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": null, \"csq\": null, \"ber\": null, \"registered\": null, \"operator\": null, \"tech\": null, \"error\": null, \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "csq-unknown": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["+CSQ: 99,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["+CREG: 0,2\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": null,\n  \"csq\": 99,\n  \"ber\": 99,\n  \"registered\": false,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": null, \"csq\": 99, \"ber\": 99, \"registered\": false, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "csq-bounds-0": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["+CSQ: 0,0\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -113,\n  \"csq\": 0,\n  \"ber\": 0,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -113, \"csq\": 0, \"ber\": 0, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "csq-bounds-31": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["+CSQ: 31,7\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -51,\n  \"csq\": 31,\n  \"ber\": 7,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -51, \"csq\": 31, \"ber\": 7, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "csq-leading-zeros": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["+CSQ:007,099\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -99,\n  \"csq\": 7,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -99, \"csq\": 7, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "creg-roaming-long-form": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["+CREG: 2,5,\"1A2B\",\"00C3\",7\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "creg-searching": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["+CREG: 0,2\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": false,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": false, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "creg-one-number": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["+CREG: 1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": null,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": null, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-no-tech": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"Far EasTone\"\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Far EasTone\",\n  \"tech\": null,\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Far EasTone\", \"tech\": null, \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-gsm": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"TWM\",0\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"TWM\",\n  \"tech\": \"GSM\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"TWM\", \"tech\": \"GSM\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-utran": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"TWM\",2\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"TWM\",\n  \"tech\": \"UTRAN\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"TWM\", \"tech\": \"UTRAN\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-unknown-tech": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"TWM\",13\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"TWM\",\n  \"tech\": \"13\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"TWM\", \"tech\": \"13\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-not-registered": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": null, \"tech\": null, \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cops-empty-name": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-sinr-floor": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"LTE\",-60,-90,0,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": -20.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": -20.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-sinr-one-step": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"LTE\",-60,-90,1,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": -19.8,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": -19.8, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-sinr-top": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"LTE\",-60,-140,250,-20\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -140,\n  \"sinr_db\": 30.0,\n  \"rsrq_db\": -20\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -140, \"sinr_db\": 30.0, \"rsrq_db\": -20}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-sinr-negative": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"LTE\",-60,0,-7,0\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": 0,\n  \"sinr_db\": -21.4,\n  \"rsrq_db\": 0\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": 0, \"sinr_db\": -21.4, \"rsrq_db\": 0}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-sinr-needs-the-rounding": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"LTE\",-60,-90,61,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": -7.8,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": -7.8, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-no-service-falls-back-to-cpsi": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"NOSERVICE\"\r\n\r\nOK\r\n"],
+     "AT+CPSI?": ["AT+CPSI?\r\r\n+CPSI: LTE,Online,466-92,0x639D,134534710,430,EUTRAN-BAND7,3050,5,5,-103,-998,-722,13\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"EUTRAN-BAND7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -99.8,\n  \"sinr_db\": 13.0,\n  \"rsrq_db\": -10.3\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"EUTRAN-BAND7\", \"plmn\": \"46692\", \"rsrp_dbm\": -99.8, \"sinr_db\": 13.0, \"rsrq_db\": -10.3}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "qcsq-not-lte-falls-back-to-cpsi": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["+QCSQ: \"WCDMA\",-70,-100,100\r\n\r\nOK\r\n"],
+     "AT+CPSI?": ["ERROR\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cpsi-overrides-qnwinfo": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 20,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,5\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,2,\"46692\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\nERROR\r\n"],
+     "AT+CPSI?": ["AT+CPSI?\r\r\n+CPSI: LTE,Online,466-92,0x639D,134534710,430,EUTRAN-BAND7,3050,5,5,-103,-998,-722,13\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -73,\n  \"csq\": 20,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"46692\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"EUTRAN-BAND7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -99.8,\n  \"sinr_db\": 13.0,\n  \"rsrq_db\": -10.3\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -73, \"csq\": 20, \"ber\": 99, \"registered\": true, \"operator\": \"46692\", \"tech\": \"LTE\", \"error\": null, \"band\": \"EUTRAN-BAND7\", \"plmn\": \"46692\", \"rsrp_dbm\": -99.8, \"sinr_db\": 13.0, \"rsrq_db\": -10.3}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cpsi-no-service": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 20,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,5\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,2,\"46692\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\nERROR\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\nERROR\r\n"],
+     "AT+CPSI?": ["+CPSI: NO SERVICE,Online\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -73,\n  \"csq\": 20,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"46692\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -73, \"csq\": 20, \"ber\": 99, \"registered\": true, \"operator\": \"46692\", \"tech\": \"LTE\", \"error\": null, \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cpsi-wcdma": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 20,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,5\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,2,\"46692\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\nERROR\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\nERROR\r\n"],
+     "AT+CPSI?": ["+CPSI: WCDMA,Online,466-92,0x639D,1,WCDMA 2100,1,2,3,4,5\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -73,\n  \"csq\": 20,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"46692\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -73, \"csq\": 20, \"ber\": 99, \"registered\": true, \"operator\": \"46692\", \"tech\": \"LTE\", \"error\": null, \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "cpsi-rounding-and-negative-zero": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 20,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,5\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,2,\"46692\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\nERROR\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\nERROR\r\n"],
+     "AT+CPSI?": ["+CPSI: LTE,Online,466-92,0x1,1,1,EUTRAN-BAND3,1,5,5,-1,-1,-1,-0\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ", "AT+CPSI?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -73,\n  \"csq\": 20,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"46692\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"EUTRAN-BAND3\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -0.1,\n  \"sinr_db\": -0.0,\n  \"rsrq_db\": -0.1\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -73, \"csq\": 20, \"ber\": 99, \"registered\": true, \"operator\": \"46692\", \"tech\": \"LTE\", \"error\": null, \"band\": \"EUTRAN-BAND3\", \"plmn\": \"46692\", \"rsrp_dbm\": -0.1, \"sinr_db\": -0.0, \"rsrq_db\": -0.1}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "operator-not-utf8": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"Chungÿhwa ä¸­è\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chung\\ufffdhwa \\u4e2d\\ufffd\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chung\\ufffdhwa \\u4e2d\\ufffd\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "operator-utf8": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"ä¸­è¯ð±\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"\\u4e2d\\u83ef\\ud83c\\udf31\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"\\u4e2d\\u83ef\\ud83c\\udf31\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "answer-in-two-pieces": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["+CSQ: 15,99\r\n", "\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "operator-name-holds-OK": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"OK", "TEL\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": null, \"tech\": null, \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "operator-name-holds-OK-in-one-read": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["+COPS: 0,0,\"OKTEL\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"OKTEL\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"OKTEL\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "late-answer": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    },
+    "delay_ms": {
+     "AT+CSQ": 1700
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": null,\n  \"csq\": null,\n  \"ber\": null,\n  \"registered\": null,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": null, \"csq\": null, \"ber\": null, \"registered\": null, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "urc-in-front": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["\r\n+QIND: \"csq\",1,2\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    }
+   },
+   "commands": ["AT+CSQ", "AT+CREG?", "AT+COPS?", "AT+QNWINFO", "AT+QCSQ"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": true,\n  \"operator\": \"Chunghwa\",\n  \"tech\": \"LTE\",\n  \"error\": null,\n  \"band\": \"LTE BAND 7\",\n  \"plmn\": \"46692\",\n  \"rsrp_dbm\": -90,\n  \"sinr_db\": 10.0,\n  \"rsrq_db\": -9\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": true, \"operator\": \"Chunghwa\", \"tech\": \"LTE\", \"error\": null, \"band\": \"LTE BAND 7\", \"plmn\": \"46692\", \"rsrp_dbm\": -90, \"sinr_db\": 10.0, \"rsrq_db\": -9}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "unplugged-after-csq": {
+   "given": {
+    "modem": {
+     "AT+CSQ": ["AT+CSQ\r\r\n+CSQ: 15,99\r\n\r\nOK\r\n"],
+     "AT+CREG?": ["AT+CREG?\r\r\n+CREG: 0,1\r\n\r\nOK\r\n"],
+     "AT+COPS?": ["AT+COPS?\r\r\n+COPS: 0,0,\"Chunghwa\",7\r\n\r\nOK\r\n"],
+     "AT+QNWINFO": ["AT+QNWINFO\r\r\n+QNWINFO: \"FDD LTE\",\"46692\",\"LTE BAND 7\",3050\r\n\r\nOK\r\n"],
+     "AT+QCSQ": ["AT+QCSQ\r\r\n+QCSQ: \"LTE\",-60,-90,150,-9\r\n\r\nOK\r\n"]
+    },
+    "close_after": "AT+CSQ"
+   },
+   "commands": ["AT+CSQ", "AT+CREG?"],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": true,\n  \"rssi_dbm\": -83,\n  \"csq\": 15,\n  \"ber\": 99,\n  \"registered\": null,\n  \"operator\": null,\n  \"tech\": null,\n  \"error\": \"[Errno 5] Input/output error\",\n  \"band\": null,\n  \"plmn\": null,\n  \"rsrp_dbm\": null,\n  \"sinr_db\": null,\n  \"rsrq_db\": null\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": true, \"rssi_dbm\": -83, \"csq\": 15, \"ber\": 99, \"registered\": null, \"operator\": null, \"tech\": null, \"error\": \"[Errno 5] Input/output error\", \"band\": null, \"plmn\": null, \"rsrp_dbm\": null, \"sinr_db\": null, \"rsrq_db\": null}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-no-file": {
+   "given": {
+    "wireless": null
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-header-only": {
+   "given": {
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-two": {
+   "given": {
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n wlan0: 0000   49.  -61.  -256        0      0      0      0     12        0\n wlan1: 0000   0.  -256.  -256        0      0      0      0      0        0\n"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [\n  {\n   \"iface\": \"wlan0\",\n   \"link\": 49.0,\n   \"rssi_dbm\": -61.0\n  },\n  {\n   \"iface\": \"wlan1\",\n   \"link\": 0.0,\n   \"rssi_dbm\": -256.0\n  }\n ],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [{\"iface\": \"wlan0\", \"link\": 49.0, \"rssi_dbm\": -61.0}, {\"iface\": \"wlan1\", \"link\": 0.0, \"rssi_dbm\": -256.0}], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-whole-numbers": {
+   "given": {
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n wlan0: 0000   49  -61  -256 0 0 0 0 12 0\n"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [\n  {\n   \"iface\": \"wlan0\",\n   \"link\": 49.0,\n   \"rssi_dbm\": -61.0\n  }\n ],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [{\"iface\": \"wlan0\", \"link\": 49.0, \"rssi_dbm\": -61.0}], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-short-row-skipped": {
+   "given": {
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n wlan0: 0000 49.\n wlan1: 0000 7. -9.\n"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [\n  {\n   \"iface\": \"wlan1\",\n   \"link\": 7.0,\n   \"rssi_dbm\": -9.0\n  }\n ],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [{\"iface\": \"wlan1\", \"link\": 7.0, \"rssi_dbm\": -9.0}], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "wifi-bad-number": {
+   "given": {
+    "wireless": "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n wlan0: 0000 x. -9.\n"
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "ValueError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "ip-missing": {
+   "given": {
+    "ip": null
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-fails": {
+   "given": {
+    "ip": {
+     "stdout": "",
+     "rc": 1
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-bad-json": {
+   "given": {
+    "ip": {
+     "stdout": "not json"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-not-utf8": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifname\":\"ÿ\"}]",
+     "latin1": true
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-blank-output": {
+   "given": {
+    "ip": {
+     "stdout": "  \n"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-hangs": {
+   "given": {
+    "ip": {
+     "hang": true
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-no-ipv4": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"wlan0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"192.168.0.113\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"eth0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"wlan0\",\n   \"up\": false,\n   \"addr\": null\n  },\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"192.168.0.113\"\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"wlan0\", \"up\": false, \"addr\": null}, {\"name\": \"eth0\", \"up\": true, \"addr\": \"192.168.0.113\"}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-empty-object": {
+   "given": {
+    "ip": {
+     "stdout": "[{}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"192.168.0.113\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"eth0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"\",\n   \"up\": false,\n   \"addr\": null\n  },\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"192.168.0.113\"\n  },\n  {\n   \"name\": \"\",\n   \"up\": false,\n   \"addr\": null\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"\", \"up\": false, \"addr\": null}, {\"name\": \"eth0\", \"up\": true, \"addr\": \"192.168.0.113\"}, {\"name\": \"\", \"up\": false, \"addr\": null}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-states": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"a0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\", \"local\": \"1.1.1.1\", \"prefixlen\": 24, \"scope\": \"global\", \"label\": \"a0\", \"valid_life_time\": 4294967295, \"preferred_life_time\": 4294967295}]}, {\"ifindex\": 2, \"ifname\": \"a1\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UNKNOWN\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"a2\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"DOWN\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"a3\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"LOWERLAYERDOWN\", \"group\": \"default\", \"addr_info\": []}, {\"ifname\": \"a4\"}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"a0\",\n   \"up\": true,\n   \"addr\": \"1.1.1.1\"\n  },\n  {\n   \"name\": \"a1\",\n   \"up\": true,\n   \"addr\": null\n  },\n  {\n   \"name\": \"a2\",\n   \"up\": false,\n   \"addr\": null\n  },\n  {\n   \"name\": \"a3\",\n   \"up\": false,\n   \"addr\": null\n  },\n  {\n   \"name\": \"a4\",\n   \"up\": false,\n   \"addr\": null\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"a0\", \"up\": true, \"addr\": \"1.1.1.1\"}, {\"name\": \"a1\", \"up\": true, \"addr\": null}, {\"name\": \"a2\", \"up\": false, \"addr\": null}, {\"name\": \"a3\", \"up\": false, \"addr\": null}, {\"name\": \"a4\", \"up\": false, \"addr\": null}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-prefix-skips": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"lo\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"loop1\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"docker0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"dockerfoo\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"veth1\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"vethernet\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"br-1\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"br0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"dummy0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"dummy\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}, {\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": []}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"br0\",\n   \"up\": true,\n   \"addr\": null\n  },\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": null\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"br0\", \"up\": true, \"addr\": null}, {\"name\": \"eth0\", \"up\": true, \"addr\": null}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-two-addresses": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet6\", \"local\": \"fe80::1\"}, {\"family\": \"inet\", \"local\": \"10.0.0.1\"}, {\"family\": \"inet\", \"local\": \"10.0.0.2\"}]}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": \"10.0.0.1\"\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"eth0\", \"up\": true, \"addr\": \"10.0.0.1\"}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-address-without-local": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifindex\": 2, \"ifname\": \"eth0\", \"flags\": [\"BROADCAST\", \"UP\"], \"mtu\": 1500, \"qdisc\": \"mq\", \"operstate\": \"UP\", \"group\": \"default\", \"addr_info\": [{\"family\": \"inet\"}]}]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": [\n  {\n   \"name\": \"eth0\",\n   \"up\": true,\n   \"addr\": null\n  }\n ]\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": [{\"name\": \"eth0\", \"up\": true, \"addr\": null}]}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-empty-list": {
+   "given": {
+    "ip": {
+     "stdout": "[]"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-empty-dict": {
+   "given": {
+    "ip": {
+     "stdout": "{}"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "ip-items-not-objects": {
+   "given": {
+    "ip": {
+     "stdout": "[1]"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "AttributeError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "ip-dict-with-keys": {
+   "given": {
+    "ip": {
+     "stdout": "{\"a\": 1}"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "AttributeError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "ip-null": {
+   "given": {
+    "ip": {
+     "stdout": "null"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "TypeError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "ip-ifname-not-a-string": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifname\": 5}]"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "AttributeError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "ip-addr-info-null": {
+   "given": {
+    "ip": {
+     "stdout": "[{\"ifname\": \"eth0\", \"addr_info\": null}]"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "TypeError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "state-dir-missing": {
+   "given": {
+    "no_state_dir": true
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "FileNotFoundError",
+   "file": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "state-dir-with-a-slash": {
+   "given": {
+    "state_arg_suffix": "/"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "tmp-is-a-link": {
+   "given": {
+    "link_at": "link_status.json.tmp"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "file-is-a-link": {
+   "given": {
+    "link_at": "link_status.json"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "state-dir-is-a-link": {
+   "given": {
+    "state_is_link": true
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "OSError",
+   "file": null,
+   "other_untouched": true,
+   "elsewhere_empty": true,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "state-dir-with-a-slash-is-a-link": {
+   "given": {
+    "state_is_link": true,
+    "state_arg_suffix": "/"
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "OSError",
+   "file": null,
+   "other_untouched": true,
+   "elsewhere_empty": true,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "left-over-tmp": {
+   "given": {
+    "tmp_before": "left over"
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "argument-order": {
+   "given": {
+    "argv": ["--once", "<state>", "ignored-extra", "--ignored"]
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "bad-period-fails-at-the-start": {
+   "given": {
+    "env": {
+     "MOWER_LINK_PERIOD_S": "soon"
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "ValueError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "bad-period-even-if-empty": {
+   "given": {
+    "env": {
+     "MOWER_LINK_PERIOD_S": ""
+    }
+   },
+   "commands": [],
+   "rc": 1,
+   "stdout": "",
+   "raises": "ValueError",
+   "file": "{\"stale\": true}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": null,
+   "chown_to_the_dir_owner": [],
+   "tmp_left": false
+  },
+  "period-is-only-for-the-loop": {
+   "given": {
+    "env": {
+     "MOWER_LINK_PERIOD_S": "0.5"
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  },
+  "at-port-env-empty-is-no-modem": {
+   "given": {
+    "env": {
+     "MOWER_LTE_AT": ""
+    }
+   },
+   "commands": [],
+   "rc": 0,
+   "stdout": "{\n \"time\": 1790000000,\n \"lte\": {\n  \"present\": false\n },\n \"wifi\": [],\n \"ifaces\": []\n}\n",
+   "raises": null,
+   "file": "{\"time\": 1790000000, \"lte\": {\"present\": false}, \"wifi\": [], \"ifaces\": []}",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "mode": 420,
+   "chown_to_the_dir_owner": [
+    ["fd", true]
+   ],
+   "tmp_left": false
+  }
+ }
+}

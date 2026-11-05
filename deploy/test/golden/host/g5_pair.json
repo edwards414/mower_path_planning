@@ -1,0 +1,3229 @@
+{
+ "about": "G5 identity.json and the pairing URL (E6 design 4.3): deploy/host/mower-pair --state-dir S --env E + argv, with machine-id, hostname, randomness, clock, LAN address and users replaced, and stdout a pipe. given.identity and identity are the file, bytes as latin-1 characters. An argparse exit (usage, help) keeps no stdout: its texts are not the contract. mowerctl pair (Rust) is held to these, modulo `raises`.",
+ "defaults": {
+  "unset": {
+   "state_dir": "/home/cat/.mower",
+   "owner": "cat",
+   "env": "/opt/mower/.env",
+   "name": null,
+   "rotate": false,
+   "json": false,
+   "no_qr": false
+  },
+  "from-env": {
+   "state_dir": "/some/where",
+   "owner": "cat",
+   "env": "/opt/mower/.env",
+   "name": null,
+   "rotate": false,
+   "json": false,
+   "no_qr": false
+  }
+ },
+ "cases": {
+  "new": {
+   "given": {
+    "argv": ["--no-qr"]
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "new-says-qrencode-is-missing": {
+   "given": {
+    "argv": []
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    "",
+    "(install qrencode to print the QR code here)"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "new-with-qrencode": {
+   "given": {
+    "argv": [],
+    "qrencode": true
+   },
+   "rc": 0,
+   "stdout": [
+    "<QR>",
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [
+    [
+     "-t",
+     "ANSIUTF8",
+     "-m",
+     "2",
+     "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113"
+    ]
+   ],
+   "state_dir_mode": null
+  },
+  "new-makes-the-state-dir": {
+   "given": {
+    "argv": ["--no-qr"],
+    "no_state_dir": true
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": 493
+  },
+  "new-json": {
+   "given": {
+    "argv": ["--json"]
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-681CQ7\",",
+    "  \"name\": \"lubancat\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",",
+    "  \"created\": 1790000000,",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "new-rotate-draws-twice": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "random": ["0000000000000000000000000000000000000001", "1111111111111111111111111111111111111122"]
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=CEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJC&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"CEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJC\",\n  \"created\": 1790000000,\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20, 20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "new-with-name": {
+   "given": {
+    "argv": ["--name", "前院", "--no-qr"]
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : 前院",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=%E5%89%8D%E9%99%A2&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"\\u524d\\u9662\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "new-hostname-in-unicode": {
+   "given": {
+    "argv": ["--no-qr"],
+    "hostname": "lubancat-前院"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat-前院",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat-%E5%89%8D%E9%99%A2&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat-\\u524d\\u9662\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "machine-id-second-path": {
+   "given": {
+    "argv": ["--no-qr"],
+    "machine_ids": {
+     "/var/lib/dbus/machine-id": "dbus-machine-id\n"
+    }
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-CGRN25",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-CGRN25&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-CGRN25\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "machine-id-empty-goes-on": {
+   "given": {
+    "argv": ["--no-qr"],
+    "machine_ids": {
+     "/etc/machine-id": "\n",
+     "/var/lib/dbus/machine-id": "x"
+    }
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-GQ8YXV",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-GQ8YXV&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-GQ8YXV\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "machine-id-stripped": {
+   "given": {
+    "argv": ["--no-qr"],
+    "machine_ids": {
+     "/etc/machine-id": "  9041cf96a09a4c2e964969d4befc76b3 \r\n"
+    }
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "machine-id-none-is-hostname-and-random": {
+   "given": {
+    "argv": ["--no-qr"],
+    "machine_ids": {},
+    "random": ["a5a5a5a5a5a5a5a5", "0000000000000000000000000000000000000001"]
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-6Z9HYK",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-6Z9HYK&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-6Z9HYK\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [8, 20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "machine-id-not-utf8-fails": {
+   "given": {
+    "argv": ["--no-qr"],
+    "machine_ids": {
+     "/etc/machine-id": "ÿ\n"
+    }
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "UnicodeDecodeError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-leaves-a-wrong-mode-alone": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "identity_mode": 420
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 420,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-says-qrencode-is-missing": {
+   "given": {
+    "argv": [],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    "",
+    "(install qrencode to print the QR code here)"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-with-qrencode": {
+   "given": {
+    "argv": [],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "qrencode": true
+   },
+   "rc": 0,
+   "stdout": [
+    "<QR>",
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [
+    [
+     "-t",
+     "ANSIUTF8",
+     "-m",
+     "2",
+     "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113"
+    ]
+   ],
+   "state_dir_mode": null
+  },
+  "keep-json": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"bench\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-json-with-qrencode": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "qrencode": true
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"bench\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-no-name": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-1",
+    "name     : ",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-1&s=S&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\"}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-null-name": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\", \"name\": null}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-1",
+    "name     : None",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-1&s=S&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\", \"name\": null}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-empty-name": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\", \"name\": \"\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-1",
+    "name     : ",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-1&s=S&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\", \"name\": \"\"}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-odd-types": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": 5, \"secret\": true, \"name\": [1, \"x\", null, 2.5]}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : 5",
+    "name     : [1, 'x', None, 2.5]",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=5&s=True&n=%5B1%2C+%27x%27%2C+None%2C+2.5%5D&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"robot_id\": 5, \"secret\": true, \"name\": [1, \"x\", null, 2.5]}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-odd-types-json": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\"robot_id\": 5, \"secret\": 1.5, \"name\": {\"a\": \"b\"}}"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": 5,",
+    "  \"secret\": 1.5,",
+    "  \"name\": {",
+    "    \"a\": \"b\"",
+    "  },",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=5&s=1.5&n=%7B%27a%27%3A+%27b%27%7D&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"robot_id\": 5, \"secret\": 1.5, \"name\": {\"a\": \"b\"}}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "keep-key-order-and-extras": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\"zz\": 1, \"secret\": \"S\", \"relay\": \"old\", \"robot_id\": \"MW-1\", \"url\": \"old\", \"lan\": \"old\", \"a\": {\"b\": [1.0, null]}}"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"zz\": 1,",
+    "  \"secret\": \"S\",",
+    "  \"relay\": \"\",",
+    "  \"robot_id\": \"MW-1\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-1&s=S&l=192.168.0.113\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"a\": {",
+    "    \"b\": [",
+    "      1.0,",
+    "      null",
+    "    ]",
+    "  }",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\"zz\": 1, \"secret\": \"S\", \"relay\": \"old\", \"robot_id\": \"MW-1\", \"url\": \"old\", \"lan\": \"old\", \"a\": {\"b\": [1.0, null]}}",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "rotate": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "rotate-again-replaces-rotated": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1789500000,\n  \"more\": 1\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000,\n  \"more\": 1\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "rotate-with-qrencode": {
+   "given": {
+    "argv": ["--rotate"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "qrencode": true
+   },
+   "rc": 0,
+   "stdout": [
+    "<QR>",
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [
+    [
+     "-t",
+     "ANSIUTF8",
+     "-m",
+     "2",
+     "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113"
+    ]
+   ],
+   "state_dir_mode": null
+  },
+  "rotate-json": {
+   "given": {
+    "argv": ["--rotate", "--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"bench\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"rotated\": 1790000000,",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "rotate-fixes-the-mode": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "identity_mode": 420
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-space": {
+   "given": {
+    "argv": ["--name", "front yard", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : front yard",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=front+yard&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"front yard\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-tilde": {
+   "given": {
+    "argv": ["--name", "a~b", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a~b",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a~b&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a~b\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-star": {
+   "given": {
+    "argv": ["--name", "a*b", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a*b",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%2Ab&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a*b\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-chinese": {
+   "given": {
+    "argv": ["--name", "前院", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : 前院",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=%E5%89%8D%E9%99%A2&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"\\u524d\\u9662\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-chinese-json": {
+   "given": {
+    "argv": ["--name", "前院", "--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"\\u524d\\u9662\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=%E5%89%8D%E9%99%A2&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"\\u524d\\u9662\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-ampersand": {
+   "given": {
+    "argv": ["--name", "a&b=c", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a&b=c",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%26b%3Dc&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a&b=c\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-reserved": {
+   "given": {
+    "argv": ["--name", "a+b%c/d?e#f:g;h,i@j'k", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a+b%c/d?e#f:g;h,i@j'k",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%2Bb%25c%2Fd%3Fe%23f%3Ag%3Bh%2Ci%40j%27k&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a+b%c/d?e#f:g;h,i@j'k\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-safe-set": {
+   "given": {
+    "argv": ["--name", "aZ09_.-~", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : aZ09_.-~",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=aZ09_.-~&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"aZ09_.-~\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-quote-backslash": {
+   "given": {
+    "argv": ["--name", "a\"b\\c", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a\"b\\c",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%22b%5Cc&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a\\\"b\\\\c\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-quote-backslash-json": {
+   "given": {
+    "argv": ["--name", "a\"b\\c", "--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"a\\\"b\\\\c\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%22b%5Cc&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a\\\"b\\\\c\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-emoji-json": {
+   "given": {
+    "argv": ["--name", "🌱", "--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"\\ud83c\\udf31\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=%F0%9F%8C%B1&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"\\ud83c\\udf31\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-control-chars": {
+   "given": {
+    "argv": ["--name", "a\tb\nc", "--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"a\\tb\\nc\\u007f\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%09b%0Ac%7F&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a\\tb\\nc\\u007f\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-empty-changes-nothing": {
+   "given": {
+    "argv": ["--name", "", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-says-new-secret": {
+   "given": {
+    "argv": ["--name", "x", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : x",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=x&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"x\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "name-and-rotate": {
+   "given": {
+    "argv": ["--rotate", "--name", "x", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : x",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=x&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"x\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-equals": {
+   "given": {
+    "argv": ["--name=a=b", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : a=b",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=a%3Db&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"a=b\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-equals-empty": {
+   "given": {
+    "argv": ["--name=", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-equals-dash": {
+   "given": {
+    "argv": ["--name=--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : --rotate",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=--rotate&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"--rotate\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-abbreviated": {
+   "given": {
+    "argv": ["--rot", "--na", "x", "--no-"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : x",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=x&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"x\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-abbreviated-equals": {
+   "given": {
+    "argv": ["--na=x", "--no"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : x",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=x&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"x\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-ambiguous": {
+   "given": {
+    "argv": ["--n", "x"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-unknown": {
+   "given": {
+    "argv": ["--bogus"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-positional": {
+   "given": {
+    "argv": ["x"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-without-value": {
+   "given": {
+    "argv": ["--name"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-then-option": {
+   "given": {
+    "argv": ["--name", "--rotate"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-dash": {
+   "given": {
+    "argv": ["--name", "-", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : -",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=-&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"-\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-negative-number": {
+   "given": {
+    "argv": ["--name", "-5", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : -5",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=-5&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"-5\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-negative-decimal": {
+   "given": {
+    "argv": ["--name", "-.5", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : -.5",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=-.5&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"-.5\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-dash-word": {
+   "given": {
+    "argv": ["--name", "-x"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-name-dash-with-space": {
+   "given": {
+    "argv": ["--name", "-x y", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : -x y",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=-x+y&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"-x y\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-flag-with-value": {
+   "given": {
+    "argv": ["--rotate=1"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-last-wins": {
+   "given": {
+    "argv": ["--name", "a", "--name", "b", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : b",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=b&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"b\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-help": {
+   "given": {
+    "argv": ["--help"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-help-short": {
+   "given": {
+    "argv": ["-h"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-help-abbreviated": {
+   "given": {
+    "argv": ["--he"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-help-before-a-bad-flag": {
+   "given": {
+    "argv": ["-h", "--bogus"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-bad-flag-before-help": {
+   "given": {
+    "argv": ["--bogus", "-h"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "arg-short-unknown": {
+   "given": {
+    "argv": ["-x"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 2,
+   "stdout": [],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-not-json": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"S\", \"device_key\": \"dk\""
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-empty-file": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": ""
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-list": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "[1]"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-no-secret": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"device_key\": \"dk\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-empty-secret": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-1\", \"secret\": \"\", \"device_key\": \"dk\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-no-robot-id": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"secret\": \"S\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-robot-id-zero": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": 0, \"secret\": \"S\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-not-utf8": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\"robot_id\": \"MW-ÿ\", \"secret\": \"S\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-bom": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "ï»¿{\"robot_id\": \"MW-1\", \"secret\": \"S\"}"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "bad-with-rotate": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "not json",
+    "random": ["0000000000000000000000000000000000000001", "1111111111111111111111111111111111111122"]
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=CEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJC&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"CEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJC\",\n  \"created\": 1790000000,\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20, 20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "identity-is-a-directory": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity_is_dir": true
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "IsADirectoryError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": true,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-relay": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "# the robot\nIMAGE_TAG=main\nPAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-relay-json": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "# the robot\nIMAGE_TAG=main\nPAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"bench\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"wss://relay.mower.fxrbindi.com/r\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-double-quotes": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=\"wss://relay.mower.fxrbindi.com/r\"\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-single-quotes": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL='wss://relay.mower.fxrbindi.com/r'\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-both-quotes": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=\"'wss://relay.mower.fxrbindi.com/r'\"\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-quotes-the-other-way": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL='\"wss://relay.mower.fxrbindi.com/r\"'\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : \"wss://relay.mower.fxrbindi.com/r\"",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=%22wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr%22&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-spaces": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "  PAIR_RELAY_URL = wss://relay.mower.fxrbindi.com/r  \n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-value-with-equals": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=wss://r/x?a=1&b=2\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://r/x?a=1&b=2",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Fr%2Fx%3Fa%3D1%26b%3D2&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-commented-out": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "#PAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\n  # PAIR_RELAY_URL=x\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-export-is-another-key": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "export PAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-last-wins": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=ws://a\nPAIR_RELAY_URL=ws://b\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : ws://b",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=ws%3A%2F%2Fb&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-empty-value": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-crlf": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "A=1\r\nPAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\r\nB=2\r\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-bare-cr": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "A=1\rPAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r\rB=2"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-no-newline-at-the-end": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": "PAIR_RELAY_URL=wss://relay.mower.fxrbindi.com/r"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : wss://relay.mower.fxrbindi.com/r",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&h=wss%3A%2F%2Frelay.mower.fxrbindi.com%2Fr&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-missing-file": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_file": null
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-is-a-directory": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "env_is_dir": true
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "env-not-utf8-fails": {
+   "given": {
+    "argv": ["--no-qr"],
+    "env_file": "A=ÿ\n"
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "UnicodeDecodeError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "lan-none": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "lan": ""
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : ?:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "lan-none-json": {
+   "given": {
+    "argv": ["--json"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "lan": ""
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-7K3Q9P\",",
+    "  \"name\": \"bench\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",",
+    "  \"created\": 1789000000,",
+    "  \"device_key\": \"dk-1234\",",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "owner-other-user": {
+   "given": {
+    "argv": ["--owner", "mower", "--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "passwd": {
+     "cat": [1000, 1000],
+     "mower": [1001, 1002]
+    }
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1001, 1002]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "owner-unknown": {
+   "given": {
+    "argv": ["--owner", "nobody9", "--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "owner-chown-denied": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "chown_error": "EPERM"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "owner-chown-eacces": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "chown_error": "EACCES"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "secret rotated: paired phones must scan again; restart the stack: sudo systemctl restart mower",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\",\n  \"rotated\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "owner-chown-fails": {
+   "given": {
+    "argv": ["--rotate", "--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "chown_error": "EINVAL"
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "OSError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": true,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-with-a-slash": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "state_arg_suffix": "/"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-from-the-environment": {
+   "given": {
+    "argv": ["--no-qr"],
+    "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+    "state_from_env": true
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-7K3Q9P",
+    "name     : bench",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-7K3Q9P&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=bench&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-7K3Q9P\",\n  \"name\": \"bench\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\n  \"created\": 1789000000,\n  \"device_key\": \"dk-1234\"\n}\n",
+   "mode": 384,
+   "rewritten": false,
+   "draws": [],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-empty-in-the-environment": {
+   "given": {
+    "argv": ["--no-qr"],
+    "state_env_empty": true
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "FileNotFoundError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-is-a-file": {
+   "given": {
+    "argv": ["--no-qr"],
+    "state_is_file": true
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "FileExistsError",
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "tmp-is-a-link": {
+   "given": {
+    "argv": ["--no-qr"],
+    "link_at": "identity.json.tmp"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "identity-is-a-link": {
+   "given": {
+    "argv": ["--json"],
+    "link_at": "identity.json"
+   },
+   "rc": 0,
+   "stdout": [
+    "{",
+    "  \"robot_id\": \"MW-681CQ7\",",
+    "  \"name\": \"lubancat\",",
+    "  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",",
+    "  \"created\": 1790000000,",
+    "  \"relay\": \"\",",
+    "  \"lan\": \"192.168.0.113\",",
+    "  \"url\": \"https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113\"",
+    "}"
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-is-a-link": {
+   "given": {
+    "argv": ["--no-qr"],
+    "state_is_link": true
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "OSError",
+   "other_untouched": true,
+   "elsewhere_empty": true,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "state-dir-with-a-slash-is-a-link": {
+   "given": {
+    "argv": ["--no-qr"],
+    "state_is_link": true,
+    "state_arg_suffix": "/"
+   },
+   "rc": 1,
+   "stdout": [],
+   "raises": "OSError",
+   "other_untouched": true,
+   "elsewhere_empty": true,
+   "identity": null,
+   "mode": null,
+   "rewritten": false,
+   "draws": [20],
+   "chown": [],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  },
+  "left-over-tmp": {
+   "given": {
+    "argv": ["--no-qr"],
+    "tmp_before": "left over"
+   },
+   "rc": 0,
+   "stdout": [
+    "robot_id : MW-681CQ7",
+    "name     : lubancat",
+    "relay    : (none, LAN only)",
+    "lan      : 192.168.0.113:9090",
+    "identity : /home/cat/.mower/identity.json  (new secret)",
+    "",
+    "https://mower.fxrbindi.com/pair?v=1&id=MW-681CQ7&s=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&n=lubancat&l=192.168.0.113",
+    ""
+   ],
+   "raises": null,
+   "other_untouched": true,
+   "elsewhere_empty": null,
+   "identity": "{\n  \"robot_id\": \"MW-681CQ7\",\n  \"name\": \"lubancat\",\n  \"secret\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB\",\n  \"created\": 1790000000\n}\n",
+   "mode": 384,
+   "rewritten": true,
+   "draws": [20],
+   "chown": [
+    ["fd", 1000, 1000]
+   ],
+   "tmp_left": false,
+   "qrencode": [],
+   "state_dir_mode": null
+  }
+ }
+}
