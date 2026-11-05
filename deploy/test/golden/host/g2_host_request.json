@@ -1,0 +1,612 @@
+{
+ "about": "G2 host.request (E6 design 4.3), written by src/mower_mission/test/test_host_contracts.py. writers: what utils/mower-host-request and mower_mission/host_request.py write and refuse, and rust: what write_host_request must accept, refuse and write (mower_rs_common/tests/host_request_golden.rs). cases: deploy/host/mower-host-request.sh on each request. A call is [update_status.json state at that moment, its cwd, the tool, its arguments]. time is fixed. Temporary paths are shown as the production ones.",
+ "writers": {
+  "shell": {
+   "update": {
+    "argv": ["update"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"update\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "restart": {
+    "argv": ["restart"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"restart\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "reboot": {
+    "argv": ["reboot"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"reboot\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "poweroff": {
+    "argv": ["poweroff"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"poweroff\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "update-by-app": {
+    "argv": ["update", "app"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"update\",\"time\":1790000000,\"requested_by\":\"app\"}\n",
+    "tmp_left": false
+   },
+   "poweroff-by-container": {
+    "argv": ["poweroff", "container"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"poweroff\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "check-refused": {
+    "argv": ["check"],
+    "rc": 2,
+    "stdout": [],
+    "stderr": ["usage: mower-host-request update|restart|reboot|poweroff [requested_by]"],
+    "file": null,
+    "tmp_left": false
+   },
+   "unknown-refused": {
+    "argv": ["format-disk"],
+    "rc": 2,
+    "stdout": [],
+    "stderr": ["usage: mower-host-request update|restart|reboot|poweroff [requested_by]"],
+    "file": null,
+    "tmp_left": false
+   },
+   "no-action": {
+    "argv": [],
+    "rc": 2,
+    "stdout": [],
+    "stderr": ["usage: mower-host-request update|restart|reboot|poweroff [requested_by]"],
+    "file": null,
+    "tmp_left": false
+   },
+   "quote-in-by": {
+    "argv": ["reboot", "a\"b"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"reboot\",\"time\":1790000000,\"requested_by\":\"a\"b\"}\n",
+    "tmp_left": false
+   },
+   "unset-state-dir": {
+    "argv": ["update"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"update\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   },
+   "missing-state-dir": {
+    "argv": ["update"],
+    "rc": 0,
+    "stdout": [],
+    "stderr": [],
+    "file": "{\"action\":\"update\",\"time\":1790000000,\"requested_by\":\"container\"}\n",
+    "tmp_left": false
+   }
+  },
+  "python": {
+   "update": {
+    "action": "update",
+    "requested_by": null,
+    "refused": false,
+    "file": "{\"action\": \"update\", \"time\": 1790000000, \"requested_by\": \"ros\"}\n",
+    "tmp_left": false
+   },
+   "check": {
+    "action": "check",
+    "requested_by": "app",
+    "refused": false,
+    "file": "{\"action\": \"check\", \"time\": 1790000000, \"requested_by\": \"app\"}\n",
+    "tmp_left": false
+   },
+   "restart": {
+    "action": "restart",
+    "requested_by": "app",
+    "refused": false,
+    "file": "{\"action\": \"restart\", \"time\": 1790000000, \"requested_by\": \"app\"}\n",
+    "tmp_left": false
+   },
+   "reboot": {
+    "action": "reboot",
+    "requested_by": "container",
+    "refused": false,
+    "file": "{\"action\": \"reboot\", \"time\": 1790000000, \"requested_by\": \"container\"}\n",
+    "tmp_left": false
+   },
+   "poweroff": {
+    "action": "poweroff",
+    "requested_by": "container",
+    "refused": false,
+    "file": "{\"action\": \"poweroff\", \"time\": 1790000000, \"requested_by\": \"container\"}\n",
+    "tmp_left": false
+   },
+   "quote-in-by": {
+    "action": "reboot",
+    "requested_by": "a\"b",
+    "refused": false,
+    "file": "{\"action\": \"reboot\", \"time\": 1790000000, \"requested_by\": \"a\\\"b\"}\n",
+    "tmp_left": false
+   },
+   "non-ascii-by": {
+    "action": "update",
+    "requested_by": "前院",
+    "refused": false,
+    "file": "{\"action\": \"update\", \"time\": 1790000000, \"requested_by\": \"\\u524d\\u9662\"}\n",
+    "tmp_left": false
+   },
+   "unknown-refused": {
+    "action": "format-disk",
+    "requested_by": null,
+    "refused": true,
+    "file": null,
+    "tmp_left": false
+   },
+   "empty-refused": {
+    "action": "",
+    "requested_by": null,
+    "refused": true,
+    "file": null,
+    "tmp_left": false
+   }
+  },
+  "rust": {
+   "accept": [
+    ["update", "app"],
+    ["check", "app"],
+    ["restart", "app"],
+    ["reboot", "container"],
+    ["poweroff", "container"],
+    ["reboot", "a\"b"],
+    ["update", "前院"]
+   ],
+   "reject": ["format-disk", "", "UPDATE", "update "],
+   "text_update_app": "{\"action\":\"update\",\"requested_by\":\"app\",\"time\":1790000000}\n"
+  }
+ },
+ "cases": {
+  "update": {
+   "given": {
+    "request": "{\"action\": \"update\", \"time\": 1789999995, \"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=update by=app"],
+    [null, "<cwd>", "mower-update.sh"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "check": {
+   "given": {
+    "request": "{\"action\": \"check\", \"time\": 1789999995, \"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=check by=app"],
+    [null, "<cwd>", "mower-update.sh", "--check"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "restart": {
+   "given": {
+    "request": "{\"action\": \"restart\", \"time\": 1789999995, \"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=restart by=app"],
+    ["restarting", "/opt/mower", "docker", "compose", "restart", "lawan_node"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"idle\",\"message\":\"restarted\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "reboot": {
+   "given": {
+    "request": "{\"action\": \"reboot\", \"time\": 1789999995, \"requested_by\": \"container\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=reboot by=container"],
+    ["rebooting", "<cwd>", "systemctl", "reboot"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"rebooting\",\"message\":\"host reboot requested by container\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "poweroff": {
+   "given": {
+    "request": "{\"action\": \"poweroff\", \"time\": 1789999995, \"requested_by\": \"container\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=poweroff by=container"],
+    ["powering_off", "<cwd>", "systemctl", "poweroff"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"powering_off\",\"message\":\"host power-off requested by container\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "text-of-the-shell-writer": {
+   "given": {
+    "request": "{\"action\":\"poweroff\",\"time\":1790000000,\"requested_by\":\"container\"}\n"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=poweroff by=container"],
+    ["powering_off", "<cwd>", "systemctl", "poweroff"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"powering_off\",\"message\":\"host power-off requested by container\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "text-of-the-python-writer": {
+   "given": {
+    "request": "{\"action\": \"restart\", \"time\": 1790000000, \"requested_by\": \"ros\"}\n"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=restart by=ros"],
+    ["restarting", "/opt/mower", "docker", "compose", "restart", "lawan_node"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"idle\",\"message\":\"restarted\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "text-of-the-rust-writer": {
+   "given": {
+    "request": "{\"action\":\"update\",\"requested_by\":\"app\",\"time\":1790000000}\n"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=update by=app"],
+    [null, "<cwd>", "mower-update.sh"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "no-file": {
+   "given": {
+    "request": null
+   },
+   "calls": [],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "bad-json": {
+   "given": {
+    "request": "not json"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by="]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "empty-file": {
+   "given": {
+    "request": ""
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by="]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "json-array": {
+   "given": {
+    "request": "[1, 2]"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by="]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "no-action-key": {
+   "given": {
+    "request": "{\"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by=app"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "empty-action": {
+   "given": {
+    "request": "{\"action\": \"\", \"time\": 1789999995, \"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by=app"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "unknown-action": {
+   "given": {
+    "request": "{\"action\": \"format-disk\", \"time\": 1789999995, \"requested_by\": \"app\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=format-disk by=app"],
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "ignoring unknown action 'format-disk'"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "null-action": {
+   "given": {
+    "request": "{\"action\": null}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=None by="],
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "ignoring unknown action 'None'"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "number-action": {
+   "given": {
+    "request": "{\"action\": 5}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=5 by="],
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "ignoring unknown action '5'"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "unparsable-from-the-shell-writer": {
+   "given": {
+    "request": "{\"action\":\"reboot\",\"time\":1790000000,\"requested_by\":\"a\"b\"}\n"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action= by="]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": null,
+   "update_status_is_json": null,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "quote-in-by-reboot": {
+   "given": {
+    "request": "{\"action\": \"reboot\", \"time\": 1789999995, \"requested_by\": \"a\\\"b\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=reboot by=a\"b"],
+    [null, "<cwd>", "systemctl", "reboot"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"rebooting\",\"message\":\"host reboot requested by a\"b\",\"time\":1790000000}\n",
+   "update_status_is_json": false,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "quote-in-by-poweroff": {
+   "given": {
+    "request": "{\"action\": \"poweroff\", \"time\": 1789999995, \"requested_by\": \"a\\\"b\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=poweroff by=a\"b"],
+    [null, "<cwd>", "systemctl", "poweroff"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"powering_off\",\"message\":\"host power-off requested by a\"b\",\"time\":1790000000}\n",
+   "update_status_is_json": false,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "no-by": {
+   "given": {
+    "request": "{\"action\": \"reboot\"}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=reboot by="],
+    ["rebooting", "<cwd>", "systemctl", "reboot"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"rebooting\",\"message\":\"host reboot requested by \",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "null-by": {
+   "given": {
+    "request": "{\"action\": \"reboot\", \"requested_by\": null}"
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=reboot by=None"],
+    ["rebooting", "<cwd>", "systemctl", "reboot"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"rebooting\",\"message\":\"host reboot requested by None\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "restart-compose-fails": {
+   "given": {
+    "request": "{\"action\": \"restart\", \"time\": 1789999995, \"requested_by\": \"app\"}",
+    "docker": {
+     "compose_restart_rc": 1
+    }
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=restart by=app"],
+    ["restarting", "/opt/mower", "docker", "compose", "restart", "lawan_node"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"idle\",\"message\":\"restarted\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "restart-no-mower-dir": {
+   "given": {
+    "request": "{\"action\": \"restart\", \"time\": 1789999995, \"requested_by\": \"app\"}",
+    "no_mower_dir": true
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=restart by=app"]
+   ],
+   "stdout": [],
+   "stderr": ["/opt/mower/host/mower-host-request.sh: line N: cd: /opt/mower: No such file or directory"],
+   "rc": 0,
+   "update_status": "{\"state\":\"idle\",\"message\":\"restarted\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "reboot-systemctl-fails": {
+   "given": {
+    "request": "{\"action\": \"reboot\", \"time\": 1789999995, \"requested_by\": \"container\"}",
+    "systemctl_rc": 1
+   },
+   "calls": [
+    [null, "<cwd>", "logger", "-t", "mower-host-request", "action=reboot by=container"],
+    ["rebooting", "<cwd>", "systemctl", "reboot"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 1,
+   "update_status": "{\"state\":\"rebooting\",\"message\":\"host reboot requested by container\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "restart-replaces-the-status": {
+   "given": {
+    "request": "{\"action\": \"restart\", \"time\": 1789999995, \"requested_by\": \"app\"}",
+    "status_before": "{\"state\":\"failed\",\"message\":\"x\",\"tag\":\"main\",\"time\":1}\n"
+   },
+   "calls": [
+    ["failed", "<cwd>", "logger", "-t", "mower-host-request", "action=restart by=app"],
+    ["restarting", "/opt/mower", "docker", "compose", "restart", "lawan_node"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"idle\",\"message\":\"restarted\",\"time\":1790000000}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  },
+  "check-keeps-the-status": {
+   "given": {
+    "request": "{\"action\": \"check\", \"time\": 1789999995, \"requested_by\": \"app\"}",
+    "status_before": "{\"state\":\"failed\",\"message\":\"x\",\"tag\":\"main\",\"time\":1}\n"
+   },
+   "calls": [
+    ["failed", "<cwd>", "logger", "-t", "mower-host-request", "action=check by=app"],
+    ["failed", "<cwd>", "mower-update.sh", "--check"]
+   ],
+   "stdout": [],
+   "stderr": [],
+   "rc": 0,
+   "update_status": "{\"state\":\"failed\",\"message\":\"x\",\"tag\":\"main\",\"time\":1}\n",
+   "update_status_is_json": true,
+   "request_left": false,
+   "tmp_left": false
+  }
+ }
+}

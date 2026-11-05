@@ -87,6 +87,7 @@ jobs:
             test/test_coverage_progress_tracker.py \
             test/test_firmware_sync_wrapper.py \
             test/test_flutter_adapter_dto.py \
+            test/test_host_contracts.py \
             test/test_host_state_dir.py \
             test/test_image_mask_import.py \
             test/test_lte_uplink.py \

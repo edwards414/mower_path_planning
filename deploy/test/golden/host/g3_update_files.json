@@ -1,0 +1,2051 @@
+{
+ "about": "G3 update_status.json, update_check.json, image.json (E6 design 4.3): deploy/host/mower-update.sh against a fake docker, given shown per case. A call is [update_status.json state at that moment, its cwd, the tool, its arguments].",
+ "cases": {
+  "up-to-date": {
+   "given": {},
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "new-image": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:bbbb2222",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:bbbb2222\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:bbbb2222\",\"id\":\"sha256:id-b\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pulled-but-not-running-it": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-old",
+     "running": true
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:aaaa1111",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "service-not-running": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": false
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:aaaa1111",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "force": {
+   "given": {
+    "args": ["--force"]
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:aaaa1111",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:aaaa1111)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "registry-unreachable-pull-works": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "manifest_fail": true
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:bbbb2222",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:bbbb2222\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:bbbb2222\",\"id\":\"sha256:id-b\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "never-pulled": {
+   "given": {
+    "docker": {
+     "local": "",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:bbbb2222",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:bbbb2222\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:bbbb2222\",\"id\":\"sha256:id-b\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-denied": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "Error response from daemon: denied"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: Error response from daemon: denied",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: docker.io login for root is missing or expired: sudo docker login docker.io"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: docker.io login for root is missing or expired: sudo docker login docker.io\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-unauthorized": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "unauthorized: authentication required"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: unauthorized: authentication required",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: docker.io login for root is missing or expired: sudo docker login docker.io"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: docker.io login for root is missing or expired: sudo docker login docker.io\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-no-network": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "dial tcp: lookup r: no such host"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: dial tcp: lookup r: no such host",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 2 of 3)",
+    "[mower-update] pull attempt 2 of 3 failed: dial tcp: lookup r: no such host",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 3 of 3)",
+    "[mower-update] pull attempt 3 of 3 failed: dial tcp: lookup r: no such host",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: no network to docker.io"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: no network to docker.io\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-timeout": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "net/http: TLS handshake timeout"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: net/http: TLS handshake timeout",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 2 of 3)",
+    "[mower-update] pull attempt 2 of 3 failed: net/http: TLS handshake timeout",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 3 of 3)",
+    "[mower-update] pull attempt 3 of 3 failed: net/http: TLS handshake timeout",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: download from docker.io timed out or was cut off (weak network?)"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: download from docker.io timed out or was cut off (weak network?)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-other-with-a-quote": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "layer 1\nmanifest \"x\" unknown"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: manifest \"x\" unknown",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: manifest \"x\" unknown"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 1: manifest \\\"x\\\" unknown\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-cut-off-once": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "unexpected EOF",
+     "pull_fail_times": 1
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "restarting",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "image", "prune", "-f"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: unexpected EOF",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 2 of 3)",
+    "[mower-update] restarting: starting sha256:bbbb2222",
+    "Container lawan_node Started",
+    "[mower-update] idle: updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"idle\",\"message\":\"updated to docker.io/fxrbindi/mower_path_planning:main (sha256:bbbb2222)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:bbbb2222\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:bbbb2222\",\"id\":\"sha256:id-b\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-cut-off-every-time": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "unexpected EOF"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: unexpected EOF",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 2 of 3)",
+    "[mower-update] pull attempt 2 of 3 failed: unexpected EOF",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 3 of 3)",
+    "[mower-update] pull attempt 3 of 3 failed: unexpected EOF",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: download from docker.io timed out or was cut off (weak network?)"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: download from docker.io timed out or was cut off (weak network?)\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "pull-no-route": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "dial tcp: network is unreachable"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    ["pulling", "/opt/mower", "sleep", "30"],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: dial tcp: network is unreachable",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 2 of 3)",
+    "[mower-update] pull attempt 2 of 3 failed: dial tcp: network is unreachable",
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main (attempt 3 of 3)",
+    "[mower-update] pull attempt 3 of 3 failed: dial tcp: network is unreachable",
+    "[mower-update] failed: pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: no network to docker.io"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of docker.io/fxrbindi/mower_path_planning:main failed on attempt 3: no network to docker.io\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "compose-up-fails": {
+   "given": {
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "compose_up_rc": 1
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "pulling",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["restarting", "/opt/mower", "docker", "compose", "up", "-d", "--remove-orphans"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling docker.io/fxrbindi/mower_path_planning:main",
+    "[mower-update] restarting: starting sha256:bbbb2222",
+    "Container lawan_node Started",
+    "[mower-update] failed: docker compose up failed"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"docker compose up failed\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "interrupted-pulling": {
+   "given": {
+    "status_before": "{\"state\": \"pulling\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n"
+   },
+   "calls": [
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": [
+    "[mower-update] failed: earlier update interrupted while pulling (reboot or power loss)",
+    "[mower-update] up_to_date: already running sha256:aaaa1111"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "interrupted-restarting": {
+   "given": {
+    "status_before": "{\"state\": \"restarting\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n"
+   },
+   "calls": [
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": [
+    "[mower-update] failed: earlier update interrupted while restarting (reboot or power loss)",
+    "[mower-update] up_to_date: already running sha256:aaaa1111"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "interrupted-rebooting": {
+   "given": {
+    "status_before": "{\"state\":\"rebooting\",\"message\":\"x\",\"time\":1}\n"
+   },
+   "calls": [
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": [
+    "[mower-update] failed: earlier update interrupted while rebooting (reboot or power loss)",
+    "[mower-update] up_to_date: already running sha256:aaaa1111"
+   ],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "earlier-failure-is-not-an-interruption": {
+   "given": {
+    "status_before": "{\"state\": \"failed\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n"
+   },
+   "calls": [
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    ["failed", "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "failed",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"tag\":\"main\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "tag-replaces-the-line": {
+   "given": {
+    "args": ["--tag", "v0.5.0"],
+    "env_file": "OTHER=1\nIMAGE_TAG=main\n"
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:v0.5.0"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"v0.5.0\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"v0.5.0\",\"image\":\"docker.io/fxrbindi/mower_path_planning:v0.5.0\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:v0.5.0\",\"tag\":\"v0.5.0\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "OTHER=1\nIMAGE_TAG=v0.5.0\n"
+  },
+  "tag-appends-a-line": {
+   "given": {
+    "args": ["--tag", "v0.5.0"],
+    "env_file": "OTHER=1\n"
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:v0.5.0"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:v0.5.0"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"v0.5.0\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"v0.5.0\",\"image\":\"docker.io/fxrbindi/mower_path_planning:v0.5.0\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:v0.5.0\",\"tag\":\"v0.5.0\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": "OTHER=1\nIMAGE_TAG=v0.5.0\n"
+  },
+  "tag-defaults-to-stable": {
+   "given": {
+    "env_file": ""
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:stable"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"stable\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"stable\",\"image\":\"docker.io/fxrbindi/mower_path_planning:stable\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:stable\",\"tag\":\"stable\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": ""
+  },
+  "no-env-file-is-created": {
+   "given": {
+    "env_file": null
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:stable"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "compose", "ps", "-q", "--status", "running", "lawan_node"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [null, "/opt/mower", "docker", "inspect", "--format", "{{.Image}}", "cid-lawan"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{.Id}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:stable"
+    ]
+   ],
+   "stdout": ["[mower-update] up_to_date: already running sha256:aaaa1111"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\":\"up_to_date\",\"message\":\"already running sha256:aaaa1111\",\"tag\":\"stable\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"stable\",\"image\":\"docker.io/fxrbindi/mower_path_planning:stable\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": "{\"image\":\"docker.io/fxrbindi/mower_path_planning:stable\",\"tag\":\"stable\",\"digest\":\"sha256:aaaa1111\",\"id\":\"sha256:id-a\",\"pulled_at\":1790000000}\n",
+   "env_file_after": ""
+  },
+  "image-repo-from-env": {
+   "given": {
+    "env_file": "IMAGE_REPO=ghcr.io/edwards414/mower_path_planning\nIMAGE_TAG=main\n",
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b",
+     "pull_fail": "denied"
+    }
+   },
+   "calls": [
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "ghcr.io/edwards414/mower_path_planning:main"
+    ],
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "ghcr.io/edwards414/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "ghcr.io/edwards414/mower_path_planning:main"
+    ],
+    ["pulling", "/opt/mower", "docker", "pull", "ghcr.io/edwards414/mower_path_planning:main"]
+   ],
+   "stdout": [
+    "[mower-update] pulling: pulling ghcr.io/edwards414/mower_path_planning:main",
+    "[mower-update] pull attempt 1 of 3 failed: denied",
+    "[mower-update] failed: pull of ghcr.io/edwards414/mower_path_planning:main failed on attempt 1: ghcr.io login for root is missing or expired: sudo docker login ghcr.io"
+   ],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": "{\"state\":\"failed\",\"message\":\"pull of ghcr.io/edwards414/mower_path_planning:main failed on attempt 1: ghcr.io login for root is missing or expired: sudo docker login ghcr.io\",\"tag\":\"main\",\"time\":1790000000}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"ghcr.io/edwards414/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_REPO=ghcr.io/edwards414/mower_path_planning\nIMAGE_TAG=main\n"
+  },
+  "check-up-to-date": {
+   "given": {
+    "args": ["--check"]
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: up to date (sha256:aaaa1111)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-moved": {
+   "given": {
+    "args": ["--check"],
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:bbbb2222",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "pulled_tag_id": "sha256:id-b"
+    }
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: docker.io/fxrbindi/mower_path_planning:main moved to sha256:bbbb2222 (running sha256:aaaa1111)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-registry-down": {
+   "given": {
+    "args": ["--check"],
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "manifest_fail": true
+    }
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: registry lookup failed"],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"registry lookup failed (network or docker.io login)\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-garbage-answer": {
+   "given": {
+    "args": ["--check"],
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "manifest_text": "not json"
+    }
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: registry lookup failed"],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"registry lookup failed (network or docker.io login)\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-list-answer": {
+   "given": {
+    "args": ["--check"],
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "manifest_text": "[{\"Descriptor\": {\"digest\": \"sha256:bbbb2222\"}}, {\"Descriptor\": {\"digest\": \"other\"}}]"
+    }
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: docker.io/fxrbindi/mower_path_planning:main moved to sha256:bbbb2222 (running sha256:aaaa1111)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:bbbb2222\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-empty-list-answer": {
+   "given": {
+    "args": ["--check"],
+    "docker": {
+     "local": "sha256:aaaa1111",
+     "remote": "sha256:aaaa1111",
+     "tag_id": "sha256:id-a",
+     "running_id": "sha256:id-a",
+     "running": true,
+     "manifest_text": "[]"
+    }
+   },
+   "calls": [
+    [null, "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     null,
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: registry lookup failed"],
+   "stderr": [],
+   "rc": 1,
+   "update_status.json": null,
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"registry lookup failed (network or docker.io login)\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "check-keeps-update-status": {
+   "given": {
+    "args": ["--check"],
+    "status_before": "{\"state\": \"idle\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n"
+   },
+   "calls": [
+    ["idle", "/opt/mower", "docker", "manifest", "inspect", "-v", "docker.io/fxrbindi/mower_path_planning:main"],
+    [
+     "idle",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ],
+    [
+     "idle",
+     "/opt/mower",
+     "docker",
+     "image",
+     "inspect",
+     "--format",
+     "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}",
+     "docker.io/fxrbindi/mower_path_planning:main"
+    ]
+   ],
+   "stdout": ["[mower-update] check: up to date (sha256:aaaa1111)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\": \"idle\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n",
+   "update_check.json": "{\"time\":1790000000,\"tag\":\"main\",\"image\":\"docker.io/fxrbindi/mower_path_planning:main\",\"remote_digest\":\"sha256:aaaa1111\",\"local_digest\":\"sha256:aaaa1111\",\"error\":\"\"}\n",
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "lock-held": {
+   "given": {
+    "lock": true,
+    "status_before": "{\"state\": \"idle\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n"
+   },
+   "calls": [],
+   "stdout": ["[mower-update] an update is already in progress (another mower-update.sh holds the lock)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": "{\"state\": \"idle\", \"message\": \"x\", \"tag\": \"main\", \"time\": 1789996400}\n",
+   "update_check.json": null,
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "lock-held-check": {
+   "given": {
+    "lock": true,
+    "args": ["--check"]
+   },
+   "calls": [],
+   "stdout": ["[mower-update] an update is already in progress (another mower-update.sh holds the lock)"],
+   "stderr": [],
+   "rc": 0,
+   "update_status.json": null,
+   "update_check.json": null,
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "unknown-argument": {
+   "given": {
+    "args": ["--nope"]
+   },
+   "calls": [],
+   "stdout": [],
+   "stderr": ["unknown argument: --nope"],
+   "rc": 2,
+   "update_status.json": null,
+   "update_check.json": null,
+   "image.json": null,
+   "env_file_after": "IMAGE_TAG=main\n"
+  },
+  "no-mower-dir": {
+   "given": {
+    "no_mower_dir": true
+   },
+   "calls": [],
+   "stdout": [],
+   "stderr": [
+    "/opt/mower/host/mower-update.sh: line N: cd: /opt/mower: No such file or directory",
+    "no /opt/mower (run deploy/install.sh first)"
+   ],
+   "rc": 1,
+   "update_status.json": null,
+   "update_check.json": null,
+   "image.json": null,
+   "env_file_after": null
+  }
+ }
+}
