@@ -3,7 +3,7 @@ use std::{
     ffi::CString,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex, MutexGuard,
+        Mutex, MutexGuard, PoisonError,
     },
 };
 
@@ -13,8 +13,18 @@ lazy_static! {
     static ref LOG_GUARD: Mutex<()> = Mutex::new(());
 }
 
-pub(crate) fn log_guard() -> MutexGuard<'static, ()> {
-    LOG_GUARD.lock().unwrap()
+// mower_rs patch: the guard holds no data, so a panic under it leaves nothing
+// half done, and it must not stop all later logging of the process. Public for
+// the workspace's test (crates/mower_ws_bridge/tests/log_nul.rs).
+#[doc(hidden)]
+pub fn log_guard() -> MutexGuard<'static, ()> {
+    LOG_GUARD.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+// mower_rs patch: `text` for rcutils, which takes C strings. A NUL, which one
+// cannot hold, is written out as `\0`, so that the text is logged whole.
+fn c_text(text: &str) -> CString {
+    CString::new(text).unwrap_or_else(|_| CString::new(text.replace('\0', "\\0")).unwrap_or_default())
 }
 
 // for some hidden reason g_rcutils_logging_initialized
@@ -44,15 +54,15 @@ pub fn log(msg: &str, logger_name: &str, file: &str, line: u32, severity: LogSev
     // currently not possible to get function name in rust.
     // see https://github.com/rust-lang/rfcs/pull/2818
     let function = CString::new("").unwrap();
-    let file = CString::new(file).unwrap();
+    let file = c_text(file);
     let location = rcutils_log_location_t {
         function_name: function.as_ptr(),
         file_name: file.as_ptr(),
         line_number: line as usize,
     };
     let format = CString::new("%s").unwrap();
-    let logger_name = CString::new(logger_name).unwrap();
-    let message = CString::new(msg).unwrap();
+    let logger_name = c_text(logger_name);
+    let message = c_text(msg);
     let severity = severity.to_native();
     unsafe {
         rcutils_log(
