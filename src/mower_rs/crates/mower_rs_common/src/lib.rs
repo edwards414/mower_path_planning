@@ -15,10 +15,12 @@ use serde_json::Value;
 pub mod guard;
 pub mod module;
 pub mod names;
+pub mod registry;
 pub mod throttle;
 
 pub use module::{module_main, BoxError, ModuleCtx, ModuleResult, ModuleRun, Shutdown};
 pub use names::{NameError, NameKind, Remaps};
+pub use registry::{BridgeProbe, Registry, SlotInfo, SlotState};
 
 /// Typed access to a node's initial parameters with defaults.
 ///

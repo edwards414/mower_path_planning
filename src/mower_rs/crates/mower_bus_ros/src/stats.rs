@@ -127,6 +127,25 @@ pub struct EntryStats {
     pub dds_server: bool,
 }
 
+fn snapshot(direction: Direction, c: &Counters) -> EntryStats {
+    let load = |n: &AtomicU64| n.load(Ordering::Relaxed);
+    EntryStats {
+        direction,
+        forwarded: load(&c.forwarded),
+        skipped: load(&c.skipped),
+        stale: load(&c.stale),
+        resyncs: load(&c.resyncs),
+        unanswered: load(&c.unanswered),
+        dropped: load(&c.dropped),
+        dds_writer: c.dds_writer.load(Ordering::Relaxed),
+        bus_server: c.bus_server.load(Ordering::Relaxed),
+        invalid: load(&c.invalid),
+        bus_writer: c.bus_writer.load(Ordering::Relaxed),
+        dds_reader: c.dds_reader.load(Ordering::Relaxed),
+        dds_server: c.dds_server.load(Ordering::Relaxed),
+    }
+}
+
 /// Every forwarder's counters, by kind and name.
 type Entries = BTreeMap<(Kind, String), (Direction, Arc<Counters>)>;
 
@@ -163,28 +182,50 @@ impl BridgeStats {
         self.get(Kind::Action, name)
     }
 
+    /// Every bridged name with its counters: topics, then services, then
+    /// actions, each sorted by name. What `mowerctl bridge` shows (E8-2).
+    pub fn entries(&self) -> Vec<(String, EntryStats)> {
+        self.lock().iter().map(|((_, name), (direction, c))| (name.clone(), snapshot(*direction, c))).collect()
+    }
+
     fn get(&self, kind: Kind, name: &str) -> Option<EntryStats> {
         let entries = self.lock();
         let (direction, c) = entries.get(&(kind, name.to_string()))?;
-        let load = |n: &AtomicU64| n.load(Ordering::Relaxed);
-        Some(EntryStats {
-            direction: *direction,
-            forwarded: load(&c.forwarded),
-            skipped: load(&c.skipped),
-            stale: load(&c.stale),
-            resyncs: load(&c.resyncs),
-            unanswered: load(&c.unanswered),
-            dropped: load(&c.dropped),
-            dds_writer: c.dds_writer.load(Ordering::Relaxed),
-            bus_server: c.bus_server.load(Ordering::Relaxed),
-            invalid: load(&c.invalid),
-            bus_writer: c.bus_writer.load(Ordering::Relaxed),
-            dds_reader: c.dds_reader.load(Ordering::Relaxed),
-            dds_server: c.dds_server.load(Ordering::Relaxed),
-        })
+        Some(snapshot(*direction, c))
     }
 
     fn lock(&self) -> MutexGuard<'_, Entries> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entries_list_every_name_in_kind_and_name_order_with_its_counters() {
+        let stats = BridgeStats::default();
+        let odom = stats.register("/odom", Direction::ToRos);
+        stats.register("/save", Direction::ServiceFromRos);
+        stats.register("/app_joy_cmd", Direction::FromRos);
+        stats.register("/nav", Direction::ActionToRos);
+        odom.forwarded();
+        odom.forwarded();
+        odom.skipped();
+        odom.set_dds_writer(true);
+        let entries = stats.entries();
+        let names: Vec<(&str, Direction)> = entries.iter().map(|(n, e)| (n.as_str(), e.direction)).collect();
+        assert_eq!(
+            names,
+            [
+                ("/app_joy_cmd", Direction::FromRos),
+                ("/odom", Direction::ToRos),
+                ("/save", Direction::ServiceFromRos),
+                ("/nav", Direction::ActionToRos),
+            ]
+        );
+        assert_eq!(entries[1].1, stats.topic("/odom").unwrap());
+        assert_eq!((entries[1].1.forwarded, entries[1].1.skipped, entries[1].1.dds_writer), (2, 1, true));
     }
 }

@@ -5,8 +5,9 @@
 use std::future::Future;
 
 use mower_bus::{Bus, Scope};
-use mower_bus_ros::{Direction, RosBridge};
+use mower_bus_ros::{BridgeStats, Direction, EntryStats, RosBridge};
 use mower_rs_common::{BoxError, ModuleCtx, ModuleResult, Remaps};
+use serde_json::{json, Value};
 
 use crate::policy::{plan, Plan, PlanError, Running};
 
@@ -124,8 +125,39 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
     let (ids, on_now) = parse_rsd_args(&m.args)?;
     let plan = rsd_plan_with(&ids, &on_now, &m.remaps)?;
     let bridge = new_bridge(ctx, &m.node_name, &m.namespace, &plan, &m.remaps, m.bus.clone())?;
+    let _probe = shown_in_registry(&bridge, &m);
     bridge.run(m.shutdown.wait()).await?;
     Ok(())
+}
+
+/// `bridge`'s counters for `/mowerd/bridge`, read when asked, until the guard
+/// goes (E8-2).
+fn shown_in_registry(bridge: &RosBridge, m: &ModuleCtx) -> mower_rs_common::registry::BridgeProbeGuard {
+    let stats = bridge.stats();
+    m.registry.set_bridge_probe(std::sync::Arc::new(move || stats_json(&stats)))
+}
+
+/// The counters of every bridged name, as `/mowerd/bridge` answers them.
+pub(crate) fn stats_json(stats: &BridgeStats) -> Value {
+    let entry = |(name, e): (String, EntryStats)| {
+        json!({
+            "name": name,
+            "direction": e.direction.to_string(),
+            "forwarded": e.forwarded,
+            "skipped": e.skipped,
+            "stale": e.stale,
+            "resyncs": e.resyncs,
+            "unanswered": e.unanswered,
+            "dropped": e.dropped,
+            "invalid": e.invalid,
+            "dds_writer": e.dds_writer,
+            "dds_reader": e.dds_reader,
+            "dds_server": e.dds_server,
+            "bus_writer": e.bus_writer,
+            "bus_server": e.bus_server,
+        })
+    };
+    Value::Array(stats.entries().into_iter().map(entry).collect())
 }
 
 /// A bridge of node `node` in `namespace` and scope `scope`, with `plan`
@@ -222,6 +254,7 @@ where
     let bus = Bus::new();
     let module_scope = bus.scope(&node);
     let bridge = new_bridge(ctx.clone(), &node, STANDALONE_NAMESPACE, &plan, &m.remaps, bus.scope(NODE))?;
+    let _probe = shown_in_registry(&bridge, &m);
     let (stop, stopped) = futures::channel::oneshot::channel::<()>();
     let mut bridging = tokio::spawn(bridge.run(async move {
         let _ = stopped.await;

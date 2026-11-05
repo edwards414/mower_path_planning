@@ -504,7 +504,9 @@ panics inside r2r.
 - `dds_writer` (whether the `to_ros` DDS writer exists);
 - `bus_server` (whether the `service_from_ros` or `action_from_ros` bus server exists).
 
-It is for diagnostics (E8's `mowerctl`) and for the tests, which cannot see a skipped publish from DDS.
+It is for diagnostics and for the tests, which cannot see a skipped publish from DDS. `BridgeStats::entries` lists every
+name with its counters: mower_bridge's module shows them in the process's registry, and `mowerctl bridge` reads them
+through ws_bridge's `/mowerd/bridge` (E8-2).
 
 ## JSON parity (E3 prep)
 

@@ -11,6 +11,8 @@ mower_bus = { path = "../mower_bus" }
 mower_bus_ros = { path = "../mower_bus_ros" }
 mower_rs_common = { path = "../mower_rs_common" }
 r2r.workspace = true
+# `/mowerd/bridge`'s answer (run.rs): the counters as the registry's probe gives them
+serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
@@ -20,7 +22,6 @@ serde_yaml = "0.9"
 # WebSocket client of it (ws_bridge depends on this crate, so only its
 # integration tests use it).
 mower_ws_bridge = { path = "../mower_ws_bridge" }
-serde_json.workspace = true
 tokio-tungstenite = "0.24"
 
 # These two run themselves again with `-r` rules in argv (the production ones;

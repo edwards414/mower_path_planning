@@ -47,7 +47,9 @@
 //! Restarting inside the process also keeps the DDS participant, so a driver
 //! stuck in a restart loop no longer floods discovery. A failure during a
 //! shutdown, or a module that does not stop within `--stop-timeout`, makes
-//! the process exit non-zero so the launch `respawn` restarts the set.
+//! the process exit non-zero so the launch `respawn` restarts the set. The
+//! supervisor keeps each slot's state in the process's `Registry`, which
+//! ws_bridge's loopback listener reads for `/mowerd/modules` (E8-2).
 //!
 //! **Start order.** The instances start in the table's order, all at once,
 //! with one exception: with static_tf in the set, localize's three wait
@@ -82,7 +84,7 @@ use std::time::Duration;
 
 use futures::future::FutureExt;
 use mower_bus::{Bus, Clock, Scope};
-use mower_rs_common::{ModuleCtx, ModuleResult, Remaps, Shutdown};
+use mower_rs_common::{ModuleCtx, ModuleResult, Registry, Remaps, Shutdown};
 
 /// The bus bridge's module id: not for `--modules`, started when needed.
 const BUS_BRIDGE: &str = "bus_bridge";
@@ -548,9 +550,13 @@ struct Slot {
 /// Every start of an instance runs on a fresh scope of `bus` named after its
 /// node. The scope is closed as soon as that start ends, and the scopes still
 /// open when the supervisor stops waiting are closed on the way out.
+/// `registry` follows each slot through its starts and failures.
 async fn supervise(
-    slots: Vec<Slot>, bus: Bus, clock: Clock, shutdown: Shutdown, stop_timeout: Duration,
+    slots: Vec<Slot>, bus: Bus, clock: Clock, registry: Registry, shutdown: Shutdown, stop_timeout: Duration,
 ) -> Vec<String> {
+    for slot in &slots {
+        registry.add_slot(&slot.label, slot.node);
+    }
     let (report, mut reports) = tokio::sync::mpsc::unbounded_channel::<(usize, Outcome)>();
     // Start a slot (after `delay` for a restart); returns the scope it runs on.
     let launch = |slot_idx: usize, delay: Duration| -> Scope {
@@ -560,12 +566,14 @@ async fn supervise(
             .with_args(slot.extra.clone())
             .with_bus(scope.clone())
             .with_clock(clock.clone())
-            .with_remaps(slot.remaps.clone());
+            .with_remaps(slot.remaps.clone())
+            .with_registry(registry.clone());
         let start = slot.start.clone();
         let label = slot.label.clone();
         let stopping = shutdown.clone();
         let report = report.clone();
         let ended = scope.clone();
+        let registry = registry.clone();
         tokio::spawn(async move {
             if !delay.is_zero() {
                 // A shutdown cuts the delay short: the slot reports at once
@@ -586,6 +594,7 @@ async fn supervise(
             } else {
                 println!("[mower_rsd] starting {label}");
             }
+            registry.slot_started(&label);
             let outcome = supervised(label.clone(), stopping, start(m)).await;
             // However the instance ended, close its scope now, before any
             // restart delay. Nothing aborts the tasks it spawned: with r2r its
@@ -638,15 +647,18 @@ async fn supervise(
         match outcome {
             Outcome::Stopped(label) => {
                 alive -= 1;
+                registry.slot_stopped(&label);
                 println!("[mower_rsd] {label} stopped");
             }
             Outcome::Failed(why) if shutdown.is_triggered() => {
                 alive -= 1;
+                registry.slot_failed(&slots[slot_idx].label, &why, false);
                 eprintln!("[mower_rsd] {why}");
                 failures.push(why);
             }
             Outcome::Failed(why) => {
                 restarts += 1;
+                registry.slot_failed(&slots[slot_idx].label, &why, true);
                 eprintln!(
                     "[mower_rsd] {why}; restarting in {:.1} s (restart #{restarts})",
                     RESTART_DELAY.as_secs_f64()
@@ -758,7 +770,7 @@ fn main() -> ExitCode {
         tokio::spawn(mower_bridge::coverage::watch(bus.clone(), running, remaps.clone(), bridge_scopes, |gap| {
             eprintln!("[mower_rsd] bus bridge: {gap}")
         }));
-        let failures = supervise(slots, bus, clock, shutdown, args.stop_timeout).await;
+        let failures = supervise(slots, bus, clock, Registry::default(), shutdown, args.stop_timeout).await;
 
         if failures.is_empty() {
             println!("[mower_rsd] stopped");
@@ -1019,7 +1031,7 @@ mod tests {
             slots.extend(localize_slots(&set, &[Run::Serve], &starts));
             let stop_timeout = Duration::from_secs(1);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(late / 2).await;
             assert!(starts.lock().unwrap().is_empty(), "localize started before static_tf published");
             tokio::time::sleep(late).await;
@@ -1042,7 +1054,7 @@ mod tests {
             let slots = localize_slots(&without, &[Run::Serve], &starts);
             let stop_timeout = Duration::from_secs(1);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(Duration::from_millis(10)).await;
             {
                 let seen = starts.lock().unwrap();
@@ -1067,7 +1079,7 @@ mod tests {
             slots.extend(localize_slots(&set, &[Run::Fail, Run::Serve], &starts));
             let stop_timeout = Duration::from_secs(1);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(Duration::from_millis(100) + RESTART_DELAY * 2).await;
             {
                 let seen = starts.lock().unwrap();
@@ -1089,7 +1101,7 @@ mod tests {
             slots.extend(localize_slots(&set, &[Run::Serve], &starts));
             let stop_timeout = Duration::from_secs(1);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(WAIT_REPORT * 3).await;
             assert!(starts.lock().unwrap().is_empty());
             shutdown.trigger();
@@ -1132,11 +1144,52 @@ mod tests {
                     }
                 })
                 .collect();
-            let run = tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), Duration::from_secs(1)));
+            let run = tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), Duration::from_secs(1)));
             tokio::time::sleep(Duration::from_millis(10)).await;
             shutdown.trigger();
             assert!(run.await.unwrap().is_empty());
             assert_eq!(*seen.lock().unwrap(), ["/imu/data", "/cmd_vel_in", "/imu/data_raw", "/cmd_vel_guard_input"]);
+        });
+    }
+
+    /// What `/mowerd/modules` reads (E8-2): every slot in start order, through
+    /// its failure, its restart and its stop, on the registry every instance
+    /// is handed.
+    #[test]
+    fn the_registry_follows_each_slot_through_its_restart_and_stop() {
+        paused().block_on(async {
+            let (imu_scopes, gps_scopes) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+            let shutdown = Shutdown::new();
+            let registry = Registry::default();
+            let seen = registry.clone();
+            let mut slots = vec![test_slot("imu", &[Run::Fail, Run::Serve], &imu_scopes), test_slot("gps", &[Run::Serve], &gps_scopes)];
+            // an instance holds the process's registry, not one of its own
+            let held: Arc<Mutex<Vec<usize>>> = Arc::default();
+            let inner = slots[1].start.clone();
+            let holding = held.clone();
+            slots[1].start = Arc::new(move |m: ModuleCtx| -> BoxFut {
+                holding.lock().unwrap().push(m.registry.slots().len());
+                inner(m)
+            });
+            let stop_timeout = Duration::from_secs(10);
+            let supervisor = tokio::spawn(supervise(slots, Bus::new(), Clock::system(), registry, shutdown.clone(), stop_timeout));
+
+            tokio::time::sleep(RESTART_DELAY / 2).await;
+            let now = seen.slots();
+            assert_eq!(now.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["test/imu", "test/gps"]);
+            assert_eq!((now[0].state, now[0].starts, now[0].failures), (mower_rs_common::SlotState::Restarting, 1, 1));
+            assert_eq!(now[0].last_failure.as_ref().unwrap().0, "test/imu: port went away");
+            assert_eq!((now[1].state, now[1].starts, now[1].failures), (mower_rs_common::SlotState::Running, 1, 0));
+            assert_eq!(*held.lock().unwrap(), [2]);
+
+            tokio::time::sleep(RESTART_DELAY).await;
+            let now = seen.slots();
+            assert_eq!((now[0].state, now[0].starts, now[0].failures), (mower_rs_common::SlotState::Running, 2, 1));
+            assert!(now[0].last_failure.is_some(), "it stays for the one who looks later");
+
+            shutdown.trigger();
+            assert!(supervisor.await.unwrap().is_empty());
+            assert!(seen.slots().iter().all(|s| s.state == mower_rs_common::SlotState::Stopped), "{:?}", seen.slots());
         });
     }
 
@@ -1151,7 +1204,7 @@ mod tests {
                 let slots = vec![test_slot("imu", &[first, Run::Serve], &scopes)];
                 let stop_timeout = Duration::from_secs(10);
                 let supervisor =
-                    tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                    tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
 
                 // The first start ended at once; the restart is RESTART_DELAY away.
                 tokio::time::sleep(RESTART_DELAY / 2).await;
@@ -1191,7 +1244,7 @@ mod tests {
             ];
             let stop_timeout = Duration::from_secs(10);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(Duration::from_secs(1)).await;
             {
                 let (s, i) = (status.lock().unwrap(), imu.lock().unwrap());
@@ -1221,7 +1274,7 @@ mod tests {
             let slots = vec![test_slot("imu", &[Run::Wedge], &imu)];
             let stop_timeout = Duration::from_secs(10);
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             shutdown.trigger();
@@ -1245,7 +1298,7 @@ mod tests {
             let slots = vec![test_slot("imu", &[Run::Fail, Run::Serve], &scopes)];
             let stop_timeout = RESTART_DELAY / 2;
             let supervisor =
-                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(slots, Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
             // The first start failed at once; the slot is in its restart delay.
             tokio::time::sleep(RESTART_DELAY / 4).await;
 
@@ -1307,7 +1360,7 @@ mod tests {
             };
             let stop_timeout = Duration::from_secs(10);
             let supervisor =
-                tokio::spawn(supervise(vec![slot], Bus::new(), Clock::system(), shutdown.clone(), stop_timeout));
+                tokio::spawn(supervise(vec![slot], Bus::new(), Clock::system(), Registry::default(), shutdown.clone(), stop_timeout));
 
             tokio::time::sleep(RESTART_DELAY * 2).await;
             {
