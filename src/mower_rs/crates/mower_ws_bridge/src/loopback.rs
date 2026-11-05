@@ -15,9 +15,9 @@
 //! - **Topics** are read with the same known-names rule as every client
 //!   (bus_hub.rs), so a typo leaves nothing behind. A name the public policy
 //!   does not allow is read in the scope `LOOPBACK_SCOPE`, which the manifest
-//!   check does not look at. If a name only DDS has, the bus bridge opens a
-//!   DDS reader for that reader, as for any bus reader (`topic info` shows the
-//!   direction).
+//!   check does not look at. For a name only DDS has, the bus bridge opens a
+//!   DDS reader while the bus has that reader, as for any bus reader
+//!   (`topic info` shows the direction).
 //! - **Parameter reads:** parameter services stay on r2r nodes until E9
 //!   (mower_bridge's manifest, "Not listed"), so they have no bus name, and
 //!   bridging them would put new DDS endpoints on the graph at all times.

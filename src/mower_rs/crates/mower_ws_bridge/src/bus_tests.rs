@@ -1334,6 +1334,10 @@ impl Drop for StateDir {
     }
 }
 
+/// A [`Robot`]'s manual clock at start: no [`Door`]'s, so that a door that
+/// finds a robot on its port knows it is not its own.
+const ROBOT_T0: Time = Time::from_ns(1_700_000_000_000_000_000);
+
 /// ws_bridge as the robot runs it, on the bus backend: a public address
 /// (127.0.0.2 counts as a LAN one), the gate on 127.0.0.1 for the relay agent,
 /// and the loopback listener, with `--loopback-policy` if `policy` names a
@@ -1356,7 +1360,7 @@ impl Robot {
         for _attempt in 0..5 {
             let (port, loopback_port) = (free_port(), free_port());
             let bus = Bus::new();
-            let (clock, manual) = Clock::manual(T0);
+            let (clock, manual) = Clock::manual(ROBOT_T0);
             let registry = Registry::default();
             let state_dir = state.as_ref().map_or("/nonexistent/ws_bridge_test", |s| s.path()).to_string();
             let mut line = format!(
