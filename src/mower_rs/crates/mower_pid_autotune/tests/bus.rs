@@ -336,6 +336,8 @@ async fn a_session_tunes_verifies_and_saves_through_the_bus() {
     let seen = record_status(test.subscribe::<Text>("/pid_autotune/status", STATUS_QUEUE).unwrap());
     let autotune = Autotune::start(&bus);
     let client = test.client::<PidAutotune::Request, PidAutotune::Response>("/pid_autotune").unwrap();
+    // the service is up just before the first status: a start in between never shows idle
+    eventually("the idle status", || last_state(&seen).as_deref() == Some("idle")).await;
     assert_eq!(call(&client, "start").await.0, true);
     eventually("the review", || matches!(last_state(&seen).as_deref(), Some("review" | "failed"))).await;
     let reviewed = seen.lock().unwrap().last().unwrap().1.clone();
