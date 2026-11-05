@@ -19,6 +19,14 @@ use crate::types::{Iface, Kind, Profile, ShowQos};
 const FIRST_CHECK: Duration = Duration::from_secs(2);
 const CHECK_PERIOD: Duration = Duration::from_secs(10);
 
+/// The scope of a reader ws_bridge makes for its loopback listener (E8-2,
+/// `mowerctl topic echo /imu/data`) on a name its manifest entry does not
+/// read. A debugging reader that comes and goes, read-only, of a name that is
+/// already on the bus: it is no endpoint of the module, it bridges nothing that
+/// was not bridged already, and [`gaps`] does not look at it. The manifest
+/// entry stays what the app can reach.
+pub const LOOPBACK_SCOPE: &str = "mower_ws_bridge_loopback";
+
 /// Whose a scope on the bus is.
 enum Owner<'a> {
     /// The bridge's own, or a test's.
@@ -62,7 +70,7 @@ impl Seen<'_> {
 /// whose flag is still false, or a scope that is no instance at all.
 pub fn gaps(bus: &Bus, running: &[Running], remaps: &Remaps, bridge_scopes: &[&str]) -> Vec<String> {
     check_bus(bus, remaps, &|scope| {
-        if bridge_scopes.contains(&scope) {
+        if bridge_scopes.contains(&scope) || scope == LOOPBACK_SCOPE {
             Owner::Skip
         } else if let Some(r) = running.iter().find(|r| r.node == scope) {
             Owner::Instance(r)

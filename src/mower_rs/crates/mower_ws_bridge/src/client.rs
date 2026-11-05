@@ -13,6 +13,10 @@
 //! calls, and its reply carries its request's `id`. What a call is checked
 //! for (a service name, the allow-list) and `/rosapi/*` are still answered
 //! in order. At most `MAX_CALLS_IN_FLIGHT` calls of a connection run at once.
+//!
+//! A client of the loopback listener with a loopback policy (E8-2) may also
+//! read what `Loopback` adds; every other client has none (lib.rs's `Access`),
+//! and gets for `/mowerd/*` what it gets for any name not allowed.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +29,7 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::config::Policy;
 use crate::entry::TopicEntry;
 use crate::hub::Hub;
+use crate::loopback::Loopback;
 
 /// How many calls of one connection may wait for their servers at once; one
 /// more is answered at once with `<s>: too many calls in flight …`. The app
@@ -96,6 +101,9 @@ pub struct Client {
     service_timeout: Duration,
     /// A place for each call of this connection that waits for its server.
     calls: Arc<Semaphore>,
+    /// What this connection may read beyond `policy`: only the loopback
+    /// listener's connections have one.
+    loopback: Option<Arc<Loopback>>,
 }
 
 impl Client {
@@ -109,7 +117,14 @@ impl Client {
             subscriptions: HashMap::new(),
             service_timeout,
             calls: Arc::new(Semaphore::new(MAX_CALLS_IN_FLIGHT)),
+            loopback: None,
         }
+    }
+
+    /// See [`Client::loopback`]; lib.rs's `Access` decides.
+    pub fn with_loopback(mut self, loopback: Option<Arc<Loopback>>) -> Self {
+        self.loopback = loopback;
+        self
     }
 
     fn status(&self, level: &str, msg: String, id: Option<&Value>) {
@@ -140,11 +155,12 @@ impl Client {
                 let Some(topic) = str_field("topic") else {
                     return self.status("error", "subscribe: missing topic".into(), id.as_ref());
                 };
-                if !self.policy.may_subscribe(&topic) {
+                let public = self.policy.may_subscribe(&topic);
+                if !public && !self.loopback.as_ref().is_some_and(|l| l.may_subscribe(&topic)) {
                     return self.status("error", format!("subscribe: {topic} is not allowed"), id.as_ref());
                 }
                 let throttle = doc.get("throttle_rate").and_then(|v| v.as_u64()).unwrap_or(0);
-                match self.hub.subscribe(&topic, str_field("type"), &self.handle, throttle).await {
+                match self.hub.subscribe(&topic, str_field("type"), &self.handle, throttle, !public).await {
                     Ok(entry) => {
                         self.subscriptions.insert(topic, entry);
                     }
@@ -193,11 +209,14 @@ impl Client {
                     // the studio's latency ping
                     let now = self.hub.now();
                     Ok(json!({"time": {"sec": now.as_secs() as i64, "nanosec": now.subsec_nanos()}}))
+                } else if let Some(values) = self.loopback.as_ref().and_then(|l| l.answer(&service, &args)) {
+                    Ok(values)
+                } else if let Some(t) = self.policy.service_type(&service) {
+                    return self.spawn_call(service, t.to_string(), args, id, None);
+                } else if let Some((t, l)) = self.parameter_read(&service) {
+                    return self.spawn_call(service, t, args, id, Some(l));
                 } else {
-                    match self.policy.service_type(&service) {
-                        None => Err(format!("service {service} is not allowed")),
-                        Some(t) => return self.spawn_call(service, t.to_string(), args, id),
-                    }
+                    Err(format!("service {service} is not allowed"))
                 };
                 answer(&self.handle, &self.logger, &self.peer, &service, response, id);
             }
@@ -206,13 +225,20 @@ impl Client {
         }
     }
 
+    /// The type of `service` and this connection's loopback view, if it is a
+    /// parameter read that view allows.
+    fn parameter_read(&self, service: &str) -> Option<(String, Arc<Loopback>)> {
+        let loopback = self.loopback.as_ref()?;
+        Some((loopback.parameter_type(service)?.to_string(), loopback.clone()))
+    }
+
     /// Call `service` in a task of its own, bounded by the service timeout,
     /// and answer with the request's `id` whenever its server does; refused
     /// at once while `MAX_CALLS_IN_FLIGHT` calls of this connection wait.
     /// A call runs on after its connection has gone, as it did when the
     /// connection waited for each: a cancel sent just before the link went
     /// still reaches its server. Its answer then goes nowhere.
-    fn spawn_call(&self, service: String, service_type: String, args: Value, id: Option<Value>) {
+    fn spawn_call(&self, service: String, service_type: String, args: Value, id: Option<Value>, parameter_read: Option<Arc<Loopback>>) {
         let Ok(place) = self.calls.clone().try_acquire_owned() else {
             let refused = format!("{service}: too many calls in flight on this connection (at most {MAX_CALLS_IN_FLIGHT})");
             return answer(&self.handle, &self.logger, &self.peer, &service, Err(refused), id);
@@ -220,7 +246,10 @@ impl Client {
         let (hub, handle, logger, peer, timeout) =
             (self.hub.clone(), self.handle.clone(), self.logger.clone(), self.peer.clone(), self.service_timeout);
         tokio::spawn(async move {
-            let response = hub.call_service(&service, &service_type, args, timeout).await;
+            let response = match parameter_read {
+                None => hub.call_service(&service, &service_type, args, timeout).await,
+                Some(loopback) => loopback.read_parameters(&service, &service_type, args, timeout).await,
+            };
             // free before the answer is out, so that a client that sends its
             // next call on this answer finds the place
             drop(place);

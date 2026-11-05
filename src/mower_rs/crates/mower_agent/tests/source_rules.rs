@@ -37,3 +37,17 @@ fn the_backend_endpoints_and_the_log_lines_are_the_python_agent_s() {
         lib.says(text);
     }
 }
+
+/// E8-2: ws_bridge's loopback listener (no gate) reads what the phones may
+/// not: every session of a phone goes to the pairing gate, and only the
+/// agent's own watch of /robot/info and /robot/telemetry to that listener.
+#[test]
+fn a_relayed_session_goes_to_the_gate_and_never_to_the_loopback_listener() {
+    let lib = Source::new("mower_agent/src/lib.rs", include_str!("../src/lib.rs"));
+    let session = lib.body("open_session");
+    session.has("agent.gate_url.as_str()");
+    session.lacks("rosbridge_url");
+    lib.body("watch_topics_forever").has("self.rosbridge_url.as_str()");
+    // the field, its value at the start and the watch: no other use
+    assert_eq!(lib.count("rosbridge_url"), 3);
+}

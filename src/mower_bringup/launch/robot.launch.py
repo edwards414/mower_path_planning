@@ -215,6 +215,12 @@ def _rust_daemon_node(context):
         # the r2r one of E3.1 and before.
         if _truthy(LaunchConfiguration('ws_bridge_bus').perform(context)):
             bridge_args += ['--backend', 'bus']
+            # What the loopback listener (and only it) reads on top of
+            # ws_bridge.yaml, for mowerctl (E8-2). A file of the image, so no
+            # launch argument and nothing in compose: the robot's old host
+            # files get it with the image. The r2r backend has no use for it.
+            bridge_args += ['--loopback-policy', os.path.join(
+                bringup, 'config', 'ws_bridge_loopback.yaml')]
         arguments += ['--module-args', ' '.join(bridge_args)]
     if 'agent' in modules:
         arguments += ['--module-args',

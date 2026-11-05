@@ -24,6 +24,8 @@
 //!   the typed names of the manifest entry with or without one.
 //! - **Time** is the module's clock: the throttle, the 5 s and 30 s bounds
 //!   and the linger.
+//! - **The loopback listener's wider view** (`--loopback-policy`, E8-2) is
+//!   loopback.rs's; here it only changes a reader's scope.
 
 use std::collections::{BTreeSet, HashMap};
 use std::pin::Pin;
@@ -32,6 +34,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use futures::StreamExt;
+use mower_bridge::coverage::LOOPBACK_SCOPE;
 use mower_bus::{BusError, Clock, ErasedMsg, ErasedSubscriber, JsonClient, JsonPublisher, Qos, Scope};
 use mower_rs_common::ModuleCtx;
 use serde_json::Value;
@@ -131,8 +134,13 @@ impl BusHub {
         self.inner.lock().topics.get(topic).map(|t| t.entry.clone())
     }
 
-    /// The topic's entry, made if it is new, with `client` attached.
-    pub fn subscribe(&self, topic: &str, type_hint: Option<String>, client: &ClientHandle, throttle_ms: u64) -> Result<Arc<TopicEntry>, String> {
+    /// The topic's entry, made if it is new, with `client` attached. Its
+    /// reader is in a child scope named after the module, or with `debugging`
+    /// (a name only the loopback policy allows) `LOOPBACK_SCOPE`, which the
+    /// manifest check does not look at.
+    pub fn subscribe(
+        &self, topic: &str, type_hint: Option<String>, client: &ClientHandle, throttle_ms: u64, debugging: bool,
+    ) -> Result<Arc<TopicEntry>, String> {
         let inner = &self.inner;
         let info = inner.scope.bus().topic(topic);
         let rust_type = info.as_ref().and_then(|t| t.type_name);
@@ -154,7 +162,7 @@ impl BusHub {
         let entry = match state.topics.get(topic) {
             Some(existing) => existing.entry.clone(),
             None => {
-                let scope = inner.scope.child(inner.scope.name());
+                let scope = inner.scope.child(if debugging { LOOPBACK_SCOPE } else { inner.scope.name() });
                 let reader = match scope.subscribe_erased(topic, READER_QOS) {
                     Ok(reader) => reader,
                     Err(e) => {
@@ -358,7 +366,7 @@ fn frame(hub: &Weak<Inner>, topic: &str, msg: ErasedMsg) -> Frame {
 }
 
 /// Where `value` holds a string with a NUL character: its JSON pointer.
-fn nul_at(value: &Value) -> Option<String> {
+pub(crate) fn nul_at(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => s.contains('\0').then(String::new),
         Value::Array(items) => items.iter().enumerate().find_map(|(i, v)| nul_at(v).map(|at| format!("/{i}{at}"))),

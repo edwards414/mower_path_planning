@@ -1,0 +1,208 @@
+{
+  "actions": {
+    "actions": [
+      {
+        "active": 0,
+        "clients": [],
+        "goals": 0,
+        "name": "/nav_action",
+        "server": "nav_action_server",
+        "type": "mower_interface/action/Waypoint"
+      }
+    ]
+  },
+  "bridge": {
+    "entries": [
+      {
+        "bus_server": false,
+        "bus_writer": false,
+        "dds_reader": false,
+        "dds_server": false,
+        "dds_writer": true,
+        "direction": "to_ros",
+        "dropped": 0,
+        "forwarded": 12,
+        "invalid": 0,
+        "name": "/fix",
+        "resyncs": 1,
+        "skipped": 3,
+        "stale": 0,
+        "unanswered": 0
+      }
+    ],
+    "running": true
+  },
+  "modules": {
+    "modules": [
+      {
+        "endpoints": {
+          "publishes": 1
+        },
+        "failures": 0,
+        "label": "gps/gps",
+        "last_failure": null,
+        "module": "gps",
+        "node": "gps",
+        "starts": 1,
+        "state": "running",
+        "up_s": 1.5
+      },
+      {
+        "endpoints": {},
+        "failures": 1,
+        "label": "imu/imu",
+        "last_failure": {
+          "age_s": 1.5,
+          "reason": "imu/imu: no such device"
+        },
+        "module": "imu",
+        "node": "imu",
+        "starts": 1,
+        "state": "restarting",
+        "up_s": 1.5
+      }
+    ],
+    "other_scopes": [
+      {
+        "endpoints": {
+          "calls": 1
+        },
+        "scope": "flutter_adapter"
+      },
+      {
+        "endpoints": {
+          "serves": 1
+        },
+        "scope": "map_manage"
+      },
+      {
+        "endpoints": {
+          "publishes": 1
+        },
+        "scope": "mower_base"
+      },
+      {
+        "endpoints": {
+          "serves": 1,
+          "serves_actions": 1
+        },
+        "scope": "nav_action_server"
+      },
+      {
+        "endpoints": {
+          "subscribes": 1
+        },
+        "scope": "navsat_transform"
+      }
+    ]
+  },
+  "services": {
+    "services": [
+      {
+        "callable": true,
+        "calls": 0,
+        "clients": [],
+        "name": "/check_nav_status",
+        "server": "nav_action_server",
+        "type": "std_srvs/srv/Trigger"
+      },
+      {
+        "callable": false,
+        "calls": 0,
+        "clients": [
+          "flutter_adapter"
+        ],
+        "name": "/not_public",
+        "server": "map_manage",
+        "type": "std_srvs/srv/Trigger"
+      }
+    ]
+  },
+  "services_named": {
+    "services": [
+      {
+        "callable": false,
+        "calls": 0,
+        "clients": [
+          "flutter_adapter"
+        ],
+        "name": "/not_public",
+        "server": "map_manage",
+        "type": "std_srvs/srv/Trigger"
+      }
+    ]
+  },
+  "topics": {
+    "topics": [
+      {
+        "age_s": 1.5,
+        "name": "/fix",
+        "published": 1,
+        "readers": [
+          {
+            "qos": {
+              "depth": 5,
+              "durability": "volatile",
+              "reliability": "reliable"
+            },
+            "scope": "navsat_transform"
+          }
+        ],
+        "retained": 0,
+        "type": "sensor_msgs/msg/NavSatFix",
+        "writers": [
+          {
+            "qos": {
+              "depth": 1,
+              "durability": "volatile",
+              "reliability": "reliable"
+            },
+            "scope": "gps"
+          }
+        ]
+      },
+      {
+        "age_s": 1.5,
+        "name": "/mower_base/telemetry",
+        "published": 1,
+        "readers": [],
+        "retained": 0,
+        "type": "std_msgs/msg/String",
+        "writers": [
+          {
+            "qos": {
+              "depth": 5,
+              "durability": "volatile",
+              "reliability": "best_effort"
+            },
+            "scope": "mower_base"
+          }
+        ]
+      }
+    ],
+    "uptime_s": 1.5
+  },
+  "topics_named": {
+    "topics": [
+      {
+        "age_s": 1.5,
+        "name": "/mower_base/telemetry",
+        "published": 1,
+        "readers": [],
+        "retained": 0,
+        "type": "std_msgs/msg/String",
+        "writers": [
+          {
+            "qos": {
+              "depth": 5,
+              "durability": "volatile",
+              "reliability": "best_effort"
+            },
+            "scope": "mower_base"
+          }
+        ]
+      }
+    ],
+    "uptime_s": 1.5
+  }
+}
