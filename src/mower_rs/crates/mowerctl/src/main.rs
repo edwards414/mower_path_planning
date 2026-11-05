@@ -13,9 +13,15 @@
 //! refuses a service that may change the robot's state unless `--yes` is
 //! given (service.rs).
 //!
+//! Two commands need no connection and run on the robot's host, ports of its
+//! Python tools (E6 design 3.4, 3.5; nothing installs them there yet): `pair`
+//! (pair.rs) writes identity.json like `mower-pair`, and `link-status`
+//! (link_status.rs) writes link_status.json like `mower-link-status.py`.
+//!
 //! Exit codes: 0 done, 1 failed (bad arguments, a call answered with an
 //! error), 2 no connection (refused, closed, or rejected by the gate), 3 no
-//! such topic or service on that listener, 4 timed out.
+//! such topic or service on that listener, 4 timed out. `pair` keeps argparse's
+//! 2 for a bad command line.
 
 mod cli;
 mod conn;
@@ -24,6 +30,8 @@ mod fake_bridge;
 mod format;
 mod gate;
 mod hz;
+mod link_status;
+mod pair;
 mod ping;
 mod service;
 mod topic;
@@ -90,6 +98,13 @@ commands:
   ping [-c N] [-i S]                round trip and the robot's clock offset
   help                              this text
 
+on the robot's host, no connection (options: --help):
+  pair [--rotate] [--name NAME] [--json] [--no-qr] [--state-dir DIR]
+       [--owner USER] [--env FILE]  the identity file and the pairing QR
+                                    (like mower-pair)
+  link-status [STATE_DIR] [--once]  sample the modem, Wi-Fi and interfaces into
+                                    link_status.json (like mower-link-status.py)
+
 connection options (before or after the command):
   --url URL       ws://HOST:PORT (default ws://127.0.0.1:9091, ws_bridge's
                   loopback listener; $MOWERCTL_URL overrides the default)
@@ -118,6 +133,13 @@ fn main() -> ExitCode {
 }
 
 fn run(argv: Vec<String>) -> Result<(), Fail> {
+    // These two take their arguments as they stand: `--name=--rotate` is a name
+    // and `--name --rotate` an error, which expand_equals would make one thing.
+    match argv.first().map(String::as_str) {
+        Some("pair") => return pair::main(&argv[1..]),
+        Some("link-status") => return link_status::main(&argv[1..]),
+        _ => {}
+    }
     let argv = cli::expand_equals(argv);
     // Connection options may come before the command word; they are handed
     // to the command, which parses them with its own (cli::ConnOpts).
@@ -141,10 +163,9 @@ fn run(argv: Vec<String>) -> Result<(), Fail> {
             println!("mowerctl {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        // New commands go here. The ones that need no connection (E6's
-        // `pair` and `link-status`) take `args` as they are and reject
-        // `lead`; the ones that read the bridge (E8-2's `node`, `bridge`,
-        // `graph`, `param`) parse cli::ConnOpts like the three above.
+        "pair" | "link-status" => Err(Fail::usage(format!("{command} needs no connection: no --url, --pair or --timeout"))),
+        // New commands go here. The ones that read the bridge (E8-2's `node`,
+        // `bridge`, `graph`, `param`) parse cli::ConnOpts like the three above.
         other => Err(Fail::usage(format!("unknown command {other:?}"))),
     }
 }
@@ -178,6 +199,14 @@ mod tests {
     }
 
     #[test]
+    fn the_host_commands_take_no_connection_options() {
+        let e = run(args(&["--url", "ws://x:1", "pair"])).unwrap_err();
+        assert!(e.msg.contains("pair needs no connection"), "{e:?}");
+        let e = run(args(&["--timeout", "1", "link-status", "--once"])).unwrap_err();
+        assert!(e.msg.contains("link-status needs no connection"), "{e:?}");
+    }
+
+    #[test]
     fn help_and_version_need_no_robot() {
         assert_eq!(run(args(&["help"])), Ok(()));
         assert_eq!(run(args(&["--help"])), Ok(()));
@@ -186,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_usage_lists_every_command_the_dispatcher_knows() {
-        for c in ["topic list", "topic info", "topic echo", "topic hz", "service list", "service call", "ping", "help"] {
+        for c in ["topic list", "topic info", "topic echo", "topic hz", "service list", "service call", "ping", "help", "pair", "link-status"] {
             assert!(USAGE.contains(&format!("  {c}")), "{c} missing from USAGE");
         }
         // no writing commands (E8 design D2)

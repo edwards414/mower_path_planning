@@ -441,6 +441,16 @@ jobs:
           cd src/mower_rs
           cargo test --locked --workspace
 
+      # How mowerctl can get onto a host without the image's glibc
+      # (crates/mowerctl/README.md, E6). No ROS environment: it needs none.
+      - name: mowerctl builds as a static binary
+        shell: bash
+        run: |
+          cd src/mower_rs
+          RUSTFLAGS='-C target-feature=+crt-static' cargo build --locked --release -p mowerctl --target aarch64-unknown-linux-gnu
+          ldd target/aarch64-unknown-linux-gnu/release/mowerctl 2>&1 | grep 'statically linked'
+          target/aarch64-unknown-linux-gnu/release/mowerctl --version
+
       - name: Coverage node cancel tracking (black box)
         timeout-minutes: 10
         shell: bash
@@ -888,6 +898,8 @@ jobs:
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mowerctl"
             test "$(command -v mowerctl)" = /usr/local/bin/mowerctl
             mowerctl help >/dev/null
+            mowerctl pair --help >/dev/null
+            mowerctl link-status --help >/dev/null
             # mower-bag upload and verify, for mower-data-collection.sh (crates/mower_recorder_core)
             test -x "${WORKSPACE}/install/mower_rs/lib/mower_rs/mower_bag"
             test "$(command -v mower_bag)" = /usr/local/bin/mower_bag

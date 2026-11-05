@@ -1,0 +1,19 @@
+[package]
+name = "mower_link"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What deploy/host/mower-link-status.py samples and writes: the modem's AT answers, /proc/net/wireless, ip -j -4 addr -> link_status.json, the same keys and number types (E6)"
+
+# No r2r and nothing that links C: mowerctl builds as a static binary for the
+# host (mowerctl/README.md). regex without its Unicode tables: the patterns name
+# their character classes themselves (parse.rs), and a feature asked for here
+# would be unified into every binary of the image's one cargo run.
+[dependencies]
+mower_pyfmt = { path = "../mower_pyfmt" }
+regex = { version = "1", default-features = false, features = ["std"] }
+libc = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true
+sha2 = "0.10"

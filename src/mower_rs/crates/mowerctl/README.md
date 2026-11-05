@@ -16,6 +16,10 @@ mowerctl service list [--json] [--policy FILE]
 mowerctl service call NAME [ARGS] [--yes] [--raw] [--timeout S]
 mowerctl ping [-c N] [-i S]
 mowerctl help
+
+# on the robot's host, no connection: see "The host tools" below
+mowerctl pair [--rotate] [--name NAME] [--json] [--no-qr] [--state-dir DIR] [--owner USER] [--env FILE]
+mowerctl link-status [STATE_DIR] [--once]
 ```
 
 Read-only by default. There is no `topic pub` and no `param set` (design
@@ -75,8 +79,53 @@ exists, write what the app may) and the bridge's own answers (`/mowerd/*`):
 `topic info` then shows writers, readers, QoS and counters, `hz` reads the
 bus's `published` counters by default (no subscription; `--jitter` for
 the subscribing mode of today), and `node`, `bridge`, `graph` and
-`param list/get` arrive. E6 adds `pair` and `link-status`, which need no
-connection.
+`param list/get` arrive.
+
+## The host tools
+
+`pair` and `link-status` need no connection. They are the Python tools of
+`deploy/host/`, `mower-pair` and `mower-link-status.py`, for when the host has
+no Python (E6 design 3.4, 3.5). **Nothing installs them on the host yet**: E6-8,
+if the owner wants it before Phase F, does that with a drop-in; the image has
+the binary because it has mowerctl. Only these two write anything: `pair` writes
+`identity.json` when it is new, broken, rotated or renamed, and `link-status`
+writes `link_status.json` every 5 s.
+
+They must not be told apart from the Python tools. Flags, defaults, files, modes,
+owners, stdout and exit codes are held to what Python did in every case of
+`deploy/test/golden/host/g5_pair.json` and `g4_link_status.json`, written by
+`src/mower_mission/test/test_host_contracts.py`:
+
+- `pair`: argparse's rules included (`--rot`, `--name=x`, exit 2), `quote_plus`'s
+  escaping in the URL (`~` stays, `*` does not), `\uXXXX` for non-ASCII in
+  `--json` and the file, nothing written without a reason. So also what design
+  D6 leaves for the owner to decide: **an `identity.json` that does not parse is
+  silently replaced, and its `device_key` is lost**, after which the backend
+  answers 409; and ws_bridge sees a new secret only after a restart.
+- Both work through the open directory and the open file, as the fixed Python
+  tools do (`mower_link::statedir`): no link is followed in the state dir or at
+  its name, and an owner or a mode is set on the file, not by name.
+- `link-status`: the same AT commands and the same bytes written. `rsrp_dbm` and
+  `rsrq_db` stay ints from Quectel's `+QCSQ` and floats from SIMCom's `+CPSI`. The
+  first argument not starting with `--` is the state dir. Run one sampler at a
+  time, in place of the Python one: two on `/dev/lte_at` read each other's answers.
+
+What is different, and why it does not matter:
+
+- `pair` looks the owner up in `/etc/passwd` rather than NSS, which keeps the
+  binary static; a user only LDAP knows counts as unknown, whose chown is skipped.
+- `--help` is its own text, and `link-status` has one (Python's treats it as an
+  unknown flag and starts sampling). `pair` and `link-status` say why they failed
+  in one line, where Python prints a traceback; the exit code is the same.
+- A modem that goes away during a read: Python's `at()` now and then dies of a
+  negative `select` timeout at its deadline and loses that round (pinned in G4's
+  tests). The loop here has no such race, so the round always records the error
+  of the write that follows, as Python does the rest of the time.
+- A number too long for 64 bits in a modem's answer reads as no answer, and
+  digits outside ASCII are not digits. A modem sends neither. In `identity.json`
+  such a number makes the file one that does not parse, and a lone surrogate
+  escape comes back as U+FFFD (`mower_pyfmt`'s gaps). Neither writer makes those.
+- `MOWER_LINK_WIRELESS` replaces `/proc/net/wireless`, for the tests.
 
 ## Output
 
@@ -114,8 +163,9 @@ connection.
   `/usr/local/bin/mowerctl` (a symlink, `Dockerfile`). No launch file,
   compose service or unit starts it.
 - Anywhere else: `cargo build --release -p mowerctl` (no ROS environment
-  needed: it has no r2r dependency). Nothing in it links C, so a static
-  binary for a host without the image's glibc builds as well (2.5 MB on
+  needed: it has no r2r dependency, which `tests/host_tools.rs` checks against
+  `Cargo.lock`). Nothing in it links C, so a static
+  binary for a host without the image's glibc builds as well (3.2 MB on
   arm64; glibc's linker warns that a host name then resolves only with the
   same glibc's NSS libraries, so give such a binary an IP address):
 
@@ -123,6 +173,10 @@ connection.
   RUSTFLAGS='-C target-feature=+crt-static' \
     cargo build --release -p mowerctl --target aarch64-unknown-linux-gnu
   ```
+
+  CI's arm64 job builds it this way. `pair` looks users up in `/etc/passwd` for
+  the same reason, and the AT port sets its speed without `cfsetispeed`: the libc
+  crate binds that to a versioned glibc symbol a static link cannot have.
 
 ## Tests
 
@@ -132,3 +186,9 @@ check) as well as the units: the MAC against the Python vector, the
 `ros2 topic hz` arithmetic, a message's bytes taken from the frame as they
 stand (no serde_json feature of its own: those would be unified into the
 image's other binaries).
+
+The host tools run over the goldens: every G5 case through `pair`'s code with
+the machine replaced (`src/pair.rs`), and in `tests/host_tools.rs` the real
+binary over every G4 case, with the modem on a real pty, and over the G5 cases
+the machine cannot change, on a terminal as well as a pipe; side by side with
+the Python tools on this machine when there is a python3.
