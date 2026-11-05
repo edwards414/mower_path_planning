@@ -209,7 +209,8 @@ pid_autotune:
 # the values the Python recorder had on the robot (autostart false, MediaMTX on
 # loopback). The per-robot ones (robot_id, output_root, r2_env_file, the
 # profile file in mower_recorder's share, git_repo_dir) robot.launch.py adds
-# for these nodes from its arguments. It records the default profile from DDS.
+# for these nodes from its arguments. It records the default profile from DDS
+# (E5-3b), the names every writer of which is on the bus here from the bus (E5-4).
 graph_snapshot:
   ros__parameters:
     period_s: 2.0
@@ -225,6 +226,13 @@ recorder_manager:
     fault_topic: /mower_recorder/fault
     video_api_url: http://127.0.0.1:9997
     min_free_mb: 2048
+    # E5-4: auto takes a name every writer of which is on the bus in this
+    # process from the bus (design 3.5); dds is E5-3's, every name from DDS
+    # (the roll-back, by a parameter file of its own)
+    source: auto
+    # G3 only (e2-verify): with auto, the bus names from DDS as well, into
+    # <dir>/<run>/; empty: off
+    dds_shadow_dir: ''
 bag_store:
   ros__parameters:
     upload_policy: wifi_or_dock

@@ -171,21 +171,23 @@ impl Bag {
 
     /// Only the instances `nodes` (a test that stands in for the others).
     async fn start_only(ns: &str, params: &[(&'static str, Params)], bridged: bool, nodes: &[&'static str]) -> Bag {
-        Bag::start_in(ns, params, bridged, nodes, Vec::new()).await
+        let set: &[&str] = &["bag"];
+        Bag::start_in(ns, params, bridged.then_some(set), nodes, Vec::new()).await
     }
 
-    /// With `args` for the instances (E5-6: the camera's `--request-file`).
+    /// With mower_rsd's bus bridge for the set `bridge` (when given), and
+    /// `args` for the instances (E5-4: mower_rsd's `--rsd-process`).
     async fn start_in(
-        ns: &str, params: &[(&'static str, Params)], bridged: bool, nodes: &[&'static str], args: Vec<String>,
+        ns: &str, params: &[(&'static str, Params)], bridge: Option<&[&str]>, nodes: &[&'static str], args: Vec<String>,
     ) -> Bag {
         let (clock, manual) = Clock::manual(Time::from_ns(T0_NS));
         let bus = Bus::new();
         let shutdown = Shutdown::new();
         let mut tasks = Vec::new();
-        if bridged {
+        if let Some(set) = bridge {
             let m = ModuleCtx::new(mower_bridge::NODE, shutdown.clone())
                 .with_bus(bus.scope(mower_bridge::NODE))
-                .with_args(mower_bridge::rsd_args(&["bag"], &[] as &[&str]))
+                .with_args(mower_bridge::rsd_args(set, &[] as &[&str]))
                 .with_clock(clock.clone());
             tasks.push(tokio::spawn(mower_bridge::run(context(), m)));
         }
@@ -205,7 +207,10 @@ impl Bag {
             for (key, value) in params.iter().filter(|(n, _)| *n == name).flat_map(|(_, p)| p) {
                 node.params.lock().unwrap().insert(key.to_string(), Parameter::new(value.clone()));
             }
-            let m = ModuleCtx::new(name, shutdown.clone()).with_bus(bus.scope(name)).with_clock(clock.clone());
+            let m = ModuleCtx::new(name, shutdown.clone())
+                .with_bus(bus.scope(name))
+                .with_clock(clock.clone())
+                .with_args(args.clone());
             let task = match name {
                 NODE_GRAPH => tokio::spawn(graph::run_node(node, m.clone())),
                 NODE_MANAGER => tokio::spawn(manager::run_node(context(), node, m.clone())),
@@ -799,7 +804,7 @@ fn camera_front_runs_the_requested_camera() {
             })
         };
         let args = vec!["--request-file".to_string(), request.to_string_lossy().into_owned()];
-        let bag = Bag::start_in("/e56_cam", &[], false, &[mower_recorder::NODE_CAMERA], args).await;
+        let bag = Bag::start_in("/e56_cam", &[], None, &[mower_recorder::NODE_CAMERA], args).await;
         let nodes = || viewer.with(|n| n.get_node_names_and_namespaces().unwrap()).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert!(!nodes().contains(&"camera_front".to_string()), "nothing before the request is looked at");
         bag.advance(mower_recorder::camera::POLL).await;
@@ -857,6 +862,279 @@ fn camera_front_runs_the_requested_camera() {
         std::env::set_var("AMENT_PREFIX_PATH", old);
         std::fs::remove_dir_all(&root).unwrap();
     });
+}
+
+/// rmw's bytes of an r2r value, padded to 4: what DDS carries and rosbag2
+/// records (the oracle for a tap's `mower_cdr` bytes).
+fn rmw_bytes<T: r2r::WrappedTypesupport>(v: &T) -> Vec<u8> {
+    let mut b = v.to_serialized_bytes().unwrap();
+    while b.len() % 4 != 0 {
+        b.push(0);
+    }
+    b
+}
+
+fn fix(i: u32) -> r2r::sensor_msgs::msg::NavSatFix {
+    let mut f = r2r::sensor_msgs::msg::NavSatFix::default();
+    f.header.frame_id = "gps".into();
+    f.header.stamp.sec = 1_793_000_000 + i as i32;
+    f.latitude = 25.0 + i as f64 * 1e-6;
+    f.longitude = 121.5;
+    // NaN survives (a JSON round trip would make it null)
+    f.altitude = if i == 3 { f64::NAN } else { 40.0 + i as f64 };
+    f.position_covariance = vec![i as f64; 9];
+    f
+}
+
+/// The `type_description_hash` of `topic` in a bag's metadata.yaml, and its
+/// offered QoS profiles' depths and durabilities.
+fn metadata_of(path: &Path, topic: &str) -> (String, Vec<String>) {
+    let text = std::fs::read_to_string(path).unwrap();
+    let entry = text.split("- topic_metadata:").find(|e| e.contains(&format!("name: {topic}\n"))).unwrap_or_else(|| panic!("{topic} in {text}"));
+    let hash = entry.lines().find_map(|l| l.trim().strip_prefix("type_description_hash: ")).unwrap().to_string();
+    let offers = entry
+        .split("- history:")
+        .skip(1)
+        .map(|o| {
+            let get = |k: &str| o.lines().find_map(|l| l.trim().strip_prefix(&format!("{k}: ")).map(str::to_string)).unwrap();
+            format!("{} {} {}", get("depth"), get("reliability"), get("durability"))
+        })
+        .collect();
+    (hash, offers)
+}
+
+/// E5-4 (`source: auto`), G3 in miniature: mower_rsd's set says `/fix` and
+/// the adapter's map layer are written on the bus alone (gps and adapter on
+/// the bus), so they are tapped; `/e54/dds` (no writer the manifest knows)
+/// comes from DDS, and so does `/gps/status`, which the manifest gives the bus
+/// but DDS shows another writer of (the look before a tap). With
+/// `dds_shadow_dir`, the same run also records the bus names from DDS,
+/// through the bus bridge, which is the G3 comparison:
+/// every sample byte for byte the same (NaN included), each also equal to
+/// rmw's own serialization; a value r2r refuses (a covariance of 8) skipped
+/// on both sides; the latched layer published before the start in both;
+/// the tap's log time within a few ms of the DDS one, its publish time the
+/// bus publish instant; the type hash the one DDS reports, one offer per
+/// bus writer (D3).
+#[test]
+fn recorder_manager_takes_the_bus_names_from_the_bus() {
+    within(async {
+        let root = scratch("taps");
+        let profile = root.join("profile.yaml");
+        std::fs::write(&profile, "topics:\n  - /fix\n  - /adapter/map_layers/map_grid\n  - /e54/dds\n  - /gps/status\n").unwrap();
+        let mut params = production(&root, None);
+        set(&mut params, NODE_MANAGER, "config_file", s(profile.to_str().unwrap()));
+        set(&mut params, NODE_MANAGER, "params_dump_nodes", P::StringArray(vec![]));
+        set(&mut params, NODE_MANAGER, "source", s("auto"));
+        set(&mut params, NODE_MANAGER, "dds_shadow_dir", s(root.join("shadow").to_str().unwrap()));
+        // the recorder's /fix reader is the gps_topic one: another name
+        set(&mut params, NODE_MANAGER, "gps_topic", s("/e54/gps_for_metadata"));
+        let set_here: &[&str] = &["gps", "adapter", "bag"];
+        let args = mower_bridge::process_args(set_here, &[] as &[&str]);
+        let bag = Bag::start_in("/e54_taps", &params, Some(set_here), &[NODE_MANAGER], args).await;
+        // the bus writers, as gps and the adapter make them (manifest QoS)
+        let gps = bag.bus.scope("gps");
+        let fixes = gps.publisher::<r2r::sensor_msgs::msg::NavSatFix>("/fix", Qos::default().keep_last(10)).unwrap();
+        let adapter = bag.bus.scope("flutter_adapter");
+        let grid = adapter.publisher::<Text>("/adapter/map_layers/map_grid", Qos::latched()).unwrap();
+        grid.publish(&Text { data: "the grid, before the start".into() }).unwrap();
+        let writer = Peer::new("e54_writer", "");
+        let dds_only = writer.with(|n| n.create_publisher::<Text>("/e54/dds", reliable(100)).unwrap());
+        let foreign = writer.with(|n| n.create_publisher::<Text>("/gps/status", reliable(100)).unwrap());
+        let mut status = bag.feeder.subscribe::<Text>("/mower_recorder/status", Qos::latched().keep_last(100)).unwrap();
+        bag.until_serving().await;
+        next("the idle status", &mut status).await;
+        // the bridge's DDS writers of the bus names exist (presence mirrored)
+        eventually("the bridge's DDS writers", || {
+            let w = |t: &str| writer.with(|n| n.get_publishers_info_by_topic(t, false).unwrap()).into_iter().map(|e| e.node_name).collect::<Vec<_>>();
+            w("/fix") == [mower_bridge::NODE] && w("/adapter/map_layers/map_grid") == [mower_bridge::NODE]
+        })
+        .await;
+
+        let (ok, reply) = call(&bag.feeder, "/mower_recorder/start").await;
+        assert!(ok, "{reply}");
+        let run = reply.strip_prefix("開始錄製 run=").unwrap().to_string();
+        let run_dir = root.join("bags").join(&run);
+        // the taps on the group's scope; the shadow's and /e54/dds's DDS readers
+        eventually("the taps", || {
+            let readers = |t: &str| bag.bus.topic(t).map(|i| i.subscribers).unwrap_or_default();
+            readers("/fix").contains(&"mower_full_recorder".to_string())
+                && readers("/adapter/map_layers/map_grid").contains(&"mower_full_recorder".to_string())
+        })
+        .await;
+        eventually("the DDS readers", || {
+            subscribed_by(&writer, "/e54/dds") == ["mower_full_recorder"] && subscribed_by(&writer, "/fix") == ["mower_full_recorder"]
+        })
+        .await;
+        eventually("the DDS matches", || dds_only.get_inter_process_subscription_count().unwrap() == 1).await;
+        // a bus name another DDS writer writes too: no tap, the DDS reader
+        eventually("the foreign writer's reader", || subscribed_by(&writer, "/gps/status") == ["mower_full_recorder"]).await;
+        eventually("its match", || foreign.get_inter_process_subscription_count().unwrap() == 1).await;
+        assert!(!bag.bus.topic("/gps/status").is_some_and(|i| i.subscribers.contains(&"mower_full_recorder".to_string())), "no tap");
+        foreign.publish(&Text { data: "from a writer the manifest does not know".into() }).unwrap();
+        let mut expected = Vec::new();
+        for i in 0..20 {
+            let mut f = fix(i);
+            if i == 7 {
+                // r2r refuses it (a fixed array of 9): the bridge drops it, the tap skips it
+                f.position_covariance = vec![0.0; 8];
+            } else {
+                expected.push(rmw_bytes(&f));
+            }
+            fixes.publish(&f).unwrap();
+            dds_only.publish(&Text { data: format!("dds #{i}") }).unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(call(&bag.feeder, "/mower_recorder/stop").await, (true, format!("已停止並封存: full (run={run})")));
+
+        let taps = messages(&run_dir.join("bag/bag_0.mcap"));
+        let shadow_bag = root.join("shadow").join(&run).join("bag");
+        let dds = messages(&shadow_bag.join("bag_0.mcap"));
+        let of = |v: &[(String, u64, u64, Vec<u8>)], t: &str| v.iter().filter(|m| m.0 == t).cloned().collect::<Vec<_>>();
+        let (tap_fix, dds_fix) = (of(&taps, "/fix"), of(&dds, "/fix"));
+        let bytes = |v: &[(String, u64, u64, Vec<u8>)]| v.iter().map(|m| m.3.clone()).collect::<Vec<_>>();
+        assert_eq!(bytes(&tap_fix), expected, "the tap's CDR is rmw's, the refused value skipped");
+        assert_eq!(bytes(&dds_fix), expected, "through the bridge, the same");
+        // the tap's receive time next to the DDS one: G3's p99 < 5 ms is for
+        // a run (e2-verify); a test machine under a workspace run's load
+        // gets the median
+        let mut dts: Vec<i64> = tap_fix.iter().zip(&dds_fix).map(|(t, d)| (t.1 as i64 - d.1 as i64).abs()).collect();
+        dts.sort_unstable();
+        assert!(dts[dts.len() / 2] < 5_000_000, "log times apart by {dts:?} ns");
+        assert!(tap_fix.iter().all(|t| t.2 <= t.1), "the bus publish instant before the tap took it");
+        assert!(tap_fix.windows(2).all(|w| w[0].2 < w[1].2), "publish times in publish order");
+        let grid_bytes = rmw_bytes(&Text { data: "the grid, before the start".into() });
+        assert_eq!(bytes(&of(&taps, "/adapter/map_layers/map_grid")), [grid_bytes.clone()], "the latched layer from the tap's history");
+        assert_eq!(bytes(&of(&dds, "/adapter/map_layers/map_grid")), [grid_bytes]);
+        assert_eq!(of(&taps, "/e54/dds").len(), 20, "a DDS name from DDS");
+        assert!(of(&dds, "/e54/dds").is_empty(), "the shadow has the bus names only");
+        assert_eq!(of(&taps, "/gps/status").len(), 1, "the foreign writer's sample, from DDS");
+        assert!(of(&dds, "/gps/status").is_empty(), "the shadow has the tapped names only");
+        // the metadata: the type hash DDS reports, one offer per bus writer
+        for topic in ["/fix", "/adapter/map_layers/map_grid"] {
+            let (tap_hash, tap_offers) = metadata_of(&run_dir.join("bag/metadata.yaml"), topic);
+            let (dds_hash, dds_offers) = metadata_of(&shadow_bag.join("metadata.yaml"), topic);
+            assert_eq!(tap_hash, dds_hash, "{topic}");
+            assert_eq!(tap_offers, dds_offers, "{topic}: one bus writer, as the bridge's DDS writer offers it");
+        }
+        let (_, fix_offers) = metadata_of(&run_dir.join("bag/metadata.yaml"), "/fix");
+        assert_eq!(fix_offers, ["10 reliable volatile"]);
+        bag.stop().await;
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
+/// `source: dds` is E5-3's: the same set, every name from DDS (through the
+/// bridge), no tap on the bus.
+#[test]
+fn recorder_manager_with_source_dds_reads_everything_from_dds() {
+    within(async {
+        let root = scratch("dds_only");
+        let profile = root.join("profile.yaml");
+        std::fs::write(&profile, "topics:\n  - /fix\n").unwrap();
+        let mut params = production(&root, None);
+        set(&mut params, NODE_MANAGER, "config_file", s(profile.to_str().unwrap()));
+        set(&mut params, NODE_MANAGER, "params_dump_nodes", P::StringArray(vec![]));
+        set(&mut params, NODE_MANAGER, "source", s("dds"));
+        set(&mut params, NODE_MANAGER, "gps_topic", s("/e54/gps_for_metadata"));
+        let set_here: &[&str] = &["gps", "bag"];
+        let args = mower_bridge::process_args(set_here, &[] as &[&str]);
+        let bag = Bag::start_in("/e54_dds", &params, Some(set_here), &[NODE_MANAGER], args).await;
+        let gps = bag.bus.scope("gps");
+        let fixes = gps.publisher::<r2r::sensor_msgs::msg::NavSatFix>("/fix", Qos::default().keep_last(10)).unwrap();
+        let watcher = Peer::new("e54_watcher", "");
+        bag.until_serving().await;
+        let (ok, reply) = call(&bag.feeder, "/mower_recorder/start").await;
+        assert!(ok, "{reply}");
+        let run = reply.strip_prefix("開始錄製 run=").unwrap().to_string();
+        eventually("the DDS reader", || subscribed_by(&watcher, "/fix") == ["mower_full_recorder"]).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!bag.bus.topic("/fix").unwrap().subscribers.contains(&"mower_full_recorder".to_string()), "no tap");
+        for i in 0..5 {
+            fixes.publish(&fix(i)).unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(call(&bag.feeder, "/mower_recorder/stop").await.0);
+        let got = messages(&root.join("bags").join(&run).join("bag/bag_0.mcap"));
+        assert_eq!(got.iter().map(|m| m.3.clone()).collect::<Vec<_>>(), (0..5).map(|i| rmw_bytes(&fix(i))).collect::<Vec<_>>());
+        bag.stop().await;
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
+/// A latched name in two groups (`/tf_static` in `bag/` and `camera/`): each
+/// group takes the whole replay whenever it starts, as each `ros2 bag record`
+/// did. A group joining the first one's reader got only what came after it
+/// joined, so F3's camera bag once held 1 of its 4 static transforms: which
+/// thread got there first decided. Here the second group starts well after
+/// the first has taken the replay, the case that loses them all.
+#[test]
+fn a_latched_name_in_two_groups_is_replayed_to_both() {
+    use mower_mcap::BagOptions;
+    use mower_recorder::sources::DdsSources;
+    use mower_recorder_core::manager::Sources;
+    use mower_recorder_core::profile::GroupSpec;
+    use mower_recorder_core::recording::{Options, QosOverrides, Recording};
+    within(async {
+        let root = scratch("latched_twice");
+        let writer = Peer::new("e54_latched_writer", "");
+        let latched = reliable(10).transient_local();
+        let publisher = writer.with(|n| n.create_publisher::<Text>("/e54/latched", latched).unwrap());
+        let text = |t: &str| Text { data: t.into() };
+        for t in ["static 0", "static 1", "static 2"] {
+            publisher.publish(&text(t)).unwrap();
+        }
+        let spec = |name: &'static str, node_name: &'static str| GroupSpec {
+            name,
+            node_name,
+            out_dir: root.join(name),
+            topics: vec!["/e54/latched".into()],
+            recorded: vec!["/e54/latched".into()],
+            cmd: Vec::new(),
+            bag: Ok(BagOptions::new("test")),
+        };
+        let recording = |name: &str| Recording::start(Options::new(name, &root.join(name), BagOptions::new("test"))).unwrap();
+        let mut sources = DdsSources::new(context(), "e54_latched");
+        let overrides = QosOverrides::default();
+
+        let first = recording("full");
+        sources.start(&spec("full", "mower_full_recorder"), &overrides, first.feed()).unwrap();
+        eventually("the first group's reader", || publisher.get_inter_process_subscription_count().unwrap() == 1).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let second = recording("camera");
+        sources.start(&spec("camera", "mower_camera_recorder"), &overrides, second.feed()).unwrap();
+        eventually("the second group's reader", || publisher.get_inter_process_subscription_count().unwrap() == 2).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        publisher.publish(&text("after both")).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // the later group first: no reader of its own could come in between
+        sources.stop("camera");
+        sources.stop("full");
+        second.stop().unwrap();
+        first.stop().unwrap();
+        let expected: Vec<Vec<u8>> = ["static 0", "static 1", "static 2", "after both"].iter().map(|t| on_the_wire(t)).collect();
+        for name in ["full", "camera"] {
+            let got: Vec<Vec<u8>> = messages(&root.join(name).join(format!("{name}_0.mcap"))).into_iter().map(|m| m.3).collect();
+            assert_eq!(got, expected, "the {name} group");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    });
+}
+
+/// The taps' scopes are the ones mower_rsd's manifest check skips.
+#[test]
+fn the_groups_nodes_are_the_bridge_s_recorder_taps() {
+    for p in ["record_topics.yaml", "data_collection.yaml"] {
+        let path = repo().join("src/mower_recorder/config").join(p);
+        let cfg = mower_recorder_core::profile::load_config(Some(&path), &mut Vec::new());
+        for spec in mower_recorder_core::profile::recorder_specs(&cfg, Path::new("/run"), None, "test").unwrap() {
+            assert!(mower_bridge::RECORDER_TAPS.contains(&spec.node_name), "{p}: {}", spec.node_name);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

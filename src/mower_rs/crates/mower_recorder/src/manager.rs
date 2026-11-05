@@ -9,7 +9,11 @@
 //! - **Sources:** [`crate::sources::DdsSources`], DDS raw subscriptions
 //!   (vendor/r2r patch 3) found as rosbag2 finds its names, with a node per
 //!   group (`mower_full_recorder`, `mower_snapshot_recorder`) while it runs
-//!   (design D12).
+//!   (design D12). E5-4, `source: auto` (the default): a name every writer
+//!   of which is on the bus in this process is read by a bus tap instead
+//!   (`sources.rs`); `source: dds` is E5-3's. The process's set comes from
+//!   mower_rsd in front of the module's arguments
+//!   (`mower_bridge::process_args`); standalone the module is alone.
 //! - **The parameter dump:** [`RosParams`], `ListParameters` and
 //!   `GetParameters` of each dumped node through clients on this node, as
 //!   `ros2 param dump` asked them, on the dump's own thread.
@@ -89,6 +93,8 @@ struct Settings {
     /// mower_recorder's `config/` (data_collection.yaml, the extrinsics
     /// placeholder, the session template): `config_file`'s directory
     share_config: Option<PathBuf>,
+    /// `source: auto` (E5-4): the bus side of the sources
+    bus: Option<crate::sources::BusSide>,
     autostart: bool,
     video_api: String,
     video_path: String,
@@ -161,10 +167,28 @@ pub async fn run_node(ctx: r2r::Context, node: r2r::Node, m: ModuleCtx) -> Modul
     let share_config = (!cfg.config_file.is_empty())
         .then(|| PathBuf::from(&cfg.config_file).parent().map(|p| p.to_path_buf()))
         .flatten();
+    let source = params::string(&node, "source", "auto");
+    let bus = match crate::sources::Source::parse(&source) {
+        Some(crate::sources::Source::Dds) => None,
+        Some(crate::sources::Source::Auto) => {
+            let (running, _) = mower_bridge::running_here(&m.args, "bag", "bag")?;
+            let shadow = params::string(&node, "dds_shadow_dir", "");
+            Some(crate::sources::BusSide {
+                scope: m.bus.clone(),
+                sources: Arc::new(mower_bridge::RecordSources::new(&running, &m.remaps)),
+                shadow: (!shadow.is_empty()).then(|| PathBuf::from(crate::expanduser(&shadow))),
+            })
+        }
+        None => {
+            r2r::log_warn!(&logger, "source: {source:?} is neither dds nor auto: every name from DDS");
+            None
+        }
+    };
     let s = Settings {
         cfg,
         request_file,
         share_config,
+        bus,
         autostart: params::bool(&node, "autostart", true),
         video_api: params::string(&node, "video_api_url", ""),
         video_path: params::string(&node, "video_path", "front"),
@@ -310,7 +334,7 @@ async fn start(
     };
     let params = Arc::new(RosParams { node: node.clone(), clients: Mutex::new(HashMap::new()) });
     let out = Arc::new(BusOutputs { status, rear, logger: logger.to_string() });
-    let hooks = hooks(ctx, logger, video, &params, &out);
+    let hooks = hooks(ctx, s, logger, video, &params, &out);
     // the timers from the start of serving, before the manager's first status
     let tick = m.bus.wall_timer(&m.clock, STATUS_PERIOD)?;
     let autostart = s.autostart.then(|| Box::pin(m.clock.sleep(AUTOSTART_DELAY)));
@@ -334,16 +358,22 @@ async fn start(
 }
 
 /// What a manager is made with: the node's outputs and parameter clients,
-/// new sources, MediaMTX, the clock and the disk.
+/// new sources (E5-4: with the bus side under `source: auto`), MediaMTX, the
+/// clock and the disk.
 fn hooks(
-    ctx: &r2r::Context, logger: &str, video: Option<Box<dyn core::Video>>, params: &Arc<RosParams>, out: &Arc<BusOutputs>,
+    ctx: &r2r::Context, s: &Settings, logger: &str, video: Option<Box<dyn core::Video>>, params: &Arc<RosParams>,
+    out: &Arc<BusOutputs>,
 ) -> Hooks {
+    let sources = crate::sources::DdsSources::new(ctx.clone(), logger);
     Hooks {
         clock: Box::new(core::SystemClock),
         disk: Box::new(core::Statvfs),
         video,
         params: params.clone(),
-        sources: Box::new(crate::sources::DdsSources::new(ctx.clone(), logger)),
+        sources: Box::new(match &s.bus {
+            Some(bus) => sources.with_bus(bus.clone()),
+            None => sources,
+        }),
         out: out.clone(),
     }
 }
@@ -430,7 +460,7 @@ async fn apply_request(ctx: &r2r::Context, s: &Settings, node: &Arc<Mutex<r2r::N
     } else {
         Some(Box::new(MediaMtx { api_url: s.video_api.clone(), path: s.video_path.clone() }))
     };
-    let hooks = hooks(ctx, logger, video, &a.params, &a.out);
+    let hooks = hooks(ctx, s, logger, video, &a.params, &a.out);
     let manager = tokio::task::spawn_blocking(move || Manager::new(cfg, hooks)).await.expect("the manager's start panicked");
     *lock(&a.manager) = manager;
     a.applied = now;

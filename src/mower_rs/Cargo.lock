@@ -1340,6 +1340,7 @@ dependencies = [
  "mower_bridge",
  "mower_bus",
  "mower_camera",
+ "mower_cdr",
  "mower_mcap",
  "mower_pyfmt",
  "mower_recorder_core",
