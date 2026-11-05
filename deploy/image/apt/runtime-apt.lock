@@ -7,6 +7,13 @@
 # ros:jazzy-ros-core as Docker Hub rebuilt it on 2026-10-27 (the digest the
 # Dockerfile pins). The ROS packages are the same.
 #
+# E5-7c (2026-11-06) removed rosbag2 and gscam from the exec_depends: 27 packages
+# left (rosbag2 and what only it needs, gscam, GStreamer's -dev packages), and
+# because that rebuilds this layer, the 8 Ubuntu updates that had left the
+# archive since moved to their successors: libpcre2-* 10.42-4ubuntu2.2,
+# libsoup-3.0-* 3.4.4-5ubuntu0.10, python3-pil 10.2.0-1ubuntu1.4. The ROS
+# packages are the same.
+#
 # The runtime stage of the Dockerfile installs exactly these versions and
 # fails when dpkg ends up with anything else. To change it (a new
 # exec_depend, a base image bump, a security update), copy the list the
@@ -55,7 +62,6 @@ gdal-plugins:arm64 3.8.4+dfsg-3ubuntu3
 gir1.2-glib-2.0:arm64 2.80.0-6ubuntu3.10
 gir1.2-gst-plugins-base-1.0:arm64 1.24.2-1ubuntu0.5
 gir1.2-gstreamer-1.0:arm64 1.24.2-1ubuntu0.1
-gir1.2-gudev-1.0:arm64 1:238-5ubuntu1
 gir1.2-ibus-1.0:arm64 1.5.29-2
 glib-networking-common 2.80.0-1build1
 glib-networking-services 2.80.0-1build1
@@ -254,14 +260,11 @@ libgssapi-krb5-2:arm64 1.20.1-6ubuntu2.10
 libgssrpc4t64:arm64 1.20.1-6ubuntu2.10
 libgstreamer-gl1.0-0:arm64 1.24.2-1ubuntu0.5
 libgstreamer-plugins-base1.0-0:arm64 1.24.2-1ubuntu0.5
-libgstreamer-plugins-base1.0-dev 1.24.2-1ubuntu0.5
 libgstreamer-plugins-good1.0-0:arm64 1.24.2-1ubuntu1.8
 libgstreamer1.0-0:arm64 1.24.2-1ubuntu0.1
-libgstreamer1.0-dev:arm64 1.24.2-1ubuntu0.1
 libgtest-dev:arm64 1.14.0-1
 libgts-0.7-5t64:arm64 0.7.6+darcs121130-5.2build1
 libgudev-1.0-0:arm64 1:238-5ubuntu1
-libgudev-1.0-dev:arm64 1:238-5ubuntu1
 libgvc6 2.42.2-9ubuntu0.1
 libgvpr2:arm64 2.42.2-9ubuntu0.1
 libharfbuzz0b:arm64 8.3.0-2build2
@@ -331,7 +334,6 @@ liblttng-ust-dev:arm64 2.13.7-1.1ubuntu2
 liblttng-ust-python-agent1t64:arm64 2.13.7-1.1ubuntu2
 liblttng-ust1t64:arm64 2.13.7-1.1ubuntu2
 liblz4-1:arm64 1.9.4-1build1.1
-liblz4-dev:arm64 1.9.4-1build1.1
 liblzma-dev:arm64 5.6.1+really5.4.5-1ubuntu0.4
 liblzma5:arm64 5.6.1+really5.4.5-1ubuntu0.4
 libmbedcrypto7t64:arm64 2.28.8-1
@@ -411,8 +413,6 @@ libopenmpi3t64:arm64 4.1.6-7ubuntu2
 libopenmpt0t64:arm64 0.7.3-1.1build3
 libopus0:arm64 1.4-1build1
 liborc-0.4-0t64:arm64 1:0.4.38-1ubuntu0.1
-liborc-0.4-dev-bin 1:0.4.38-1ubuntu0.1
-liborc-0.4-dev:arm64 1:0.4.38-1ubuntu0.1
 liborocos-kdl-dev:arm64 1.5.1-4build1
 liborocos-kdl1.5:arm64 1.5.1-4build1
 libp11-kit0:arm64 0.25.3-4ubuntu2.2
@@ -427,11 +427,11 @@ libpangoft2-1.0-0:arm64 1.52.1+ds-1build1
 libpathplan4:arm64 2.42.2-9ubuntu0.1
 libpciaccess-dev:arm64 0.17-3ubuntu0.24.04.3
 libpciaccess0:arm64 0.17-3ubuntu0.24.04.3
-libpcre2-16-0:arm64 10.42-4ubuntu2.1
-libpcre2-32-0:arm64 10.42-4ubuntu2.1
-libpcre2-8-0:arm64 10.42-4ubuntu2.1
-libpcre2-dev:arm64 10.42-4ubuntu2.1
-libpcre2-posix3:arm64 10.42-4ubuntu2.1
+libpcre2-16-0:arm64 10.42-4ubuntu2.2
+libpcre2-32-0:arm64 10.42-4ubuntu2.2
+libpcre2-8-0:arm64 10.42-4ubuntu2.2
+libpcre2-dev:arm64 10.42-4ubuntu2.2
+libpcre2-posix3:arm64 10.42-4ubuntu2.2
 libpgm-5.3-0t64:arm64 5.3.128~dfsg-2.1build1
 libpgm-dev:arm64 5.3.128~dfsg-2.1build1
 libpixman-1-0:arm64 0.42.2-1build1
@@ -509,8 +509,8 @@ libsndio7.0:arm64 1.9.0-0.3build3
 libsocket++1:arm64 1.12.13+git20131030.5d039ba-1build1
 libsodium-dev:arm64 1.0.18-1ubuntu0.24.04.1
 libsodium23:arm64 1.0.18-1ubuntu0.24.04.1
-libsoup-3.0-0:arm64 3.4.4-5ubuntu0.9
-libsoup-3.0-common 3.4.4-5ubuntu0.9
+libsoup-3.0-0:arm64 3.4.4-5ubuntu0.10
+libsoup-3.0-common 3.4.4-5ubuntu0.10
 libsoxr0:arm64 0.1.3-4build3
 libspatialite8t64:arm64 5.1.0-3build1
 libspdlog-dev:arm64 1:1.12.0+ds-2build1
@@ -562,7 +562,6 @@ libudev-dev:arm64 255.4-1ubuntu8.18
 libudev1:arm64 255.4-1ubuntu8.18
 libudfread0:arm64 1.1.2-1build1
 libunistring5:arm64 1.1-2build1.1
-libunwind-dev:arm64 1.6.2-3build1.1
 libunwind8:arm64 1.6.2-3build1.1
 liburcu-dev:arm64 0.14.0-3.1build1
 liburcu8t64:arm64 0.14.0-3.1build1
@@ -600,7 +599,6 @@ libwebpmux3:arm64 1.3.2-0.4build3
 libx11-6:arm64 2:1.8.7-1ubuntu0.1
 libx11-data 2:1.8.7-1ubuntu0.1
 libx11-dev:arm64 2:1.8.7-1ubuntu0.1
-libx11-xcb-dev:arm64 2:1.8.7-1ubuntu0.1
 libx11-xcb1:arm64 2:1.8.7-1ubuntu0.1
 libx264-164:arm64 2:0.164.3108+git31e19f9-1
 libx265-199:arm64 3.5-2build1
@@ -741,7 +739,7 @@ python3-more-itertools 10.2.0-1
 python3-numpy 1:1.26.4+ds-6ubuntu1
 python3-opencv:arm64 4.6.0+dfsg-13.1ubuntu1
 python3-packaging 24.0-1
-python3-pil:arm64 10.2.0-1ubuntu1.3
+python3-pil:arm64 10.2.0-1ubuntu1.4
 python3-pkg-resources 68.1.2-2ubuntu1.2
 python3-pluggy 1.4.0-1
 python3-psutil 5.9.8-2build2
@@ -859,7 +857,6 @@ ros-jazzy-generate-parameter-library-py 0.7.6-1noble.20260810.141423
 ros-jazzy-geographic-msgs 1.0.6-2noble.20260911.082247
 ros-jazzy-geometry-msgs 5.3.8-1noble.20260911.081635
 ros-jazzy-gmock-vendor 1.14.9000-2noble.20260225.231553
-ros-jazzy-gscam 2.0.2-5noble.20260911.153845
 ros-jazzy-gtest-vendor 1.14.9000-2noble.20260225.225707
 ros-jazzy-gz-cmake-vendor 0.0.12-1noble.20260618.172935
 ros-jazzy-gz-math-vendor 0.0.11-1noble.20260903.201031
@@ -879,7 +876,6 @@ ros-jazzy-joint-state-broadcaster 4.42.1-1noble.20260924.165236
 ros-jazzy-joint-state-publisher 2.4.3-1noble.20260911.135113
 ros-jazzy-joy 3.3.0-3noble.20260911.135755
 ros-jazzy-kdl-parser 2.11.0-3noble.20260911.051153
-ros-jazzy-keyboard-handler 0.3.2-1noble.20260305.214544
 ros-jazzy-laser-geometry 2.7.2-1noble.20260916.080327
 ros-jazzy-launch 3.4.12-1noble.20260920.232315
 ros-jazzy-launch-ros 0.26.13-1noble.20260920.234332
@@ -889,12 +885,10 @@ ros-jazzy-launch-testing-ros 0.26.13-1noble.20260920.235910
 ros-jazzy-launch-xml 3.4.12-1noble.20260920.235526
 ros-jazzy-launch-yaml 3.4.12-1noble.20260920.235608
 ros-jazzy-libcamera 0.7.2-1noble.20260713.080834
-ros-jazzy-liblz4-vendor 0.26.11-1noble.20260603.145530
 ros-jazzy-libstatistics-collector 1.7.4-1noble.20260911.055824
 ros-jazzy-libyaml-vendor 1.6.4-2noble.20260603.145652
 ros-jazzy-lifecycle-msgs 2.0.4-1noble.20260911.053400
 ros-jazzy-map-msgs 2.4.1-2noble.20260911.131928
-ros-jazzy-mcap-vendor 0.26.11-1noble.20260604.093033
 ros-jazzy-message-filters 4.11.17-1noble.20260911.145333
 ros-jazzy-nav-2d-msgs 1.3.13-1noble.20260911.091111
 ros-jazzy-nav-2d-utils 1.3.13-1noble.20260921.044250
@@ -927,7 +921,6 @@ ros-jazzy-pal-statistics 2.8.2-1noble.20260911.120141
 ros-jazzy-pal-statistics-msgs 2.8.2-1noble.20260911.092429
 ros-jazzy-parameter-traits 0.7.6-1noble.20260911.123721
 ros-jazzy-pluginlib 5.4.6-1noble.20260911.050246
-ros-jazzy-pybind11-vendor 3.1.3-1noble.20260305.220146
 ros-jazzy-python-cmake-module 0.11.1-2noble.20260305.220219
 ros-jazzy-rcl 9.2.11-1noble.20260911.055517
 ros-jazzy-rcl-action 9.2.11-1noble.20260911.055838
@@ -958,7 +951,6 @@ ros-jazzy-ros-environment 4.2.1-1noble.20260225.120022
 ros-jazzy-ros-workspace 1.0.3-7noble.20260224.192101
 ros-jazzy-ros2-controllers-test-nodes 4.42.1-1noble.20260911.135214
 ros-jazzy-ros2action 0.32.13-1noble.20261006.040212
-ros-jazzy-ros2bag 0.26.11-1noble.20261006.034319
 ros-jazzy-ros2cli 0.32.13-1noble.20261006.034053
 ros-jazzy-ros2cli-common-extensions 0.3.1-1noble.20261006.040504
 ros-jazzy-ros2component 0.32.13-1noble.20261006.040118
@@ -977,16 +969,6 @@ ros-jazzy-ros2service 0.32.13-1noble.20261006.034527
 ros-jazzy-ros2topic 0.32.13-1noble.20261006.034446
 ros-jazzy-rosapi 2.7.1-1noble.20261006.040514
 ros-jazzy-rosapi-msgs 2.7.1-1noble.20260911.054725
-ros-jazzy-rosbag2-compression 0.26.11-1noble.20260911.182832
-ros-jazzy-rosbag2-compression-zstd 0.26.11-1noble.20260911.224724
-ros-jazzy-rosbag2-cpp 0.26.11-1noble.20260911.175843
-ros-jazzy-rosbag2-interfaces 0.26.11-1noble.20260911.054750
-ros-jazzy-rosbag2-py 0.26.11-1noble.20260911.230412
-ros-jazzy-rosbag2-storage 0.26.11-1noble.20260911.075819
-ros-jazzy-rosbag2-storage-default-plugins 0.26.11-1noble.20260911.144505
-ros-jazzy-rosbag2-storage-mcap 0.26.11-1noble.20260911.095159
-ros-jazzy-rosbag2-storage-sqlite3 0.26.11-1noble.20260911.101454
-ros-jazzy-rosbag2-transport 0.26.11-1noble.20260911.225152
 ros-jazzy-rosbridge-library 2.7.1-1noble.20260911.112833
 ros-jazzy-rosbridge-msgs 2.7.1-1noble.20260911.053730
 ros-jazzy-rosbridge-server 2.7.1-1noble.20261006.040859
@@ -1028,7 +1010,6 @@ ros-jazzy-service-msgs 2.0.4-1noble.20260911.052221
 ros-jazzy-shape-msgs 5.3.8-1noble.20260911.091314
 ros-jazzy-smclib 4.2.0-1noble.20260317.155426
 ros-jazzy-spdlog-vendor 1.6.2-1noble.20260603.151440
-ros-jazzy-sqlite3-vendor 0.26.11-1noble.20260604.090944
 ros-jazzy-sros2 0.13.6-1noble.20261006.034442
 ros-jazzy-sros2-cmake 0.13.6-1noble.20261006.034533
 ros-jazzy-statistics-msgs 2.0.4-1noble.20260911.054844
@@ -1066,7 +1047,6 @@ ros-jazzy-visualization-msgs 5.3.8-1noble.20260911.130930
 ros-jazzy-xacro 2.1.1-1noble.20260519.011649
 ros-jazzy-yaml-cpp-vendor 9.0.1-1noble.20260305.224129
 ros-jazzy-zstd-image-transport 4.0.7-1noble.20260911.194816
-ros-jazzy-zstd-vendor 0.26.11-1noble.20260604.092801
 ros2-apt-source 1.2.0~noble
 rpcsvc-proto 1.4.2-0ubuntu7
 sed 4.9-2ubuntu0.24.04.1

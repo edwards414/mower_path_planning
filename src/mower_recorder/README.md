@@ -27,8 +27,8 @@ This package keeps what is not the recorder:
 The three rclpy nodes (`recorder_manager`, `bag_store`, `graph_snapshot`), `record.launch.py`,
 `data_collection.launch.py`, `front_camera.launch.py` (gscam), `record_profile.py`, `video_record.py` and
 `camera_launch.py` were removed in E5-7; the Rust port cites them by file and line, so read them at bf19e6c. Their
-rosbag2 and gscam packages stay in the image, as `exec_depend`s of this package and so `ros2 bag` keeps working there,
-until E5-7c: dropping them rebuilds the runtime apt layer, a 245 MB download for the robot. Roll-back to the Python recorder is an image from before E5-7
+rosbag2 and gscam packages left the image in E5-7c, so `ros2 bag` (`reindex`, `info`, `play`) runs off the robot now.
+Roll-back to the Python recorder is an image from before E5-7
 (`mower-update.sh --tag <previous>`).
 
 ## Layout of a run

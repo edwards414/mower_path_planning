@@ -894,6 +894,10 @@ jobs:
             for n in recorder_manager_node bag_store_node graph_snapshot_node; do
               test ! -e "$(ros2 pkg prefix mower_recorder)/lib/mower_recorder/$n"
             done
+            # E5-7c: rosbag2 and gscam left the runtime apt lock
+            for p in gscam ros2bag rosbag2_cpp; do
+              if ros2 pkg prefix "$p" >/dev/null 2>&1; then echo "$p is still in the image"; exit 1; fi
+            done
             # a stale build/lib in the cache mount would ship these (Dockerfile)
             for m in recorder_manager_node bag_store_node graph_snapshot_node record_profile video_record camera_launch; do
               if python3 -c "import mower_recorder.$m" 2>/dev/null; then echo "stale mower_recorder.$m in the image"; exit 1; fi
