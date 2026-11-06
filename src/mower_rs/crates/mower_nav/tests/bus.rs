@@ -789,8 +789,8 @@ fn the_health_gate_reads_its_inputs_from_the_bus() {
         };
         nav.until_status("a healthy picture", |s| s["ready"] == true).await;
         let (_goal, result, _feedback) = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await.expect("admitted");
-        // The inputs stop: the gate closes once they are stale (0.3 s), and
-        // cancels the reserved goal.
+        // The inputs stop: the gate closes once the first of them is stale
+        // (the IMU, 0.3 s), and cancels the reserved goal.
         feeding.store(false, Ordering::SeqCst);
         let _ = feeder.await;
         let (status, _) = wait("the result", result).await.unwrap();
@@ -1063,7 +1063,29 @@ fn the_health_gate_and_the_manual_hold_run_on_the_production_defaults() {
         manual.advance(Duration::from_millis(290));
         assert_eq!(nav.status().await["ready"], true, "0.29 s old inputs");
         manual.advance(Duration::from_millis(20));
-        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.31 s old inputs");
+        // the first budget to run out: the IMU's 0.30 s (the pose's is 0.50 s,
+        // and /fix's and /odometry/gps's 0.60 s: state.rs has each of them)
+        assert_eq!(nav.status().await["block_reason"], "IMU is unavailable or stale", "0.31 s old inputs");
+        manual.advance(Duration::from_millis(200));
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.51 s old inputs");
+
+        // A sample that was late on arrival has less of its budget left: the
+        // gate bounds how old the data is, not how long ago it came. Only /fix
+        // is 0.4 s old here, so 0.19 s on it is at 0.59 s and at 0.21 s past 0.6.
+        feed(0.01f64.powi(2));
+        nav.until_status("healthy before the late fix", |s| s["ready"] == true).await;
+        let (sec, nanosec) = (clock.now() - Duration::from_millis(400)).to_parts();
+        let mut late = NavSatFix::default();
+        late.header.stamp = r2r::builtin_interfaces::msg::Time { sec, nanosec };
+        (late.latitude, late.longitude, late.status.status) = (25.0, 121.5, 2);
+        late.position_covariance = vec![0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
+        late.position_covariance_type = 2;
+        fix_pub.publish(&late).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        manual.advance(Duration::from_millis(190));
+        assert_eq!(nav.status().await["ready"], true, "the fix 0.59 s old");
+        manual.advance(Duration::from_millis(20));
+        assert_eq!(nav.status().await["block_reason"], "GPS fix is stale", "the fix 0.61 s old, everything else 0.21 s");
 
         feed(0.01f64.powi(2));
         nav.until_status("healthy again", |s| s["ready"] == true).await;

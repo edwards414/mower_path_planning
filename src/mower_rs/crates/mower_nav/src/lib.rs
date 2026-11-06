@@ -263,6 +263,17 @@ impl Ctx {
         }
     }
 
+    /// When a sample was taken, on the module's monotonic clock: now, less its
+    /// stamp's age. A budget that counts from here bounds how old the data
+    /// behind the gate can get, whatever the delay on the way.
+    fn sampled_at(&self, stamp: &Time) -> Mono {
+        let now = self.clock.mono();
+        match self.stamp_age_s(stamp) {
+            Some(age) if age.is_finite() && age > 0.0 => now - Duration::from_secs_f64(age),
+            _ => now,
+        }
+    }
+
     fn info(&self, m: &str) {
         r2r::log_info!(&self.logger, "{}", m);
     }
@@ -1676,7 +1687,18 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
     let safety = SafetyParams {
         manual_command_hold_s: params::f64(&node, "manual_command_hold_s", 0.75),
         require_navigation_health: params::bool(&node, "require_navigation_health", true),
+        // Each source's budget follows its rate: one sample may be missing,
+        // with 0.10 s of jitter on top (2 periods + 0.10 s). 0.30 s for all of
+        // them gave /fix (4 Hz) 0.05 s of jitter and the pose (5 Hz, a throttle
+        // of the 20 Hz EKF) 0.05-0.10 s, and a trip every 10-20 s under load.
+        // /fix's, /odometry/gps's and the pose's budgets count from the sample's
+        // stamp (sampled_at), so they bound how old the data can be; before,
+        // a sample 0.30 s old on arrival had another 0.30 s. The IMU keeps
+        // 0.30 s from its receipt, and it stops with a hub reset or a stall of
+        // the sensors too. See tests/source_rules.rs for the rates they assume.
         navigation_health_timeout_s: params::f64(&node, "navigation_health_timeout_s", 0.30),
+        navigation_health_gps_timeout_s: params::f64(&node, "navigation_health_gps_timeout_s", 0.60),
+        navigation_health_pose_timeout_s: params::f64(&node, "navigation_health_pose_timeout_s", 0.50),
         navigation_health_max_future_skew_s: params::f64(&node, "navigation_health_max_future_skew_s", 0.5),
         max_gps_horizontal_sigma_m: params::f64(&node, "max_gps_horizontal_sigma_m", 0.015),
         max_imu_orientation_sigma_rad: params::f64(&node, "max_imu_orientation_sigma_rad", 0.35),
@@ -1819,7 +1841,7 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                     ctx.progress.lock().unwrap().robot_pose = PoseStamped::clone(&msg);
                 }
                 let mut st = ctx.state.lock().unwrap();
-                st.last_robot_pose_received_at = if reason.is_none() { Some(ctx.clock.mono()) } else { None };
+                st.last_robot_pose_received_at = if reason.is_none() { Some(ctx.sampled_at(&msg.header.stamp)) } else { None };
                 st.robot_pose_rejection_reason = reason;
             }
         });
@@ -1866,7 +1888,7 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                 let mut st = ctx.state.lock().unwrap();
                 match reason {
                     None => {
-                        st.valid_fix_received_at_by_topic.insert(source.clone(), ctx.clock.mono());
+                        st.valid_fix_received_at_by_topic.insert(source.clone(), ctx.sampled_at(&msg.header.stamp));
                         st.fix_rejections_by_topic.remove(&source);
                     }
                     Some(r) => {
@@ -1885,7 +1907,7 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                 let p = &msg.pose.pose.position;
                 let reason = state::gps_odometry_block_reason(ctx.stamp_age_s(&msg.header.stamp), &msg.header.frame_id, [p.x, p.y, p.z], &msg.pose.covariance, &ctx.safety);
                 let mut st = ctx.state.lock().unwrap();
-                st.last_gps_odometry_received_at = if reason.is_none() { Some(ctx.clock.mono()) } else { None };
+                st.last_gps_odometry_received_at = if reason.is_none() { Some(ctx.sampled_at(&msg.header.stamp)) } else { None };
                 st.gps_odometry_rejection_reason = reason;
             }
         });
