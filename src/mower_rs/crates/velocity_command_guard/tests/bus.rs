@@ -168,10 +168,13 @@ async fn the_final_guard_forwards_twist_mux_s_commands_with_the_robot_s_stamp() 
     ends.mux.publish(&command(clock.now() - ms(251), 0.3, 0.0)).unwrap();
     let out = next(&mut ends.base).await;
     assert_eq!((out.twist.linear.x, out.twist.angular.z), (0.0, 0.0));
-    // the rejection moved the barrier to the robot's clock: an older stamp moves backward, a zero again
+    // the barrier is at that stamp: an older one moves backward, a zero again
     manual.advance(ms(10));
-    ends.mux.publish(&command(clock.now() - ms(50), 0.3, 0.0)).unwrap();
+    ends.mux.publish(&command(clock.now() - ms(300), 0.3, 0.0)).unwrap();
     assert_eq!(next(&mut ends.base).await.twist.linear.x, 0.0);
+    // and a newer one that is young enough is judged by itself: it moves
+    ends.mux.publish(&command(clock.now() - ms(50), 0.3, 0.0)).unwrap();
+    assert_eq!(next(&mut ends.base).await.twist.linear.x, 0.3);
     // overspeed, NaN, lateral: zeros
     for bad in [command(clock.now(), 0.51, 0.0), command(clock.now(), f64::NAN, 0.0), {
         let mut c = command(clock.now(), 0.1, 0.0);

@@ -86,9 +86,15 @@ manual_velocity_guard:
     # the navigation guard below keeps the default. Keep in step with the
     # app's _manualCommandClockTimeout (mission_mock_provider.dart).
     max_input_age_s: 0.8
+    # Both guards' receipt timeout: the base's own cmd_vel_timeout, so that the
+    # app's 100 ms stream may slip 0.15 s before a guard stops it. Not more: past
+    # 0.25 s the base brakes by itself whatever the guards say, so a longer one
+    # only leaves the base alone under a silent guard. The code's default: 0.20 s.
+    command_timeout_s: 0.25
 velocity_command_guard:
   ros__parameters:
     require_command_session: false
+    command_timeout_s: 0.25
 
 # --- imu (rust_imu) ----------------------------------------------------------
 imu:
