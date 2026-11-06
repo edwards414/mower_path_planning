@@ -28,7 +28,7 @@ black-box tools in, so neither that job nor the vector job runs apt.
 
 ```sh
 docker buildx build -f tools/oracle/Dockerfile -t mower-oracle:jazzy .   # from the repository root
-docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh  # all; or: nav, localize, base
+docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh  # all; or: nav, localize, base, facts
 docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what CI checks
 ```
 
@@ -61,13 +61,32 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what
   (about 3 min);
 - `src/mower_rs/crates/mower_localize_core/tests/oracle/run_oracle.sh`;
 - `src/mower_rs/crates/mower_base_core/tests/oracle/generate.sh`, which
-  fetches ros2_controllers and control_toolbox at pinned commits.
+  fetches ros2_controllers and control_toolbox at pinned commits;
+- `regen_facts.sh` (E9-06): what rcl, r2r and rmw give with no stack running:
+  the resolver's names, what rcl reads from the parameter files, the CDR
+  vectors, E3's JSON corpus. It builds `mower_interface` out of the tree, as
+  r2r needs it.
+
+`check.sh` ends with `facts_no_ros.sh`: the frozen facts' tests with no ROS
+environment, and no test binary linking rcl.
+
+### The frozen facts of a running stack (E9-06)
+
+`freeze_stack.py IMAGE` makes the rest of `deploy/test/golden/ros_facts/` on the
+host, from a robot image as `tools/ab` runs it: the DDS graph with its QoS,
+`ros2 param dump`, launch's `--params-file` list and the start-up log. It is not
+done in this image because that has only part of what production runs (no
+`nav2_lifecycle_manager`, `nav2_smoother` or `nav2_waypoint_follower`, and no
+mower_bringup or mower_rsd). The workflow runs it after `check.sh`, on
+`:main` unless told another image. That file's README says what each fact is and
+what is normalised.
 
 ## CI
 
-`.github/workflows/oracle.yml` (arm64, like the robot) runs `regen.sh`
-monthly, on demand, and when this directory changes on main. It fails if a
-vector changed. Run by hand with `publish`, it also:
+`.github/workflows/oracle.yml` (arm64, like the robot) runs `regen.sh` and
+`freeze_stack.py` monthly, on demand, and when this directory or the frozen
+facts change on main. It fails if a vector changed. Run by hand with `publish`,
+it also:
 
 - pushes `ghcr.io/edwards414/mower-oracle:jazzy` and `:jazzy-<commit>`;
 - prints the digest in the job summary;

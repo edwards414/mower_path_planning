@@ -1145,12 +1145,10 @@ dependencies = [
 name = "mower_cdr"
 version = "0.1.0"
 dependencies = [
- "mcap",
  "mower_schema",
  "r2r",
- "rand",
  "serde",
- "zstd",
+ "serde_json",
 ]
 
 [[package]]
@@ -1376,6 +1374,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+ "zstd",
+]
+
+[[package]]
+name = "mower_ros_facts"
+version = "0.1.0"
+dependencies = [
+ "mcap",
+ "mower_cdr",
+ "mower_schema",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
  "zstd",
 ]
 

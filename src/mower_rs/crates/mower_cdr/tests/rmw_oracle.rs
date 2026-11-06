@@ -15,11 +15,12 @@
 //! Then what r2r refuses: mower_cdr refuses the same values (fixed-array
 //! length, NUL) where r2r panics.
 
-use mower_cdr::Value;
-use mower_schema::{ArrayKind, FieldType, Primitive};
+#[path = "support/random_value.rs"]
+mod random_value;
+
 use r2r::WrappedTypesupport;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use random_value::{random, Rng};
+use std::path::{Path, PathBuf};
 use std::sync::Once;
 
 /// rmw_implementation loads the RMW the first time a type is serialized,
@@ -35,87 +36,7 @@ fn robot_rmw() {
     });
 }
 
-const STRINGS: &[&str] = &["", "a", "map", "/tf", "測試 字串", "émoji 🚀", "with space and \"quotes\"", "line\nbreak",
-    "0123456789abcdef0123456789abcdef0123456789abcdef"];
-
-fn prim(rng: &mut StdRng, p: Primitive) -> Value {
-    let edge = rng.gen_bool(0.3);
-    match p {
-        Primitive::Bool => Value::Bool(rng.gen()),
-        Primitive::Byte | Primitive::Char | Primitive::Uint8 => Value::U8(if edge { *pick(rng, &[0, 1, 255]) } else { rng.gen() }),
-        Primitive::Int8 => Value::I8(if edge { *pick(rng, &[i8::MIN, -1, 0, i8::MAX]) } else { rng.gen() }),
-        Primitive::Int16 => Value::I16(if edge { *pick(rng, &[i16::MIN, -1, 0, i16::MAX]) } else { rng.gen() }),
-        Primitive::Uint16 => Value::U16(if edge { *pick(rng, &[0, u16::MAX]) } else { rng.gen() }),
-        Primitive::Int32 => Value::I32(if edge { *pick(rng, &[i32::MIN, -1, 0, i32::MAX]) } else { rng.gen() }),
-        Primitive::Uint32 => Value::U32(if edge { *pick(rng, &[0, u32::MAX]) } else { rng.gen() }),
-        Primitive::Int64 => Value::I64(if edge { *pick(rng, &[i64::MIN, -1, 0, i64::MAX]) } else { rng.gen() }),
-        Primitive::Uint64 => Value::U64(if edge { *pick(rng, &[0, u64::MAX]) } else { rng.gen() }),
-        Primitive::Float32 => Value::F32(if edge {
-            *pick(rng, &[f32::NAN, -f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0, f32::MIN_POSITIVE, 1e-45, f32::MAX])
-        } else {
-            f32::from_bits(rng.gen())
-        }),
-        Primitive::Float64 => Value::F64(if edge {
-            *pick(rng, &[f64::NAN, f64::from_bits(0x7ff4_0000_0000_0001), f64::INFINITY, f64::NEG_INFINITY, -0.0,
-                f64::MIN_POSITIVE, 5e-324, f64::MAX])
-        } else if rng.gen_bool(0.5) {
-            rng.gen_range(-1e6..1e6)
-        } else {
-            f64::from_bits(rng.gen())
-        }),
-    }
-}
-
-fn pick<'a, T>(rng: &mut StdRng, xs: &'a [T]) -> &'a T {
-    &xs[rng.gen_range(0..xs.len())]
-}
-
-fn elem(rng: &mut StdRng, ty: &FieldType, depth: u32) -> Value {
-    match ty {
-        FieldType::Primitive(p) => prim(rng, *p),
-        FieldType::String { bound } => {
-            let mut s = pick(rng, STRINGS).to_string();
-            if rng.gen_bool(0.2) {
-                s = (0..rng.gen_range(0..300)).map(|_| rng.gen_range(b' '..=b'~') as char).collect();
-            }
-            if let Some(b) = bound {
-                s.truncate(*b as usize);
-            }
-            Value::Str(s)
-        }
-        FieldType::WString { .. } => unreachable!("no wstring in the table"),
-        FieldType::Message(name) => random(rng, name, depth + 1),
-    }
-}
-
-fn random(rng: &mut StdRng, name: &str, depth: u32) -> Value {
-    let def = mower_schema::message(name).unwrap();
-    let mut fields = Vec::new();
-    for f in &def.fields {
-        let n = match f.array {
-            ArrayKind::Single => {
-                fields.push((f.name.clone(), elem(rng, &f.ty, depth)));
-                continue;
-            }
-            ArrayKind::Fixed(n) => n as usize,
-            ArrayKind::Bounded(b) => rng.gen_range(0..=b as usize),
-            ArrayKind::Unbounded => match &f.ty {
-                FieldType::Message(_) if depth > 2 => rng.gen_range(0..=1),
-                FieldType::Message(_) => rng.gen_range(0..=3),
-                _ => *pick(rng, &[0, 1, 2, 7, 33]),
-            },
-        };
-        let v = if matches!(f.ty, FieldType::Primitive(Primitive::Uint8 | Primitive::Byte | Primitive::Char)) {
-            Value::Bytes((0..n).map(|_| rng.gen()).collect())
-        } else {
-            Value::Array((0..n).map(|_| elem(rng, &f.ty, depth)).collect())
-        };
-        fields.push((f.name.clone(), v));
-    }
-    Value::Struct(fields)
-}
-
-fn check<T>(name: &str, rng: &mut StdRng, n: usize)
+fn check<T>(name: &str, rng: &mut Rng, n: usize)
 where
     T: WrappedTypesupport + serde::Serialize + serde::de::DeserializeOwned,
 {
@@ -136,19 +57,21 @@ where
     }
 }
 
-macro_rules! oracle {
-    ($rng:ident, $n:expr; $($t:path => $name:literal),* $(,)?) => {{
-        let names: Vec<&str> = vec![$($name),*];
-        $( check::<$t>($name, &mut $rng, $n); )*
-        names
-    }};
+/// A type of mower_schema's table, typed through r2r.
+struct Entry {
+    name: &'static str,
+    check: fn(&str, &mut Rng, usize),
+    vectors: fn(&str, &mut String),
 }
 
-#[test]
-fn mower_cdr_writes_what_rmw_writes_for_every_table_type() {
-    robot_rmw();
-    let mut rng = StdRng::seed_from_u64(0x0e5_cd2);
-    let covered = oracle!(rng, 300;
+macro_rules! entries {
+    ($($t:path => $name:literal),* $(,)?) => {
+        vec![$(Entry { name: $name, check: check::<$t>, vectors: vectors_of::<$t> }),*]
+    };
+}
+
+fn table() -> Vec<Entry> {
+    let table = entries!(
         r2r::builtin_interfaces::msg::Duration => "builtin_interfaces/msg/Duration",
         r2r::builtin_interfaces::msg::Time => "builtin_interfaces/msg/Time",
         r2r::diagnostic_msgs::msg::DiagnosticArray => "diagnostic_msgs/msg/DiagnosticArray",
@@ -189,7 +112,64 @@ fn mower_cdr_writes_what_rmw_writes_for_every_table_type() {
         r2r::visualization_msgs::msg::MeshFile => "visualization_msgs/msg/MeshFile",
         r2r::visualization_msgs::msg::UVCoordinate => "visualization_msgs/msg/UVCoordinate",
     );
-    assert_eq!(covered, mower_schema::names(), "a table type is not checked here");
+    let names: Vec<&str> = table.iter().map(|e| e.name).collect();
+    assert_eq!(names, mower_schema::names(), "a table type is not checked here");
+    table
+}
+
+#[test]
+fn mower_cdr_writes_what_rmw_writes_for_every_table_type() {
+    robot_rmw();
+    let mut rng = Rng::new(0x0e5_cd2);
+    for entry in table() {
+        (entry.check)(entry.name, &mut rng, 300);
+    }
+}
+
+/// The vectors `mower_ros_facts` replays without ROS, in table order: for each
+/// table type, this many values of `random_value`, the bytes rmw writes and
+/// r2r's JSON of the typed value, as `serde_json::Value` writes it (what the
+/// bridge sends the app). E3's corpus has hand-picked values of the types the app
+/// uses; these are every type's, edge values included.
+const VECTORS_PER_TYPE: u32 = 10;
+
+fn vectors_of<T>(name: &str, text: &mut String)
+where
+    T: WrappedTypesupport + serde::Serialize + serde::de::DeserializeOwned,
+{
+    for i in 0..VECTORS_PER_TYPE {
+        let v = random(&mut Rng::for_vector(name, i), name, 0);
+        let typed: T = mower_cdr::from_value(&v).unwrap_or_else(|e| panic!("{name} #{i}: from_value: {e}"));
+        let hex: String = typed.to_serialized_bytes().unwrap().iter().map(|b| format!("{b:02x}")).collect();
+        let json = serde_json::to_value(&typed).unwrap_or_else(|e| panic!("{name} #{i}: to_value: {e}"));
+        text.push_str(&format!("{name}\t{i}\t{hex}\t{json}\n"));
+    }
+}
+
+fn facts(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../deploy/test/golden/ros_facts").join(name)
+}
+
+/// What rmw writes is what `cdr_vectors.txt` holds. `MOWER_GOLDEN=write`
+/// writes the file instead (tools/oracle/regen.sh facts); then
+/// tools/oracle/facts_manifest.py.
+#[test]
+fn the_frozen_vectors_are_what_rmw_writes() {
+    robot_rmw();
+    let mut text = String::new();
+    for entry in table() {
+        (entry.vectors)(entry.name, &mut text);
+    }
+    let path = facts("cdr_vectors.txt");
+    if std::env::var("MOWER_GOLDEN").as_deref() == Ok("write") {
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    for (want, have) in text.lines().zip(have.lines()) {
+        assert!(want == have, "rmw no longer writes this vector of {} (tools/oracle/regen.sh facts rewrites it)", want.split('\t').next().unwrap());
+    }
+    assert_eq!(text.lines().count(), have.lines().count(), "{} is not this table's (tools/oracle/regen.sh facts)", path.display());
 }
 
 fn panics(f: impl FnOnce()) -> bool {

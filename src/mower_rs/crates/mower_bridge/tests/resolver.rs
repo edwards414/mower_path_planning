@@ -19,8 +19,14 @@
 //! refuses arguments it does not know, so this test has a `main` of its own:
 //! it runs itself again with the rules in argv, on ROS domain 79 and
 //! rmw_cyclonedds_cpp, and that run does the work.
+//!
+//! The names it proved are frozen in `deploy/test/golden/ros_facts/resolver.json`
+//! (E9-06), which `mower_ros_facts/tests/resolver.rs` replays against
+//! `Remaps::resolve` with no rcl. A changed manifest fails here until the file
+//! is written again, with `MOWER_GOLDEN=write` (tools/oracle/regen.sh facts).
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
@@ -83,6 +89,8 @@ struct Probe {
     code: &'static str,
     /// What rcl must make of `code`.
     expected: String,
+    /// The endpoint's ROS type, frozen with the name: E9-22 has to generate it.
+    ros_type: String,
 }
 
 /// The name a writer of `probe` has on the graph, and whether it is a DDS
@@ -93,6 +101,35 @@ fn graph_name(probe: &Probe) -> (String, bool) {
         Space::Service => (format!("rq{}Request", probe.expected), true),
         Space::Action => (format!("rq{}/_action/send_goalRequest", probe.expected), true),
     }
+}
+
+fn space_name(space: Space) -> &'static str {
+    match space {
+        Space::Topic => "topic",
+        Space::Service => "service",
+        Space::Action => "action",
+    }
+}
+
+/// `resolver.json`: the rules and every probe, sorted, one name a line.
+fn frozen_text(probes: &[Probe]) -> String {
+    let string = |s: &str| serde_json::Value::from(s).to_string();
+    let rules: Vec<String> = PRODUCTION_REMAPS.iter().map(|r| format!("  {}", string(r))).collect();
+    let mut names: Vec<String> = probes
+        .iter()
+        .map(|p| {
+            format!(
+                "  {{\"node\":{},\"space\":{},\"code\":{},\"name\":{},\"type\":{}}}",
+                string(p.node),
+                string(space_name(p.space)),
+                string(p.code),
+                string(&p.expected),
+                string(&p.ros_type)
+            )
+        })
+        .collect();
+    names.sort();
+    format!("{{\n \"rules\": [\n{}\n ],\n \"names\": [\n{}\n ]\n}}\n", rules.join(",\n"), names.join(",\n"))
 }
 
 fn shown(graph: &r2r::Node, node: &str, name: &str, mangled: bool) -> bool {
@@ -127,13 +164,14 @@ fn oracle() -> ExitCode {
                 if expected != e.name {
                     failures.push(format!("{} {}: Remaps::resolve gives {expected}, the manifest {}", instance.node, e.code, e.name));
                 }
-                match e.iface {
+                let ros_type = match e.iface {
                     Iface::Topic(t, profile) => {
                         let ros_type = t.ros_type();
                         match node.create_publisher_untyped(e.code, &ros_type, profile.ros()) {
                             Ok(p) => publishers.push(p),
                             Err(err) => failures.push(format!("{} {} ({ros_type}): {err}", instance.node, e.code)),
                         }
+                        ros_type
                     }
                     Iface::Service(s) => {
                         let ros_type = s.ros_type();
@@ -141,6 +179,7 @@ fn oracle() -> ExitCode {
                             Ok(c) => clients.push(c),
                             Err(err) => failures.push(format!("{} {} ({ros_type}): {err}", instance.node, e.code)),
                         }
+                        ros_type
                     }
                     Iface::Action(a) => {
                         let ros_type = a.ros_type();
@@ -148,9 +187,10 @@ fn oracle() -> ExitCode {
                             Ok(c) => action_clients.push(c),
                             Err(err) => failures.push(format!("{} {} ({ros_type}): {err}", instance.node, e.code)),
                         }
+                        ros_type
                     }
-                }
-                probes.push(Probe { node: instance.node, space: e.kind.space(), code: e.code, expected });
+                };
+                probes.push(Probe { node: instance.node, space: e.kind.space(), code: e.code, expected, ros_type });
             }
             nodes.push(node);
         }
@@ -168,6 +208,7 @@ fn oracle() -> ExitCode {
     }
 
     let total = probes.len();
+    let frozen = frozen_text(&probes);
     let deadline = Instant::now() + WAIT;
     while !probes.is_empty() && Instant::now() < deadline {
         probes.retain(|p| {
@@ -177,14 +218,18 @@ fn oracle() -> ExitCode {
         std::thread::sleep(Duration::from_millis(50));
     }
     for p in &probes {
-        let kind = match p.space {
-            Space::Topic => "topic",
-            Space::Service => "service",
-            Space::Action => "action",
-        };
-        failures.push(format!("{} {kind} {}: rcl did not resolve it to {}", p.node, p.code, p.expected));
+        failures.push(format!("{} {} {}: rcl did not resolve it to {}", p.node, space_name(p.space), p.code, p.expected));
     }
     drop((publishers, clients, action_clients, nodes));
+    // Only what rcl proved is written.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../deploy/test/golden/ros_facts/resolver.json");
+    if failures.is_empty() {
+        if std::env::var("MOWER_GOLDEN").as_deref() == Ok("write") {
+            std::fs::write(&path, &frozen).expect("resolver.json");
+        } else if std::fs::read_to_string(&path).unwrap_or_default() != frozen {
+            failures.push(format!("{} is not these names (MOWER_GOLDEN=write rewrites it; tools/oracle/regen.sh facts)", path.display()));
+        }
+    }
     if failures.is_empty() {
         println!("{total} names: rcl resolves every one as the manifest and Remaps::resolve do");
         ExitCode::SUCCESS

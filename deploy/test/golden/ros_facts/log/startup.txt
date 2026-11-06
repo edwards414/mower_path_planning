@@ -1,0 +1,86 @@
+[INFO] [T] [bag_store]: bag_store up: root=<MOWER_STATE_DIR>/bags policy=wifi_or_dock r2=NOT configured
+[INFO] [T] [battery_state]: battery_state: 6S OCV estimate from /mower_base/telemetry -> /battery_state
+[INFO] [T] [boustrophedon_coverage]: boustrophedon_coverage 初始化
+[INFO] [T] [boustrophedon_coverage]: coverage backend: RustBackend
+[INFO] [T] [ekf_filter_node_map]: ekf_filter_node_map (mower_rs): 20 Hz, world_frame map, odom0 odom, odom1 odometry/gps, imu0 imu, publishing odometry/filtered and /odometry/global_slow at 5 Hz
+[INFO] [T] [ekf_filter_node_odom]: ekf_filter_node_odom (mower_rs): 20 Hz, world_frame odom, odom0 odom, imu0 imu, publishing odometry/filtered
+[INFO] [T] [flutter_adapter]: flutter_adapter init (mower_rs)
+[INFO] [T] [flutter_adapter]: map datum from navsat: (N, N), bearing N deg
+[INFO] [T] [gps]: UART1 output off (RAM)
+[INFO] [T] [gps]: fix: type 3 status 2 carrier fixed sats 17 hAcc N m (hp)
+[INFO] [T] [gps]: receiver configured: 250 ms epochs, NAV-PVT + HPPOSLLH + RELPOSNED + SAT every 4 + EOE
+[INFO] [T] [gps]: u-blox receiver on /dev/gps_rtk opened
+[INFO] [T] [graph_snapshot]: graph_snapshot up (period=2.0s, watch=['boustrophedon_coverage', 'map_manage'])
+[INFO] [T] [imu]: Serial port /dev/imu_usb opened successfully...
+[INFO] [T] [manual_velocity_guard]: velocity_command_guard: timeout=0.25s max_age=0.8s max_future_skew=0.05s max_linear_x=0.5m/s max_angular_z=1rad/s session=true
+[INFO] [T] [map_manage]: Publishing OccupancyGrid on /map_grid and /map_grid_global (latched, on change)
+[INFO] [T] [map_manage]: map_manage init
+[INFO] [T] [mower_base]: STM32 firmware 0.6.0+abcd1234 (protocol 1, built 1758600000)
+[INFO] [T] [mower_base]: arm latch: cmd_vel re-armed by an explicit stop held for N s, N s after the activation
+[INFO] [T] [mower_base]: arm latch: wheel_override re-armed by silence (nothing for > N s nor within the last request's ttl), N s after the activation
+[INFO] [T] [mower_base]: arm latch: wheels held until the STM32 shows it receives our commands and cmd_vel has carried no non-zero command for N s (zero commands, or none for N s once its publisher has been matched for N s); wheel_override likewise
+[INFO] [T] [mower_base]: cmd_vel: publisher in the graph N s after activation
+[INFO] [T] [mower_base]: device=/dev/stmcom baud=115200 max_rpm=N counts_per_rev=8896 update_rate=25 Hz; /drivetrain_guarded_cmd_vel -> wheels, odom -> /odom (open loop, odom_tf false), slow copy /odom_slow at 5 Hz
+[INFO] [T] [mower_base]: light request: mode 1 rgb(110,110,110) period 0 ms
+[INFO] [T] [mower_base]: opened /dev/stmcom
+[INFO] [T] [mower_base]: wheel_override: publisher in the graph N s after activation
+[INFO] [T] [mower_bus_bridge]: mower_bridge: /nav_cmd_vel: not bridged for nav_action_server, which publishes it only with nav_backend: nav_core: that would need both directions
+[INFO] [T] [mower_bus_bridge]: mower_bridge: 85 to_ros, 4 from_ros, 48 service_to_ros, 1 service_from_ros, 2 action_to_ros, 0 action_from_ros
+[INFO] [T] [mower_bus_bridge]: mower_bus_ros: forwarding 140 names between the bus and DDS
+[INFO] [T] [mower_ws_bridge]: listening on ws://127.0.0.1:9090 (pairing gate, relay agent)
+[INFO] [T] [mower_ws_bridge]: listening on ws://127.0.0.1:9091 (loopback, no gate)
+[INFO] [T] [mower_ws_bridge]: listening on ws://<ROSBRIDGE_ADDRESS>:9090 (pairing gate)
+[INFO] [T] [mower_ws_bridge]: loopback policy /mower_ws/install/mower_bringup/share/mower_bringup/config/ws_bridge_loopback.yaml
+[INFO] [T] [mower_ws_bridge]: pairing gate for <ROBOT_ID>
+[INFO] [T] [nav_action_server]: NavActionServer initialized (mower_rs)
+[INFO] [T] [navsat_transform]: Datum locked on an RTK fixed fix (0 fixes before it were not RTK fixed)
+[INFO] [T] [navsat_transform]: Datum locked: UTM zone 51N
+[INFO] [T] [navsat_transform]: Delay elapsed. Continuing.
+[INFO] [T] [navsat_transform]: Delaying for 3 seconds before starting...
+[INFO] [T] [navsat_transform]: navsat_transform (mower_rs): 30 Hz, gps/fix + imu + odometry/filtered -> odometry/gps
+[INFO] [T] [path_record_node]: path_recorder ready (mower_rs).
+[INFO] [T] [path_record_node]: ✅ 已清空 RViz zone_markers 與 risk_zone_markers
+[INFO] [T] [path_record_node]: 機器人位置初始化成功: x=N, y=N
+[INFO] [T] [pid_autotune]: pid_autotune ready: service /pid_autotune, status on /pid_autotune/status
+[INFO] [T] [robot_status]: /robot/online -> true
+[INFO] [T] [robot_status]: STM32 firmware 0.6.0+abcd1234
+[INFO] [T] [robot_status]: lights: normal
+[INFO] [T] [robot_status]: robot_status: id=<ROBOT_ID> software=<MOWER_VERSION> api=2 state_dir=<MOWER_STATE_DIR> bundled_firmware=<MOWER_VERSION> heartbeat=/odom_slow@2Hz(stale 2s) telemetry@10Hz
+[INFO] [T] [static_tf_publisher]: static_tf: robot mower_robot from base_footprint: 7 fixed joints on /tf_static, 5 moving ones on /tf from /joint_states (step E4; robot_state_publisher's "Robot initialized")
+[INFO] [T] [twist_mux]: Topic handler 'locks.navigation_coordinator' subscribed to topic '/navigation_coordinator_lock': timeout = 0.300000s , priority = 50.
+[INFO] [T] [twist_mux]: Topic handler 'topics.app_manual' subscribed to topic '/joy_cmd': timeout = 0.500000s , priority = 90.
+[INFO] [T] [twist_mux]: Topic handler 'topics.keyboard' subscribed to topic '/keyboard_cmd_vel': timeout = 0.500000s , priority = 80.
+[INFO] [T] [twist_mux]: Topic handler 'topics.navigation' subscribed to topic '/nav_cmd_vel': timeout = 0.500000s , priority = 10.
+[INFO] [T] [twist_mux]: Topic handler 'topics.navigation_safety_stop' subscribed to topic '/navigation_safety_stop': timeout = 0.200000s , priority = 50.
+[INFO] [T] [twist_mux]: Topic handler 'topics.physical_joystick' subscribed to topic '/physical_joy_cmd': timeout = 0.500000s , priority = 100.
+[INFO] [T] [twist_mux]: mux: 5 inputs and 1 locks to /cmd_vel_guard_input, on the bus (step E4; tools/mux_oracle.py)
+[INFO] [T] [velocity_command_guard]: velocity_command_guard: timeout=0.25s max_age=0.25s max_future_skew=0.05s max_linear_x=0.5m/s max_angular_z=1rad/s session=false
+[WARN] [T] [flutter_adapter]: map datum unavailable; fixed fallback is disabled
+[WARN] [T] [imu]: Discarded oversized IMU serial backlog
+[WARN] [T] [recorder_manager]: video off failed (front): http://127.0.0.1:9997/v3/config/paths/patch/front: Connection Failed: Connect error: Connection refused (os error 111)
+[mower_agent] WARNING MOWER_BACKEND_URL not set: agent idle (development mode)
+[mower_rsd] starting adapter/flutter_adapter
+[mower_rsd] starting agent/mower_agent
+[mower_rsd] starting bag/bag_store
+[mower_rsd] starting bag/camera_front
+[mower_rsd] starting bag/graph_snapshot
+[mower_rsd] starting bag/recorder_manager
+[mower_rsd] starting base/mower_base
+[mower_rsd] starting battery/battery_state
+[mower_rsd] starting bridge/mower_ws_bridge
+[mower_rsd] starting bus_bridge/mower_bus_bridge
+[mower_rsd] starting coverage/boustrophedon_coverage
+[mower_rsd] starting gps/gps
+[mower_rsd] starting guards/manual_velocity_guard
+[mower_rsd] starting guards/velocity_command_guard
+[mower_rsd] starting imu/imu
+[mower_rsd] starting localize/ekf_filter_node_map
+[mower_rsd] starting localize/ekf_filter_node_odom
+[mower_rsd] starting localize/navsat_transform
+[mower_rsd] starting map/map_manage
+[mower_rsd] starting mux/twist_mux
+[mower_rsd] starting nav/nav_action_server
+[mower_rsd] starting pid_autotune/pid_autotune
+[mower_rsd] starting record/path_record_node
+[mower_rsd] starting static_tf/static_tf_publisher
+[mower_rsd] starting status/robot_status

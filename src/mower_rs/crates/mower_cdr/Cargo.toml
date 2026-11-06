@@ -11,8 +11,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 # tests/rmw_oracle.rs: rmw itself, through r2r, is the oracle while ROS is in
-# the image (E5 design G3); it goes with r2r at E9
+# the image (E5 design G3), and writes the vectors mower_ros_facts replays
+# without it; it goes with r2r at E9
 r2r = { workspace = true }
-rand = "0.8"
-mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
-zstd = "0.14"
+serde_json.workspace = true

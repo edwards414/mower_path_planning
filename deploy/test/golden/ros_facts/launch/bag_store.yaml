@@ -1,0 +1,5 @@
+bag_store:
+  ros__parameters:
+    output_root: <MOWER_STATE_DIR>/bags
+    r2_env_file: <MOWER_STATE_DIR>/r2.env
+    robot_id: mower

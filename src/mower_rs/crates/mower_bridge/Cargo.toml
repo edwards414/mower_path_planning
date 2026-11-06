@@ -24,11 +24,15 @@ serde_yaml = "0.9"
 mower_ws_bridge = { path = "../mower_ws_bridge" }
 tokio-tungstenite = "0.24"
 
-# These two run themselves again with `-r` rules in argv (the production ones;
-# launch's `__node:=`), which rcl reads when the context is created and
-# libtest would refuse.
+# These run themselves again with `-r` rules or `--params-file`s in argv (the
+# production ones; launch's `__node:=`), which rcl reads when the context is
+# created and libtest would refuse.
 [[test]]
 name = "resolver"
+harness = false
+
+[[test]]
+name = "param_overrides"
 harness = false
 
 [[test]]

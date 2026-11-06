@@ -55,7 +55,8 @@ is tested against what the Python recorder and rosbag2 wrote in
   hand over ureq, held to botocore's signatures and to the Python uploader
   against moto), MediaMTX, graph JSON, parameter dumps, camera extrinsics.
 
-They have no `r2r` dependency (`mower_cdr`'s oracle test uses it). Nor has
+They have no `r2r` dependency (`mower_cdr`'s oracle test uses it, and writes the
+vectors `mower_ros_facts` replays with no ROS at all: `deploy/test/golden/ros_facts/`). Nor has
 `mower_camera` (E5-6), the front camera without gscam: gscam's stream on
 gstreamer-rs (an appsink of `image/jpeg`, gscam's stamps; behind the
 feature `gst`, so a plain `cargo test` needs no GStreamer development

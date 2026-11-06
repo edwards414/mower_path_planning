@@ -1,0 +1,48 @@
+{
+ "modules": [
+  "base",
+  "status",
+  "guards",
+  "mux",
+  "imu",
+  "gps",
+  "static_tf",
+  "localize",
+  "map",
+  "coverage",
+  "nav",
+  "record",
+  "adapter",
+  "battery",
+  "pid_autotune",
+  "bridge",
+  "agent",
+  "bag"
+ ],
+ "remaps": [
+  "manual_velocity_guard:cmd_vel_in:=/app_joy_cmd",
+  "manual_velocity_guard:cmd_vel_out:=/joy_cmd",
+  "manual_velocity_guard:command_clock:=/manual_command_clock",
+  "velocity_command_guard:cmd_vel_in:=/cmd_vel_guard_input",
+  "velocity_command_guard:cmd_vel_out:=/drivetrain_guarded_cmd_vel",
+  "twist_mux:cmd_vel_out:=/cmd_vel_guard_input",
+  "imu:imu/data_raw:=imu/data",
+  "ekf_filter_node_odom:odometry/filtered:=odometry/local",
+  "ekf_filter_node_odom:imu:=imu/data",
+  "ekf_filter_node_map:odometry/filtered:=odometry/global",
+  "ekf_filter_node_map:imu:=imu/data",
+  "navsat_transform:imu:=imu/data",
+  "navsat_transform:odometry/filtered:=odometry/global",
+  "navsat_transform:gps/fix:=/fix"
+ ],
+ "params_files": [
+  "src/mower_bringup/config/mower_rsd.yaml",
+  "src/mower_bringup/config/gps.yaml",
+  "launch/static_tf_publisher.yaml",
+  "launch/path_record_node.yaml",
+  "src/mower_bringup/config/twist_mux_topics.yaml",
+  "launch/recorder_manager.yaml",
+  "launch/bag_store.yaml",
+  "src/mower_nav2/config/dual_ekf_navsat_params.yaml"
+ ]
+}

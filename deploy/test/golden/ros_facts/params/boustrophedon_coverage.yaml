@@ -1,0 +1,16 @@
+/boustrophedon_coverage:
+  ros__parameters:
+    allow_backend_fallback: true
+    boundary_ring: false
+    coverage_backend: rust
+    coverage_pattern: zigzag
+    fallback_cancel_request_timeout_s: 5.0
+    min_safe_component_area_m2: 0.05
+    start_type_description_service: true
+    strip_width_m: 0.8
+    unknown_as_obstacle: true
+    use_sim_time: false
+    waypoint_spacing_m: 0.2
+    zigzag_angle_deg: 0.0
+    zigzag_auto_angle: false
+

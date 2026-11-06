@@ -1,0 +1,189 @@
+{
+ "bag_store": {
+  "dock_topic": {"string":""},
+  "output_root": {"string":"<MOWER_STATE_DIR>/bags"},
+  "r2_env_file": {"string":"<MOWER_STATE_DIR>/r2.env"},
+  "robot_id": {"string":"mower"},
+  "upload_policy": {"string":"wifi_or_dock"},
+  "wifi_interfaces": {"string_array":["wlan0"]}
+ },
+ "battery_state": {
+  "capacity_ah": {"double":0.0},
+  "charger_present_min_v": {"double":25.0},
+  "meter_current_wired": {"bool":false}
+ },
+ "boustrophedon_coverage": {
+  "use_sim_time": {"bool":false}
+ },
+ "camera_front": {},
+ "ekf_filter_node_map": {
+  "base_link_frame": {"string":"base_footprint"},
+  "debug": {"bool":false},
+  "frequency": {"double":20.0},
+  "imu0": {"string":"imu"},
+  "imu0_config": {"bool_array":[false,false,false,false,false,true,false,false,false,false,false,false,false,false,false]},
+  "imu0_differential": {"bool":false},
+  "imu0_queue_size": {"integer":10},
+  "imu0_relative": {"bool":false},
+  "imu0_remove_gravitational_acceleration": {"bool":true},
+  "initial_estimate_covariance": {"double_array":[1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1e-9]},
+  "map_frame": {"string":"map"},
+  "odom0": {"string":"odom"},
+  "odom0_config": {"bool_array":[false,false,false,false,false,false,true,true,true,false,false,true,false,false,false]},
+  "odom0_differential": {"bool":false},
+  "odom0_queue_size": {"integer":10},
+  "odom0_relative": {"bool":false},
+  "odom1": {"string":"odometry/gps"},
+  "odom1_config": {"bool_array":[true,true,false,false,false,false,false,false,false,false,false,false,false,false,false]},
+  "odom1_differential": {"bool":false},
+  "odom1_queue_size": {"integer":10},
+  "odom1_relative": {"bool":false},
+  "odom_frame": {"string":"odom"},
+  "odometry_slow_rate_hz": {"double":5.0},
+  "odometry_slow_topic": {"string":"/odometry/global_slow"},
+  "print_diagnostics": {"bool":false},
+  "process_noise_covariance": {"double_array":[1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.001,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3]},
+  "publish_tf": {"bool":true},
+  "two_d_mode": {"bool":true},
+  "use_control": {"bool":false},
+  "world_frame": {"string":"map"}
+ },
+ "ekf_filter_node_odom": {
+  "base_link_frame": {"string":"base_footprint"},
+  "debug": {"bool":false},
+  "frequency": {"double":20.0},
+  "imu0": {"string":"imu"},
+  "imu0_config": {"bool_array":[false,false,false,false,false,true,false,false,false,false,false,true,true,true,false]},
+  "imu0_differential": {"bool":false},
+  "imu0_queue_size": {"integer":10},
+  "imu0_relative": {"bool":false},
+  "imu0_remove_gravitational_acceleration": {"bool":true},
+  "map_frame": {"string":"map"},
+  "odom0": {"string":"odom"},
+  "odom0_config": {"bool_array":[false,false,false,false,false,false,true,true,false,false,false,true,false,false,false]},
+  "odom0_differential": {"bool":false},
+  "odom0_queue_size": {"integer":10},
+  "odom0_relative": {"bool":false},
+  "odom_frame": {"string":"odom"},
+  "print_diagnostics": {"bool":false},
+  "process_noise_covariance": {"double_array":[0.001,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.001,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.001,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.3]},
+  "publish_tf": {"bool":true},
+  "two_d_mode": {"bool":true},
+  "use_control": {"bool":false},
+  "world_frame": {"string":"odom"}
+ },
+ "flutter_adapter": {
+  "robot_pose_source_topic": {"string":"/odometry/global_slow"}
+ },
+ "gps": {
+  "configure_receiver": {"bool":true},
+  "device": {"string":"/dev/gps_rtk"},
+  "disable_uart1_output": {"bool":true},
+  "fix_topic": {"string":"/fix"},
+  "frame_id": {"string":"gps_link"},
+  "rate_hz": {"double":4.0},
+  "stale_timeout_s": {"double":5.0},
+  "startup_timeout_s": {"double":20.0},
+  "status_topic": {"string":"gps/status"}
+ },
+ "graph_snapshot": {
+  "fault_topic": {"string":"/mower_recorder/fault"},
+  "period_s": {"double":2.0},
+  "watch_nodes": {"string_array":["map_manage","boustrophedon_coverage"]}
+ },
+ "imu": {
+  "port": {"string":"/dev/imu_usb"}
+ },
+ "manual_velocity_guard": {
+  "command_timeout_s": {"double":0.25},
+  "max_input_age_s": {"double":0.8},
+  "require_command_session": {"bool":true}
+ },
+ "map_manage": {
+  "use_sim_time": {"bool":false}
+ },
+ "mower_base": {
+  "device": {"string":"/dev/stmcom"},
+  "latch_release_s": {"double":0.5},
+  "odom_slow_rate_hz": {"double":5.0},
+  "odom_slow_topic": {"string":"/odom_slow"},
+  "shutdown_command": {"string":"/usr/local/bin/mower-host-request poweroff"}
+ },
+ "mower_bus_bridge": {},
+ "mower_ws_bridge": {},
+ "nav_action_server": {
+  "gps_fix_topic": {"string":"/fix"},
+  "require_navigation_health": {"bool":true}
+ },
+ "navsat_transform": {
+  "broadcast_cartesian_transform": {"bool":true},
+  "datum_requires_rtk_fixed": {"bool":true},
+  "delay": {"double":3.0},
+  "frequency": {"double":30.0},
+  "magnetic_declination_radians": {"double":0.0},
+  "publish_filtered_gps": {"bool":true},
+  "use_odometry_yaw": {"bool":false},
+  "wait_for_datum": {"bool":false},
+  "yaw_offset": {"double":0.0},
+  "zero_altitude": {"bool":true}
+ },
+ "path_record_node": {
+  "require_datum": {"bool":true},
+  "require_rtk_fixed": {"bool":true},
+  "robot_pose_source_topic": {"string":"/odometry/global_slow"},
+  "rtk_fix_max_age_s": {"double":1.0},
+  "save_dir": {"string":"<MOWER_STATE_DIR>/zone_record"},
+  "sites_dir": {"string":"<MOWER_STATE_DIR>/sites"}
+ },
+ "pid_autotune": {},
+ "recorder_manager": {
+  "autostart": {"bool":false},
+  "config_file": {"string":"/mower_ws/install/mower_recorder/share/mower_recorder/config/record_topics.yaml"},
+  "dds_shadow_dir": {"string":""},
+  "fault_topic": {"string":"/mower_recorder/fault"},
+  "git_repo_dir": {"string":""},
+  "gps_topic": {"string":"/fix"},
+  "min_free_mb": {"integer":2048},
+  "output_root": {"string":"<MOWER_STATE_DIR>/bags"},
+  "params_dump_nodes": {"string_array":["/boustrophedon_coverage","/map_manage"]},
+  "qos_overrides_path": {"string":"/mower_ws/install/mower_recorder/share/mower_recorder/config/qos_overrides.yaml"},
+  "robot_id": {"string":"mower"},
+  "source": {"string":"auto"},
+  "video_api_url": {"string":"http://127.0.0.1:9997"}
+ },
+ "robot_status": {
+  "gps_fix_topic": {"string":"/fix"},
+  "heartbeat_publish_rate_hz": {"double":2.0},
+  "heartbeat_source_topic": {"string":"/odom_slow"},
+  "heartbeat_stale_timeout_s": {"double":2.0},
+  "odom_topic": {"string":"/odom_slow"}
+ },
+ "static_tf_publisher": {
+  "robot_description": {"string":"<?xml version=\"1.0\" ?><!-- =================================================================================== --><!-- |    This document was autogenerated by xacro from /mower_ws/install/mower_description/share/mower_description/mower_robot/real_robot.xacro | --><!-- |    EDITING THIS FILE BY HAND IS NOT RECOMMENDED                                 | --><!-- =================================================================================== --><robot name=\"mower_robot\"><!-- ============================================================ --><!--  Material 定義                                                --><!-- ============================================================ --><material name=\"base_link_material\"><color rgba=\"0.901961 0.878431 0.811765 1\"/></material><material name=\"wheel_material\"><color rgba=\"0.627451 0.627451 0.627451 1\"/></material><material name=\"dark_material\"><color rgba=\"0.207843 0.192157 0.192157 1\"/></material><material name=\"grey_material\"><color rgba=\"0.678431 0.678431 0.678431 1\"/></material><material name=\"camera_material\"><color rgba=\"0.701961 0.701961 0.701961 1\"/></material><material name=\"black_material\"><color rgba=\"0 0 0 1\"/></material><material name=\"silver_material\"><color rgba=\"0.6 0.6 0.6 1\"/></material><material name=\"camera_direction_material\"><color rgba=\"0 0.85 1 0.75\"/></material><!-- ============================================================ --><!--  base_footprint（Nav2 必要）                                  --><!-- ============================================================ --><link name=\"base_footprint\"/><joint name=\"base_footprint_joint\" type=\"fixed\"><!-- Rotate CAD frame so base_footprint +X is the mower forward direction. --><origin rpy=\"0 0 1.5708\" xyz=\"0 0 0\"/><parent link=\"base_footprint\"/><child link=\"base_link\"/></joint><!-- ============================================================ --><!--  base_link                                                    --><!-- ============================================================ --><link name=\"base_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"0 0 0\"/><mass value=\"5.0\"/><inertia ixx=\"0.1\" ixy=\"0\" ixz=\"0\" iyy=\"0.1\" iyz=\"0\" izz=\"0.1\"/></inertial><visual><origin rpy=\"0 -0 0\" xyz=\"0.0145303 0.0155339 -0.0929528\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/base_link.stl\"/></geometry><material name=\"base_link_material\"/></visual><collision><origin rpy=\"0 -0 0\" xyz=\"0.0145303 0.0155339 -0.0929528\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/base_link.stl\"/></geometry></collision></link><!-- ============================================================ --><!--  左輪 left_wheel_link                                        --><!-- ============================================================ --><link name=\"left_wheel_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-3.1524e-07 9.95807e-06 -0.0428781\"/><mass value=\"0.368513\"/><inertia ixx=\"0.000961278\" ixy=\"3.92e-09\" ixz=\"6.596e-09\" iyy=\"0.000961335\" iyz=\"1.3009e-08\" izz=\"0.00177481\"/></inertial><visual><origin rpy=\"0 -0 -0\" xyz=\"0 0 -0.025531\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/left_wheel_link.stl\"/></geometry><material name=\"wheel_material\"/></visual><collision><origin rpy=\"0 -0 -0\" xyz=\"0 0 -0.025531\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/left_wheel_link.stl\"/></geometry></collision></link><!-- Joint: base_link → left_wheel_link --><!-- rpy x=+1.5708: 輪子朝外安裝，Z 軸向內，需用 0 0 -1 讓正速度=前進 --><joint name=\"left_wheel_joint\" type=\"continuous\"><origin rpy=\"1.5708 1.22081 -1.5708\" xyz=\"0.13253 0.165534 -0.00295275\"/><parent link=\"base_link\"/><child link=\"left_wheel_link\"/><axis xyz=\"0 0 -1\"/><limit effort=\"10\" velocity=\"6\"/></joint><!-- ============================================================ --><!--  右輪 right_wheel_link                                       --><!-- ============================================================ --><link name=\"right_wheel_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-3.1524e-07 9.95807e-06 -0.0428781\"/><mass value=\"0.368513\"/><inertia ixx=\"0.000961278\" ixy=\"3.92e-09\" ixz=\"6.596e-09\" iyy=\"0.000961335\" iyz=\"1.3009e-08\" izz=\"0.00177481\"/></inertial><visual><origin rpy=\"0 -0 0\" xyz=\"0 0 -0.025531\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/right_wheel_link.stl\"/></geometry><material name=\"wheel_material\"/></visual><collision><origin rpy=\"0 -0 0\" xyz=\"0 0 -0.025531\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/right_wheel_link.stl\"/></geometry></collision></link><!-- Joint: base_link → right_wheel_link --><!-- rpy x=-1.5708: 輪子朝外安裝（另一側），Z 軸向外，用 0 0 1 讓正速度=前進 --><joint name=\"right_wheel_joint\" type=\"continuous\"><origin rpy=\"-1.5708 1.51106 -1.5708\" xyz=\"-0.10347 0.165534 -0.00295275\"/><parent link=\"base_link\"/><child link=\"right_wheel_link\"/><axis xyz=\"0 0 1\"/><limit effort=\"10\" velocity=\"6\"/></joint><!-- ============================================================ --><!--  caster_yaw_link                                             --><!-- ============================================================ --><link name=\"caster_yaw_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-0.00894349 -1.10704e-07 -0.0235114\"/><mass value=\"0.205996\"/><inertia ixx=\"0.000152202\" ixy=\"-7.97e-10\" ixz=\"-3.03099e-05\" iyy=\"0.000161102\" iyz=\"-1.164e-09\" izz=\"0.000106547\"/></inertial><visual><origin rpy=\"0 -0 0\" xyz=\"0 0 0\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/caster_yaw_link.stl\"/></geometry><material name=\"grey_material\"/></visual><collision><origin rpy=\"0 -0 0\" xyz=\"0 0 0\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/caster_yaw_link.stl\"/></geometry></collision></link><!-- Joint: base_link → caster_yaw_link --><joint name=\"caster_yaw_joint\" type=\"revolute\"><origin rpy=\"0 -0 -1.5708\" xyz=\"0.0145303 -0.150966 0.0155472\"/><parent link=\"base_link\"/><child link=\"caster_yaw_link\"/><axis xyz=\"0 0 1\"/><limit effort=\"10\" lower=\"-3.14159\" upper=\"3.14159\" velocity=\"6\"/></joint><!-- ============================================================ --><!--  caster_wheel_link                                           --><!-- ============================================================ --><link name=\"caster_wheel_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"2.3994e-08 -1.69119e-07 -0.0164994\"/><mass value=\"0.138953\"/><inertia ixx=\"5.52912e-05\" ixy=\"-1.43e-10\" ixz=\"-5.3e-11\" iyy=\"5.52922e-05\" iyz=\"3.05e-10\" izz=\"8.94246e-05\"/></inertial><visual><origin rpy=\"-1.5708 -1.5708 0\" xyz=\"0 0 -0.0165\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/caster_wheel_link.stl\"/></geometry><material name=\"dark_material\"/></visual><collision><origin rpy=\"-1.5708 -1.5708 0\" xyz=\"0 0 -0.0165\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/caster_wheel_link.stl\"/></geometry></collision></link><!-- Joint: caster_yaw_link → caster_wheel_link --><joint name=\"caster_wheel_joint\" type=\"continuous\"><origin rpy=\"1.5708 1.52376 -3.14159\" xyz=\"-0.0255 0.0170526 -0.0695\"/><parent link=\"caster_yaw_link\"/><child link=\"caster_wheel_link\"/><axis xyz=\"0 0 1\"/><limit effort=\"10\" velocity=\"6\"/></joint><!-- ============================================================ --><!--  depth_camera_link                                           --><!-- ============================================================ --><link name=\"depth_camera_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-0.0210924 2.34653e-05 -0.0116574\"/><mass value=\"0.292898\"/><inertia ixx=\"2.81585e-05\" ixy=\"-1.4716e-08\" ixz=\"-1.69117e-06\" iyy=\"0.000189634\" iyz=\"8.1277e-08\" izz=\"0.000187962\"/></inertial><visual><origin rpy=\"3.14159 -0 0\" xyz=\"-0.0225 0 -0.02505\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/depth_camera_link.stl\"/></geometry><material name=\"camera_material\"/></visual><collision><origin rpy=\"3.14159 -0 0\" xyz=\"-0.0225 0 -0.02505\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/depth_camera_link.stl\"/></geometry></collision></link><!-- Joint: base_link → depth_camera_link --><joint name=\"depth_camera_joint\" type=\"fixed\"><origin rpy=\"-1.5708 -0 0\" xyz=\"0.0370303 -0.183912 0.0740472\"/><parent link=\"base_link\"/><child link=\"depth_camera_link\"/></joint><!-- ============================================================ --><!--  back_camera_link                                            --><!-- ============================================================ --><link name=\"back_camera_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"0.000174127 0.000320936 -0.0147836\"/><mass value=\"0.0107094\"/><inertia ixx=\"9.78237e-07\" ixy=\"-2.6898e-08\" ixz=\"1.5856e-08\" iyy=\"9.49758e-07\" iyz=\"2.9225e-08\" izz=\"1.19328e-06\"/></inertial><visual><origin rpy=\"0 -0 0\" xyz=\"0 0 -0.0202866\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/back_camera_link.stl\"/></geometry><material name=\"camera_material\"/></visual><collision><origin rpy=\"0 -0 0\" xyz=\"0 0 -0.0202866\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/back_camera_link.stl\"/></geometry></collision></link><!-- Joint: base_link → back_camera_link --><joint name=\"back_camera_joint\" type=\"fixed\"><origin rpy=\"-1.5708 -0 0\" xyz=\"0.0145303 0.218752 0.0620472\"/><parent link=\"base_link\"/><child link=\"back_camera_link\"/></joint><link name=\"back_camera_rotated_frame\"><visual name=\"back_camera_direction_center\"><origin rpy=\"0 0 0\" xyz=\"0.35 0 0\"/><geometry><box size=\"0.7 0.018 0.018\"/></geometry><material name=\"camera_direction_material\"/></visual><visual name=\"back_camera_direction_left\"><origin rpy=\"0 0 0.6981\" xyz=\"0.267 0.225 0\"/><geometry><box size=\"0.7 0.014 0.014\"/></geometry><material name=\"camera_direction_material\"/></visual><visual name=\"back_camera_direction_right\"><origin rpy=\"0 0 -0.6981\" xyz=\"0.267 -0.225 0\"/><geometry><box size=\"0.7 0.014 0.014\"/></geometry><material name=\"camera_direction_material\"/></visual><visual name=\"back_camera_direction_top\"><origin rpy=\"0 -0.561 0\" xyz=\"0.296 0 0.187\"/><geometry><box size=\"0.7 0.014 0.014\"/></geometry><material name=\"camera_direction_material\"/></visual><visual name=\"back_camera_direction_bottom\"><origin rpy=\"0 0.561 0\" xyz=\"0.296 0 -0.187\"/><geometry><box size=\"0.7 0.014 0.014\"/></geometry><material name=\"camera_direction_material\"/></visual><visual name=\"back_camera_direction_tip\"><origin rpy=\"0 0 0\" xyz=\"0.7 0 0\"/><geometry><sphere radius=\"0.025\"/></geometry><material name=\"camera_direction_material\"/></visual></link><joint name=\"back_camera_rotated_joint\" type=\"fixed\"><origin rpy=\"0 0 1.5708\" xyz=\"0 0 0\"/><parent link=\"back_camera_link\"/><child link=\"back_camera_rotated_frame\"/></joint><!-- ============================================================ --><!--  imu_link                                                    --><!-- ============================================================ --><link name=\"imu_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-0.000251465 3.703e-09 -0.00531321\"/><mass value=\"0.205582\"/><inertia ixx=\"3.85914e-05\" ixy=\"1.7e-11\" ixz=\"-3.105e-09\" iyy=\"4.59431e-05\" iyz=\"-1e-12\" izz=\"7.98412e-05\"/></inertial><visual><origin rpy=\"3.14159 -0 0\" xyz=\"-0.000256254 0 -0.005\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/imu_link.stl\"/></geometry><material name=\"black_material\"/></visual><collision><origin rpy=\"3.14159 -0 0\" xyz=\"-0.000256254 0 -0.005\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/imu_link.stl\"/></geometry></collision></link><!-- Joint: base_link → imu_link --><joint name=\"imu_joint\" type=\"fixed\"><origin rpy=\"3.14159 -0 0\" xyz=\"0.015897 0.209534 -0.0129528\"/><parent link=\"base_link\"/><child link=\"imu_link\"/></joint><!-- ============================================================ --><!--  NEW: gps_link（GPS 天線位置）                               --><!-- ============================================================ --><link name=\"gps_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"0 0 0\"/><mass value=\"0.05\"/><inertia ixx=\"1e-6\" ixy=\"0\" ixz=\"0\" iyy=\"1e-6\" iyz=\"0\" izz=\"1e-6\"/></inertial><visual><origin rpy=\"0 0 0\" xyz=\"0 0 0\"/><geometry><box size=\"0.03 0.03 0.01\"/></geometry><material name=\"black_material\"/></visual><collision><origin rpy=\"0 0 0\" xyz=\"0 0 0\"/><geometry><box size=\"0.03 0.03 0.01\"/></geometry></collision></link><!-- Joint: base_link → gps_link（放在機器人頂部中央）--><joint name=\"gps_joint\" type=\"fixed\"><origin rpy=\"0 0 0\" xyz=\"0.0 0.0 0.12\"/><parent link=\"base_link\"/><child link=\"gps_link\"/></joint><!-- ============================================================ --><!--  connector + blade_hub（割草機刀盤）                         --><!-- ============================================================ --><link name=\"connector\"><inertial><origin rpy=\"0 0 0\" xyz=\"-8.04e-10 -0.000464193 -0.0128143\"/><mass value=\"0.0120859\"/><inertia ixx=\"1.19168e-06\" ixy=\"0\" ixz=\"0\" iyy=\"1.267e-06\" iyz=\"2.3234e-08\" izz=\"2.01476e-06\"/></inertial><visual><origin rpy=\"3.14159 -0 0\" xyz=\"0 0 0\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/connector.stl\"/></geometry><material name=\"silver_material\"/></visual><collision><origin rpy=\"3.14159 -0 0\" xyz=\"0 0 0\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/connector.stl\"/></geometry></collision></link><link name=\"blade_hub\"><inertial><origin rpy=\"0 0 0\" xyz=\"-0 -0 -0.00147225\"/><mass value=\"0.0672483\"/><inertia ixx=\"9.33182e-05\" ixy=\"0\" ixz=\"0\" iyy=\"9.33182e-05\" iyz=\"0\" izz=\"0.000186538\"/></inertial><visual><origin rpy=\"3.14159 -0 0\" xyz=\"0 0 -0.003\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/blade_hub.stl\"/></geometry><material name=\"silver_material\"/></visual><collision><origin rpy=\"3.14159 -0 0\" xyz=\"0 0 -0.003\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/blade_hub.stl\"/></geometry></collision></link><!-- Joint: connector → blade_hub --><joint name=\"pad_joint\" type=\"fixed\"><origin rpy=\"0 -0 -0\" xyz=\"-0 0 -0.018\"/><parent link=\"connector\"/><child link=\"blade_hub\"/></joint><!-- Joint: base_link → connector --><!-- continuous: 刀盤需要無限旋轉，不能用 revolute（有 -π~π 限制） --><joint name=\"mower_joint\" type=\"continuous\"><origin rpy=\"0 -0 3.14159\" xyz=\"0.0145303 0.0155339 -0.0549528\"/><parent link=\"base_link\"/><child link=\"connector\"/><axis xyz=\"0 0 1\"/><limit effort=\"100\" velocity=\"6\"/></joint><!-- ros2_control configuration for the real robot.\n\n       Drivetrain: STM32F411 over UART through src/mower_hardware\n       (firmware/UART_OPEN_LOOP_PROTOCOL.md). The firmware itself lives in\n       firmware/ and the container flashes it at start-up (firmware-sync), so\n       driver and firmware always come from the same build.\n\n       Device paths are the udev names from usb.rules; deploy/docker-compose.yaml\n       passes them into the container. /dev/stmcom is the LubanCat UART3\n       (/dev/ttyS3) or a USB-serial adapter on a bench. --><ros2_control name=\"RealRobot\" type=\"system\"><hardware><plugin>mower_hardware/MowerSystem</plugin><param name=\"device\">/dev/stmcom</param><param name=\"baud\">115200</param><!-- firmware: 1000 permille == wheel_max_rpm (58 rpm) --><param name=\"max_rpm\">58.0</param><!-- FT-555 16 PPR x4 (quadrature) x 139:1 gearbox --><param name=\"counts_per_rev\">8896</param><!-- sent in every 0x01 frame; the firmware stops if no command arrives within this --><param name=\"command_timeout_ms\">300</param><!-- the driver zeroes reported velocity if no 0x85 feedback within this --><param name=\"feedback_timeout_s\">0.5</param><!-- Power button held 3 s: the STM32 asks the host to halt. Inside the\n           container there is no systemd, so hand the request to the host\n           (deploy/host/mower-host-request.service watches this file). --><param name=\"shutdown_command\">/usr/local/bin/mower-host-request poweroff</param><!-- 0x87 build identity, latched JSON; /robot/info merges it --><param name=\"firmware_info_topic\">/mower_base/firmware_info</param></hardware><!-- Left Wheel Joint --><joint name=\"left_wheel_joint\"><command_interface name=\"velocity\"><param name=\"min\">-6.1</param><param name=\"max\">6.1</param></command_interface><state_interface name=\"position\"/><state_interface name=\"velocity\"/></joint><!-- Right Wheel Joint --><joint name=\"right_wheel_joint\"><command_interface name=\"velocity\"><param name=\"min\">-6.1</param><param name=\"max\">6.1</param></command_interface><state_interface name=\"position\"/><state_interface name=\"velocity\"/></joint><!-- The blade (mower_joint) is not driven through ros2_control on the\n         real robot: production blade actuation is disabled and the legacy\n         mower_controller/MowerSystemHardware effort path was a no-op. --></ros2_control></robot>"}
+ },
+ "twist_mux": {
+  "locks.navigation_coordinator.priority": {"integer":50},
+  "locks.navigation_coordinator.timeout": {"double":0.3},
+  "locks.navigation_coordinator.topic": {"string":"/navigation_coordinator_lock"},
+  "topics.app_manual.priority": {"integer":90},
+  "topics.app_manual.timeout": {"double":0.5},
+  "topics.app_manual.topic": {"string":"/joy_cmd"},
+  "topics.keyboard.priority": {"integer":80},
+  "topics.keyboard.timeout": {"double":0.5},
+  "topics.keyboard.topic": {"string":"/keyboard_cmd_vel"},
+  "topics.navigation.priority": {"integer":10},
+  "topics.navigation.timeout": {"double":0.5},
+  "topics.navigation.topic": {"string":"/nav_cmd_vel"},
+  "topics.navigation_safety_stop.priority": {"integer":50},
+  "topics.navigation_safety_stop.timeout": {"double":0.2},
+  "topics.navigation_safety_stop.topic": {"string":"/navigation_safety_stop"},
+  "topics.physical_joystick.priority": {"integer":100},
+  "topics.physical_joystick.timeout": {"double":0.5},
+  "topics.physical_joystick.topic": {"string":"/physical_joy_cmd"},
+  "use_stamped": {"bool":true}
+ },
+ "velocity_command_guard": {
+  "command_timeout_s": {"double":0.25},
+  "require_command_session": {"bool":false}
+ }
+}

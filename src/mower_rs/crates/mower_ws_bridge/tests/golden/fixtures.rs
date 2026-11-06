@@ -20,6 +20,11 @@
 //!   publishes, as r2r decodes it. `map_grid.frame` is a real map layer, the
 //!   frame mower_ws_bridge sent on main (fbf5afe) for map_manage's start-up
 //!   grid through the adapter: the case `map_layer` publishes its `data`.
+//! - **Without r2r** (E9-06): `tests/golden_cdr.rs` writes the bytes rmw gives
+//!   for the message cases to `deploy/test/golden/ros_facts/json_corpus_cdr.txt`,
+//!   and `mower_ros_facts/tests/json_corpus.rs` makes these frames from them
+//!   with `mower_cdr` and no ROS. Only the imports here name r2r: E9-22's types
+//!   replace them, and every case must still give the same bytes.
 //! - **No NUL** in any string: r2r cannot carry one (its conversion
 //!   panics), so ws_bridge's bus backend refuses it at the door instead.
 

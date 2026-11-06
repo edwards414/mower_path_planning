@@ -333,5 +333,10 @@ in `run` by `instance_on_bus`, give the tests a `run_on_bus` that takes the node
   `-r __node:=battery_state` in argv. Its node is `/battery_state`, the bridge's `/mower_bus_bridge/battery_state`, and
   telemetry from DDS comes back out as `/battery_state`.
 - `tests/resolver.rs` (domain 79, its own `main`): the resolver oracle. In one context with robot.launch.py's rules,
-  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (283 names, the five action
-  ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`).
+  rcl names every endpoint of every instance as the manifest and `Remaps::resolve` do (299 names, the five action
+  ends among them: an action client's goal requests show as `rq<name>/_action/send_goalRequest`). The names are frozen
+  in `deploy/test/golden/ros_facts/resolver.json`, which `mower_ros_facts` replays with no rcl; a changed manifest fails
+  here until `MOWER_GOLDEN=write` writes the file again (`tools/oracle/regen.sh facts`).
+- `tests/param_overrides.rs` (domain 109, its own `main`): what rcl and r2r read from production's parameter files,
+  node by node (`param_overrides.json`), and from two files with every form E9-23 has to know (`param_rules.json`); a
+  changed parameter file fails here the same way.

@@ -246,7 +246,7 @@ Each citation is `alias:line`.
 | `/coverage_progress` | `mower_interface/CoverageProgress` | `nav_action_server`, `R TL 1` (mower_nav:1639) | — | allowed for the app (ws_bridge.yaml:27), but neither the app nor the Studio subscribes | ≤2 Hz from feedback, plus forced updates (mower_nav:142, 298-326) | no | bus only unless a client appears |
 | `/split_path`, `/coverage_split_points` | `Path`, `Marker` | `nav_action_server`, `R V 1` (mower_nav:1632-1633) | — | rviz | per dispatch | no | bus only |
 | `/plan` | `Path` | nav2 planner_server. *nav_core*: `nav_action_server`, `R V 1` (mower_nav/core_backend:122, 225) | — | recorder snapshot buffer (record_topics.yaml:55) | while navigating | no | nav2: DDS only. *nav_core*: bus→DDS while recording |
-| `/rosout` | `rcl_interfaces/Log` | every node (rcl's rosout publisher; upstream `R TL 1000`, unconfirmed) | `nav_action_server`, `R V 100`, nav2 backend only; keeps WARN and above from nav2's nodes (mower_nav:1779-1789; mower_nav/state:191-204) | recorder (record_topics.yaml:45) | unknown | no | DDS→bus for nav2's logs until E9; for the modules' own logs see 5.8 |
+| `/rosout` | `rcl_interfaces/Log` | nav2's nodes and launch's, `R TL 1000` (measured 2026-11-06: no module, r2r makes no rosout writer; `deploy/test/golden/ros_facts/graph.json`) | `nav_action_server`, `R V 100`, nav2 backend only; keeps WARN and above from nav2's nodes (mower_nav:1779-1789; mower_nav/state:191-204) | recorder (record_topics.yaml:45) | unknown | no | DDS→bus for nav2's logs until E9; for the modules' own logs see 5.8 |
 
 ### 2.7 Status, battery, autotune
 
@@ -681,10 +681,10 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
      `/coverage_progress_status` and `/cencel_nav2`.
    - Used only by the Studio, not the app: `/robot/telemetry`, `/pid_autotune/status`, `/pid_autotune`,
      `/mower_base/servo_command` and `/mower_base/blade_command`.
-6. **`/rosout` loses the logs of moved modules.** A module that drops its r2r node will likely stop appearing in
-   `/rosout`. rcl publishes a log to `/rosout` only under a live node's logger name; that is expected, not checked for
-   r2r. The recorder records `/rosout` as "all node + service logs" (record_topics.yaml:45), and the bag module reads it
-   from DDS (E5 design: until a log tap, E9). Keep each moved module's r2r node until then, or forward its log lines.
+6. **The modules' logs are not on `/rosout`.** rcl publishes a log to `/rosout` only under a node that has a rosout
+   writer, and r2r never makes one (`rcl_logging_rosout_init_publisher_for_node`), so no mower_rsd module has ever been
+   there (measured 2026-11-06, `deploy/test/golden/ros_facts/`). The recorder records `/rosout` as "all node + service
+   logs" (record_topics.yaml:45), but it holds nav2's and launch's, from DDS (E5 design: until a log tap, E9).
 7. **The idle drivetrain chain runs at 20 Hz end to end.** The coordinator lock and the safety stop
    (mower_nav:1981-1998) go through twist_mux and then the final guard to the base. In E2 that is two bridge crossings
    per message at 20 Hz, until E4.

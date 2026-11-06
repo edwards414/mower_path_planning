@@ -1,0 +1,4 @@
+path_record_node:
+  ros__parameters:
+    save_dir: <MOWER_STATE_DIR>/zone_record
+    sites_dir: <MOWER_STATE_DIR>/sites

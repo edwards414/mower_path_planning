@@ -1,0 +1,1569 @@
+{
+ "nodes": [
+  "/bag_store",
+  "/battery_state",
+  "/behavior_server",
+  "/boustrophedon_coverage",
+  "/bt_navigator",
+  "/bt_navigator_navigate_through_poses_rclcpp_node",
+  "/bt_navigator_navigate_to_pose_rclcpp_node",
+  "/controller_server",
+  "/ekf_filter_node_map",
+  "/ekf_filter_node_odom",
+  "/flutter_adapter",
+  "/global_costmap/global_costmap",
+  "/gps",
+  "/graph_snapshot",
+  "/imu",
+  "/launch_ros_*",
+  "/lifecycle_manager_navigation",
+  "/local_costmap/local_costmap",
+  "/manual_velocity_guard",
+  "/map_manage",
+  "/mower_base",
+  "/mower_bus_bridge",
+  "/mower_ws_bridge",
+  "/nav2_container",
+  "/nav_action_server",
+  "/navsat_transform",
+  "/path_record_node",
+  "/pid_autotune",
+  "/planner_server",
+  "/recorder_manager",
+  "/robot_status",
+  "/smoother_server",
+  "/static_tf_publisher",
+  "/transform_listener_impl_*",
+  "/transform_listener_impl_*",
+  "/twist_mux",
+  "/velocity_command_guard",
+  "/velocity_smoother",
+  "/waypoint_follower"
+ ],
+ "topics": {
+  "/adapter/coverage_settings": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/map_datum": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/map_layers/chennal_map_inflated": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/map_layers/free_space_inflated": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/map_layers/map_grid": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/map_layers/risk_map_inflated": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/channels": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/connectors": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/coverage_path": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/invalid_segments": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/risk_zones": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/marker_layers/zones": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/robot_pose": {
+   "types": ["geometry_msgs/msg/PoseStamped"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/PoseStamped","hash":"RIHS01_10f3786d7d40fd2b54367835614bff85d4ad3b5dab62bf8bca0cc232d73b4cd8","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/adapter/zone_summaries": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/aon_battery_state": {
+   "types": ["sensor_msgs/msg/BatteryState"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/BatteryState","hash":"RIHS01_4bee5dfce981c98faa6828b868307a0a73f992ed0789f374ee96c8f840e69741","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/assisted_teleop/_action/feedback": {
+   "types": ["nav2_msgs/action/AssistedTeleop_FeedbackMessage"],
+   "publishers": [
+    {"node":"/behavior_server","type":"nav2_msgs/action/AssistedTeleop_FeedbackMessage","hash":"RIHS01_440e6eff945d974df81e3aa2c7ee115aaa930deb218d8a04b853e8bf2d9c2df5","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/assisted_teleop/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/behavior_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/backup/_action/feedback": {
+   "types": ["nav2_msgs/action/BackUp_FeedbackMessage"],
+   "publishers": [
+    {"node":"/behavior_server","type":"nav2_msgs/action/BackUp_FeedbackMessage","hash":"RIHS01_f279f363e5f9f485dfca4704643e12354bb5bb092dc27b0ae3dca718cff715f7","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/action/BackUp_FeedbackMessage","hash":"RIHS01_f279f363e5f9f485dfca4704643e12354bb5bb092dc27b0ae3dca718cff715f7","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/backup/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/behavior_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/battery_state": {
+   "types": ["sensor_msgs/msg/BatteryState"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/BatteryState","hash":"RIHS01_4bee5dfce981c98faa6828b868307a0a73f992ed0789f374ee96c8f840e69741","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/behavior_server/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/behavior_server","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/behavior_tree_log": {
+   "types": ["nav2_msgs/msg/BehaviorTreeLog"],
+   "publishers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/msg/BehaviorTreeLog","hash":"RIHS01_9335ecb688a4f61b7eb82a7c10f23eea5f4e8bbdb7edfa048e3539aa928f51b7","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"nav2_msgs/msg/BehaviorTreeLog","hash":"RIHS01_9335ecb688a4f61b7eb82a7c10f23eea5f4e8bbdb7edfa048e3539aa928f51b7","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/bt_navigator/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/bt_navigator","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/channel_path": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/channel_path_array": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/chennal_map": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/chennal_map_inflated": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/chennal_path": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/chennal_path_array": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/cmd_vel_guard_input": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/cmd_vel_nav": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/controller_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/velocity_smoother","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/cmd_vel_teleop": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/behavior_server","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/compute_path_through_poses/_action/feedback": {
+   "types": ["nav2_msgs/action/ComputePathThroughPoses_FeedbackMessage"],
+   "publishers": [
+    {"node":"/planner_server","type":"nav2_msgs/action/ComputePathThroughPoses_FeedbackMessage","hash":"RIHS01_b04e85195fb2c41edab60868657632fa95d11e9ae69792ca2a1df9de4fbc5521","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/action/ComputePathThroughPoses_FeedbackMessage","hash":"RIHS01_b04e85195fb2c41edab60868657632fa95d11e9ae69792ca2a1df9de4fbc5521","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/compute_path_through_poses/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/planner_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/compute_path_to_pose/_action/feedback": {
+   "types": ["nav2_msgs/action/ComputePathToPose_FeedbackMessage"],
+   "publishers": [
+    {"node":"/planner_server","type":"nav2_msgs/action/ComputePathToPose_FeedbackMessage","hash":"RIHS01_a086c8f040554ab5883b433bded128a1d1a732d21ca57596b7fdbe7ad2d0b64a","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"nav2_msgs/action/ComputePathToPose_FeedbackMessage","hash":"RIHS01_a086c8f040554ab5883b433bded128a1d1a732d21ca57596b7fdbe7ad2d0b64a","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/compute_path_to_pose/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/planner_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/controller_selector": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/controller_server/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/controller_server","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_connectors": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_invalid_segments": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_path": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_path_markers": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_progress": {
+   "types": ["mower_interface/msg/CoverageProgress"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"mower_interface/msg/CoverageProgress","hash":"RIHS01_329b78e593662a0d8e0f2754c884f543d5aee91ffd58e9bcd62ba107513d0877","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/coverage_split_points": {
+   "types": ["visualization_msgs/msg/Marker"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/Marker","hash":"RIHS01_45b13ccf791f225962bf74e746f9644518855d783a6f42ba0cc14fde2b4f3ce0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/curvature_lookahead_point": {
+   "types": ["geometry_msgs/msg/PointStamped"],
+   "publishers": [
+    {"node":"/controller_server","type":"geometry_msgs/msg/PointStamped","hash":"RIHS01_4c0296af86e01e562e9e0405d138a01537247580076c58ea38d7923ac1045897","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/diagnostics": {
+   "types": ["diagnostic_msgs/msg/DiagnosticArray"],
+   "publishers": [
+    {"node":"/lifecycle_manager_navigation","type":"diagnostic_msgs/msg/DiagnosticArray","hash":"RIHS01_5a8a36efb05fb25070fa0fb3810290c0e6cd4862b54a8fb975a1ee8dc55a333e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/mower_bus_bridge","type":"diagnostic_msgs/msg/DiagnosticArray","hash":"RIHS01_5a8a36efb05fb25070fa0fb3810290c0e6cd4862b54a8fb975a1ee8dc55a333e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/drive_on_heading/_action/feedback": {
+   "types": ["nav2_msgs/action/DriveOnHeading_FeedbackMessage"],
+   "publishers": [
+    {"node":"/behavior_server","type":"nav2_msgs/action/DriveOnHeading_FeedbackMessage","hash":"RIHS01_5f0d0cc07e53aa1a6fefdc62c7c273ae914c7f4f730648bc5b1885b098e26958","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/drive_on_heading/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/behavior_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/drivetrain_guarded_cmd_vel": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/fix": {
+   "types": ["sensor_msgs/msg/NavSatFix"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/NavSatFix","hash":"RIHS01_62223ab3fe210a15976021da7afddc9e200dc9ec75231c1b6a557fc598a65404","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/follow_gps_waypoints/_action/feedback": {
+   "types": ["nav2_msgs/action/FollowGPSWaypoints_FeedbackMessage"],
+   "publishers": [
+    {"node":"/waypoint_follower","type":"nav2_msgs/action/FollowGPSWaypoints_FeedbackMessage","hash":"RIHS01_455b2b8a7ab82141f52af896a2f493ea01c43e0f68ff64bae2360e75ada7de2e","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/follow_gps_waypoints/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/waypoint_follower","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/follow_path/_action/feedback": {
+   "types": ["nav2_msgs/action/FollowPath_FeedbackMessage"],
+   "publishers": [
+    {"node":"/controller_server","type":"nav2_msgs/action/FollowPath_FeedbackMessage","hash":"RIHS01_3f4008700ba56ac4c82b01ef2b7fdd3fc18dc194399c48e5c43ebf8008b891d5","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/action/FollowPath_FeedbackMessage","hash":"RIHS01_3f4008700ba56ac4c82b01ef2b7fdd3fc18dc194399c48e5c43ebf8008b891d5","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"nav2_msgs/action/FollowPath_FeedbackMessage","hash":"RIHS01_3f4008700ba56ac4c82b01ef2b7fdd3fc18dc194399c48e5c43ebf8008b891d5","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav_action_server","type":"nav2_msgs/action/FollowPath_FeedbackMessage","hash":"RIHS01_3f4008700ba56ac4c82b01ef2b7fdd3fc18dc194399c48e5c43ebf8008b891d5","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/follow_path/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/controller_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav_action_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/follow_waypoints/_action/feedback": {
+   "types": ["nav2_msgs/action/FollowWaypoints_FeedbackMessage"],
+   "publishers": [
+    {"node":"/waypoint_follower","type":"nav2_msgs/action/FollowWaypoints_FeedbackMessage","hash":"RIHS01_467071c0ede294cafe6be7251e6e85716a6e19b8ed46db18952ac0c05597abcf","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/follow_waypoints/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/waypoint_follower","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/free_space": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/free_space_inflated": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/costmap": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/costmap_raw": {
+   "types": ["nav2_msgs/msg/Costmap"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/smoother_server","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/global_costmap/costmap_raw_updates": {
+   "types": ["nav2_msgs/msg/CostmapUpdate"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/smoother_server","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/global_costmap/costmap_updates": {
+   "types": ["map_msgs/msg/OccupancyGridUpdate"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"map_msgs/msg/OccupancyGridUpdate","hash":"RIHS01_c4095b0be2e4363f8978a1570e0293ee093436f1e1c61d99b48502ac317025e8","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/footprint": {
+   "types": ["geometry_msgs/msg/Polygon"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/global_costmap/global_costmap","type":"geometry_msgs/msg/Polygon","hash":"RIHS01_3782f9f0bf044964d692d6c017d705e37611afb1f0bf6a9dee248a7dda0f784a","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/global_costmap/global_costmap/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/published_footprint": {
+   "types": ["geometry_msgs/msg/PolygonStamped"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"geometry_msgs/msg/PolygonStamped","hash":"RIHS01_b7cf07932f1523d4b4088075945c1a0141f7cd21da87cc940fc61652e9138b46","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/smoother_server","type":"geometry_msgs/msg/PolygonStamped","hash":"RIHS01_b7cf07932f1523d4b4088075945c1a0141f7cd21da87cc940fc61652e9138b46","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/global_costmap/static_layer": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/static_layer_raw": {
+   "types": ["nav2_msgs/msg/Costmap"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/static_layer_raw_updates": {
+   "types": ["nav2_msgs/msg/CostmapUpdate"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/global_costmap/static_layer_updates": {
+   "types": ["map_msgs/msg/OccupancyGridUpdate"],
+   "publishers": [
+    {"node":"/global_costmap/global_costmap","type":"map_msgs/msg/OccupancyGridUpdate","hash":"RIHS01_c4095b0be2e4363f8978a1570e0293ee093436f1e1c61d99b48502ac317025e8","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/goal_pose": {
+   "types": ["geometry_msgs/msg/PoseStamped"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/bt_navigator","type":"geometry_msgs/msg/PoseStamped","hash":"RIHS01_10f3786d7d40fd2b54367835614bff85d4ad3b5dab62bf8bca0cc232d73b4cd8","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/gps/filtered": {
+   "types": ["sensor_msgs/msg/NavSatFix"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/NavSatFix","hash":"RIHS01_62223ab3fe210a15976021da7afddc9e200dc9ec75231c1b6a557fc598a65404","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/gps/status": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/graph_events": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/graph_snapshot": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/imu/data": {
+   "types": ["sensor_msgs/msg/Imu"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/Imu","hash":"RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/is_rotating_to_heading": {
+   "types": ["std_msgs/msg/Bool"],
+   "publishers": [
+    {"node":"/controller_server","type":"std_msgs/msg/Bool","hash":"RIHS01_feb91e995ff9ebd09c0cb3d2aed18b11077585839fb5db80193b62d74528f6c9","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/joint_states": {
+   "types": ["sensor_msgs/msg/JointState"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"sensor_msgs/msg/JointState","hash":"RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/joy_cmd": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/keyboard_cmd_vel": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/local_costmap/costmap": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/costmap_raw": {
+   "types": ["nav2_msgs/msg/Costmap"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/local_costmap/costmap_raw_updates": {
+   "types": ["nav2_msgs/msg/CostmapUpdate"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/local_costmap/costmap_updates": {
+   "types": ["map_msgs/msg/OccupancyGridUpdate"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"map_msgs/msg/OccupancyGridUpdate","hash":"RIHS01_c4095b0be2e4363f8978a1570e0293ee093436f1e1c61d99b48502ac317025e8","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/footprint": {
+   "types": ["geometry_msgs/msg/Polygon"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/local_costmap/local_costmap","type":"geometry_msgs/msg/Polygon","hash":"RIHS01_3782f9f0bf044964d692d6c017d705e37611afb1f0bf6a9dee248a7dda0f784a","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/local_costmap/local_costmap/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/published_footprint": {
+   "types": ["geometry_msgs/msg/PolygonStamped"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"geometry_msgs/msg/PolygonStamped","hash":"RIHS01_b7cf07932f1523d4b4088075945c1a0141f7cd21da87cc940fc61652e9138b46","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"geometry_msgs/msg/PolygonStamped","hash":"RIHS01_b7cf07932f1523d4b4088075945c1a0141f7cd21da87cc940fc61652e9138b46","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/local_costmap/static_layer": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/static_layer_raw": {
+   "types": ["nav2_msgs/msg/Costmap"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav2_msgs/msg/Costmap","hash":"RIHS01_d51bf7aecafdbb3f8f98215de648abe6d53f8db69156d6e143125d2ad2bf0027","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/static_layer_raw_updates": {
+   "types": ["nav2_msgs/msg/CostmapUpdate"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"nav2_msgs/msg/CostmapUpdate","hash":"RIHS01_b44706e1f0906a3f72a1640bc2153e85576ff8e8ad203ec48b78c187669168a2","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/local_costmap/static_layer_updates": {
+   "types": ["map_msgs/msg/OccupancyGridUpdate"],
+   "publishers": [
+    {"node":"/local_costmap/local_costmap","type":"map_msgs/msg/OccupancyGridUpdate","hash":"RIHS01_c4095b0be2e4363f8978a1570e0293ee093436f1e1c61d99b48502ac317025e8","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/lookahead_collision_arc": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/controller_server","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/lookahead_point": {
+   "types": ["geometry_msgs/msg/PointStamped"],
+   "publishers": [
+    {"node":"/controller_server","type":"geometry_msgs/msg/PointStamped","hash":"RIHS01_4c0296af86e01e562e9e0405d138a01537247580076c58ea38d7923ac1045897","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/manual_command_clock": {
+   "types": ["std_msgs/msg/Header"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/Header","hash":"RIHS01_f49fb3ae2cf070f793645ff749683ac6b06203e41c891e17701b1cb597ce6a01","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/map_grid": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/local_costmap/local_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/map_grid_global": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/global_costmap/global_costmap","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/mower_base/firmware_info": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_base/led_command": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_base/pid_command": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":4,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_base/rear_light": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/mower_base","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":8,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/mower_base/telemetry": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"BEST_EFFORT"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_base/wheel_override": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"BEST_EFFORT"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_recorder/bags": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_recorder/command_result": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_recorder/fault": {
+   "types": ["std_msgs/msg/Bool"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/Bool","hash":"RIHS01_feb91e995ff9ebd09c0cb3d2aed18b11077585839fb5db80193b62d74528f6c9","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/mower_recorder/status": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/nav_action/_action/feedback": {
+   "types": ["mower_interface/action/Waypoint_FeedbackMessage"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"mower_interface/action/Waypoint_FeedbackMessage","hash":"RIHS01_8d6190be6612194255bbdf10ed77a7d265b78cb22443727b3dfedee5386cf02c","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/nav_action/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/nav_action_follow_path/_action/feedback": {
+   "types": ["mower_interface/action/Waypoint_FeedbackMessage"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"mower_interface/action/Waypoint_FeedbackMessage","hash":"RIHS01_8d6190be6612194255bbdf10ed77a7d265b78cb22443727b3dfedee5386cf02c","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/nav_action_follow_path/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/nav_cmd_vel": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/velocity_smoother","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/nav_operation_active": {
+   "types": ["std_msgs/msg/Bool"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/Bool","hash":"RIHS01_feb91e995ff9ebd09c0cb3d2aed18b11077585839fb5db80193b62d74528f6c9","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/navigate_through_poses/_action/feedback": {
+   "types": ["nav2_msgs/action/NavigateThroughPoses_FeedbackMessage"],
+   "publishers": [
+    {"node":"/bt_navigator","type":"nav2_msgs/action/NavigateThroughPoses_FeedbackMessage","hash":"RIHS01_073962415ad2a226b3de7245b142aeb414268a4d35ef1321ff2a484e2130e2b1","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/navigate_through_poses/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/bt_navigator","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/navigate_to_pose/_action/feedback": {
+   "types": ["nav2_msgs/action/NavigateToPose_FeedbackMessage"],
+   "publishers": [
+    {"node":"/bt_navigator","type":"nav2_msgs/action/NavigateToPose_FeedbackMessage","hash":"RIHS01_9d1f6fa2eb975ce733b419ac2e97b134d8ff92b6478b6559feed9a50bdfd82b3","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator","type":"nav2_msgs/action/NavigateToPose_FeedbackMessage","hash":"RIHS01_9d1f6fa2eb975ce733b419ac2e97b134d8ff92b6478b6559feed9a50bdfd82b3","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav_action_server","type":"nav2_msgs/action/NavigateToPose_FeedbackMessage","hash":"RIHS01_9d1f6fa2eb975ce733b419ac2e97b134d8ff92b6478b6559feed9a50bdfd82b3","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/waypoint_follower","type":"nav2_msgs/action/NavigateToPose_FeedbackMessage","hash":"RIHS01_9d1f6fa2eb975ce733b419ac2e97b134d8ff92b6478b6559feed9a50bdfd82b3","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/navigate_to_pose/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/bt_navigator","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav_action_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/waypoint_follower","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/navigation_coordinator_lock": {
+   "types": ["std_msgs/msg/Bool"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/Bool","hash":"RIHS01_feb91e995ff9ebd09c0cb3d2aed18b11077585839fb5db80193b62d74528f6c9","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/navigation_safety_stop": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/odom": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/controller_server","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/odom_slow": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/odometry/global": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/odometry/global_slow": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/odometry/gps": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/odometry/local": {
+   "types": ["nav_msgs/msg/Odometry"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Odometry","hash":"RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/parameter_events": {
+   "types": ["rcl_interfaces/msg/ParameterEvent"],
+   "publishers": [
+    {"node":"/behavior_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/controller_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/global_costmap/global_costmap","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/launch_ros_*","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/lifecycle_manager_navigation","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/local_costmap/local_costmap","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/planner_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/smoother_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/velocity_smoother","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/waypoint_follower","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/controller_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/global_costmap/global_costmap","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/lifecycle_manager_navigation","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/local_costmap/local_costmap","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav2_container","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/planner_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/smoother_server","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/velocity_smoother","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/waypoint_follower","type":"rcl_interfaces/msg/ParameterEvent","hash":"RIHS01_043e627780fcad87a22d225bc2a037361dba713fca6a6b9f4b869a5aa0393204","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/physical_joy_cmd": {
+   "types": ["geometry_msgs/msg/TwistStamped"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/mower_bus_bridge","type":"geometry_msgs/msg/TwistStamped","hash":"RIHS01_5f0fcd4f81d5d06ad9b4c4c63e3ea51b82d6ae4d0558f1d475229b1121db6f64","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/pid_autotune/status": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/plan": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/planner_server","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/plan_smoothed": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/smoother_server","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/planner_selector": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/planner_server/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/planner_server","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/preempt_teleop": {
+   "types": ["std_msgs/msg/Empty"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/behavior_server","type":"std_msgs/msg/Empty","hash":"RIHS01_20b625256f32d5dbc0d04fee44f43c41e51c70d3502f84b4a08e7a9c26a96312","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/received_global_plan": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/controller_server","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/recorded_path": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/risk_map": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/risk_map_inflated": {
+   "types": ["nav_msgs/msg/OccupancyGrid"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/OccupancyGrid","hash":"RIHS01_8d348150c12913a31ee0ec170fbf25089e4745d17035792a1ba94d6f0bc0cfc7","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/risk_zone_list": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/risk_zone_markers": {
+   "types": ["visualization_msgs/msg/Marker"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/Marker","hash":"RIHS01_45b13ccf791f225962bf74e746f9644518855d783a6f42ba0cc14fde2b4f3ce0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/robot/info": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/robot/online": {
+   "types": ["std_msgs/msg/Bool"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/Bool","hash":"RIHS01_feb91e995ff9ebd09c0cb3d2aed18b11077585839fb5db80193b62d74528f6c9","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/robot/telemetry": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/robot_description": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/rosout": {
+   "types": ["rcl_interfaces/msg/Log"],
+   "publishers": [
+    {"node":"/behavior_server","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator_navigate_to_pose_rclcpp_node","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/controller_server","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/global_costmap/global_costmap","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/launch_ros_*","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/lifecycle_manager_navigation","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/local_costmap/local_costmap","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/nav2_container","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/planner_server","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/smoother_server","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/velocity_smoother","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/waypoint_follower","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":1000,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":10000000000,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/mower_bus_bridge","type":"rcl_interfaces/msg/Log","hash":"RIHS01_e28ce254ca8abc06abf92773b74602cdbf116ed34fbaf294fb9f81da9f318eac","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/site_list": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/smooth_path/_action/feedback": {
+   "types": ["nav2_msgs/action/SmoothPath_FeedbackMessage"],
+   "publishers": [
+    {"node":"/smoother_server","type":"nav2_msgs/action/SmoothPath_FeedbackMessage","hash":"RIHS01_185338884216b3c62b5685968a0c8ed534691d3d3cb0ad65561be1d6a022123e","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/smooth_path/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/smoother_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/smoother_server/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/smoother_server","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/speed_limit": {
+   "types": ["nav2_msgs/msg/SpeedLimit"],
+   "publishers": [],
+   "subscribers": [
+    {"node":"/controller_server","type":"nav2_msgs/msg/SpeedLimit","hash":"RIHS01_83d8e4e842559f4d9a988b19d31b162216ec738536389f98438d1a166f91845a","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/spin/_action/feedback": {
+   "types": ["nav2_msgs/action/Spin_FeedbackMessage"],
+   "publishers": [
+    {"node":"/behavior_server","type":"nav2_msgs/action/Spin_FeedbackMessage","hash":"RIHS01_65172773a4a518f36640b41d18d588319e665e7ba04a29237e7f92ba275e8388","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/action/Spin_FeedbackMessage","hash":"RIHS01_65172773a4a518f36640b41d18d588319e665e7ba04a29237e7f92ba275e8388","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/spin/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/behavior_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/split_path": {
+   "types": ["nav_msgs/msg/Path"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"nav_msgs/msg/Path","hash":"RIHS01_1957a5bb3cee5da65c4e52e52b65a93df227efce4c20f8458b36e73066ca334b","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/tf": {
+   "types": ["tf2_msgs/msg/TFMessage"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/smoother_server","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/tf_static": {
+   "types": ["tf2_msgs/msg/TFMessage"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/navsat_transform","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/behavior_server","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/bt_navigator","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/smoother_server","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}},
+    {"node":"/transform_listener_impl_*","type":"tf2_msgs/msg/TFMessage","hash":"RIHS01_e369d0f05a23ae52508854b66f6aa0437f3449d652e8cbf22d5abe85d020f087","qos":{"deadline_ns":9223372036854775807,"depth":100,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/velocity_smoother/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/velocity_smoother","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/wait/_action/feedback": {
+   "types": ["nav2_msgs/action/Wait_FeedbackMessage"],
+   "publishers": [
+    {"node":"/behavior_server","type":"nav2_msgs/action/Wait_FeedbackMessage","hash":"RIHS01_cb143310afa60cc18ef814ac127a730d4ee190828ce9b9a943fa8f0cb1a09f7c","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"nav2_msgs/action/Wait_FeedbackMessage","hash":"RIHS01_cb143310afa60cc18ef814ac127a730d4ee190828ce9b9a943fa8f0cb1a09f7c","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/wait/_action/status": {
+   "types": ["action_msgs/msg/GoalStatusArray"],
+   "publishers": [
+    {"node":"/behavior_server","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": [
+    {"node":"/bt_navigator_navigate_through_poses_rclcpp_node","type":"action_msgs/msg/GoalStatusArray","hash":"RIHS01_6c1684b00f177d37438febe6e709fc4e2b0d4248dca4854946f9ed8b30cda83e","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ]
+  },
+  "/waypoint_follower/transition_event": {
+   "types": ["lifecycle_msgs/msg/TransitionEvent"],
+   "publishers": [
+    {"node":"/waypoint_follower","type":"lifecycle_msgs/msg/TransitionEvent","hash":"RIHS01_d5f8873a2f0146498f812d7885c7327ce27e463d36811d8792f35ee38c0d6c38","qos":{"deadline_ns":9223372036854775807,"depth":10,"durability":"VOLATILE","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/zone_list": {
+   "types": ["visualization_msgs/msg/MarkerArray"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/MarkerArray","hash":"RIHS01_86cb8800b6fb05b5eff1abd7a56f62a5641d3ae9a1c29e78e67e704f1d067dcf","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/zone_markers": {
+   "types": ["visualization_msgs/msg/Marker"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"visualization_msgs/msg/Marker","hash":"RIHS01_45b13ccf791f225962bf74e746f9644518855d783a6f42ba0cc14fde2b4f3ce0","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  },
+  "/zone_sequence_status": {
+   "types": ["std_msgs/msg/String"],
+   "publishers": [
+    {"node":"/mower_bus_bridge","type":"std_msgs/msg/String","hash":"RIHS01_df668c740482bbd48fb39d76a70dfd4bd59db1288021743503259e948f6b1a18","qos":{"deadline_ns":9223372036854775807,"depth":1,"durability":"TRANSIENT_LOCAL","history":"KEEP_LAST","lifespan_ns":9223372036854775807,"liveliness":"AUTOMATIC","liveliness_lease_ns":9223372036854775807,"reliability":"RELIABLE"}}
+   ],
+   "subscribers": []
+  }
+ },
+ "services": {
+  "/assisted_teleop/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/behavior_server"],"clients":[]},
+  "/assisted_teleop/_action/get_result": {"types":["nav2_msgs/action/AssistedTeleop_GetResult"],"servers":["/behavior_server"],"clients":[]},
+  "/assisted_teleop/_action/send_goal": {"types":["nav2_msgs/action/AssistedTeleop_SendGoal"],"servers":["/behavior_server"],"clients":[]},
+  "/backup/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/backup/_action/get_result": {"types":["nav2_msgs/action/BackUp_GetResult"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/backup/_action/send_goal": {"types":["nav2_msgs/action/BackUp_SendGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/behavior_server/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/behavior_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/behavior_server/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/behavior_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/behavior_server/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/behavior_server"],"clients":[]},
+  "/behavior_server/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/behavior_server"],"clients":[]},
+  "/boustrophedon_coverage/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/boustrophedon_coverage"],"clients":[]},
+  "/boustrophedon_coverage/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/boustrophedon_coverage"],"clients":[]},
+  "/boustrophedon_coverage/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/boustrophedon_coverage"],"clients":["/flutter_adapter"]},
+  "/boustrophedon_coverage/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/boustrophedon_coverage"],"clients":[]},
+  "/boustrophedon_coverage/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/boustrophedon_coverage"],"clients":["/mower_bus_bridge"]},
+  "/boustrophedon_coverage/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/boustrophedon_coverage"],"clients":[]},
+  "/bt_navigator/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/bt_navigator"],"clients":["/lifecycle_manager_navigation"]},
+  "/bt_navigator/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/bt_navigator"],"clients":["/lifecycle_manager_navigation","/nav_action_server"]},
+  "/bt_navigator/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/bt_navigator"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_through_poses_rclcpp_node/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/bt_navigator_navigate_through_poses_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/bt_navigator_navigate_to_pose_rclcpp_node/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/bt_navigator_navigate_to_pose_rclcpp_node"],"clients":[]},
+  "/cancel_nav2": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/cancel_navigation_dispatch": {"types":["mower_interface/srv/CancelNavigationDispatch"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/cencel_nav2": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/channel_record_end": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/channel_record_start": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/check_nav_status": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/chennal_record_end": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/chennal_record_start": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/compute_path_through_poses/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/compute_path_through_poses/_action/get_result": {"types":["nav2_msgs/action/ComputePathThroughPoses_GetResult"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/compute_path_through_poses/_action/send_goal": {"types":["nav2_msgs/action/ComputePathThroughPoses_SendGoal"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/compute_path_to_pose/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_to_pose_rclcpp_node"]},
+  "/compute_path_to_pose/_action/get_result": {"types":["nav2_msgs/action/ComputePathToPose_GetResult"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_to_pose_rclcpp_node"]},
+  "/compute_path_to_pose/_action/send_goal": {"types":["nav2_msgs/action/ComputePathToPose_SendGoal"],"servers":["/planner_server"],"clients":["/bt_navigator_navigate_to_pose_rclcpp_node"]},
+  "/confirm_navigation_dispatch": {"types":["mower_interface/srv/ConfirmNavigationDispatch"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/controller_server/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/controller_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/controller_server/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/controller_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/controller_server/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/controller_server"],"clients":[]},
+  "/controller_server/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/controller_server"],"clients":[]},
+  "/coverage_progress_status": {"types":["mower_interface/srv/GetCoverageProgress"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/create_chennal_map": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/create_free_space": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/create_risk_map": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/datum": {"types":["robot_localization/srv/SetDatum"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/drive_on_heading/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/behavior_server"],"clients":[]},
+  "/drive_on_heading/_action/get_result": {"types":["nav2_msgs/action/DriveOnHeading_GetResult"],"servers":["/behavior_server"],"clients":[]},
+  "/drive_on_heading/_action/send_goal": {"types":["nav2_msgs/action/DriveOnHeading_SendGoal"],"servers":["/behavior_server"],"clients":[]},
+  "/edit_zone": {"types":["mower_interface/srv/EditZone"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/ekf_filter_node_map/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_map/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_map/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_map/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_map/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_map/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/ekf_filter_node_map"],"clients":[]},
+  "/ekf_filter_node_odom/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/ekf_filter_node_odom/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/ekf_filter_node_odom/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/ekf_filter_node_odom/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/ekf_filter_node_odom/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/ekf_filter_node_odom/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/ekf_filter_node_odom"],"clients":[]},
+  "/follow_gps_waypoints/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/waypoint_follower"],"clients":[]},
+  "/follow_gps_waypoints/_action/get_result": {"types":["nav2_msgs/action/FollowGPSWaypoints_GetResult"],"servers":["/waypoint_follower"],"clients":[]},
+  "/follow_gps_waypoints/_action/send_goal": {"types":["nav2_msgs/action/FollowGPSWaypoints_SendGoal"],"servers":["/waypoint_follower"],"clients":[]},
+  "/follow_path/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/controller_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node","/bt_navigator_navigate_to_pose_rclcpp_node","/nav_action_server"]},
+  "/follow_path/_action/get_result": {"types":["nav2_msgs/action/FollowPath_GetResult"],"servers":["/controller_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node","/bt_navigator_navigate_to_pose_rclcpp_node","/nav_action_server"]},
+  "/follow_path/_action/send_goal": {"types":["nav2_msgs/action/FollowPath_SendGoal"],"servers":["/controller_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node","/bt_navigator_navigate_to_pose_rclcpp_node","/nav_action_server"]},
+  "/follow_waypoints/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/waypoint_follower"],"clients":[]},
+  "/follow_waypoints/_action/get_result": {"types":["nav2_msgs/action/FollowWaypoints_GetResult"],"servers":["/waypoint_follower"],"clients":[]},
+  "/follow_waypoints/_action/send_goal": {"types":["nav2_msgs/action/FollowWaypoints_SendGoal"],"servers":["/waypoint_follower"],"clients":[]},
+  "/fromLL": {"types":["robot_localization/srv/FromLL"],"servers":["/mower_bus_bridge"],"clients":["/waypoint_follower"]},
+  "/fromLLArray": {"types":["robot_localization/srv/FromLLArray"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/generate_coverage_path": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_channel_path_list": {"types":["mower_interface/srv/ChannelPathList"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_channel_route": {"types":["mower_interface/srv/ChannelRoute"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_chennal_path_list": {"types":["mower_interface/srv/ChennalPathList"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_record_zone_info": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_record_zone_list": {"types":["mower_interface/srv/GetZoneList"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_risk_zone_list": {"types":["mower_interface/srv/GetZoneList"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/get_zone_map_list_srv": {"types":["mower_interface/srv/ZoneMapList"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/global_costmap/clear_around_global_costmap": {"types":["nav2_msgs/srv/ClearCostmapAroundRobot"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/clear_around_pose_global_costmap": {"types":["nav2_msgs/srv/ClearCostmapAroundPose"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/clear_entirely_global_costmap": {"types":["nav2_msgs/srv/ClearEntireCostmap"],"servers":["/global_costmap/global_costmap"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node","/bt_navigator_navigate_to_pose_rclcpp_node"]},
+  "/global_costmap/clear_except_global_costmap": {"types":["nav2_msgs/srv/ClearCostmapExceptRegion"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/get_cost_global_costmap": {"types":["nav2_msgs/srv/GetCost"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/get_costmap": {"types":["nav2_msgs/srv/GetCostmap"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/get_static_layer": {"types":["nav2_msgs/srv/GetCostmap"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/global_costmap/global_costmap/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/global_costmap/global_costmap"],"clients":[]},
+  "/import_image_mask": {"types":["mower_interface/srv/ImportImageMask"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/is_path_valid": {"types":["nav2_msgs/srv/IsPathValid"],"servers":["/planner_server"],"clients":[]},
+  "/launch_ros_*/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/launch_ros_*"],"clients":[]},
+  "/launch_ros_*/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/launch_ros_*"],"clients":[]},
+  "/lifecycle_manager_navigation/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/is_active": {"types":["std_srvs/srv/Trigger"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/manage_nodes": {"types":["nav2_msgs/srv/ManageLifecycleNodes"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/lifecycle_manager_navigation/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/lifecycle_manager_navigation"],"clients":[]},
+  "/load_zone_list": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/local_costmap/clear_around_local_costmap": {"types":["nav2_msgs/srv/ClearCostmapAroundRobot"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/clear_around_pose_local_costmap": {"types":["nav2_msgs/srv/ClearCostmapAroundPose"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/clear_entirely_local_costmap": {"types":["nav2_msgs/srv/ClearEntireCostmap"],"servers":["/local_costmap/local_costmap"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node","/bt_navigator_navigate_to_pose_rclcpp_node"]},
+  "/local_costmap/clear_except_local_costmap": {"types":["nav2_msgs/srv/ClearCostmapExceptRegion"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/get_cost_local_costmap": {"types":["nav2_msgs/srv/GetCost"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/get_costmap": {"types":["nav2_msgs/srv/GetCostmap"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/get_static_layer": {"types":["nav2_msgs/srv/GetCostmap"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/local_costmap/local_costmap/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/local_costmap/local_costmap"],"clients":[]},
+  "/map_manage/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/map_manage"],"clients":[]},
+  "/map_manage/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/map_manage"],"clients":[]},
+  "/map_manage/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/map_manage"],"clients":["/flutter_adapter"]},
+  "/map_manage/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/map_manage"],"clients":[]},
+  "/map_manage/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/map_manage"],"clients":[]},
+  "/map_manage/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/map_manage"],"clients":[]},
+  "/mission_operation_lock": {"types":["mower_interface/srv/MissionOperationLock"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/mower_recorder/snapshot": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/mower_recorder/start": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/mower_recorder/stop": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav2_container/_container/list_nodes": {"types":["composition_interfaces/srv/ListNodes"],"servers":["/nav2_container"],"clients":[]},
+  "/nav2_container/_container/load_node": {"types":["composition_interfaces/srv/LoadNode"],"servers":["/nav2_container"],"clients":["/launch_ros_*"]},
+  "/nav2_container/_container/unload_node": {"types":["composition_interfaces/srv/UnloadNode"],"servers":["/nav2_container"],"clients":[]},
+  "/nav2_container/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/nav2_container"],"clients":[]},
+  "/nav_action/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav_action/_action/get_result": {"types":["mower_interface/action/Waypoint_GetResult"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav_action/_action/send_goal": {"types":["mower_interface/action/Waypoint_SendGoal"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav_action_follow_path/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav_action_follow_path/_action/get_result": {"types":["mower_interface/action/Waypoint_GetResult"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/nav_action_follow_path/_action/send_goal": {"types":["mower_interface/action/Waypoint_SendGoal"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/navigate_through_poses/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/bt_navigator"],"clients":[]},
+  "/navigate_through_poses/_action/get_result": {"types":["nav2_msgs/action/NavigateThroughPoses_GetResult"],"servers":["/bt_navigator"],"clients":[]},
+  "/navigate_through_poses/_action/send_goal": {"types":["nav2_msgs/action/NavigateThroughPoses_SendGoal"],"servers":["/bt_navigator"],"clients":[]},
+  "/navigate_to_pose/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/bt_navigator"],"clients":["/bt_navigator","/nav_action_server","/waypoint_follower"]},
+  "/navigate_to_pose/_action/get_result": {"types":["nav2_msgs/action/NavigateToPose_GetResult"],"servers":["/bt_navigator"],"clients":["/bt_navigator","/nav_action_server","/waypoint_follower"]},
+  "/navigate_to_pose/_action/send_goal": {"types":["nav2_msgs/action/NavigateToPose_SendGoal"],"servers":["/bt_navigator"],"clients":["/bt_navigator","/nav_action_server","/waypoint_follower"]},
+  "/navsat_transform/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/navsat_transform"],"clients":[]},
+  "/navsat_transform/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/navsat_transform"],"clients":[]},
+  "/navsat_transform/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/navsat_transform"],"clients":[]},
+  "/navsat_transform/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/navsat_transform"],"clients":[]},
+  "/navsat_transform/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/navsat_transform"],"clients":[]},
+  "/navsat_transform/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/navsat_transform"],"clients":[]},
+  "/pid_autotune": {"types":["mower_interface/srv/PidAutotune"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/planner_server/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/planner_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/planner_server/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/planner_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/planner_server/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/planner_server"],"clients":[]},
+  "/planner_server/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/planner_server"],"clients":[]},
+  "/record_cancel": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/record_zone_end": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/record_zone_start": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/restore_free_space_coverage": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/resume_coverage": {"types":["mower_interface/srv/ResumeCoverage"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/risk_zone_end": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/risk_zone_start": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/run_zone_sequence": {"types":["mower_interface/srv/ZoneSequence"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/save_zone_list": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/site_op": {"types":["mower_interface/srv/SiteOp"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/smooth_path/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/smoother_server"],"clients":[]},
+  "/smooth_path/_action/get_result": {"types":["nav2_msgs/action/SmoothPath_GetResult"],"servers":["/smoother_server"],"clients":[]},
+  "/smooth_path/_action/send_goal": {"types":["nav2_msgs/action/SmoothPath_SendGoal"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/smoother_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/smoother_server/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/smoother_server"],"clients":["/lifecycle_manager_navigation"]},
+  "/smoother_server/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/smoother_server"],"clients":[]},
+  "/smoother_server/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/smoother_server"],"clients":[]},
+  "/spin/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/spin/_action/get_result": {"types":["nav2_msgs/action/Spin_GetResult"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/spin/_action/send_goal": {"types":["nav2_msgs/action/Spin_SendGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/stop_zone_sequence": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/system/check_update": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/system/restart": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/system/update": {"types":["std_srvs/srv/Trigger"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/toLL": {"types":["robot_localization/srv/ToLL"],"servers":["/mower_bus_bridge"],"clients":[]},
+  "/transform_listener_impl_*/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/transform_listener_impl_*","/transform_listener_impl_*"],"clients":[]},
+  "/velocity_smoother/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/velocity_smoother"],"clients":["/lifecycle_manager_navigation"]},
+  "/velocity_smoother/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/velocity_smoother"],"clients":["/lifecycle_manager_navigation"]},
+  "/velocity_smoother/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/velocity_smoother"],"clients":[]},
+  "/velocity_smoother/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/velocity_smoother"],"clients":[]},
+  "/wait/_action/cancel_goal": {"types":["action_msgs/srv/CancelGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/wait/_action/get_result": {"types":["nav2_msgs/action/Wait_GetResult"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/wait/_action/send_goal": {"types":["nav2_msgs/action/Wait_SendGoal"],"servers":["/behavior_server"],"clients":["/bt_navigator_navigate_through_poses_rclcpp_node"]},
+  "/waypoint_follower/change_state": {"types":["lifecycle_msgs/srv/ChangeState"],"servers":["/waypoint_follower"],"clients":["/lifecycle_manager_navigation"]},
+  "/waypoint_follower/describe_parameters": {"types":["rcl_interfaces/srv/DescribeParameters"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_available_states": {"types":["lifecycle_msgs/srv/GetAvailableStates"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_available_transitions": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_parameter_types": {"types":["rcl_interfaces/srv/GetParameterTypes"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_parameters": {"types":["rcl_interfaces/srv/GetParameters"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_state": {"types":["lifecycle_msgs/srv/GetState"],"servers":["/waypoint_follower"],"clients":["/lifecycle_manager_navigation"]},
+  "/waypoint_follower/get_transition_graph": {"types":["lifecycle_msgs/srv/GetAvailableTransitions"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/get_type_description": {"types":["type_description_interfaces/srv/GetTypeDescription"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/list_parameters": {"types":["rcl_interfaces/srv/ListParameters"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/set_parameters": {"types":["rcl_interfaces/srv/SetParameters"],"servers":["/waypoint_follower"],"clients":[]},
+  "/waypoint_follower/set_parameters_atomically": {"types":["rcl_interfaces/srv/SetParametersAtomically"],"servers":["/waypoint_follower"],"clients":[]},
+  "/zone_exec_path": {"types":["mower_interface/srv/ZoneExecPath"],"servers":["/mower_bus_bridge"],"clients":[]}
+ }
+}

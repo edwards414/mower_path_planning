@@ -441,6 +441,12 @@ jobs:
           cd src/mower_rs
           cargo test --locked --workspace
 
+      # E9-06: what ROS told us, frozen, is checked with no ROS: nothing sourced
+      # here, and no test binary may link rcl.
+      - name: The frozen ROS facts need no ROS
+        shell: bash
+        run: tools/oracle/facts_no_ros.sh
+
       # How mowerctl can get onto a host without the image's glibc
       # (crates/mowerctl/README.md, E6). No ROS environment: it needs none.
       - name: mowerctl builds as a static binary
