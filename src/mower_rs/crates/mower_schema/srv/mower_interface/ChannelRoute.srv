@@ -1,0 +1,8 @@
+int32 zone_from_id
+int32 zone_to_id
+float32 proximity_m
+---
+bool success
+string message
+nav_msgs/Path channel_path
+int32 matched_channel_id

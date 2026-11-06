@@ -64,11 +64,13 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what
   fetches ros2_controllers and control_toolbox at pinned commits;
 - `regen_facts.sh` (E9-06): what rcl, r2r and rmw give with no stack running:
   the resolver's names, what rcl reads from the parameter files, the CDR
-  vectors, E3's JSON corpus. It builds `mower_interface` out of the tree, as
+  vectors, E3's JSON corpus, and E9-22's vectors, defaults and constants. It builds `mower_interface` out of the tree, as
   r2r needs it.
 
 `check.sh` ends with `facts_no_ros.sh`: the frozen facts' tests with no ROS
-environment, and no test binary linking rcl.
+environment, and no test binary linking rcl; since E9-22 also `mower_msgs` and
+`mower_schema` with its feature `interfaces`, and that `gen_types.py` would write
+what is committed.
 
 ### The frozen facts of a running stack (E9-06)
 

@@ -1,0 +1,6 @@
+# Wheel-speed PID auto-tune (mower_mission pid_autotune_node). The wheels spin
+# at up to 70 % duty during "start": the vehicle must be jacked up first.
+string op   # "start" | "abort" | "apply" (write the tuned gains to STM32 flash) | "discard"
+---
+bool success
+string message

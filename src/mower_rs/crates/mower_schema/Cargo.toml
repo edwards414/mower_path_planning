@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "ROS 2 message definitions without ROS: the .msg texts, RIHS01 hashes and layouts of the bus's types, and rosbag2's schema text (generated from the robot image, no dependencies)"
 
+[features]
+# E9-22: every service and action the crates name, for mower_msgs's generator and its
+# tests. No production crate turns it on, so the robot's binaries do not hold them.
+interfaces = []
+
 [dev-dependencies]
 mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
 zstd = "0.14"

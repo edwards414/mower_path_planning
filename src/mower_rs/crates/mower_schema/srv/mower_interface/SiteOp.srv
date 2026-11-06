@@ -1,0 +1,9 @@
+# Manage named zone-set "sites": WGS84-anchored snapshots of all recorded
+# objects (work zones / risk zones / channels) that survive map-frame resets.
+string op          # "save" | "load" | "delete" | "rename" | "list"
+string name        # target site name (ignored for "list")
+string new_name    # new name, only for "rename"
+---
+bool success
+string message
+string sites_json  # JSON {"active": ..., "sites": [...]} after the op

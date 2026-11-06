@@ -56,7 +56,12 @@ is tested against what the Python recorder and rosbag2 wrote in
   against moto), MediaMTX, graph JSON, parameter dumps, camera extrinsics.
 
 They have no `r2r` dependency (`mower_cdr`'s oracle test uses it, and writes the
-vectors `mower_ros_facts` replays with no ROS at all: `deploy/test/golden/ros_facts/`). Nor has
+vectors `mower_ros_facts` replays with no ROS at all: `deploy/test/golden/ros_facts/`).
+Nor has `mower_msgs` (E9-22): the interface types the crates use as plain Rust,
+in r2r's module layout, generated from `mower_schema`'s files
+(`crates/mower_schema/gen/gen_types.py`) with `mower_msgs_ros`, the moves to and from
+r2r's types and the test that every type's JSON, default and CDR are r2r's. No
+production crate uses them yet. Nor has
 `mower_camera` (E5-6), the front camera without gscam: gscam's stream on
 gstreamer-rs (an appsink of `image/jpeg`, gscam's stamps; behind the
 feature `gst`, so a plain `cargo test` needs no GStreamer development

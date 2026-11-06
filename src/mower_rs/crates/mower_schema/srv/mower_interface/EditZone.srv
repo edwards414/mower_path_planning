@@ -1,0 +1,9 @@
+# Edit a recorded object (work zone / risk zone / channel) from the app.
+string op                       # "add" | "delete" | "update"
+string kind                     # "zone" | "risk" | "channel"
+int32 id                        # target id for delete/update (ignored for add)
+geometry_msgs/Point[] points    # polygon / line vertices for add/update
+---
+bool success
+string message
+int32 id                        # resulting id (the new id for add)

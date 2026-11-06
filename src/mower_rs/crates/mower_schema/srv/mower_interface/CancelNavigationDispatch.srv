@@ -1,0 +1,5 @@
+string dispatch_id
+---
+bool success
+bool terminal_confirmed
+string message

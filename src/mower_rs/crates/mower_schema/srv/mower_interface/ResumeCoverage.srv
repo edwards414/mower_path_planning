@@ -1,0 +1,9 @@
+# Continue the unfinished coverage execution recorded in the navigation
+# server's checkpoint, from its first unfinished segment. The zone's current
+# coverage path must be the one that was executed (same path, split points
+# and split parameters); a regenerated path is refused.
+# zone_id: the zone to resume; -1 = whatever zone the checkpoint names.
+int32 zone_id -1
+---
+bool success
+string message

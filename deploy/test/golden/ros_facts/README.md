@@ -16,7 +16,11 @@ is that check: nothing sourced, and `ldd` on every test binary.
 | `param_overrides.json` | For every module node, what `node.params` holds with production's `--params-file` list, with the type r2r read: rcl's parser and r2r's filter, the only source of the parameters of the nodes with no parameter services | `mower_bridge/tests/param_overrides.rs` |
 | `param_rules/`, `param_rules.json` | Two files with every form E9-23's reader has to know, and what the same path makes of them | same |
 | `cdr_vectors.txt` | E5's G3 frozen. Ten values of every `mower_schema` type (`mower_cdr/tests/support/random_value.rs`): type, index, rmw_cyclonedds's bytes in hex (unpadded), r2r's JSON of the value | `mower_cdr/tests/rmw_oracle.rs` |
-| `json_corpus_cdr.txt` | rmw's bytes for the message cases of E3's JSON corpus (`mower_ws_bridge/tests/golden/`), so its frames can be compared with no r2r. No service cases: `mower_schema` has no service types | `mower_ws_bridge/tests/golden_cdr.rs` |
+| `json_corpus_cdr.txt` | rmw's bytes for the message cases of E3's JSON corpus (`mower_ws_bridge/tests/golden/`), so its frames can be compared with no r2r | `mower_ws_bridge/tests/golden_cdr.rs` |
+| `json_corpus_srv_cdr.txt` | rmw's bytes for the service cases of the same corpus: `<case>/request` and `<case>/response`, with the part's type | same |
+| `interface_vectors.txt` | E9-22: `cdr_vectors.txt`'s form, for the types it does not have: every service's and action's parts, and the messages only they need | `mower_msgs_ros/tests/parity.rs` |
+| `interface_defaults.txt` | E9-22: for every type of `mower_msgs`, rmw's bytes and r2r's JSON of r2r's `Default` | same |
+| `interface_constants.txt` | E9-22: every constant of those types, with the value r2r binds | same |
 | `graph.json` | The DDS graph of the production stack from outside: every node, topic and service, each endpoint with its node, type, RIHS01 hash and full QoS | `tools/oracle/freeze_stack.py` |
 | `params/<node>.yaml` | `ros2 param dump` of each module node that serves parameters | same |
 | `launch/args.json`, `launch/<node>.yaml` | What launch gives mower_rsd: `--modules`, the `-r` rules, the `--params-file` list in order. The repo's files are named by their path; the node-scoped files launch writes for each run are here | same |
@@ -104,6 +108,12 @@ These were found by freezing them, on main 7fdf614 (`PROVENANCE.txt`). From 32b0
   (`later_file_type`). `yes`, `on` and `y` are booleans, `~` is a string, and `/ns/x`
   and a bare `x` both reach the node `x` in `/ns`. No production file has `/**`.
 - **Types (E9-22).** `mower_schema`'s table has all 18 message types the manifest's
-  topics use, and its hashes match the graph's. It has no services or actions: the 24
-  service and 3 action types in `resolver.json`, and the messages only they use, are not
-  in it.
+  topics use, and its hashes match the graph's. It had no services or actions: the 24
+  service and 3 action types in `resolver.json`, and the messages only they use. Those
+  are now behind its feature `interfaces` (`gen/gen_schema.py`), and `mower_msgs` holds
+  the plain types generated from both (`gen/gen_types.py`). `mower_ros_facts/tests/`:
+  `plain_vectors.rs` holds them to the vectors, defaults and constants above,
+  `plain_corpus.rs` compiles E3's `fixtures.rs` on them, so the services' values are
+  compared at last, and `plain_types.rs` holds the list to what the crates, `resolver.json`
+  and `graph.json` name. `graph.json`'s other types are nav2's and rcl's own; no crate
+  names them.

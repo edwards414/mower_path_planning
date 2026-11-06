@@ -8,6 +8,9 @@
 //! - `recorded_payloads.rs`: every payload rosbag2 recorded in E5-0, the same;
 //! - `json_corpus.rs`: E3's JSON corpus, against `mower_cdr`'s reading of the
 //!   bytes rmw wrote for the same values;
+//! - `plain_vectors.rs`, `plain_corpus.rs`, `plain_types.rs`: E9-22's generated
+//!   types (`mower_msgs`) against the same files, E3's `fixtures.rs` compiled on them
+//!   and the names of every type the crates use;
 //! - `frozen.rs`: the graph, the parameters, the log: what they must not hold,
 //!   how they agree with each other, and that no file changed behind
 //!   `SHA256SUMS`.

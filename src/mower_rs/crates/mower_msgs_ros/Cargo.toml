@@ -1,0 +1,17 @@
+[package]
+name = "mower_msgs_ros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "mower_msgs against r2r: generated moves between a plain type and r2r's, for the bridge, and the test that every type's JSON, default and CDR are r2r's (E9-22)"
+
+[dependencies]
+mower_msgs = { path = "../mower_msgs" }
+r2r = { workspace = true }
+
+[dev-dependencies]
+mower_bus = { path = "../mower_bus" }
+mower_cdr = { path = "../mower_cdr" }
+mower_schema = { path = "../mower_schema", features = ["interfaces"] }
+serde = { workspace = true }
+serde_json.workspace = true

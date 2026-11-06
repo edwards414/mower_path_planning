@@ -1,0 +1,6 @@
+string owner
+string operation
+bool acquire
+---
+bool success
+string message
