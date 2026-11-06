@@ -10,6 +10,8 @@ use std::time::Instant;
 
 /// The rejection of a command stamped behind the ordering barrier.
 const MOVED_BACKWARD: &str = "velocity source timestamp moved backward";
+/// The rejection of a repeated stamp once its motion has stopped.
+const REPLAY: &str = "replayed velocity cannot resume stopped motion";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Limits {
@@ -177,7 +179,7 @@ impl Guard {
                     Some(received_at) => mono.duration_since(received_at).as_secs_f64() > self.limits.command_timeout_s,
                 };
                 if !self.nonzero_active || replay_expired {
-                    return Some("replayed velocity cannot resume stopped motion");
+                    return Some(REPLAY);
                 }
             }
         }
@@ -202,7 +204,14 @@ impl Guard {
             // 100 ms, 4G takes 150-300 ms) each of those lands behind the
             // moved barrier in turn, and manual driving stayed locked until
             // the stick was let go (robot, 2026-10-24: 40 s of rejections).
-            if reason != MOVED_BACKWARD && self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
+            //
+            // Nor for a repeat of a stamp after the motion stopped. The watchdog
+            // stopped that motion and left the barrier alone, so that the next
+            // new stamp moves the wheels; a repeat in between adds nothing to
+            // the stop, and the barrier already excludes that stamp. It comes
+            // when the clock frames stall on their way to the app, which keeps
+            // sending the last one it has.
+            if !matches!(reason, MOVED_BACKWARD | REPLAY) && self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
                 self.last_source_stamp_ns = Some(ros_ns);
             }
             self.nonzero_active = false;
@@ -354,23 +363,53 @@ mod tests {
         }
         // ...so 201 ms after the original receipt the watchdog still fires
         assert!(g.watchdog(t0 + Duration::from_millis(201)));
-        // and a newer stamp is needed to move again (the rejection moved the
-        // barrier to the robot clock, so "newer" means after that instant)
+        // the same stamp again cannot move it, however often it comes
+        for ms in [210i64, 212, 214] {
+            assert_eq!(
+                g.on_command(&cmd(now, 0.2, 0.0), now + ms * 1_000_000, t0 + Duration::from_millis(ms as u64)),
+                Action::Reject("replayed velocity cannot resume stopped motion")
+            );
+        }
+        assert!(!g.watchdog(t0 + Duration::from_millis(215)), "stopped already");
+        // anything older cannot either
         assert_eq!(
-            g.on_command(&cmd(now, 0.2, 0.0), now + 210_000_000, t0 + Duration::from_millis(210)),
-            Action::Reject("replayed velocity cannot resume stopped motion")
-        );
-        assert_eq!(
-            g.on_command(&cmd(now + 205_000_000, 0.2, 0.0), now + 215_000_000, t0 + Duration::from_millis(215)),
+            g.on_command(&cmd(now - 1, 0.2, 0.0), now + 215_000_000, t0 + Duration::from_millis(215)),
             Action::Reject("velocity source timestamp moved backward")
         );
-        // that rejection was behind the barrier and left it at now + 210 ms:
-        // the barrier's own stamp is a replay, only a newer one moves again
-        assert_eq!(
-            g.on_command(&cmd(now + 210_000_000, 0.2, 0.0), now + 216_000_000, t0 + Duration::from_millis(216)),
-            Action::Reject("replayed velocity cannot resume stopped motion")
-        );
-        assert_eq!(g.on_command(&cmd(now + 220_000_000, 0.2, 0.0), now + 220_000_000, t0 + Duration::from_millis(220)), forward(0.2, 0.0));
+        // a newer stamp is what moves it again: the replay was only late, it
+        // left the barrier at the stamp it repeated
+        assert_eq!(g.on_command(&cmd(now + 100_000_000, 0.2, 0.0), now + 216_000_000, t0 + Duration::from_millis(216)), forward(0.2, 0.0));
+        // and the watchdog runs from that receipt
+        assert!(!g.watchdog(t0 + Duration::from_millis(216 + 200)));
+        assert!(g.watchdog(t0 + Duration::from_millis(216 + 201)));
+    }
+
+    /// The downlink stalls for 0.5 s, as the app sees it over 4G: the clock
+    /// frames stop reaching it, so it repeats one stamp every 100 ms, and the
+    /// ones after the stall are 250 ms old on arrival. The stall stops the
+    /// wheels (the watchdog 300 ms after the last new stamp, then a zero per
+    /// repeat), and the first command echoing a newer clock moves them again,
+    /// not one round trip after that.
+    #[test]
+    fn a_stall_stops_the_wheels_and_costs_no_more_than_the_stall() {
+        let mut g = Guard::new(Limits::new(0.20, 0.8, 0.05, 0.50, 1.00, true, 0.05).unwrap());
+        let t0 = Instant::now();
+        let base = 1_000 * NS;
+        let mut refused = Vec::new();
+        let mut zeros_forced = Vec::new();
+        for ms in (0..=2000u64).step_by(100) {
+            let now = base + ms as i64 * 1_000_000;
+            if g.watchdog(t0 + Duration::from_millis(ms)) {
+                zeros_forced.push(ms);
+            }
+            let seen = if (1000..1500).contains(&ms) { 750 } else { ms as i64 - 250 };
+            let stamp = base + seen * 1_000_000;
+            if g.on_command(&cmd(stamp, 0.2, 0.0), now, t0 + Duration::from_millis(ms)) != forward(0.2, 0.0) {
+                refused.push(ms);
+            }
+        }
+        assert_eq!(zeros_forced, vec![1300]);
+        assert_eq!(refused, vec![1300, 1400]);
     }
 
     #[test]

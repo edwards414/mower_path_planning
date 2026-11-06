@@ -15,6 +15,8 @@ from std_msgs.msg import Header
 
 # The rejection of a command stamped behind the ordering barrier.
 _MOVED_BACKWARD = 'velocity source timestamp moved backward'
+_REPLAY = 'replayed velocity cannot resume stopped motion'
+_KEEPS_BARRIER = (_MOVED_BACKWARD, _REPLAY)
 
 
 class VelocityCommandGuard(Node):
@@ -217,7 +219,7 @@ class VelocityCommandGuard(Node):
                     > self._command_timeout_s
                 )
                 if not self._nonzero_active or replay_expired:
-                    return 'replayed velocity cannot resume stopped motion'
+                    return _REPLAY
         return None
 
     def _publish_command_clock(self) -> None:
@@ -254,9 +256,12 @@ class VelocityCommandGuard(Node):
             # sends every 100 ms, 4G takes 150-300 ms) each of those lands
             # behind the moved barrier in turn, and manual driving stayed
             # locked until the stick was let go (robot, 2026-10-24).
+            #
+            # Nor for a repeat of a stamp after the motion stopped: the watchdog
+            # stopped that motion and left the barrier alone. core.rs says more.
             rejection_barrier_ns = self.get_clock().now().nanoseconds
             previous_stamp = self._last_source_stamp_ns
-            if reason != _MOVED_BACKWARD and (
+            if reason not in _KEEPS_BARRIER and (
                 previous_stamp is None
                 or rejection_barrier_ns > previous_stamp
             ):
