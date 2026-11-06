@@ -11,6 +11,10 @@
 //! Each `call_service` runs in a task of its own, at most 16 per connection
 //! (E3.3, client.rs); every other frame keeps its order.
 //!
+//! With `--loopback-policy` on the bus backend the loopback listener also
+//! reads what mowerctl needs, `/mowerd/*` included (E8-2, loopback.rs);
+//! nothing changes on the gated listeners.
+//!
 //! Two backends (hub.rs), chosen with `--backend`:
 //! - `r2r`, the default: one r2r node of its own, with untyped endpoints.
 //! - `bus` (step E3): mower_bus's erased access in the module's scope; the
@@ -21,7 +25,7 @@
 //! Usage (rosbridge.launch.py):
 //!   mower_ws_bridge --address 10.77.0.2 --port 9090 --loopback-port 9091
 //!                   --policy ws_bridge.yaml [--state-dir DIR] [--max-size N]
-//!                   [--backend r2r|bus]
+//!                   [--backend r2r|bus] [--loopback-policy FILE]
 
 pub mod auth;
 mod bus_hub;
@@ -33,6 +37,7 @@ mod entry;
 #[cfg(test)]
 mod golden;
 mod hub;
+mod loopback;
 mod r2r_hub;
 
 use std::net::SocketAddr;
@@ -53,6 +58,7 @@ use crate::bus_hub::BusHub;
 use crate::client::Client;
 use crate::config::Policy;
 use crate::hub::Hub;
+use crate::loopback::{Loopback, LoopbackPolicy};
 use crate::r2r_hub::R2rHub;
 
 /// What the bridge's hub talks to (`--backend`).
@@ -100,6 +106,7 @@ struct Args {
     max_size: usize,
     service_timeout_s: u64,
     backend: Backend,
+    loopback_policy: Option<String>,
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -112,6 +119,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         max_size: 64 * 1024 * 1024,
         service_timeout_s: 30,
         backend: Backend::R2r,
+        loopback_policy: None,
     };
     let mut it = argv.iter().cloned();
     while let Some(a) = it.next() {
@@ -128,6 +136,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--max-size" => args.max_size = value("--max-size")?.parse().map_err(|_| "--max-size".to_string())?,
             "--service-timeout" => args.service_timeout_s = value("--service-timeout")?.parse().map_err(|_| "--service-timeout".to_string())?,
             "--backend" => args.backend = Backend::parse(&value("--backend")?)?,
+            "--loopback-policy" => args.loopback_policy = Some(value("--loopback-policy")?),
             "--ros-args" => break, // ros2 launch appends --ros-args ...; the node reads those itself
             other => return Err(format!("unknown argument {other}")),
         }
@@ -152,6 +161,20 @@ impl Gate {
     }
 }
 
+/// What a listener's connections may do. A connection's peer address says
+/// nothing: every session the relay agent opens comes from 127.0.0.1 too.
+#[derive(Clone)]
+enum Access {
+    /// The pairing gate: the public address, and 127.0.0.1:`--port` for the
+    /// relay agent's sessions, which come from off the machine. The public
+    /// policy and nothing else.
+    Gated(Arc<Gate>),
+    /// 127.0.0.1:`--loopback-port`, no gate: the public policy, with what
+    /// `--loopback-policy` adds if there is one (loopback.rs). No other
+    /// listener can hold a [`Loopback`].
+    Loopback(Option<Arc<Loopback>>),
+}
+
 struct Shared {
     hub: Hub,
     policy: Arc<Policy>,
@@ -161,14 +184,14 @@ struct Shared {
     service_timeout: Duration,
 }
 
-async fn serve_listener(listener: TcpListener, shared: Arc<Shared>, gate: Option<Arc<Gate>>) {
+async fn serve_listener(listener: TcpListener, shared: Arc<Shared>, access: Access) {
     loop {
         let Ok((stream, peer)) = listener.accept().await else { continue };
         no_delay(&stream);
         let shared = shared.clone();
-        let gate = gate.clone();
+        let access = access.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, peer, shared, gate).await {
+            if let Err(e) = handle_connection(stream, peer, shared, access).await {
                 // closed connections and the app's plain-TCP reachability
                 // probes (no WebSocket handshake) are routine
                 if !e.contains("Connection reset") && !e.contains("closed") && !e.contains("Handshake not finished") {
@@ -186,10 +209,13 @@ fn no_delay(stream: &TcpStream) {
     let _ = stream.set_nodelay(true);
 }
 
-async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, gate: Option<Arc<Gate>>) -> Result<(), String> {
+async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, access: Access) -> Result<(), String> {
+    let (gate, loopback) = match access {
+        Access::Gated(gate) => (Some(gate), None),
+        Access::Loopback(loopback) => (None, loopback),
+    };
     let client_name = Arc::new(Mutex::new(String::from("local")));
     let callback = {
-        let gate = gate.clone();
         let client_name = client_name.clone();
         let logger = shared.logger.clone();
         move |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
@@ -224,7 +250,8 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shar
     let id = shared.next_id.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::channel::<Arc<str>>(512);
     let peer_label = format!("{}@{}", client_name.lock().unwrap(), peer);
-    let mut client = Client::new(id, tx, shared.hub.clone(), shared.policy.clone(), shared.logger.clone(), peer_label.clone(), shared.service_timeout);
+    let mut client = Client::new(id, tx, shared.hub.clone(), shared.policy.clone(), shared.logger.clone(), peer_label.clone(), shared.service_timeout)
+        .with_loopback(loopback);
     r2r::log_info!(&shared.logger, "client {} connected", peer_label);
 
     // Writer: queued JSON frames plus a keep-alive ping every 20 s.
@@ -272,23 +299,49 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shar
 /// `mower_rsd`; the listeners, gate, policy and node name are the same, and
 /// `m.args` carries what the launch file used to pass on the command line.
 pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
-    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S] [--backend r2r|bus]"))?;
+    let args = parse_args(&m.args).map_err(|e| format!("{e}\nusage: mower_ws_bridge --policy FILE [--address A] [--port P] [--loopback-port P|none] [--state-dir D] [--max-size N] [--service-timeout S] [--backend r2r|bus] [--loopback-policy FILE]"))?;
     let policy = Arc::new(Policy::from_yaml(&std::fs::read_to_string(&args.policy).map_err(|e| format!("{}: {e}", args.policy))?)?);
 
+    let params_context = ctx.clone();
     let node = r2r::Node::create(ctx, &m.node_name, &m.namespace)?;
     let logger = node.logger().to_string();
     match args.backend {
         Backend::R2r => {
+            if args.loopback_policy.is_some() {
+                r2r::log_warn!(&logger, "--loopback-policy is for the bus backend: the loopback listener serves the public policy");
+            }
             let hub = Hub::R2r(R2rHub::start(node)?);
-            serve(args, policy, hub, logger, m).await
+            serve(args, policy, None, hub, logger, m).await
         }
         Backend::Bus => {
             // The node stays for the graph's sake, with no endpoint and no
             // spin: graph_snapshot and the DDS tools keep seeing it.
             let hub = Hub::Bus(BusHub::new(m.bus.clone(), m.clock.clone(), bus_hub::manifest_names(&m)?, &logger));
-            let served = serve(args, policy, hub, logger, m).await;
+            let loopback = load_loopback(&args, &policy, &m, Some(params_context), &logger);
+            let served = serve(args, policy, loopback.clone(), hub, logger, m).await;
+            if let Some(loopback) = loopback {
+                loopback.shutdown();
+            }
             drop(node);
             served
+        }
+    }
+}
+
+/// What `--loopback-policy` gives the loopback listener. A file that cannot
+/// be read is reported and leaves the listener on the public policy, as
+/// without the option: a debugging view must not cost the app its door.
+fn load_loopback(args: &Args, public: &Arc<Policy>, m: &ModuleCtx, context: Option<r2r::Context>, logger: &str) -> Option<Arc<Loopback>> {
+    let path = args.loopback_policy.as_ref()?;
+    let policy = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")).and_then(|text| LoopbackPolicy::from_yaml(&text));
+    match policy {
+        Ok(policy) => {
+            r2r::log_info!(logger, "loopback policy {}", path);
+            Some(Arc::new(Loopback::new(policy, public.clone(), m.bus.bus().clone(), m.registry.clone(), context, &m.namespace, logger)))
+        }
+        Err(e) => {
+            r2r::log_error!(logger, "--loopback-policy: {e}; the loopback listener serves the public policy");
+            None
         }
     }
 }
@@ -313,7 +366,7 @@ impl Drop for Listeners {
 }
 
 /// The listeners, the gate and the clients, on `hub`, until the shutdown.
-async fn serve(args: Args, policy: Arc<Policy>, hub: Hub, logger: String, m: ModuleCtx) -> ModuleResult {
+async fn serve(args: Args, policy: Arc<Policy>, loopback: Option<Arc<Loopback>>, hub: Hub, logger: String, m: ModuleCtx) -> ModuleResult {
     let identity = Identity::load(&args.state_dir)?;
     match &identity {
         Some(id) => r2r::log_info!(&logger, "pairing gate for {}", id.robot_id),
@@ -337,13 +390,13 @@ async fn serve(args: Args, policy: Arc<Policy>, hub: Hub, logger: String, m: Mod
     if lan_address {
         let local_gate = TcpListener::bind(("127.0.0.1", args.port)).await.map_err(|e| format!("bind 127.0.0.1:{}: {e}", args.port))?;
         r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (pairing gate, relay agent)", args.port);
-        tasks.tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Some(gate.clone()))));
+        tasks.tasks.push(tokio::spawn(serve_listener(local_gate, shared.clone(), Access::Gated(gate.clone()))));
     }
     if let Some(port) = args.loopback_port {
         if !(args.address == "127.0.0.1" && port == args.port) {
             let local = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;
             r2r::log_info!(&logger, "listening on ws://127.0.0.1:{} (loopback, no gate)", port);
-            tasks.tasks.push(tokio::spawn(serve_listener(local, shared.clone(), None)));
+            tasks.tasks.push(tokio::spawn(serve_listener(local, shared.clone(), Access::Loopback(loopback))));
         }
     }
     // A LAN address may not exist yet (booted with the cable out, on 4G):
@@ -371,7 +424,7 @@ async fn serve(args: Args, policy: Arc<Policy>, hub: Hub, logger: String, m: Mod
         }
     };
     r2r::log_info!(&logger, "listening on ws://{}:{} (pairing gate)", args.address, args.port);
-    tasks.tasks.push(tokio::spawn(serve_listener(public, shared.clone(), Some(gate.clone()))));
+    tasks.tasks.push(tokio::spawn(serve_listener(public, shared.clone(), Access::Gated(gate.clone()))));
 
     m.shutdown.wait().await;
     r2r::log_info!(&logger, "mower_ws_bridge: shutting down");
@@ -428,5 +481,13 @@ mod tests {
         ] {
             assert_eq!(backend_of(&argv(line)), backend, "{line}");
         }
+    }
+
+    #[test]
+    fn the_loopback_policy_is_optional_and_ends_at_the_ros_block() {
+        assert_eq!(args("--policy p.yaml").unwrap().loopback_policy, None);
+        assert_eq!(args("--policy p.yaml --loopback-policy l.yaml").unwrap().loopback_policy.as_deref(), Some("l.yaml"));
+        assert_eq!(args("--policy p.yaml --ros-args --loopback-policy l.yaml").unwrap().loopback_policy, None);
+        assert!(args("--policy p.yaml --loopback-policy").is_err());
     }
 }

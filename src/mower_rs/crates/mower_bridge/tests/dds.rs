@@ -431,3 +431,109 @@ fn the_bus_ws_bridge_reaches_the_names_only_dds_has_through_its_bridge() {
         serving.abort();
     });
 }
+
+/// E8-2 over real DDS: with `--loopback-policy`, ws_bridge's loopback listener
+/// shows the bus and the bridge's real counters, reads a parameter over DDS,
+/// and the r2r node that takes exists only around such a read. The gate
+/// refuses all of it.
+#[test]
+fn the_loopback_listener_shows_the_bridge_and_reads_parameters_around_the_call() {
+    use r2r::rcl_interfaces::msg::{ListParametersResult, ParameterValue};
+    use r2r::rcl_interfaces::srv::{GetParameters, ListParameters};
+    use serde_json::json;
+    within(async {
+        // a node with parameter services, as map_manage's
+        let node = Peer::new("dds_test_map_manage");
+        let mut lists = node.with(|n| n.create_service::<ListParameters::Service>("/dds_test_map_manage/list_parameters", QosProfile::services_default())).unwrap();
+        let mut gets = node.with(|n| n.create_service::<GetParameters::Service>("/dds_test_map_manage/get_parameters", QosProfile::services_default())).unwrap();
+        let listing = tokio::spawn(async move {
+            while let Some(request) = lists.next().await {
+                let result = ListParametersResult { names: vec!["robot_radius".to_string()], prefixes: Vec::new() };
+                let _ = request.respond(ListParameters::Response { result });
+            }
+        });
+        let getting = tokio::spawn(async move {
+            while let Some(request) = gets.next().await {
+                let values = request.message.names.iter().map(|_| ParameterValue { type_: 3, double_value: 0.35, ..Default::default() }).collect();
+                let _ = request.respond(GetParameters::Response { values });
+            }
+        });
+        let recorder = Peer::new("dds_test_recorder_manager");
+        let status = recorder.with(|n| n.create_publisher::<Text>("/mower_recorder/status", R_TL_1.ros())).unwrap();
+        status.publish(&Text { data: "{}".into() }).unwrap();
+
+        let free_port = || std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let (port, loopback) = (free_port(), free_port());
+        let config = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../mower_bringup/config");
+        let argv = format!(
+            "--address 127.0.0.1 --port {port} --loopback-port {loopback} --policy {config}/ws_bridge.yaml \
+             --state-dir /nonexistent/ws_bridge_test --backend bus --loopback-policy {config}/ws_bridge_loopback.yaml"
+        );
+        let shutdown = Shutdown::new();
+        let m = ModuleCtx::new("mower_ws_bridge", shutdown.clone()).with_args(argv.split_whitespace().map(str::to_string).collect());
+        let door = run_standalone("bridge", context(), m, mower_ws_bridge::run);
+        let check = async {
+            let params_node = |peer: &Peer| peer.with(|n| n.get_node_names_and_namespaces().unwrap()).iter().any(|(name, _)| name == "mower_ws_bridge_params");
+            let mut local = ws_connect(&format!("ws://127.0.0.1:{loopback}")).await;
+            let mut gate = ws_connect(&format!("ws://127.0.0.1:{port}")).await;
+            let call = |id: &str, service: &str, args: serde_json::Value| json!({"op": "call_service", "id": id, "service": service, "args": args});
+            let answer = |text: String| serde_json::from_str::<serde_json::Value>(&text).unwrap();
+
+            // the gate: none of it
+            for service in ["/mowerd/bridge", "/dds_test_map_manage/list_parameters"] {
+                ws_send(&mut gate, call("g", service, json!({}))).await;
+                let refused = json!({"op": "service_response", "id": "g", "service": service, "values": format!("service {service} is not allowed"), "result": false});
+                assert_eq!(ws_recv(&mut gate).await, refused.to_string());
+            }
+
+            // the bus bridge's real counters, through the registry
+            ws_send(&mut local, call("b", "/mowerd/bridge", json!({}))).await;
+            let bridge = answer(ws_recv(&mut local).await);
+            assert_eq!(bridge["values"]["running"], true, "{bridge}");
+            let entries = bridge["values"]["entries"].as_array().unwrap();
+            let status_row = entries.iter().find(|e| e["name"] == "/mower_recorder/status").unwrap_or_else(|| panic!("{bridge}"));
+            assert_eq!(status_row["direction"], "from_ros");
+            assert!(entries.iter().any(|e| e["name"] == "/mower_recorder/start" && e["direction"] == "service_from_ros"), "{bridge}");
+
+            // a name only DDS has, read by the loopback listener alone: its DDS
+            // reader comes with the bus reader, and it is the bridge's
+            ws_send(&mut local, json!({"op": "subscribe", "topic": "/mower_recorder/status"})).await;
+            assert_eq!(ws_recv(&mut local).await, json!({"op": "publish", "topic": "/mower_recorder/status", "msg": {"data": "{}"}}).to_string());
+            ws_send(&mut local, json!({"op": "unsubscribe", "topic": "/mower_recorder/status"})).await;
+
+            // nothing of parameter reads on the graph until one is asked for
+            assert!(!params_node(&node), "before any read");
+            ws_send(&mut local, call("l", "/dds_test_map_manage/list_parameters", json!({"prefixes": [], "depth": 0}))).await;
+            let listed = answer(ws_recv(&mut local).await);
+            assert_eq!(listed["result"], true, "{listed}");
+            assert_eq!(listed["values"]["result"]["names"], json!(["robot_radius"]));
+            ws_send(&mut local, call("v", "/dds_test_map_manage/get_parameters", json!({"names": ["robot_radius"]}))).await;
+            let got = answer(ws_recv(&mut local).await);
+            assert_eq!(got["result"], true, "{got}");
+            assert_eq!(got["values"]["values"][0]["double_value"], 0.35);
+            eventually("the node of parameter reads to be on the graph", || params_node(&node)).await;
+
+            // a node with no such service: unavailable, as any call
+            ws_send(&mut local, call("n", "/dds_test_nobody/get_parameters", json!({"names": ["x"]}))).await;
+            assert_eq!(answer(ws_recv(&mut local).await)["values"], "/dds_test_nobody/get_parameters: service unavailable");
+
+            // and it goes when no read is left
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while params_node(&node) {
+                assert!(Instant::now() < deadline, "the node of parameter reads stayed");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // what the node left: nothing on ws_bridge's own node, which has no endpoint
+            assert!(node.writers("/mower_ws_bridge/wake").is_empty());
+            assert!(node.writers("/mower_ws_bridge_params/wake").is_empty());
+            // and it comes back for the next read
+            ws_send(&mut local, call("v", "/dds_test_map_manage/get_parameters", json!({"names": ["robot_radius"]}))).await;
+            assert_eq!(answer(ws_recv(&mut local).await)["result"], true);
+            shutdown.trigger();
+        };
+        let (result, ()) = tokio::join!(door, check);
+        result.unwrap();
+        listing.abort();
+        getting.abort();
+    });
+}

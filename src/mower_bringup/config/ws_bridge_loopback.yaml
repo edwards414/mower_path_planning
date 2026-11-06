@@ -1,0 +1,25 @@
+# What mower_ws_bridge's loopback listener (127.0.0.1:9091, no gate) may read
+# on top of ws_bridge.yaml, for mowerctl (E8-2). It applies only to that
+# listener, and only on the bus backend; the public listener and the pairing
+# gate on 127.0.0.1:9090 (the relay agent's) never see it.
+#
+# This file can only add reading: the bridge refuses any other key, and any
+# service here that is not a parameter read. What the listener may publish and
+# which other services it may call stay ws_bridge.yaml's. With this file left
+# out, or unreadable, the listener serves ws_bridge.yaml alone, as before E8-2.
+#
+# With it the listener also answers /mowerd/{topics,services,actions,modules,
+# bridge} itself: they are not names on the bus, and they are not here.
+
+# Names the bus already knows (a typed endpoint has fixed the type): a typo is
+# refused and leaves nothing behind. /rosapi/topics still lists ws_bridge.yaml's.
+topics_sub:
+  - '*'
+
+# Parameter services stay on r2r nodes until E9, so each read goes over DDS: an
+# r2r node of ws_bridge's own exists around a read, and only then.
+parameter_services:
+  '/*/list_parameters': rcl_interfaces/srv/ListParameters
+  '/*/get_parameters': rcl_interfaces/srv/GetParameters
+  '/*/describe_parameters': rcl_interfaces/srv/DescribeParameters
+  '/*/get_parameter_types': rcl_interfaces/srv/GetParameterTypes

@@ -1,10 +1,10 @@
-//! `mowerctl service list | call`.
+//! `mowerctl service list | info | call`.
 //!
-//! No call of today's bridge lists services, so `list` prints what the
-//! listener's policy allows: the policy built into this binary (the
-//! `ws_bridge.yaml` of the same source tree, which on the robot is the image
-//! the bridge runs from), or `--policy FILE`. Whether a server is up shows
-//! on a call. E8-2's `/mowerd/services` answers from the bus instead.
+//! `list` and `info` read the bus through `/mowerd/services` (E8-2). Where that
+//! is not answered, `list` prints what the listener's policy allows: the
+//! policy built into this binary (the `ws_bridge.yaml` of the same source
+//! tree, which on the robot is the image the bridge runs from), or
+//! `--policy FILE`; whether a server is up then shows on a call.
 //!
 //! `call` goes through the bridge like the app's calls, so only what the
 //! policy allows can be called at all. On top of that mowerctl stays
@@ -16,9 +16,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::cli::{self, ConnOpts, CALL_TIMEOUT};
+use crate::cli::{self, ConnOpts, CALL_TIMEOUT, DEFAULT_TIMEOUT};
 use crate::conn::{service_error, Conn};
 use crate::format::{self, Out};
+use crate::mowerd::{self, number, rows, text, BRIDGE, SERVICES};
 use crate::{block_on, Fail};
 
 /// src/mower_bringup/config/ws_bridge.yaml, the policy of the source tree
@@ -34,19 +35,22 @@ const QUERIES: [&str; 4] = ["/rosapi/topics", "/rosapi/get_time", "/check_nav_st
 const QUERY_SUFFIXES: [&str; 4] = ["/get_parameters", "/list_parameters", "/describe_parameters", "/get_parameter_types"];
 
 pub fn is_query(service: &str) -> bool {
-    QUERIES.contains(&service) || QUERY_SUFFIXES.iter().any(|s| service.ends_with(s) && service.len() > s.len())
+    QUERIES.contains(&service)
+        || service.starts_with("/mowerd/")
+        || QUERY_SUFFIXES.iter().any(|s| service.ends_with(s) && service.len() > s.len())
 }
 
 /// `args`: the subcommand first (main.rs appends the leading options).
 pub fn main(args: Vec<String>) -> Result<(), Fail> {
     let Some((sub, rest)) = args.split_first() else {
-        return Err(Fail::usage("service: list or call?"));
+        return Err(Fail::usage("service: list, info or call?"));
     };
     let rest = rest.to_vec();
     match sub.as_str() {
         "list" => list(rest, &mut Out::stdout()),
+        "info" => Info::parse(rest).and_then(|c| block_on(c.run(&mut Out::stdout()))),
         "call" => Call::parse(rest).and_then(|c| block_on(c.run(&mut Out::stdout()))),
-        other => Err(Fail::usage(format!("service {other}: no such command (list, call)"))),
+        other => Err(Fail::usage(format!("service {other}: no such command (list, info, call)"))),
     }
 }
 
@@ -62,17 +66,68 @@ pub fn policy_services(yaml: &str) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+/// `/mowerd/services`, if the listener can be reached and answers it.
+async fn from_the_bus(conn: &ConnOpts) -> Result<Option<Value>, Fail> {
+    let mut c = match Conn::open(conn).await {
+        Ok(c) => c,
+        Err(e) if e.code == crate::EXIT_CONNECT && conn.url.is_none() => {
+            eprintln!("{e}", e = e.msg);
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    let values = mowerd::read(&mut c, SERVICES, json!({}), conn.timeout_or(DEFAULT_TIMEOUT)).await;
+    c.close().await;
+    values
+}
+
+fn print_bus_services(values: &Value, json_out: bool, out: &mut Out) -> Result<(), Fail> {
+    if json_out {
+        return out.line(&values.to_string());
+    }
+    let mut lines: Vec<Vec<String>> = rows(values, "services")
+        .iter()
+        .map(|s| {
+            let note = match (s.get("callable").and_then(Value::as_bool) == Some(true), is_query(text(s, "name"))) {
+                (false, _) => "not callable here",
+                (true, true) => "",
+                (true, false) => "needs --yes",
+            };
+            let server = s.get("server").and_then(Value::as_str).unwrap_or("(no server)");
+            let ty = s.get("type").and_then(Value::as_str).unwrap_or("?");
+            vec![text(s, "name").to_string(), ty.to_string(), server.to_string(), format!("calls {}", number(s, "calls")), note.to_string()]
+        })
+        .collect();
+    // answered by the bridge itself, so not on the bus
+    lines.extend(NATIVE.iter().map(|(n, t)| vec![n.to_string(), t.to_string(), "(the bridge)".to_string(), String::new(), String::new()]));
+    lines.sort();
+    for line in mowerd::table(lines) {
+        out.line(&line)?;
+    }
+    Ok(())
+}
+
 fn list(args: Vec<String>, out: &mut Out) -> Result<(), Fail> {
     let mut json_out = false;
     let mut policy: Option<String> = None;
+    let mut conn = ConnOpts::default();
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" => json_out = true,
             "--policy" => policy = Some(cli::value(&a, &mut it)?),
-            // accepted for symmetry with the other commands; nothing to connect to
-            _ if ConnOpts::default().take(&a, &mut it)? => {}
+            _ if conn.take(&a, &mut it)? => {}
             _ => return Err(cli::unknown("service list", &a)),
+        }
+    }
+    if policy.is_none() {
+        let mut values = None;
+        block_on(async {
+            values = from_the_bus(&conn).await?;
+            Ok(())
+        })?;
+        if let Some(values) = values {
+            return print_bus_services(&values, json_out, out);
         }
     }
     let (text, source) = match &policy {
@@ -98,6 +153,65 @@ fn list(args: Vec<String>, out: &mut Out) -> Result<(), Fail> {
         out.line(line.trim_end())?;
     }
     Ok(())
+}
+
+/// `service info NAME`: what the bus and the bus bridge say about one service.
+#[derive(Debug)]
+struct Info {
+    conn: ConnOpts,
+    name: String,
+    json: bool,
+}
+
+impl Info {
+    fn parse(args: Vec<String>) -> Result<Self, Fail> {
+        let mut c = Info { conn: ConnOpts::default(), name: String::new(), json: false };
+        let mut it = args.into_iter();
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--json" => c.json = true,
+                _ if c.conn.take(&a, &mut it)? => {}
+                _ if !a.starts_with('-') && c.name.is_empty() => c.name = a,
+                _ => return Err(cli::unknown("service info", &a)),
+            }
+        }
+        if c.name.is_empty() {
+            return Err(Fail::usage("service info: which service?"));
+        }
+        Ok(c)
+    }
+
+    async fn run(self, out: &mut Out) -> Result<(), Fail> {
+        let timeout = self.conn.timeout_or(DEFAULT_TIMEOUT);
+        let mut c = Conn::open(&self.conn).await?;
+        let values = mowerd::require(&mut c, SERVICES, mowerd::named(std::slice::from_ref(&self.name)), timeout).await;
+        let bridge = match &values {
+            Ok(_) => mowerd::require(&mut c, BRIDGE, json!({}), timeout).await,
+            Err(e) => Err(e.clone()),
+        };
+        c.close().await;
+        let (values, bridge) = (values?, bridge?);
+        let Some(service) = rows(&values, "services").iter().find(|s| text(s, "name") == self.name) else {
+            return Err(Fail::missing(format!("{}: no such service on the bus", self.name)));
+        };
+        let via = mowerd::bridged(&bridge, &self.name, mowerd::is_service_direction);
+        if self.json {
+            let mut doc = service.clone();
+            doc["bridge"] = via.cloned().unwrap_or(Value::Null);
+            return out.line(&doc.to_string());
+        }
+        let clients: Vec<&str> = rows(service, "clients").iter().filter_map(Value::as_str).collect();
+        out.line(&format!("Service: {}", self.name))?;
+        out.line(&format!("Type: {}", service.get("type").and_then(Value::as_str).unwrap_or("?")))?;
+        out.line(&format!("Server: {}", service.get("server").and_then(Value::as_str).unwrap_or("(none)")))?;
+        out.line(&format!("Clients: {}", if clients.is_empty() { "(none)".to_string() } else { clients.join(", ") }))?;
+        out.line(&format!("Calls: {}", number(service, "calls")))?;
+        out.line(&format!("Callable through the bridge: {}", if service.get("callable").and_then(Value::as_bool) == Some(true) { "yes" } else { "no" }))?;
+        match via {
+            Some(e) => out.line(&format!("DDS: {}", mowerd::bridge_line(e))),
+            None => out.line("DDS: not bridged"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -186,7 +300,7 @@ mod tests {
 
     #[test]
     fn queries_run_without_yes_and_everything_else_needs_it() {
-        for q in ["/rosapi/topics", "/rosapi/get_time", "/check_nav_status", "/coverage_progress_status", "/map_manage/get_parameters", "/boustrophedon_coverage/list_parameters"] {
+        for q in ["/rosapi/topics", "/rosapi/get_time", "/check_nav_status", "/coverage_progress_status", "/map_manage/get_parameters", "/boustrophedon_coverage/list_parameters", "/mowerd/topics"] {
             assert!(is_query(q), "{q}");
         }
         // what the app's buttons do, and the parameter write it uses
@@ -244,6 +358,49 @@ mod tests {
         let restart = sent.iter().find(|d| d["service"] == "/system/restart").unwrap();
         assert_eq!(restart["args"], json!({}));
         assert!(restart["id"].as_str().unwrap().starts_with("mowerctl:call:"));
+    }
+
+    #[test]
+    fn list_and_info_read_the_bus_where_mowerd_answers() {
+        let b = FakeBridge::loopback();
+        let (mut out, buf) = Out::buffer();
+        list(v(&["--url", &b.url]), &mut out).unwrap();
+        let text = buf.lock().unwrap().clone();
+        assert!(text.lines().any(|l| l.starts_with("/check_nav_status") && l.contains("nav_action_server") && l.contains("calls ")), "{text}");
+        assert!(text.lines().any(|l| l.starts_with("/not_public") && l.ends_with("not callable here")), "{text}");
+        assert!(text.lines().any(|l| l.starts_with("/rosapi/get_time")), "{text}");
+        let (mut out, buf) = Out::buffer();
+        list(v(&["--url", &b.url, "--json"]), &mut out).unwrap();
+        assert!(serde_json::from_str::<Value>(&buf.lock().unwrap()).unwrap()["services"].is_array());
+
+        let info = |args: &[&str]| {
+            let mut a = v(args);
+            a.extend(v(&["--url", &b.url]));
+            let (mut out, buf) = Out::buffer();
+            let r = block_on(Info::parse(a).unwrap().run(&mut out));
+            let text = buf.lock().unwrap().clone();
+            (r, text)
+        };
+        let (r, text) = info(&["/not_public"]);
+        assert_eq!(r, Ok(()));
+        for line in ["Service: /not_public", "Type: std_srvs/srv/Trigger", "Server: map_manage", "Clients: flutter_adapter", "Callable through the bridge: no", "DDS: not bridged"] {
+            assert!(text.lines().any(|l| l == line), "{line:?} in {text}");
+        }
+        assert_eq!(info(&["/rm_rf"]).0.unwrap_err().code, crate::EXIT_MISSING);
+        let refused = FakeBridge::start(None);
+        let e = block_on(Info::parse(v(&["/not_public", "--url", &refused.url])).unwrap().run(&mut Out::buffer().0)).unwrap_err();
+        assert_eq!(e.code, crate::EXIT_MISSING);
+        assert!(e.msg.contains("loopback"), "{e:?}");
+    }
+
+    /// Where `/mowerd/services` is refused, `list` is what it was.
+    #[test]
+    fn list_falls_back_to_the_policy() {
+        let b = FakeBridge::start(None);
+        let (mut out, buf) = Out::buffer();
+        list(v(&["--url", &b.url]), &mut out).unwrap();
+        let text = buf.lock().unwrap().clone();
+        assert!(text.lines().any(|l| l.starts_with("/system/restart") && l.ends_with("needs --yes")), "{text}");
     }
 
     #[test]

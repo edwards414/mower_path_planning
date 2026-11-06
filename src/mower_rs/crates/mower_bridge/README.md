@@ -275,8 +275,11 @@ say so.
 - **In a module's tests:** `mower_bridge::coverage::assert_in_manifest(&m)` checks what the module made on its scope
   `m.bus` (other scopes are the test's), resolving the manifest's names with `m`'s rules, and `gaps_of(&m)` returns the
   lines.
-- **Skipped:** the bridge's own scope, and (E5-4) the recorder's taps (`RECORDER_TAPS`: the groups' scopes, named as
-  their nodes), which read names every writer of which is on the bus here and so need nothing planned.
+- **Skipped:** the bridge's own scope; (E5-4) the recorder's taps (`RECORDER_TAPS`: the groups' scopes, named as
+  their nodes), which read names every writer of which is on the bus here and so need nothing planned; and (E8-2)
+  `LOOPBACK_SCOPE` (`mower_ws_bridge_loopback`), the readers ws_bridge makes for its loopback listener on names its
+  manifest entry does not read (`mowerctl topic echo /imu/data`). Those are debugging readers that come and go on names
+  already on the bus, not endpoints of the module, and the manifest entry stays what the app can reach.
 
 ## The recorder's sources (E5-4)
 

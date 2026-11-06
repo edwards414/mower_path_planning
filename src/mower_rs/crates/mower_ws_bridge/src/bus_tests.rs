@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
 use mower_bus::{Bus, Clock, ManualClock, Message, Publisher, Qos, Scope, Subscriber, Time};
-use mower_rs_common::{ModuleCtx, ModuleResult, Shutdown};
+use mower_rs_common::{ModuleCtx, ModuleResult, Registry, Shutdown};
 use r2r::geometry_msgs::msg::{PoseStamped, TwistStamped};
+use r2r::mower_interface::action::Waypoint;
 use r2r::mower_interface::msg::CoverageProgress;
 use r2r::mower_interface::srv::{
     EditZone, GetCoverageProgress, ImportImageMask, PidAutotune, ResumeCoverage, SiteOp, ZoneExecPath, ZoneSequence,
@@ -30,6 +31,7 @@ use r2r::std_srvs::srv::Trigger;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -38,7 +40,10 @@ use crate::client::{ClientHandle, MAX_CALLS_IN_FLIGHT};
 use crate::config::Policy;
 use crate::golden::fixtures;
 use crate::hub::Hub;
-use crate::{parse_args, serve};
+use crate::{load_loopback, parse_args, serve};
+
+/// The reader of `manifest_names`' topics, R TL 10, for the check below.
+const READER_QOS: Qos = Qos::latched().keep_last(10);
 
 /// Real time for a frame that must come.
 const WAIT: Duration = Duration::from_secs(10);
@@ -110,7 +115,7 @@ impl Door {
         let policy = Arc::new(Policy::from_yaml(&std::fs::read_to_string(policy_file()).unwrap()).unwrap());
         let m = ModuleCtx::new("mower_ws_bridge", Shutdown::new()).with_bus(bus.scope("mower_ws_bridge")).with_clock(clock.clone());
         let hub = BusHub::new(m.bus.clone(), clock, manifest_names(&m).unwrap(), "mower_ws_bridge");
-        let task = tokio::spawn(serve(args, policy, Hub::Bus(hub.clone()), "mower_ws_bridge".into(), m.clone()));
+        let task = tokio::spawn(serve(args, policy, None, Hub::Bus(hub.clone()), "mower_ws_bridge".into(), m.clone()));
         let url = format!("ws://127.0.0.1:{port}");
         let door = Door { bus, manual, start, m, hub, url, task };
         let deadline = Instant::now() + WAIT;
@@ -950,8 +955,8 @@ async fn a_slow_consumer_loses_frames_and_holds_up_nobody() {
     let telemetry = status_module.publisher::<Text>("/robot/telemetry", Qos::default()).unwrap();
     let (slow_tx, mut slow) = mpsc::channel(512);
     let (fast_tx, mut fast) = mpsc::channel(1024);
-    door.hub.subscribe("/robot/telemetry", None, &ClientHandle::for_test(901, slow_tx), 0).unwrap();
-    door.hub.subscribe("/robot/telemetry", None, &ClientHandle::for_test(902, fast_tx), 0).unwrap();
+    door.hub.subscribe("/robot/telemetry", None, &ClientHandle::for_test(901, slow_tx), 0, false).unwrap();
+    door.hub.subscribe("/robot/telemetry", None, &ClientHandle::for_test(902, fast_tx), 0, false).unwrap();
     // One at a time: the topic's reader keeps 10, as the r2r backend's did.
     for i in 0..600 {
         telemetry.publish(&text(&i.to_string())).unwrap();
@@ -1253,7 +1258,7 @@ async fn a_fatal_bind_error_leaves_no_listener_behind() {
         let bus = Bus::new();
         let m = ModuleCtx::new("mower_ws_bridge", Shutdown::new()).with_bus(bus.scope("mower_ws_bridge"));
         let hub = BusHub::new(m.bus.clone(), m.clock.clone(), manifest_names(&m).unwrap(), "mower_ws_bridge");
-        let failed = serve(args, policy, Hub::Bus(hub), "mower_ws_bridge".into(), m).await.unwrap_err().to_string();
+        let failed = serve(args, policy, None, Hub::Bus(hub), "mower_ws_bridge".into(), m).await.unwrap_err().to_string();
         if failed.starts_with("bind 127.0.0.1:") {
             continue; // another test had one of the loopback ports
         }
@@ -1265,4 +1270,530 @@ async fn a_fatal_bind_error_leaves_no_listener_behind() {
         return;
     }
     panic!("no free ports in five attempts");
+}
+
+// ---------------------------------------------------------------------------
+// The loopback listener (E8-2)
+// ---------------------------------------------------------------------------
+
+fn loopback_policy_file() -> String {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../mower_bringup/config/ws_bridge_loopback.yaml").to_string()
+}
+
+/// The modules a robot has, for these tests: names of the public policy, a
+/// name it does not allow (`/mower_base/telemetry`) and a service it does not
+/// allow.
+struct Modules {
+    fix: Publisher<NavSatFix>,
+    telemetry: Publisher<Text>,
+    _ekf_reader: Subscriber<NavSatFix>,
+    _nav: tokio::task::JoinHandle<()>,
+    _private: tokio::task::JoinHandle<()>,
+    _server: mower_bus::ActionServer<Wp>,
+    _caller: mower_bus::Client<Trigger::Request, Trigger::Response>,
+}
+
+type Wp = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback);
+
+impl Modules {
+    fn on(bus: &Bus) -> Modules {
+        let fix = bus.scope("gps").publisher::<NavSatFix>("/fix", Qos::system_default()).unwrap();
+        let telemetry = bus.scope("mower_base").publisher::<Text>("/mower_base/telemetry", Qos::sensor_data()).unwrap();
+        let _ekf_reader = bus.scope("navsat_transform").subscribe::<NavSatFix>("/fix", Qos::default().keep_last(5)).unwrap();
+        let nav = bus.scope("nav_action_server");
+        let _nav = serve_with(&nav, "/check_nav_status", trigger("{\"state\":\"idle\"}"));
+        let _private = serve_with(&bus.scope("map_manage"), "/not_public", trigger("private"));
+        let _server = nav.action_server::<Wp>("/nav_action").unwrap();
+        let _caller = bus.scope("flutter_adapter").client::<Trigger::Request, Trigger::Response>("/not_public").unwrap();
+        fix.publish(&NavSatFix::default()).unwrap();
+        telemetry.publish(&text("{}")).unwrap();
+        Modules { fix, telemetry, _ekf_reader, _nav, _private, _server, _caller }
+    }
+}
+
+/// A state dir with a robot's identity, which turns the gate on.
+struct StateDir(std::path::PathBuf);
+
+impl StateDir {
+    fn paired() -> StateDir {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!("ws_bridge_e82_{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("identity.json"), r#"{"robot_id": "MW-E82TST", "secret": "mfrggzdf"}"#).unwrap();
+        StateDir(dir)
+    }
+
+    fn path(&self) -> &str {
+        self.0.to_str().unwrap()
+    }
+}
+
+impl Drop for StateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A [`Robot`]'s manual clock at start: no [`Door`]'s, so that a door that
+/// finds a robot on its port knows it is not its own.
+const ROBOT_T0: Time = Time::from_ns(1_700_000_000_000_000_000);
+
+/// ws_bridge as the robot runs it, on the bus backend: a public address
+/// (127.0.0.2 counts as a LAN one), the gate on 127.0.0.1 for the relay agent,
+/// and the loopback listener, with `--loopback-policy` if `policy` names a
+/// file. The gate is open unless `state` has an identity.
+struct Robot {
+    bus: Bus,
+    manual: ManualClock,
+    m: ModuleCtx,
+    registry: Registry,
+    public: String,
+    relay: String,
+    loopback: String,
+    state: Option<StateDir>,
+    task: tokio::task::JoinHandle<ModuleResult>,
+    modules: Modules,
+}
+
+impl Robot {
+    async fn start(policy: Option<&str>, state: Option<StateDir>) -> Robot {
+        for _attempt in 0..5 {
+            let (port, loopback_port) = (free_port(), free_port());
+            let bus = Bus::new();
+            let (clock, manual) = Clock::manual(ROBOT_T0);
+            let registry = Registry::default();
+            let state_dir = state.as_ref().map_or("/nonexistent/ws_bridge_test", |s| s.path()).to_string();
+            let mut line = format!(
+                "--address 127.0.0.2 --port {port} --loopback-port {loopback_port} --policy {} --state-dir {state_dir} --backend bus",
+                policy_file()
+            );
+            if let Some(file) = policy {
+                line += &format!(" --loopback-policy {file}");
+            }
+            let args = parse_args(&argv(&line)).unwrap();
+            let public = Arc::new(Policy::from_yaml(&std::fs::read_to_string(policy_file()).unwrap()).unwrap());
+            let m = ModuleCtx::new("mower_ws_bridge", Shutdown::new())
+                .with_bus(bus.scope("mower_ws_bridge"))
+                .with_clock(clock.clone())
+                .with_registry(registry.clone());
+            let hub = BusHub::new(m.bus.clone(), clock, manifest_names(&m).unwrap(), "mower_ws_bridge");
+            let view = load_loopback(&args, &public, &m, None, "mower_ws_bridge");
+            let modules = Modules::on(&bus);
+            let task = tokio::spawn(serve(args, public, view, Hub::Bus(hub), "mower_ws_bridge".into(), m.clone()));
+            let deadline = Instant::now() + WAIT;
+            let listening = loop {
+                if task.is_finished() {
+                    break false;
+                }
+                if TcpStream::connect(("127.0.0.2", port)).await.is_ok() && TcpStream::connect(("127.0.0.1", port)).await.is_ok() && TcpStream::connect(("127.0.0.1", loopback_port)).await.is_ok() {
+                    break true;
+                }
+                assert!(Instant::now() < deadline, "ws_bridge did not listen");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            };
+            if listening {
+                return Robot {
+                    bus,
+                    manual,
+                    m,
+                    registry,
+                    public: format!("ws://127.0.0.2:{port}"),
+                    relay: format!("ws://127.0.0.1:{port}"),
+                    loopback: format!("ws://127.0.0.1:{loopback_port}"),
+                    state,
+                    task,
+                    modules,
+                };
+            }
+            // another test had one of the ports
+        }
+        panic!("no free ports in five attempts");
+    }
+
+    async fn with_the_shipped_policy() -> Robot {
+        Robot::start(Some(&loopback_policy_file()), None).await
+    }
+
+    /// A client of `url`, through the gate if the state dir has an identity.
+    async fn client(&self, url: &str) -> Ws {
+        let mut request = url.into_client_request().unwrap();
+        if let Some(state) = self.state.as_ref().filter(|_| url != self.loopback) {
+            let identity = crate::auth::Identity::load(state.path()).unwrap().unwrap();
+            let t = crate::auth::now_unix();
+            static NONCES: AtomicUsize = AtomicUsize::new(0);
+            let nonce = format!("{:032x}", NONCES.fetch_add(1, Ordering::Relaxed));
+            let mac = identity.compute_mac("test_phone", t, &nonce);
+            for (k, v) in [("x-mower-robot", identity.robot_id.clone()), ("x-mower-client", "test_phone".to_string()), ("x-mower-time", t.to_string()), ("x-mower-nonce", nonce), ("x-mower-mac", mac)] {
+                request.headers_mut().insert(k, v.parse().unwrap());
+            }
+        }
+        let (stream, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        Ws { stream }
+    }
+
+    fn scopes_reading(&self, topic: &str) -> Vec<String> {
+        self.bus.topic(topic).map_or(Vec::new(), |t| t.subscribers)
+    }
+
+    async fn close(self) {
+        self.m.shutdown.trigger();
+        tokio::time::timeout(WAIT, self.task).await.expect("serve returned").unwrap().unwrap();
+        self.m.bus.close();
+    }
+}
+
+/// What the loopback policy opens, which the public listeners must keep shut.
+const NOT_FOR_THE_GATE: [&str; 11] = [
+    "/mowerd/topics",
+    "/mowerd/services",
+    "/mowerd/actions",
+    "/mowerd/modules",
+    "/mowerd/bridge",
+    "/map_manage/list_parameters",
+    "/map_manage/get_parameters",
+    "/map_manage/describe_parameters",
+    "/map_manage/get_parameter_types",
+    "/boustrophedon_coverage/get_parameters",
+    "/not_public",
+];
+
+/// **The security property of E8-2:** through the gate (the public address,
+/// and 127.0.0.1:9090, where the relay agent's sessions arrive from off the
+/// machine) nothing the loopback policy opens is reachable, gate open or on.
+/// Every such call gets what a service that was never allowed gets, byte for
+/// byte, and every such subscribe what a topic never allowed gets, and neither
+/// leaves a reader or a client on the bus.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_the_loopback_policy_opens_is_reachable_through_the_gate() {
+    for state in [None, Some(StateDir::paired())] {
+        let paired = state.is_some();
+        let robot = Robot::start(Some(&loopback_policy_file()), state).await;
+        for url in [robot.public.clone(), robot.relay.clone()] {
+            let mut phone = robot.client(&url).await;
+            // the reference: a name no policy has ever had
+            phone.call("id", "/rm_rf", json!({})).await;
+            let refused = phone.recv().await;
+            assert_eq!(refused, answer("id", "/rm_rf", json!("service /rm_rf is not allowed"), false));
+            for service in NOT_FOR_THE_GATE {
+                phone.call("id", service, json!({"names": ["/fix"]})).await;
+                assert_eq!(phone.recv().await, refused.replace("/rm_rf", service), "{url} paired={paired}");
+            }
+            for topic in ["/mower_base/telemetry", "/imu/data", "/odom", "/rosout", "*"] {
+                phone.send(json!({"op": "subscribe", "id": "s", "topic": topic})).await;
+                assert_eq!(phone.recv().await, status(Some("s"), &format!("subscribe: {topic} is not allowed")), "{url}");
+            }
+            // a type hint and a throttle change nothing
+            phone.send(json!({"op": "subscribe", "id": "s", "topic": "/mower_base/telemetry", "type": "std_msgs/msg/String", "throttle_rate": 100})).await;
+            assert_eq!(phone.recv().await, status(Some("s"), "subscribe: /mower_base/telemetry is not allowed"));
+            robot.modules.telemetry.publish(&text("{}")).unwrap();
+            phone.quiet().await;
+            // /rosapi/topics lists the public policy's names and no other
+            phone.call("t", "/rosapi/topics", json!({})).await;
+            let listed = phone.recv_json().await;
+            let names: Vec<&str> = listed["values"]["topics"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+            assert!(names.contains(&"/fix"), "{names:?}");
+            assert!(!names.contains(&"/mower_base/telemetry"), "{names:?}");
+        }
+        assert_eq!(robot.scopes_reading("/mower_base/telemetry"), Vec::<String>::new(), "no reader was made");
+        for name in NOT_FOR_THE_GATE {
+            assert!(!robot.bus.services().iter().any(|s| s.name == name && s.clients.iter().any(|c| c == "mower_ws_bridge")), "{name}");
+        }
+        // not because nothing answers them: the loopback listener does
+        let mut local = robot.client(&robot.loopback).await;
+        local.call("m", "/mowerd/topics", json!({"names": ["/mower_base/telemetry"]})).await;
+        let answered = local.recv_json().await;
+        assert_eq!(answered["result"], true, "{answered}");
+        assert_eq!(answered["values"]["topics"][0]["name"], "/mower_base/telemetry");
+        robot.close().await;
+    }
+}
+
+/// Everything a phone sends, on a robot with the loopback policy and on one
+/// without: the same bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_phone_cannot_tell_whether_the_loopback_policy_is_on() {
+    async fn session(robot: &Robot) -> Vec<String> {
+        let mut phone = robot.client(&robot.public).await;
+        let mut seen = Vec::new();
+        for (service, args) in [
+            ("/rosapi/topics", json!({})),
+            ("/check_nav_status", json!({})),
+            ("/mowerd/topics", json!({})),
+            ("/mowerd/modules", json!({})),
+            ("/map_manage/get_parameters", json!({"names": ["x"]})),
+            ("/not_public", json!({})),
+            ("/rm_rf", json!({})),
+        ] {
+            phone.call("id", service, args).await;
+            seen.push(phone.recv().await);
+        }
+        phone.subscribe("/fix", 0).await;
+        eventually("the app's reader", || robot.scopes_reading("/fix").iter().any(|s| s == "mower_ws_bridge")).await;
+        robot.modules.fix.publish(&NavSatFix::default()).unwrap();
+        seen.push(phone.recv().await);
+        phone.subscribe("/mower_base/telemetry", 0).await;
+        seen.push(phone.recv().await);
+        phone.send(json!({"op": "publish", "topic": "/mower_base/telemetry", "msg": {"data": "x"}})).await;
+        seen.push(phone.recv().await);
+        seen
+    }
+    let without = Robot::start(None, None).await;
+    let before = session(&without).await;
+    without.close().await;
+    let with = Robot::with_the_shipped_policy().await;
+    let after = session(&with).await;
+    assert_eq!(after, before);
+    assert_eq!(after[2], answer("id", "/mowerd/topics", json!("service /mowerd/topics is not allowed"), false));
+    with.close().await;
+}
+
+/// The loopback listener is 127.0.0.1's alone: a socket bound to the wildcard
+/// would take these connections too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_loopback_listener_takes_connections_on_127_0_0_1_alone() {
+    let robot = Robot::with_the_shipped_policy().await;
+    let port = robot.loopback.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+    assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+    assert!(TcpStream::connect(("127.0.0.2", port)).await.is_err(), "127.0.0.2:{port} is another address");
+    // and any address of this machine that leads off it, where it has one
+    let outward = std::net::UdpSocket::bind(("0.0.0.0", 0)).and_then(|s| s.connect(("10.255.255.255", 9)).and_then(|()| s.local_addr()));
+    if let Ok(addr) = outward {
+        if !addr.ip().is_loopback() && !addr.ip().is_unspecified() {
+            assert!(TcpStream::connect((addr.ip(), port)).await.is_err(), "{}:{port}", addr.ip());
+        }
+    }
+    robot.close().await;
+}
+
+/// Where the gate holds the loopback port (`--address 127.0.0.1`, the port
+/// the same), there is no loopback listener, so no wider view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loopback_port_the_gate_holds_serves_no_wider_view() {
+    for _attempt in 0..5 {
+        let port = free_port();
+        let line = format!(
+            "--address 127.0.0.1 --port {port} --loopback-port {port} --policy {} --state-dir /nonexistent/ws_bridge_test --backend bus --loopback-policy {}",
+            policy_file(),
+            loopback_policy_file()
+        );
+        let args = parse_args(&argv(&line)).unwrap();
+        let public = Arc::new(Policy::from_yaml(&std::fs::read_to_string(policy_file()).unwrap()).unwrap());
+        let bus = Bus::new();
+        let m = ModuleCtx::new("mower_ws_bridge", Shutdown::new()).with_bus(bus.scope("mower_ws_bridge"));
+        let hub = BusHub::new(m.bus.clone(), m.clock.clone(), manifest_names(&m).unwrap(), "mower_ws_bridge");
+        let view = load_loopback(&args, &public, &m, None, "mower_ws_bridge");
+        assert!(view.is_some());
+        let task = tokio::spawn(serve(args, public, view, Hub::Bus(hub), "mower_ws_bridge".into(), m.clone()));
+        let deadline = Instant::now() + WAIT;
+        while TcpStream::connect(("127.0.0.1", port)).await.is_err() && !task.is_finished() {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if task.is_finished() {
+            continue; // another test had the port
+        }
+        let (stream, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}")).await.unwrap();
+        let mut phone = Ws { stream };
+        phone.call("id", "/mowerd/topics", json!({})).await;
+        assert_eq!(phone.recv().await, answer("id", "/mowerd/topics", json!("service /mowerd/topics is not allowed"), false));
+        m.shutdown.trigger();
+        task.await.unwrap().unwrap();
+        return;
+    }
+    panic!("no free port in five attempts");
+}
+
+/// Without `--loopback-policy`, or with a file it cannot use, the loopback
+/// listener is what it was, and the door stands: a roll-back of E8-2 and a bad
+/// file look the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_usable_loopback_policy_the_listener_serves_the_public_one() {
+    let dir = StateDir::paired();
+    let bad = dir.0.join("bad.yaml");
+    std::fs::write(&bad, "topics_sub: ['*']\ntopics_pub: ['/cmd_vel']\n").unwrap();
+    let bad = bad.to_str().unwrap().to_string();
+    for policy in [None, Some("/nonexistent/ws_bridge_loopback.yaml"), Some(bad.as_str())] {
+        let robot = Robot::start(policy, None).await;
+        let mut local = robot.client(&robot.loopback).await;
+        local.call("m", "/mowerd/topics", json!({})).await;
+        assert_eq!(local.recv().await, answer("m", "/mowerd/topics", json!("service /mowerd/topics is not allowed"), false), "{policy:?}");
+        local.send(json!({"op": "subscribe", "id": "s", "topic": "/mower_base/telemetry"})).await;
+        assert_eq!(local.recv().await, status(Some("s"), "subscribe: /mower_base/telemetry is not allowed"));
+        local.call("p", "/map_manage/get_parameters", json!({})).await;
+        assert_eq!(local.recv().await, answer("p", "/map_manage/get_parameters", json!("service /map_manage/get_parameters is not allowed"), false));
+        // and what it did serve, it serves
+        local.call("c", "/check_nav_status", json!({})).await;
+        assert_eq!(local.recv_json().await["result"], true);
+        robot.close().await;
+    }
+}
+
+/// The loopback policy only reads: what the listener may publish and which
+/// other services it may call stay the public policy's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_loopback_listener_writes_what_the_public_policy_writes_and_nothing_more() {
+    let robot = Robot::with_the_shipped_policy().await;
+    let mut local = robot.client(&robot.loopback).await;
+    for topic in ["/mower_base/telemetry", "/cmd_vel", "/fix"] {
+        local.send(json!({"op": "advertise", "id": "a", "topic": topic, "type": "std_msgs/msg/String"})).await;
+        assert_eq!(local.recv().await, status(Some("a"), &format!("advertise: {topic} is not allowed")));
+        local.send(json!({"op": "publish", "id": "p", "topic": topic, "msg": {"data": "x"}})).await;
+        assert_eq!(local.recv().await, status(Some("p"), &format!("publish: {topic} is not allowed")));
+    }
+    for service in ["/not_public", "/map_manage/set_parameters", "/map_manage/set_parameters_atomically", "/rm_rf", "/mowerd/nonsense", "/mowerd", "/mowerd/topics/x"] {
+        local.call("c", service, json!({})).await;
+        assert_eq!(local.recv().await, answer("c", service, json!(format!("service {service} is not allowed")), false));
+    }
+    // what the app may do, it may do, as before
+    local.call("c", "/check_nav_status", json!({})).await;
+    assert_eq!(local.recv().await, answer("c", "/check_nav_status", json!({"message": "{\"state\":\"idle\"}", "success": true}), true));
+    robot.close().await;
+}
+
+/// A parameter read reaches rcl only with a name rcl can hold, and only then
+/// looks for a server; without a context (no DDS here) none answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parameter_reads_take_real_names_only() {
+    let robot = Robot::with_the_shipped_policy().await;
+    let mut local = robot.client(&robot.loopback).await;
+    // (a NUL in a name is `is_ros_name`'s test)
+    for bad in ["/a b/get_parameters", "//get_parameters", "/1a/list_parameters", "/get_parameters"] {
+        local.call("c", bad, json!({})).await;
+        assert_eq!(local.recv().await, answer("c", bad, json!(format!("service {bad} is not allowed")), false));
+    }
+    local.call("c", "/map_manage/get_parameters", json!({"names": ["a"]})).await;
+    assert_eq!(local.recv().await, answer("c", "/map_manage/get_parameters", json!("/map_manage/get_parameters: service unavailable"), false));
+    local.call("c", "/map_manage/get_parameters", json!({"names": ["a\u{0}b"]})).await;
+    assert_eq!(local.recv().await, answer("c", "/map_manage/get_parameters", json!("/map_manage/get_parameters: request failed: /names/0 holds a NUL character"), false));
+    robot.close().await;
+}
+
+/// A name only the loopback policy allows: read in the scope the manifest
+/// check does not look at, delivered as to any client, gone with the linger.
+/// A typo is refused like any client's and leaves no channel behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_loopback_reads_what_the_bus_knows_and_a_typo_leaves_nothing() {
+    let robot = Robot::with_the_shipped_policy().await;
+    let mut local = robot.client(&robot.loopback).await;
+
+    local.subscribe("/mower_base/telemetry", 0).await;
+    eventually("the reader", || !robot.scopes_reading("/mower_base/telemetry").is_empty()).await;
+    assert_eq!(robot.scopes_reading("/mower_base/telemetry"), [mower_bridge::coverage::LOOPBACK_SCOPE]);
+    robot.modules.telemetry.publish(&text("{\"voltage\":24}")).unwrap();
+    assert_eq!(local.recv().await, publish_frame("/mower_base/telemetry", json!({"data": "{\"voltage\":24}"})));
+
+    // the manifest check has nothing to say about it, and would about a reader
+    // of the module's own scope
+    let running = mower_bridge::Running::rsd(&["bridge"], mower_bridge::on_bus_with(&["bridge"]));
+    let gaps = |bus: &Bus| mower_bridge::coverage::gaps(bus, &running, &Default::default(), &[mower_bridge::NODE]);
+    let own = |scope: &str, gap: &str| gap.starts_with(&format!("{scope} "));
+    assert!(!gaps(&robot.bus).iter().any(|g| own(mower_bridge::coverage::LOOPBACK_SCOPE, g)), "{:?}", gaps(&robot.bus));
+    let other = Bus::new();
+    let _reader = other.scope("mower_ws_bridge").subscribe::<Text>("/mower_base/telemetry", READER_QOS).unwrap();
+    assert!(gaps(&other).iter().any(|g| own("mower_ws_bridge", g)), "the check looks at the module's scope");
+
+    // a typo: the texts of every client, and no channel
+    local.send(json!({"op": "subscribe", "id": "s", "topic": "/odmo"})).await;
+    assert_eq!(local.recv().await, status(Some("s"), "subscribe: cannot infer type of /odmo: not advertised yet"));
+    assert_eq!(robot.bus.topic("/odmo"), None);
+    local.send(json!({"op": "subscribe", "id": "s", "topic": "/mower_base/telemetry", "type": "std_msgs/msg/Bool"})).await;
+    assert_eq!(local.recv().await, status(Some("s"), "subscribe: subscribe /mower_base/telemetry (std_msgs/msg/Bool) failed: the topic is std_msgs/msg/String"));
+
+    // gone with the linger after the last client, as every entry
+    local.send(json!({"op": "unsubscribe", "topic": "/mower_base/telemetry"})).await;
+    let at = robot.manual.clock().mono() + LINGER;
+    eventually("the linger", || robot.manual.next_deadline() == Some(at)).await;
+    robot.manual.advance(LINGER);
+    eventually("the reader to go", || robot.scopes_reading("/mower_base/telemetry").is_empty()).await;
+
+    // a name the public policy allows is read as the app reads it
+    local.subscribe("/fix", 0).await;
+    eventually("the reader", || robot.scopes_reading("/fix").iter().any(|s| s == "mower_ws_bridge")).await;
+    robot.close().await;
+}
+
+/// The fields of `/mowerd/*` that hold a time, replaced: the golden file holds
+/// the rest. mowerctl's tests read the same file (its fake_bridge.rs), which
+/// is what ties its parser to these answers.
+fn without_times(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if matches!(k.as_str(), "uptime_s" | "age_s" | "up_s") && !v.is_null() {
+                    assert!(v.as_f64().is_some_and(|s| s >= 0.0), "{k}: {v}");
+                    *v = json!(1.5);
+                }
+                without_times(v);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(without_times),
+        _ => {}
+    }
+}
+
+/// What `/mowerd/*` says about a known set of endpoints, against
+/// tests/golden/mowerd.json (`E82_WRITE_GOLDEN=1` rewrites it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mowerd_answers_from_the_bus_and_the_registry() {
+    let robot = Robot::with_the_shipped_policy().await;
+    robot.registry.add_slot("gps/gps", "gps");
+    robot.registry.slot_started("gps/gps");
+    robot.registry.add_slot("imu/imu", "imu");
+    robot.registry.slot_started("imu/imu");
+    robot.registry.slot_failed("imu/imu", "imu/imu: no such device", true);
+    let _probe = robot.registry.set_bridge_probe(Arc::new(|| {
+        json!([{"name": "/fix", "direction": "to_ros", "forwarded": 12, "skipped": 3, "stale": 0, "resyncs": 1, "unanswered": 0, "dropped": 0,
+                "invalid": 0, "dds_writer": true, "dds_reader": false, "dds_server": false, "bus_writer": false, "bus_server": false}])
+    }));
+    let mut local = robot.client(&robot.loopback).await;
+    let mut golden = serde_json::Map::new();
+    for (key, service, args) in [
+        ("topics", "/mowerd/topics", json!({})),
+        ("topics_named", "/mowerd/topics", json!({"names": ["/mower_base/telemetry", "/no_such_topic"]})),
+        ("services", "/mowerd/services", json!({})),
+        ("services_named", "/mowerd/services", json!({"names": ["/not_public", "/no_such_service"]})),
+        ("actions", "/mowerd/actions", json!({})),
+        ("modules", "/mowerd/modules", json!({})),
+        ("bridge", "/mowerd/bridge", json!({})),
+    ] {
+        local.call("m", service, args).await;
+        let frame = local.recv_json().await;
+        assert_eq!(frame["result"], true, "{frame}");
+        let mut values = frame["values"].clone();
+        without_times(&mut values);
+        golden.insert(key.to_string(), values);
+    }
+    let found = serde_json::to_string_pretty(&Value::Object(golden)).unwrap() + "\n";
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/mowerd.json");
+    if std::env::var_os("E82_WRITE_GOLDEN").is_some() {
+        std::fs::write(path, &found).unwrap();
+    }
+    assert_eq!(found, std::fs::read_to_string(path).unwrap(), "{path}");
+
+    // no bridge: says so
+    drop(_probe);
+    local.call("b", "/mowerd/bridge", json!({})).await;
+    assert_eq!(local.recv_json().await["values"], json!({"running": false, "entries": []}));
+    robot.close().await;
+}
+
+/// `published` and `age_s` move with the bus, and with nothing else: a client
+/// that only reads the counters adds no reader (what makes `hz` free).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reading_the_counters_adds_no_reader() {
+    let robot = Robot::with_the_shipped_policy().await;
+    let mut local = robot.client(&robot.loopback).await;
+    let counted = |frame: &Value| frame["values"]["topics"][0]["published"].as_u64().unwrap();
+    local.call("m", "/mowerd/topics", json!({"names": ["/mower_base/telemetry"]})).await;
+    let first = local.recv_json().await;
+    for _ in 0..3 {
+        robot.modules.telemetry.publish(&text("{}")).unwrap();
+    }
+    local.call("m", "/mowerd/topics", json!({"names": ["/mower_base/telemetry"]})).await;
+    let second = local.recv_json().await;
+    assert_eq!(counted(&second), counted(&first) + 3);
+    assert!(second["values"]["uptime_s"].as_f64() > first["values"]["uptime_s"].as_f64());
+    assert_eq!(second["values"]["topics"][0]["readers"], json!([]));
+    assert!(robot.scopes_reading("/mower_base/telemetry").is_empty());
+    robot.close().await;
 }

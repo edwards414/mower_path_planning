@@ -27,8 +27,10 @@ pub enum Hub {
 impl Hub {
     /// Subscribe `client` to `topic` with its throttle: the topic's shared
     /// entry, with the client attached (a latched topic replays at once).
+    /// `debugging`: only the loopback policy allows the name (loopback.rs),
+    /// and the r2r backend has none.
     pub async fn subscribe(
-        &self, topic: &str, type_hint: Option<String>, client: &ClientHandle, throttle_ms: u64,
+        &self, topic: &str, type_hint: Option<String>, client: &ClientHandle, throttle_ms: u64, debugging: bool,
     ) -> Result<Arc<TopicEntry>, String> {
         match self {
             Hub::R2r(hub) => {
@@ -36,7 +38,7 @@ impl Hub {
                 entry.add_client(client.clone(), throttle_ms);
                 Ok(entry)
             }
-            Hub::Bus(hub) => hub.subscribe(topic, type_hint, client, throttle_ms),
+            Hub::Bus(hub) => hub.subscribe(topic, type_hint, client, throttle_ms, debugging),
         }
     }
 

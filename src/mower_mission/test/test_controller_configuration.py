@@ -365,8 +365,10 @@ def test_ws_bridge_bus_is_a_run_time_switch_that_is_on_by_default(monkeypatch):
                       rust_daemon_params_file='/cfg/mower_rsd.yaml')
     today = ('bridge=--address 10.77.0.2 --port 9090 --loopback-port 9091 '
              '--policy /share/mower_bringup/config/ws_bridge.yaml')
+    bus = (' --backend bus --loopback-policy '
+           '/share/mower_bringup/config/ws_bridge_loopback.yaml')
     for value, extra in (('false', ''), ('0', ''), ('', ''),
-                         ('true', ' --backend bus'), ('on', ' --backend bus')):
+                         ('true', bus), ('on', bus)):
         context = LaunchContext()
         context.launch_configurations.update(configured, ws_bridge_bus=value)
         [node] = module._rust_daemon_node(context)
@@ -375,6 +377,42 @@ def test_ws_bridge_bus_is_a_run_time_switch_that_is_on_by_default(monkeypatch):
                   if a == '--module-args' and
                   arguments[i + 1].startswith('bridge=')]
         assert bridge == [today + extra], repr(value)
+
+
+def test_the_loopback_policy_reads_more_on_the_loopback_listener_alone():
+    """E8-2: robot.launch.py gives ws_bridge's bus backend a file of the image
+    (no launch argument, nothing in compose, so the robot's old host files get
+    it with the image). The file only adds reading: no key to publish, no
+    service but the parameter reads. The relay agent's sessions go to the
+    pairing gate, never to the loopback listener, so they do not get it."""
+    import yaml
+
+    config = SRC_DIR / 'mower_bringup/config'
+    added = yaml.safe_load(
+        (config / 'ws_bridge_loopback.yaml').read_text(encoding='utf-8'))
+    assert set(added) == {'topics_sub', 'parameter_services'}
+    assert added['topics_sub'] == ['*']
+    assert added['parameter_services'] == {
+        '/*/list_parameters': 'rcl_interfaces/srv/ListParameters',
+        '/*/get_parameters': 'rcl_interfaces/srv/GetParameters',
+        '/*/describe_parameters': 'rcl_interfaces/srv/DescribeParameters',
+        '/*/get_parameter_types': 'rcl_interfaces/srv/GetParameterTypes',
+    }
+    # what the phones reach stays the other file's, which names none of it
+    public = yaml.safe_load((config / 'ws_bridge.yaml').read_text(encoding='utf-8'))
+    assert not [name for name in public['services']
+                if name.startswith('/mowerd/')
+                or name.endswith(('/get_parameters', '/list_parameters'))]
+    assert '*' not in public['topics_sub']
+
+    robot = ROBOT_LAUNCH.read_text(encoding='utf-8')
+    assert 'ws_bridge_loopback' not in DEPLOY_COMPOSE.read_text(encoding='utf-8')
+    assert "DeclareLaunchArgument(\n            'ws_bridge_loopback" not in robot
+    # the separate binary (rust_daemon:=false) stays as it was
+    assert 'loopback-policy' not in ROSBRIDGE_LAUNCH.read_text(encoding='utf-8')
+    # the relay's sessions: the gate; the loopback port: the agent's own watch
+    assert ("'agent=--gate ws://127.0.0.1:9090 '\n"
+            "                      '--rosbridge ws://127.0.0.1:9091'") in robot
 
 
 def test_rust_daemon_recorder_uses_the_launch_directories():

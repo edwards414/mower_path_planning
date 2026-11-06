@@ -32,6 +32,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 use crate::names::{NameError, NameKind, Remaps};
+use crate::registry::Registry;
 
 /// Error type for a module: `Send + Sync` so it can cross a task boundary.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -133,6 +134,10 @@ pub struct ModuleCtx {
     /// [`ModuleCtx::resolve_topic`]. rcl reads the same argv for the r2r
     /// node, so a name resolves to the same thing on both.
     pub remaps: Arc<Remaps>,
+    /// What the process knows about itself and no bus name carries: its
+    /// supervisor's slots, its bus bridge's counters (E8-2). `mower_rsd`
+    /// shares one with every instance; alone, a context has one of its own.
+    pub registry: Registry,
 }
 
 impl ModuleCtx {
@@ -149,6 +154,7 @@ impl ModuleCtx {
             bus: mower_bus::Bus::new().scope(node_name),
             clock: mower_bus::Clock::system(),
             remaps: Arc::default(),
+            registry: Registry::default(),
         }
     }
 
@@ -174,6 +180,12 @@ impl ModuleCtx {
     /// `mower_rsd` pass the process's).
     pub fn with_remaps(mut self, remaps: Arc<Remaps>) -> Self {
         self.remaps = remaps;
+        self
+    }
+
+    /// Share `registry` with the rest of the process (`mower_rsd`).
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
         self
     }
 

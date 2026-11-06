@@ -4,9 +4,10 @@
 //! new message; rate = 1 / mean interval, std dev over the intervals, and
 //! "window" = intervals + 1 messages.
 //!
-//! This is the subscribing mode (E8-1). E8-2 adds a counting mode that reads
-//! the bus's `published` counters instead; it reports a rate and a window
-//! but no min / max / std dev (`Report`'s fields stay the JSON names).
+//! This is the subscribing mode (`--jitter`, or where `/mowerd/*` is not
+//! answered). The default, [`Counted`], reads the bus's `published` counters
+//! instead: no reader, no frames, so it costs the robot one small call a
+//! second, and it reports a rate and a window but no min / max / std dev.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -100,9 +101,100 @@ impl Hz {
     }
 }
 
+/// The counting mode's statistic for one topic: `published` as `/mowerd/topics`
+/// answers it, with when the latest of them was published on the bridge's own
+/// clock, so neither a slow link nor where a read fell between two messages
+/// bends the rate. The samples kept span at most `window` messages.
+pub struct Counted {
+    window: u64,
+    samples: VecDeque<(f64, u64)>,
+    /// Messages since the first sample.
+    pub messages: u64,
+    first: Option<u64>,
+    reported: Option<u64>,
+}
+
+/// What [`Counted`] reports.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CountedReport {
+    pub rate_hz: f64,
+    /// messages the statistic spans (as `Report::window`)
+    pub window: u64,
+    pub published: u64,
+}
+
+impl CountedReport {
+    pub fn line(&self) -> String {
+        format!("average rate: {:.3}  window: {}", self.rate_hz, self.window)
+    }
+
+    pub fn json(&self, t: f64, topic: &str) -> Value {
+        json!({"t": (t * 1e3).round() / 1e3, "topic": topic, "rate_hz": self.rate_hz, "window": self.window, "published": self.published})
+    }
+}
+
+impl Counted {
+    pub fn new(window: usize) -> Self {
+        Counted { window: (window as u64).max(1), samples: VecDeque::new(), messages: 0, first: None, reported: None }
+    }
+
+    pub fn on_sample(&mut self, last_published_s: f64, published: u64) {
+        let first = *self.first.get_or_insert(published);
+        self.messages = published.saturating_sub(first);
+        self.samples.push_back((last_published_s, published));
+        while self.samples.len() > 2 && published - self.samples[1].1 >= self.window {
+            self.samples.pop_front();
+        }
+    }
+
+    /// The statistic, when a message came since the last one.
+    pub fn report(&mut self) -> Option<CountedReport> {
+        let (&(t0, n0), &(t1, n1)) = (self.samples.front()?, self.samples.back()?);
+        if n1 == n0 || t1 <= t0 || self.reported == Some(n1) {
+            return None;
+        }
+        self.reported = Some(n1);
+        Some(CountedReport { rate_hz: (n1 - n0) as f64 / (t1 - t0), window: n1 - n0 + 1, published: n1 })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counting_takes_the_rate_from_the_counters_on_the_bridges_clock() {
+        let mut c = Counted::new(DEFAULT_WINDOW);
+        assert_eq!(c.report(), None, "nothing yet");
+        c.on_sample(100.0, 5000);
+        assert_eq!(c.report(), None, "one sample: no span");
+        assert_eq!(c.messages, 0);
+        c.on_sample(101.0, 5010);
+        let r = c.report().unwrap();
+        assert_eq!((r.rate_hz, r.window, r.published), (10.0, 11, 5010));
+        assert_eq!(c.report(), None, "nothing new");
+        c.on_sample(103.0, 5010);
+        assert_eq!(c.report(), None, "no new message, no report");
+        c.on_sample(104.0, 5040);
+        let r = c.report().unwrap();
+        assert_eq!((r.rate_hz, r.window), (10.0, 41));
+        assert_eq!(r.line(), "average rate: 10.000  window: 41");
+        assert_eq!(c.messages, 40);
+        let j = r.json(1.23456, "/x");
+        assert_eq!((j["topic"].as_str(), j["published"].as_u64(), j["t"].as_f64()), (Some("/x"), Some(5040), Some(1.235)));
+    }
+
+    #[test]
+    fn counting_spans_the_window_only() {
+        let mut c = Counted::new(10);
+        c.on_sample(0.0, 0);
+        c.on_sample(1.0, 100);
+        c.on_sample(2.0, 110);
+        c.on_sample(3.0, 120);
+        // the last sample that leaves at least the window
+        let r = c.report().unwrap();
+        assert_eq!((r.rate_hz, r.window), (10.0, 11));
+    }
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
