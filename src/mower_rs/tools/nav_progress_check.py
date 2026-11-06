@@ -9,11 +9,12 @@ final /coverage_progress_status answer.
 
 Scenarios (a straight 6 m path with split points at 2 m and 4 m, i.e. three
 2 m FollowPath segments):
+  N  a goal that names no zone runs to the end: it reports zone -1.
   A  zone 7 runs to the end: the mission id is the dispatch id, the status
      goes navigating_to_start -> running -> succeeded, overall progress never
      falls, feedback moves it inside a segment, and the last message says
      3/3 segments, 6 m, 100 %.
-  B  no zone id, the action is canceled halfway through segment 2:
+  B  zone 7 again, the action is canceled halfway through segment 2:
      canceling is published, then canceled with 1 completed segment and the
      overall progress between 1/3 and 2/3 (kept, not reset).
   E  the server restarts (as --restart-as, if given: the checkpoint file is
@@ -271,8 +272,8 @@ class Check:
 
     def scenario_d(self):
         print('scenario D: resume goals outside the checkpoint are rejected', flush=True)
-        self.dispatch(resume=2, length_m=7.0, expect_accept=False)
-        self.dispatch(resume=3, expect_accept=False)
+        self.dispatch(zone_id=7, resume=2, length_m=7.0, expect_accept=False)
+        self.dispatch(zone_id=7, resume=3, expect_accept=False)
         status = self.final_status()
         self.expect(status is not None and status.checkpoint.checkpoint_available, 'checkpoint still resumable')
 
@@ -281,7 +282,7 @@ class Check:
         self.fake.hold_segment = None
         self.fake.follow_count = 0
         self.fake.navigate_goals.clear()
-        mission, handle = self.dispatch(resume=2)
+        mission, handle = self.dispatch(zone_id=7, resume=2)
         if handle is None:
             return
         result = wait(handle.get_result_async(), 30.0)
@@ -340,11 +341,24 @@ class Check:
             '/coverage_progress_status returns the final state',
         )
 
+    def scenario_n(self):
+        print('scenario N: a goal that names no zone', flush=True)
+        self.fake.hold_segment = None
+        self.fake.follow_count = 0
+        mission, handle = self.dispatch()
+        if handle is None:
+            return
+        result = wait(handle.get_result_async(), 30.0)
+        self.expect(result is not None and result.result.success, 'action succeeded')
+        time.sleep(0.3)
+        msgs = self.caller.of(mission)
+        self.expect(bool(msgs) and all(m.zone_id == -1 for m in msgs), 'no zone id -> -1')
+
     def scenario_b(self):
         print('scenario B: canceled halfway through segment 2', flush=True)
         self.fake.hold_segment = 2
         self.fake.follow_count = 0
-        mission, handle = self.dispatch()
+        mission, handle = self.dispatch(zone_id=7)
         if handle is None:
             return
         deadline = time.monotonic() + 20.0
@@ -360,7 +374,7 @@ class Check:
         msgs = self.caller.of(mission)
         if not self.expect(bool(msgs), 'progress published'):
             return
-        self.expect(all(m.zone_id == -1 for m in msgs), 'no zone id -> -1')
+        self.expect(all(m.zone_id == 7 for m in msgs), 'zone 7 throughout')
         statuses = [m.status for m in msgs]
         self.expect(CoverageProgress.STATUS_CANCELING in statuses, 'canceling is published')
         last = msgs[-1]
@@ -377,7 +391,7 @@ class Check:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--only', default='abedc', help='scenarios to run, in order, e.g. "a"')
+    ap.add_argument('--only', default='nabedc', help='scenarios to run, in order, e.g. "a"')
     ap.add_argument('--restart-as', help='server command line to restart into in scenario E')
     ap.add_argument('command', nargs='+', help='navigation server command line')
     args = ap.parse_args()

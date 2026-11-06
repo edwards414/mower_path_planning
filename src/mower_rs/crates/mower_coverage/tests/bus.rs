@@ -199,6 +199,8 @@ struct Script {
     block_reason: &'static str,
     /// `(zone, completed, total)` of a resumable checkpoint.
     checkpoint: Option<(i32, i32, i32)>,
+    /// What the checkpoint says, with or without one.
+    checkpoint_message: &'static str,
 }
 
 impl Default for Script {
@@ -212,6 +214,7 @@ impl Default for Script {
             succeed_after: None,
             block_reason: "",
             checkpoint: None,
+            checkpoint_message: "",
         }
     }
 }
@@ -269,7 +272,9 @@ impl FakeNav {
             while let Some(request) = progress.next().await {
                 let mut response = GetCoverageProgress::Response { success: true, ..Default::default() };
                 response.checkpoint.zone_id = -1;
-                if let Some((zone, done, total)) = s.lock().unwrap().checkpoint {
+                let script = s.lock().unwrap().clone();
+                response.checkpoint.message = script.checkpoint_message.into();
+                if let Some((zone, done, total)) = script.checkpoint {
                     response.checkpoint.checkpoint_available = true;
                     (response.checkpoint.zone_id, response.checkpoint.completed_segments, response.checkpoint.total_segments) = (zone, done, total);
                 }
@@ -795,6 +800,76 @@ fn a_rejected_goal_reports_nav_s_reason() {
         assert_eq!((answer.success, answer.message.as_str()), (false, "Navigation action goal rejected: GPS fix is stale"));
         pass(&manual, Duration::from_secs(5)).await;
         assert_eq!(nav.dispatch_cancels_since(t0), Vec::<f64>::new());
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// A resume nav refused: what it says next to the checkpoint is the reason, not
+/// what would block a goal right now (here a GPS that happens to be stale),
+/// and not "busy or a safety precondition failed".
+#[test]
+fn a_refused_resume_reports_what_nav_says_about_the_checkpoint() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        const REFUSAL: &str = "cannot resume: coverage path or split parameters changed since the checkpoint; regenerate and start over";
+        let script = Script { reject: true, block_reason: "GPS fix is stale", checkpoint: Some((1, 2, 5)), checkpoint_message: REFUSAL, ..Script::default() };
+        let nav = FakeNav::start(&bus, &clock, script);
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual).await;
+        let resume = |zone_id| call::<_, ResumeCoverage::Response>(&coverage.test, "/resume_coverage", ResumeCoverage::Request { zone_id });
+        let answer = resume(-1).await;
+        assert_eq!((answer.success, answer.message.as_str()), (false, format!("Navigation action goal rejected: {REFUSAL}").as_str()));
+
+        // nav says nothing of the kind (the rclpy server): as it always was
+        nav.script(|s| s.checkpoint_message = "Resumable at segment 3/5");
+        let answer = resume(-1).await;
+        assert_eq!((answer.success, answer.message.as_str()), (false, "Navigation action goal rejected: GPS fix is stale"));
+        nav.script(|s| s.block_reason = "");
+        let answer = resume(-1).await;
+        assert_eq!((answer.success, answer.message.as_str()), (false, "Navigation action goal rejected: busy or a safety precondition failed"));
+
+        // a checkpoint nav no longer offers: no goal, and its reason
+        nav.script(|s| {
+            s.checkpoint = None;
+            s.checkpoint_message = "coverage path or split parameters changed since the checkpoint; regenerate and start over";
+        });
+        let answer = resume(-1).await;
+        assert!(!answer.success);
+        assert_eq!(answer.message, "No resumable coverage checkpoint (coverage path or split parameters changed since the checkpoint; regenerate and start over)");
+        coverage.stop().await;
+        nav.stop();
+    });
+}
+
+/// `/resume_coverage` while a sequence is alive: refused, also between two legs,
+/// where nav is idle and the mission lock has nothing to say. Before this it
+/// sent a goal next to the leg the sequence was about to send.
+#[test]
+fn resume_is_refused_while_a_sequence_is_alive() {
+    within(async {
+        let bus = Bus::new();
+        let (clock, manual) = manual_clock();
+        let script = Script { end_on_cancel: true, checkpoint: Some((1, 2, 5)), ..Script::default() };
+        let nav = FakeNav::start(&bus, &clock, script);
+        let _world = World::start(&bus);
+        let coverage = Coverage::start(&bus, clock, manual.clone()).await;
+        let mut status = coverage.test.subscribe::<Text>("/zone_sequence_status", Qos::latched().keep_last(100)).unwrap();
+        let resume = |zone_id| call::<_, ResumeCoverage::Response>(&coverage.test, "/resume_coverage", ResumeCoverage::Request { zone_id });
+        assert!(coverage.run_sequence(&[1, 2]).await.success);
+        settled("the first leg's goal", || nav.seen(|s| s.goals.len() == 1)).await;
+
+        let answer = resume(-1).await;
+        assert!(!answer.success && answer.message.contains("任務序列"), "{}", answer.message);
+        assert_eq!(nav.seen(|s| s.goals.len()), 1, "no goal for it");
+
+        let _: Trigger::Response = call(&coverage.test, "/stop_zone_sequence", Trigger::Request {}).await;
+        sequence_state(&mut status, "canceled").await;
+        pass(&manual, Duration::from_secs(3)).await;
+        let answer = resume(-1).await;
+        assert!(answer.success, "after it: {}", answer.message);
+        settled("the resume's goal", || nav.seen(|s| s.goals.len() == 2)).await;
         coverage.stop().await;
         nav.stop();
     });

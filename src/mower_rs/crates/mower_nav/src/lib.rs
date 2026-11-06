@@ -34,6 +34,7 @@ mod nav2;
 mod progress;
 mod state;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,13 +54,13 @@ use r2r::rcl_interfaces::msg::Log;
 use r2r::sensor_msgs::msg::{Imu, NavSatFix};
 use r2r::std_msgs::msg::{Bool, ColorRGBA};
 use r2r::std_srvs::srv::Trigger;
-use r2r::visualization_msgs::msg::Marker;
+use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use r2r::QosProfile;
 use tokio::sync::Notify;
 
 use crate::core_backend::{CoreFeedback, CoreParams, GoalHandle, GoalKey, GoalOutcome, NavRuntime, PoseSource, Readiness};
 use crate::nav2::{terminal_from_core, terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
-use crate::progress::{Checkpoint, Progress, Status as ProgressStatus};
+use crate::progress::{Checkpoint, Progress, Status as ProgressStatus, PATH_CHANGED};
 use crate::state::{NavState, SafetyParams, TaskResult};
 
 /// `mower_interface/action/Waypoint` as a bus action (r2r's `Waypoint::Action`).
@@ -115,6 +116,27 @@ impl ExecParams {
         let poses: Vec<[f64; 3]> = path.poses.iter().map(|p| [p.pose.position.x, p.pose.position.y, p.pose.position.z]).collect();
         let splits: Vec<[f64; 2]> = split_points.iter().map(|p| [p.position.x, p.position.y]).collect();
         progress::path_hash(zone_id, self.split_params(), &poses, &splits)
+    }
+
+    /// What `/coverage_path_markers` says of each zone's path now, as
+    /// [`progress::path_hash`] of its poses alone (`path_hash` above with no
+    /// split points): mower_coverage draws zone N's path as a LINE_STRIP in
+    /// namespace `zone_N_path`. The split points are not in it, so a path that
+    /// differs in those alone looks the same here and is refused at the goal.
+    fn zone_path_hashes(&self, snapshot: &MarkerArray) -> HashMap<i32, String> {
+        const LINE_STRIP: i32 = 4;
+        const ADD: i32 = 0;
+        let mut poses: HashMap<i32, Vec<[f64; 3]>> = HashMap::new();
+        for marker in &snapshot.markers {
+            if marker.type_ != LINE_STRIP || marker.action != ADD {
+                continue;
+            }
+            let zone = marker.ns.strip_prefix("zone_").and_then(|s| s.strip_suffix("_path")).and_then(|s| s.parse().ok());
+            if let Some(zone) = zone {
+                poses.entry(zone).or_default().extend(marker.points.iter().map(|p| [p.x, p.y, p.z]));
+            }
+        }
+        poses.into_iter().map(|(zone, poses)| (zone, progress::path_hash(zone, self.split_params(), &poses, &[]))).collect()
     }
 }
 
@@ -210,6 +232,12 @@ struct ProgressState {
     /// along. Only while it runs, so that driving by hand afterwards counts
     /// for nothing.
     following: Option<Path>,
+    /// Each zone's path now (`ExecParams::zone_path_hashes`), from the latched
+    /// `/coverage_path_markers`; `None` until mower_coverage has drawn one.
+    zone_paths: Option<HashMap<i32, String>>,
+    /// Why the last resume goal was refused, until the next goal or plan. The
+    /// action's rejection has no words, so its caller reads it here.
+    resume_refusal: Option<String>,
 }
 
 impl ProgressState {
@@ -227,6 +255,20 @@ impl ProgressState {
         }
     }
 
+    /// Why `c` could not go on on the path its zone has now. `None` also when
+    /// nothing says: no snapshot yet, or the other server's checkpoint.
+    fn path_block_reason(&self, c: &Checkpoint) -> Option<String> {
+        let paths = self.zone_paths.as_ref()?;
+        if !c.resumable() || c.path_poses_hash.is_empty() {
+            return None;
+        }
+        match paths.get(&c.zone_id) {
+            Some(hash) if *hash == c.path_poses_hash => None,
+            Some(_) => Some(PATH_CHANGED.into()),
+            None => Some(format!("zone {} has no coverage path; generate the same path to continue", c.zone_id)),
+        }
+    }
+
     /// The checkpoint as a message, for `/coverage_progress_status`.
     fn checkpoint_msg(&self, stamp: Time) -> CoverageProgress {
         match &self.checkpoint {
@@ -240,7 +282,13 @@ impl ProgressState {
                 let restored = ProgressState { progress: c.restored_progress(), checkpoint: Some(c.clone()), ..Default::default() };
                 let mut msg = restored.to_msg(stamp);
                 msg.status_text = c.status.clone();
-                msg.message = if c.resumable() {
+                let path_block = self.path_block_reason(c);
+                msg.checkpoint_available = msg.checkpoint_available && path_block.is_none();
+                msg.message = if let Some(refusal) = &self.resume_refusal {
+                    refusal.clone()
+                } else if let Some(reason) = path_block {
+                    reason
+                } else if c.resumable() {
                     format!("Resumable at segment {}/{}", c.resume_segment_index(), c.total_segments)
                 } else {
                     "Checkpoint is not resumable".into()
@@ -272,10 +320,17 @@ impl ProgressState {
         msg.current_segment_start = p.current_segment_start.clone();
         msg.current_segment_goal = p.current_segment_goal.clone();
         msg.checkpoint_available = !p.path_hash.is_empty()
-            && self.checkpoint.as_ref().is_some_and(|c| c.resumable() && c.path_hash == p.path_hash && c.mission_id == p.mission_id);
+            && self.checkpoint.as_ref().is_some_and(|c| {
+                c.resumable() && c.path_hash == p.path_hash && c.mission_id == p.mission_id && self.path_block_reason(c).is_none()
+            });
         msg.message = p.message.clone();
         msg
     }
+}
+
+/// What the health gate says when it stops a goal, in the log and in the status.
+fn safety_stop_message(reason: Option<&str>) -> String {
+    format!("Navigation safety stop: {}", reason.unwrap_or_default())
 }
 
 /// `t` as a header stamp.
@@ -591,13 +646,18 @@ impl Ctx {
     /// Cancel an accepted mission if pose or GPS health becomes stale.
     fn monitor_navigation_health(&self) {
         let (should_cancel, reason, dispatch_id) = {
-            let st = self.state.lock().unwrap();
+            let mut st = self.state.lock().unwrap();
             let reason = st.navigation_health_block_reason(&self.safety, self.clock.mono());
             let should_cancel = st.goal_reserved && reason.is_some();
+            if should_cancel && !st.goal_end_decided {
+                // the first reason is the trip's: the others follow from it
+                let message = safety_stop_message(reason.as_deref());
+                st.safety_stop_message.get_or_insert(message);
+            }
             (should_cancel, reason, st.pending_dispatch_id.clone())
         };
         if should_cancel {
-            let message = format!("Navigation safety stop: {}", reason.unwrap_or_default());
+            let message = safety_stop_message(reason.as_deref());
             if self.request_navigation_cancel(&message, dispatch_id.as_deref()) {
                 let status = self.state.lock().unwrap().last_status_message.clone();
                 self.error(&status);
@@ -1062,8 +1122,18 @@ impl Execution {
 
     fn canceled_before_task(&mut self) -> Outcome {
         self.terminate(&Outcome::Canceled);
-        self.ctx.set_nav_state("canceled", "Navigation canceled before task start");
+        self.set_canceled("Navigation canceled before task start");
         Outcome::Canceled
+    }
+
+    /// The `canceled` state, saying why when the health gate is what stopped
+    /// the goal: a person looking at it later has only this to go by.
+    fn set_canceled(&self, message: &str) {
+        let reason = self.ctx.state.lock().unwrap().safety_stop_message.clone();
+        match reason {
+            Some(reason) => self.ctx.set_nav_state("canceled", &format!("{message}: {reason}")),
+            None => self.ctx.set_nav_state("canceled", message),
+        }
     }
 
     /// Keep Nav2 locked until the action caller confirms goal receipt.
@@ -1250,7 +1320,7 @@ impl Execution {
                     st.external_cancel_requested = false;
                     st.active_task_name = None;
                 }
-                self.ctx.set_nav_state("canceled", &format!("{task_name} canceled"));
+                self.set_canceled(&format!("{task_name} canceled"));
                 return false;
             }
             let (feedback, feedback_distance) = {
@@ -1286,7 +1356,7 @@ impl Execution {
                 st.external_cancel_requested = false;
                 st.active_task_name = None;
             }
-            self.ctx.set_nav_state("canceled", &format!("{task_name} canceled"));
+            self.set_canceled(&format!("{task_name} canceled"));
             return false;
         }
         match terminal.result {
@@ -1302,7 +1372,7 @@ impl Execution {
                     st.external_cancel_requested = false;
                     st.active_task_name = None;
                 }
-                self.ctx.set_nav_state("canceled", &format!("{task_name} canceled"));
+                self.set_canceled(&format!("{task_name} canceled"));
                 false
             }
             TaskResult::Failed => {
@@ -1413,6 +1483,7 @@ impl Execution {
         let first = resume_index.max(1) as usize;
         let distances = split_paths.iter().map(geometry::path_distance).collect();
         let hash = self.ctx.exec.path_hash(zone_id, &path, &split_points);
+        let poses_hash = self.ctx.exec.path_hash(zone_id, &path, &[]);
         // before the progress below replaces the checkpoint it reads
         let resumed = self.resume_here(&split_paths[first - 1], resume_index);
         let whole_segments = split_paths.clone();
@@ -1422,6 +1493,7 @@ impl Execution {
         self.ctx.update_progress(true, |p| {
             p.set_segments(distances);
             p.path_hash = hash;
+            p.path_poses_hash = poses_hash;
             if resume_index > 0 {
                 p.resume_from(resume_index);
             }
@@ -1625,14 +1697,21 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<Waypoin
         let _ = req.reject();
         return;
     };
-    if goal.resume_segment_index != 0 {
-        let hash = ctx.exec.path_hash(goal.zone_id, &goal.path, &goal.coverage_split_points);
-        let reason = match &ctx.progress.lock().unwrap().checkpoint {
-            None => Some("no coverage checkpoint to resume".to_string()),
-            Some(c) => c.resume_block_reason(&hash, goal.resume_segment_index),
-        };
-        if let Some(reason) = reason {
-            return reject(&ctx, &format!("cannot resume: {reason}"), req);
+    {
+        let refusal = (goal.resume_segment_index != 0)
+            .then(|| {
+                let hash = ctx.exec.path_hash(goal.zone_id, &goal.path, &goal.coverage_split_points);
+                match &ctx.progress.lock().unwrap().checkpoint {
+                    None => Some("no coverage checkpoint to resume".to_string()),
+                    Some(c) => c.resume_block_reason(&hash, goal.resume_segment_index),
+                }
+            })
+            .flatten()
+            .map(|reason| format!("cannot resume: {reason}"));
+        // before the rejection: its caller asks right after it
+        ctx.progress.lock().unwrap().resume_refusal = refusal.clone();
+        if let Some(refusal) = refusal {
+            return reject(&ctx, &refusal, req);
         }
     }
     {
@@ -1649,6 +1728,7 @@ async fn handle_goal_request(ctx: Arc<Ctx>, req: ActionServerGoalRequest<Waypoin
         }
         st.seen_dispatch_ids.insert(dispatch_id.clone());
         st.goal_reserved = true;
+        st.safety_stop_message = None;
         st.external_cancel_requested = false;
         st.dispatch_confirmed = false;
         st.pending_dispatch_id = Some(dispatch_id.clone());
@@ -1931,6 +2011,19 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                         ctx.warn(&status);
                     }
                 }
+            }
+        });
+    }
+    // ---- the zones' paths ----------------------------------------------------
+    {
+        let mut stream = m.bus.subscribe::<MarkerArray>(&m.resolve_topic("/coverage_path_markers")?, latched())?;
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            while let Some(snapshot) = stream.next().await {
+                let paths = ctx.exec.zone_path_hashes(&snapshot);
+                let mut ps = ctx.progress.lock().unwrap();
+                ps.zone_paths = Some(paths);
+                ps.resume_refusal = None;
             }
         });
     }

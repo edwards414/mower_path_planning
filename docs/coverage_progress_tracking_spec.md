@@ -8,6 +8,8 @@
 
 > **2026-11-06 補記（`mower_nav`，Rust 伺服器）：** 檢查點多了選用欄位 `current_segment_done_m`（未完成那段走到幾公尺，量的是機器在 `map` 的姿態，不是 FollowPath 的回饋）。續割時，如果機器人距離那個點 0.30 m 以內且姿態新鮮，就不導航回段起點（它不能倒車，回頭要繞一圈），直接從機器後方 0.05 m 接著走那段剩下的部分；否則照舊導航到段起點、整段重割。下文第 9 節「resume 只保證從段落開始」現在只是 rclpy 伺服器的行為：它忽略這個欄位，兩邊的檢查點仍可互相續割。
 
+> **2026-11-06 補記（續割的狀態，`mower_nav` 與 `mower_coverage`；rclpy 伺服器不變）：** 檢查點多了選用欄位 `path_poses_hash`（路徑的點，不含 split points），`mower_nav` 訂閱 latched 的 `/coverage_path_markers` 比對該 zone 目前的路徑：不同或沒有路徑時 `checkpoint_available` 為 false，`checkpoint.message` 說明；還沒收到這個 topic（只跑導航伺服器時）或檢查點沒有這個欄位時不比對。split points 不在 markers 裡，只有 split points 不同時仍要等送出 goal 才拒絕。通道段（zone -1）不算可續割。被拒絕的續割原因（`cannot resume: …`）放在 `checkpoint.message`，`mower_coverage` 從這裡讀，回給 `/resume_coverage` 的呼叫者。安全停止的狀態仍是 `canceled`，原因在 `progress.message` 與 `/check_nav_status` 的 `message`（`… canceled: Navigation safety stop: …`）。`/resume_coverage` 在任務序列還活著時拒絕。
+
 本文件規劃如何在目前割草 coverage path 執行時，記錄、發布、查詢目前工作進度。目標是讓前端能顯示割草進度，也讓後續中斷恢復任務有可靠基礎。
 
 ## 1. 背景與現況

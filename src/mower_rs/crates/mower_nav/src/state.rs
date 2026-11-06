@@ -78,6 +78,8 @@ pub struct NavState {
     pub nav_state: String,
     pub last_feedback_message: String,
     pub last_status_message: String,
+    /// What the health gate first said when it stopped the reserved goal.
+    pub safety_stop_message: Option<String>,
     /// Latched when an action returns without proving that its Nav2 goal is
     /// terminal.
     pub nav2_task_uncertain: bool,

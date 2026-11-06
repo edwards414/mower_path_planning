@@ -254,8 +254,8 @@ Flutter 顯示建議：
 | Stop Zone Sequence | `/stop_zone_sequence` | `std_srvs/srv/Trigger` | 無 | 停止序列並取消目前那個 zone 的導航 |
 | Cancel Navigation | `/cencel_nav2` | `std_srvs/Trigger` | 無 | 取消 Nav2 任務 |
 | Check Nav Status | `/check_nav_status` | `std_srvs/Trigger` | 無 | 查詢 BasicNavigator 狀態 |
-| Coverage Progress | `/coverage_progress_status` | `mower_interface/srv/GetCoverageProgress` | 無 | `progress`：目前（或最後一次，重啟後由檢查點還原）執行的進度快照，平常訂閱 latched topic `/coverage_progress` 即可，這個給重連後補查；`checkpoint`：磁碟上的檢查點，`checkpoint.checkpoint_available` 為 true 時可續割（`zone_id`、`completed_segments`/`total_segments`）。2026-09-30 加入 |
-| Resume Coverage | `/resume_coverage` | `mower_interface/srv/ResumeCoverage` | `zone_id: int32`（-1 = 檢查點上的 zone） | 從檢查點第一個未完成的段落續割（先導航到該段起點）；該 zone 的路徑重新生成過、或切段參數變了，會被拒絕。2026-09-30 加入 |
+| Coverage Progress | `/coverage_progress_status` | `mower_interface/srv/GetCoverageProgress` | 無 | `progress`：目前（或最後一次，重啟後由檢查點還原）執行的進度快照，平常訂閱 latched topic `/coverage_progress` 即可，這個給重連後補查；`checkpoint`：磁碟上的檢查點，`checkpoint.checkpoint_available` 為 true 時可續割（`zone_id`、`completed_segments`/`total_segments`），該 zone 目前的路徑不是檢查點那條、或通道段（zone -1）時為 false，原因在 `checkpoint.message`；`progress.message` 含安全停止的原因（`Navigation safety stop: …`，狀態仍是 `canceled`）。2026-09-30 加入 |
+| Resume Coverage | `/resume_coverage` | `mower_interface/srv/ResumeCoverage` | `zone_id: int32`（-1 = 檢查點上的 zone） | 從檢查點第一個未完成的段落續割：機器在停下的點 0.30 m 內就接著走，否則先導航到該段起點；該 zone 的路徑重新生成過、切段參數變了，或任務序列還在跑，會被拒絕，`message` 說明原因。只割完該 zone，不會接著跑序列剩下的 zone。2026-09-30 加入 |
 | Follow Path Action | `/nav_action_follow_path` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points`, `dispatch_id`, `zone_id` | 由後端內部呼叫 |
 | Nav Action | `/nav_action` | `mower_interface/action/Waypoint` | `path`, `coverage_split_points` | 舊版逐段 path action |
 
@@ -298,7 +298,7 @@ Execution 頁建議欄位：
 - Zone selector：從 `/get_zone_map_list_srv` 或 coverage result 建立。
 - Start button：呼叫 `/zone_exec_path`。
 - Cancel button：呼叫 `/cencel_nav2`。
-- Progress bar / current segment / distance remaining：訂閱 `/coverage_progress`（`mower_interface/msg/CoverageProgress`，latched）。`overall_progress` 0–1 以各段長度加權；`status_text` 為 `navigating_to_start` / `running` / `canceling` / `canceled` / `succeeded` / `failed`；`mission_id` 換了就是新任務；`zone_id` 是正在割的 zone（通道為 -1）。取消與失敗會保留最後進度。`checkpoint_available` 為 true 時可顯示「繼續上次」按鈕，呼叫 `/resume_coverage`。欄位定義見 `docs/coverage_progress_tracking_spec.md`。
+- Progress bar / current segment / distance remaining：訂閱 `/coverage_progress`（`mower_interface/msg/CoverageProgress`，latched）。`overall_progress` 0–1 以各段長度加權；`status_text` 為 `navigating_to_start` / `running` / `canceling` / `canceled` / `succeeded` / `failed`；`mission_id` 換了就是新任務；`zone_id` 是正在割的 zone（通道為 -1）。取消與失敗會保留最後進度。`checkpoint_available` 為 true 時 App 顯示「繼續割草」按鈕，呼叫 `/resume_coverage`（App 查 `/coverage_progress_status`，不訂閱這個 topic）。欄位定義見 `docs/coverage_progress_tracking_spec.md`。
 - Current segment path：由 `/split_path` 更新。
 - Error panel：顯示 `/rosout` 中 `controller_server`、`planner_server`、`bt_navigator`、`behavior_server` 錯誤。
 

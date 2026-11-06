@@ -21,6 +21,11 @@
 //! from the pose in `odom` and so drifts with the `map -> odom` offset. The key
 //! is optional: a checkpoint without it (the Python twin's, which ignores the key
 //! and always resumes at a segment's start) reads as 0.
+//!
+//! So is `path_poses_hash`, the executed path's poses without its split points:
+//! what can be compared with `/coverage_path_markers`, to say that a checkpoint
+//! is for another path before a resume is refused for it (`ProgressState` in
+//! lib.rs). A checkpoint without it is not compared.
 
 use sha2::{Digest, Sha256};
 
@@ -73,6 +78,8 @@ pub struct Progress<P> {
     pub message: String,
     /// [`path_hash`] of the executed goal; empty until the plan is split.
     pub path_hash: String,
+    /// [`path_hash`] of its poses alone (no split points), set with it.
+    pub path_poses_hash: String,
     /// How far along the current segment the mower's pose has got, metres:
     /// the most it ever was. What a resume goes by; the progress above is
     /// FollowPath's feedback, for the app.
@@ -136,6 +143,7 @@ impl<P: Clone + Default> Progress<P> {
             total_distance_m: self.total_distance_m,
             overall_progress: self.overall_progress,
             path_hash: self.path_hash.clone(),
+            path_poses_hash: self.path_poses_hash.clone(),
             current_segment_done_m: if self.current_segment_index == self.completed_segments + 1 { self.segment_reached_m } else { 0.0 },
             updated_at,
         }
@@ -254,6 +262,9 @@ pub fn path_hash(zone_id: i32, split_params: [f64; 4], poses: &[[f64; 3]], split
 
 pub const CHECKPOINT_VERSION: i64 = 1;
 
+/// Why a checkpoint cannot go on on the path a zone has now.
+pub const PATH_CHANGED: &str = "coverage path or split parameters changed since the checkpoint; regenerate and start over";
+
 /// The checkpoint file (`progress_checkpoint_path`), spec section 8.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Checkpoint {
@@ -267,6 +278,8 @@ pub struct Checkpoint {
     pub total_distance_m: f64,
     pub overall_progress: f64,
     pub path_hash: String,
+    /// [`path_hash`] of the poses alone; empty in the other server's checkpoint.
+    pub path_poses_hash: String,
     /// How far the unfinished segment got, metres along it (the most it ever
     /// reported); 0 when the current segment is finished or not started.
     pub current_segment_done_m: f64,
@@ -288,6 +301,7 @@ impl Checkpoint {
             "total_distance_m": self.total_distance_m,
             "overall_progress": self.overall_progress,
             "path_hash": self.path_hash,
+            "path_poses_hash": self.path_poses_hash,
             "current_segment_done_m": self.current_segment_done_m,
             "updated_at": self.updated_at,
         })
@@ -314,14 +328,17 @@ impl Checkpoint {
             total_distance_m: num("total_distance_m")?,
             overall_progress: num("overall_progress")?,
             path_hash: text("path_hash")?,
+            path_poses_hash: text("path_poses_hash").unwrap_or_default(),
             current_segment_done_m: num("current_segment_done_m").unwrap_or(0.0),
             updated_at: num("updated_at").unwrap_or(0.0),
         })
     }
 
-    /// Unfinished work that a resume could pick up.
+    /// Unfinished work that a resume could pick up. Not a route with no zone
+    /// (a sequence's channel leg): `/resume_coverage` only knows zones' paths.
     pub fn resumable(&self) -> bool {
         self.status != Status::Succeeded.text()
+            && self.zone_id >= 0
             && !self.path_hash.is_empty()
             && self.total_segments > 0
             && (0..self.total_segments).contains(&self.completed_segments)
@@ -348,7 +365,7 @@ impl Checkpoint {
             return Some("no unfinished coverage checkpoint to resume".into());
         }
         if self.path_hash != path_hash {
-            return Some("coverage path or split parameters changed since the checkpoint; regenerate and start over".into());
+            return Some(PATH_CHANGED.into());
         }
         if index < 1 || index > self.resume_segment_index() {
             return Some(format!(
@@ -381,6 +398,7 @@ impl Checkpoint {
         p.remaining_distance_m = (self.total_distance_m - self.completed_distance_m).max(0.0);
         p.overall_progress = self.overall_progress;
         p.path_hash = self.path_hash.clone();
+        p.path_poses_hash = self.path_poses_hash.clone();
         // total_segments without the lengths: equal parts are enough to report
         let n = self.total_segments.max(0) as usize;
         p.segment_distances = vec![if n > 0 { self.total_distance_m / n as f64 } else { 0.0 }; n];
@@ -592,6 +610,30 @@ mod tests {
         // a new segment starts from nothing
         p.start_segment(2, (0.0, 0.0), (1.0, 0.0));
         assert!(close(p.checkpoint(0.0).current_segment_done_m, 0.0));
+    }
+
+    /// A route with no zone (a sequence's channel leg): `/resume_coverage` has
+    /// nothing to look its path up by, so nothing offers to continue it.
+    #[test]
+    fn a_route_with_no_zone_cannot_be_resumed() {
+        let channel = Checkpoint { zone_id: -1, ..checkpoint_after_segment_one() };
+        assert!(!channel.resumable());
+        assert!(channel.resume_block_reason("abc", 2).unwrap().contains("no unfinished"));
+        assert!(checkpoint_after_segment_one().resumable(), "zone 3 can");
+    }
+
+    /// `path_poses_hash` is optional, as the other server does not write it,
+    /// and a restart keeps it.
+    #[test]
+    fn the_poses_hash_is_optional_and_survives_a_restart() {
+        let mut c = checkpoint_after_segment_one();
+        c.path_poses_hash = "poses".into();
+        assert_eq!(Checkpoint::from_json(&c.to_json()).unwrap().path_poses_hash, "poses");
+        let restored: P = c.restored_progress();
+        assert_eq!(restored.checkpoint(0.0).path_poses_hash, "poses");
+        let mut other: serde_json::Value = serde_json::from_str(&c.to_json()).unwrap();
+        other.as_object_mut().unwrap().remove("path_poses_hash");
+        assert_eq!(Checkpoint::from_json(&other.to_string()).unwrap().path_poses_hash, "");
     }
 
     /// A restart writes a checkpoint from what it restored (at start, in
