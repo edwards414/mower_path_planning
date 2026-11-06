@@ -10,6 +10,8 @@ use std::time::Instant;
 
 /// The rejection of a command stamped behind the ordering barrier.
 const MOVED_BACKWARD: &str = "velocity source timestamp moved backward";
+/// The rejection of a command older than `max_input_age_s`.
+const STALE: &str = "velocity timestamp is stale";
 /// The rejection of a repeated stamp once its motion has stopped.
 const REPLAY: &str = "replayed velocity cannot resume stopped motion";
 
@@ -128,9 +130,9 @@ impl Guard {
         }
         let is_new = previous.map(|p| stamp_ns > p).unwrap_or(true);
         if is_new {
-            // A newer malformed/overspeed command still represents a newer
-            // stop barrier. A queued older valid motion must never resume after
-            // the guard rejected it and published zero.
+            // A newer malformed/overspeed/stale command still represents a
+            // newer stop barrier. Motion queued older than it must never resume
+            // after the guard rejected it and published zero.
             self.last_source_stamp_ns = Some(stamp_ns);
         }
         (None, Some(stamp_ns), is_new)
@@ -171,7 +173,7 @@ impl Guard {
         if let Some(stamp_ns) = source_stamp_ns {
             let age_s = (ros_ns - stamp_ns) as f64 / 1e9;
             if age_s > self.limits.max_input_age_s {
-                return Some("velocity timestamp is stale");
+                return Some(STALE);
             }
             if command.moving() && !timestamp_is_new {
                 let replay_expired = match self.last_nonzero_received_at {
@@ -191,27 +193,31 @@ impl Guard {
         let (barrier_reason, source_stamp_ns, timestamp_is_new) = self.apply_timestamp_barrier(command, ros_ns);
         let reason = barrier_reason.or_else(|| self.block_reason(command, source_stamp_ns, timestamp_is_new, ros_ns, mono));
         if let Some(reason) = reason {
-            // A rejection is a stop boundary even when its source stamp is
-            // untrusted (for example, far in the future). Advance only to the
-            // robot's own clock so any command already queued before this
-            // rejection cannot become a fresh resume command afterward.
+            // A rejection that says something is wrong with the sender (the
+            // session, the clock, the payload, a stamp from the future) is a
+            // stop boundary even when its source stamp is untrusted. Advance
+            // only to the robot's own clock so no command stamped before this
+            // rejection can resume the motion: it takes one stamped after it,
+            // so a round trip of a live link.
             //
-            // Not for a command that is already behind the barrier: the
-            // barrier excludes it and everything older as it stands, and
-            // moving it to `ros_ns` again would also exclude the next commands
-            // the sender stamps with the robot clock it has seen. When the
-            // round trip is longer than the send interval (the app sends every
-            // 100 ms, 4G takes 150-300 ms) each of those lands behind the
-            // moved barrier in turn, and manual driving stayed locked until
-            // the stick was let go (robot, 2026-10-24: 40 s of rejections).
-            //
-            // Nor for a repeat of a stamp after the motion stopped. The watchdog
-            // stopped that motion and left the barrier alone, so that the next
-            // new stamp moves the wheels; a repeat in between adds nothing to
-            // the stop, and the barrier already excludes that stamp. It comes
-            // when the clock frames stall on their way to the app, which keeps
-            // sending the last one it has.
-            if !matches!(reason, MOVED_BACKWARD | REPLAY) && self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
+            // Not for a command that was refused only for being late: behind
+            // the barrier, older than the age limit, or a repeat of a stamp
+            // after the motion stopped. The wheels get their zero all the same,
+            // and the barrier already excludes that stamp and everything older
+            // (it advanced to a new stale stamp above). A newer command can
+            // resume the motion without that round trip, if it passes the same
+            // age limit by itself: after a stall, the first of the backlog
+            // young enough. What that costs: if the link dies again right
+            // there, the wheels run on that command until the receipt timeout.
+            // Moving the barrier to `ros_ns` as well would exclude the next
+            // commands the sender stamps with the robot clock it has seen: when
+            // the round trip is longer than the send interval (the app sends
+            // every 100 ms, 4G takes 150-300 ms), every command for a round trip
+            // and a backlog more lands behind it. (Robot, 2026-10-24: 40 s of
+            // rejections behind the barrier, fixed then for those; harness,
+            // 2026-11: "moved backward" was three in four refused commands on a
+            // bad link.)
+            if !matches!(reason, MOVED_BACKWARD | STALE | REPLAY) && self.last_source_stamp_ns.map(|p| ros_ns > p).unwrap_or(true) {
                 self.last_source_stamp_ns = Some(ros_ns);
             }
             self.nonzero_active = false;
@@ -328,11 +334,12 @@ mod tests {
         let mut g = Guard::new(limits(false));
         let t0 = Instant::now();
         let now = 1_000 * NS;
-        // 251 ms old: stale
+        // 251 ms old: stale, and its stamp is the barrier now
         assert_eq!(g.on_command(&cmd(now - 251_000_000, 0.2, 0.0), now, t0), Action::Reject("velocity timestamp is stale"));
-        // 100 ms old: fine (and newer than the rejection barrier? no: the
-        // rejection advanced the barrier to `now`, so this older stamp moved backward)
-        assert_eq!(g.on_command(&cmd(now - 100_000_000, 0.2, 0.0), now, t0), Action::Reject("velocity source timestamp moved backward"));
+        // older than that: moved backward, even within the age limit's reach
+        assert_eq!(g.on_command(&cmd(now - 252_000_000, 0.2, 0.0), now, t0), Action::Reject("velocity source timestamp moved backward"));
+        // 100 ms old and newer than it: a late command says nothing against it
+        assert_eq!(g.on_command(&cmd(now - 100_000_000, 0.2, 0.0), now, t0), forward(0.2, 0.0));
         // stamps after the barrier flow again
         let later = now + 10_000_000;
         assert_eq!(g.on_command(&cmd(later, 0.2, 0.0), later, t0), forward(0.2, 0.0));
@@ -410,6 +417,28 @@ mod tests {
         }
         assert_eq!(zeros_forced, vec![1300]);
         assert_eq!(refused, vec![1300, 1400]);
+    }
+
+    /// Stale commands stop the wheels. The ones behind them are judged by the
+    /// same age limit: old ones stay refused, and an older one can never come
+    /// after a newer one has been seen.
+    #[test]
+    fn a_stale_command_stops_the_wheels_and_only_older_ones_stay_barred() {
+        let mut g = Guard::new(Limits::new(0.20, 0.8, 0.05, 0.50, 1.00, true, 0.05).unwrap());
+        let t0 = Instant::now();
+        let now = 1_000 * NS;
+        assert_eq!(g.on_command(&cmd(now - 100_000_000, 0.2, 0.0), now, t0), forward(0.2, 0.0));
+        // a backlog after a stall: oldest first, every one a zero until one is young enough
+        let t1 = t0 + Duration::from_millis(900);
+        let later = now + 900_000_000;
+        for (age_ms, expected) in [(850i64, Action::Reject("velocity timestamp is stale")), (810, Action::Reject("velocity timestamp is stale")), (770, forward(0.2, 0.0))] {
+            assert_eq!(g.on_command(&cmd(later - age_ms * 1_000_000, 0.2, 0.0), later, t1), expected, "{age_ms} ms old");
+        }
+        // what comes after it in the backlog but stamped before it: behind the barrier
+        assert_eq!(g.on_command(&cmd(later - 780_000_000, 0.2, 0.0), later, t1), Action::Reject("velocity source timestamp moved backward"));
+        // every rejection ended the motion: with nothing new, the watchdog has nothing to do
+        assert_eq!(g.on_command(&cmd(later - 900_000_000, 0.2, 0.0), later, t1), Action::Reject("velocity source timestamp moved backward"));
+        assert!(!g.watchdog(t1 + Duration::from_secs(5)));
     }
 
     #[test]

@@ -296,6 +296,26 @@ def _stamped(stamp_ns, linear_x=0.2):
     return command
 
 
+def test_a_stale_command_stops_and_only_older_ones_stay_barred(guard):
+    """A stale command gets its zero and leaves the barrier at its own stamp:
+    a newer command that is young enough passes, an older one does not."""
+    node, published = guard
+    now_ns = node.get_clock().now().nanoseconds
+    stale_stamp = now_ns - 1_000_000_000
+    node._command_callback(_stamped(stale_stamp))
+    assert published[-1].twist.linear.x == 0.0
+    assert not node._nonzero_active
+    assert node._last_source_stamp_ns == stale_stamp
+
+    node._command_callback(_stamped(stale_stamp - 1_000_000))
+    assert published[-1].twist.linear.x == 0.0
+    assert node._last_source_stamp_ns == stale_stamp
+
+    node._command_callback(_stamped(node.get_clock().now().nanoseconds - 50_000_000))
+    assert published[-1].twist.linear.x == pytest.approx(0.2)
+    assert node._nonzero_active
+
+
 def test_a_replay_after_the_stop_leaves_the_barrier_at_its_stamp(guard):
     """A repeated stamp cannot resume the motion, and the next new stamp can:
     the repeat was only late, as when the app's clock frames stall."""

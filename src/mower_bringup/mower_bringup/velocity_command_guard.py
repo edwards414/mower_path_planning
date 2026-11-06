@@ -15,8 +15,9 @@ from std_msgs.msg import Header
 
 # The rejection of a command stamped behind the ordering barrier.
 _MOVED_BACKWARD = 'velocity source timestamp moved backward'
+_STALE = 'velocity timestamp is stale'
 _REPLAY = 'replayed velocity cannot resume stopped motion'
-_KEEPS_BARRIER = (_MOVED_BACKWARD, _REPLAY)
+_KEEPS_BARRIER = (_MOVED_BACKWARD, _STALE, _REPLAY)
 
 
 class VelocityCommandGuard(Node):
@@ -157,9 +158,9 @@ class VelocityCommandGuard(Node):
             return _MOVED_BACKWARD, stamp_ns, False
         is_new = previous_stamp is None or stamp_ns > previous_stamp
         if is_new:
-            # A newer malformed/overspeed command still represents a newer
-            # stop barrier. A queued older valid motion must never resume after
-            # the guard rejected it and published zero.
+            # A newer malformed/overspeed/stale command still represents a
+            # newer stop barrier. Motion queued older than it must never resume
+            # after the guard rejected it and published zero.
             self._last_source_stamp_ns = stamp_ns
         return None, stamp_ns, is_new
 
@@ -206,7 +207,7 @@ class VelocityCommandGuard(Node):
                 self.get_clock().now().nanoseconds - source_stamp_ns
             ) / 1_000_000_000.0
             if age_s > self._max_input_age_s:
-                return 'velocity timestamp is stale'
+                return _STALE
             moving = (
                 abs(float(twist.linear.x)) > 1e-9
                 or abs(float(twist.angular.z)) > 1e-9
@@ -243,22 +244,23 @@ class VelocityCommandGuard(Node):
                 timestamp_is_new,
             )
         if reason is not None:
-            # A rejection is a stop boundary even when its source stamp is
-            # untrusted (for example, far in the future). Advance only to the
-            # robot's own clock so any command already queued before this
-            # rejection cannot become a fresh resume command afterward.
+            # A rejection that says something is wrong with the sender (the
+            # session, the clock, the payload, a stamp from the future) is a
+            # stop boundary even when its source stamp is untrusted. Advance
+            # only to the robot's own clock so no command stamped before this
+            # rejection can resume the motion: it takes one stamped after it.
             #
-            # Not for a command that is already behind the barrier: the
-            # barrier excludes it and everything older as it stands, and
-            # moving it to the clock again would also exclude the next
-            # commands the sender stamps with the robot clock it has seen.
-            # When the round trip is longer than the send interval (the app
-            # sends every 100 ms, 4G takes 150-300 ms) each of those lands
-            # behind the moved barrier in turn, and manual driving stayed
-            # locked until the stick was let go (robot, 2026-10-24).
-            #
-            # Nor for a repeat of a stamp after the motion stopped: the watchdog
-            # stopped that motion and left the barrier alone. core.rs says more.
+            # Not for a command refused only for being late: behind the
+            # barrier, older than the age limit, or a repeat of a stamp after
+            # the motion stopped. The wheels get their zero all the same, and
+            # the barrier already excludes that stamp and everything older. A
+            # newer command can resume the motion without that round trip, if
+            # it passes the same age limit by itself. Moving the barrier as
+            # well would exclude the next commands the sender stamps with the
+            # robot clock it has seen: when the round trip is longer than the
+            # send interval (the app sends every 100 ms, 4G takes 150-300 ms),
+            # every command for a round trip and a backlog more lands behind
+            # it (robot, 2026-10-24 and harness 2026-11). core.rs says the same.
             rejection_barrier_ns = self.get_clock().now().nanoseconds
             previous_stamp = self._last_source_stamp_ns
             if reason not in _KEEPS_BARRIER and (
