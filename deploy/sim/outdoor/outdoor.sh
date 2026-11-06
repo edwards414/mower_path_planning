@@ -17,7 +17,9 @@
 # `calibrate`'s calibration.json; FULL is 4 unthrottled cores. NET: clean,
 # good, typ, bad (netem.sh). navcore = RUST_NAV_CORE=true. MOWER_RS_TARGET
 # = a directory with a Linux mower_rsd to run instead of the image's
-# (../docker-compose.sim.local.yaml); MOWER_SIM_BIN another mower_sim.
+# (../docker-compose.sim.local.yaml); MOWER_SIM_BIN another mower_sim;
+# OUTDOOR_COMPOSE_EXTRA one more compose override (for example a tree's launch
+# files and config mounted over an older image's).
 # Guard overrides: MANUAL_GUARD_TIMEOUT_S, FINAL_GUARD_TIMEOUT_S. SIM_SEED,
 # SIM_ARGS go to mower_sim.
 set -euo pipefail
@@ -46,6 +48,7 @@ export MOWER_PAIR_FILE MOWER_BACKEND_URL=
 compose() {
   local files=(-f "$repo/deploy/sim/docker-compose.sim.yaml" -f "$here/docker-compose.outdoor.yaml")
   [ -n "${MOWER_RS_TARGET:-}" ] && files+=(-f "$repo/deploy/sim/docker-compose.sim.local.yaml")
+  [ -n "${OUTDOOR_COMPOSE_EXTRA:-}" ] && files+=(-f "$OUTDOOR_COMPOSE_EXTRA")
   docker compose -p "$OD" "${files[@]}" "$@"
 }
 cid() { docker compose -p "$OD" -f "$repo/deploy/sim/docker-compose.sim.yaml" -f "$here/docker-compose.outdoor.yaml" ps -q "$1"; }

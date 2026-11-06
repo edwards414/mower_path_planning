@@ -139,6 +139,7 @@ async def main():
     ap.add_argument('--hold', type=float, default=5.0)
     ap.add_argument('--pause', type=float, default=1.5)
     ap.add_argument('--blk-hold', type=float, default=0.0)
+    ap.add_argument('--blk-repeat', type=int, default=1, help='that many blackout holds (run_blackouts.py cuts the link under each)')
     args = ap.parse_args()
     safety.check(args.url)
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
@@ -156,16 +157,16 @@ async def main():
         await app.hold(min(args.hold, max(0.5, args.seconds - (time.monotonic() - start))), direction, f'soak{n}')
         direction = -direction
         await asyncio.sleep(args.pause)
-    if args.blk_hold > 0:
+    for k in range(args.blk_repeat if args.blk_hold > 0 else 0):
         await asyncio.sleep(1.0)
         print(f'BLK_HOLD_START {time.time():.4f}', flush=True)
-        await app.hold(args.blk_hold, direction, 'blk')
+        await app.hold(args.blk_hold, direction, 'blk' if args.blk_repeat == 1 else f'blk{k + 1}')
         direction = -direction
         t_wait = time.time()
         while app.clock is None and time.time() - t_wait < 20:
             await asyncio.sleep(0.05)
         app.ev('back', clock=app.clock is not None, after_s=round(time.time() - t_wait, 2))
-        for i in range(2):
+        for i in range(2 if args.blk_repeat == 1 else 1):
             await asyncio.sleep(1.0)
             await app.hold(3.0, direction, f'after{i + 1}')
             direction = -direction
