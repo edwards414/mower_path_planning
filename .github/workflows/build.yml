@@ -529,14 +529,18 @@ jobs:
         timeout-minutes: 10
         run: |
           debs="$HOME/arm-none-eabi-debs"
-          if compgen -G "$debs/*.deb" >/dev/null && sudo apt-get install -y --no-install-recommends "$debs"/*.deb; then
+          packages="gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib"
+          # Where apt keeps what it downloaded, and no network: given a local
+          # .deb of the version the mirror has too, apt fetched all 574 MB from
+          # the mirror anyway, so a stalled mirror still failed the job.
+          if compgen -G "$debs/*.deb" >/dev/null && sudo cp "$debs"/*.deb /var/cache/apt/archives/ \
+            && sudo apt-get install -y --no-install-recommends --no-download $packages; then
             echo "installed from the cache"
             arm-none-eabi-gcc --version | head -1
             exit 0
           fi
           rm -rf "$debs"
           mkdir -p "$debs"
-          packages="gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends --download-only $packages
           cp /var/cache/apt/archives/*.deb "$debs"/
