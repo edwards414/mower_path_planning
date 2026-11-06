@@ -16,3 +16,11 @@ use source_check::Source;
 fn a_site_is_loaded_only_within_100_m_by_default() {
     Source::new("mower_record/src/lib.rs", include_str!("../src/lib.rs")).body("run(ctx").has("\"max_site_datum_distance_m\", 100.0");
 }
+
+/// A recording with an RTK pause over 10 s is not saved, by default (owner,
+/// 2026-11-07). The bus test `a_recording_with_a_long_rtk_outage_is_refused`
+/// shows the refusal on the code's defaults; this pins the number.
+#[test]
+fn a_recording_is_saved_only_without_an_rtk_pause_over_10_s_by_default() {
+    Source::new("mower_record/src/lib.rs", include_str!("../src/lib.rs")).body("run(ctx").has("\"max_rtk_pause_s\", 10.0");
+}

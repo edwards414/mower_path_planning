@@ -89,10 +89,43 @@ pub struct Config {
     /// after RTK fixed; the start only, not the samples. The Python
     /// path_record_node has no such gate.
     pub require_datum: bool,
+    /// A recording one of whose RTK pauses (see `require_rtk_fixed`) lasted
+    /// more than this many seconds is not saved (owner, 2026-11-07, after
+    /// the outdoor harness saved a zone across a 90 s outage with a straight
+    /// chord): its end is refused and the recording discarded. A pause still
+    /// going on at the end counts at its length then. 0 or less turns the
+    /// check off; it never fires with `require_rtk_fixed` off, which takes no
+    /// pause. The Python path_record_node has no such check.
+    pub max_rtk_pause_s: f64,
 }
 
 /// Service reply: (success, message).
 pub type Reply = (bool, String);
+
+/// The words that tell the app a refused end discarded the recording, so
+/// that it leaves its recording state (mower_lawer_app reads them; keep
+/// them).
+pub const DISCARDED_ZH: &str = "未儲存，請重新記錄";
+
+/// What an end request did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndReply {
+    /// Saved, and the recording ended: the caller releases the lease.
+    Saved(String),
+    /// Refused; the recording, if one runs, goes on (nothing of that kind to
+    /// end, too few points, the save failed): the lease stays held.
+    Refused(String),
+    /// Refused and the recording discarded, as a cancel does (an RTK pause
+    /// over `max_rtk_pause_s`): nothing saved, the caller releases the lease.
+    Discarded(String),
+}
+
+/// `d` in seconds with one decimal, rounded up: a pause just over the limit
+/// never reads as the limit itself.
+fn tenths_up(d: std::time::Duration) -> String {
+    let tenths = d.as_nanos().div_ceil(100_000_000);
+    format!("{}.{}", tenths / 10, tenths % 10)
+}
 
 pub struct Recorder {
     pub cfg: Config,
@@ -104,6 +137,9 @@ pub struct Recorder {
     last_gps_odometry: Option<Mono>,
     /// Since when sampling has waited for RTK fixed, while a recording runs.
     rtk_paused_since: Option<Mono>,
+    /// The longest RTK pause of the current recording that has ended (the
+    /// one going on is `rtk_paused_since`).
+    rtk_longest_pause: std::time::Duration,
     pub datum: Option<Datum>,
     pub active_site: Option<String>,
     pub manifest_blocked: Option<String>,
@@ -156,6 +192,7 @@ impl Recorder {
             last_fix: None,
             last_gps_odometry: None,
             rtk_paused_since: None,
+            rtk_longest_pause: std::time::Duration::ZERO,
             datum: None,
             active_site: None,
             manifest_blocked: None,
@@ -344,7 +381,9 @@ impl Recorder {
             }
             (None, Some(since)) => {
                 self.rtk_paused_since = None;
-                let paused_s = (self.mono)().saturating_duration_since(since).as_secs_f64();
+                let paused = (self.mono)().saturating_duration_since(since);
+                self.rtk_longest_pause = self.rtk_longest_pause.max(paused);
+                let paused_s = paused.as_secs_f64();
                 out.info(&format!("RTK 恢復 fixed，繼續 {label} 取樣（暫停 {paused_s:.1} s）"));
                 true
             }
@@ -357,6 +396,35 @@ impl Recorder {
             let paused_s = (self.mono)().saturating_duration_since(since).as_secs_f64();
             out.info(&format!("記錄結束時 RTK 仍未 fixed（已暫停取樣 {paused_s:.1} s）"));
         }
+    }
+
+    /// A new recording starts with no outage of the last one.
+    fn reset_rtk_pauses(&mut self) {
+        self.rtk_paused_since = None;
+        self.rtk_longest_pause = std::time::Duration::ZERO;
+    }
+
+    /// The longest single RTK pause of the current recording, the one going
+    /// on (if any) at its length now. Pauses are never added up.
+    fn longest_rtk_pause(&self) -> std::time::Duration {
+        let ongoing = self.rtk_paused_since.map_or(std::time::Duration::ZERO, |since| (self.mono)().saturating_duration_since(since));
+        self.rtk_longest_pause.max(ongoing)
+    }
+
+    /// The reply refusing to save a `kind` recording one of whose RTK pauses
+    /// lasted more than `max_rtk_pause_s`; `None` when none did, and always
+    /// with the check off (0 or less).
+    fn rtk_pause_refusal(&self, kind: Kind) -> Option<String> {
+        let max = self.cfg.max_rtk_pause_s;
+        if max.is_nan() || max <= 0.0 {
+            return None;
+        }
+        let longest = self.longest_rtk_pause();
+        if longest.as_secs_f64() <= max {
+            return None;
+        }
+        let outline = if kind == Kind::Channel { "路徑" } else { "邊界" };
+        Some(format!("錄製中 RTK 中斷 {} 秒（超過 {max} 秒），{outline}可能不準，{DISCARDED_ZH}", tenths_up(longest)))
     }
 
     /// 0.5 s until the first pose: clear stale RViz markers, publish lists.
@@ -552,7 +620,7 @@ impl Recorder {
     pub fn start_zone(&mut self, out: &dyn Outputs) -> Reply {
         out.info("記錄區域起始點");
         self.recording_zone = true;
-        self.rtk_paused_since = None;
+        self.reset_rtk_pauses();
         self.zone_id += 1;
         self.path = empty_path(&self.cfg.frame_id);
         if let Some(pos) = self.robot_pos(out) {
@@ -563,9 +631,41 @@ impl Recorder {
         (true, "成功記錄區域起始點".into())
     }
 
-    /// Returns (reply, needs_release): the caller releases the mutation lease
-    /// and appends the lock-release warning when release is unconfirmed.
-    pub fn end_zone(&mut self, out: &dyn Outputs) -> Result<String, String> {
+    fn is_recording(&self, kind: Kind) -> bool {
+        match kind {
+            Kind::Zone => self.recording_zone,
+            Kind::Risk => self.recording_risk,
+            Kind::Channel => self.recording_channel,
+        }
+    }
+
+    /// An end request (`/record_zone_end`, `/risk_zone_end`,
+    /// `/channel_record_end`). A `kind` recording with an RTK pause over
+    /// `max_rtk_pause_s` is not saved: it is discarded as a cancel discards
+    /// it (in-progress path and marker cleared, sampling stopped, so the rear
+    /// light goes off), since no retry could save it, and the caller gives
+    /// the lease back. Otherwise the recording is saved and ended, or the end
+    /// is refused with the recording kept.
+    pub fn end(&mut self, kind: Kind, out: &dyn Outputs) -> EndReply {
+        if self.is_recording(kind) {
+            if let Some(msg) = self.rtk_pause_refusal(kind) {
+                out.warn(&msg);
+                self.cancel(out);
+                return EndReply::Discarded(msg);
+            }
+        }
+        let ended = match kind {
+            Kind::Zone => self.end_zone(out),
+            Kind::Risk => self.end_risk(out),
+            Kind::Channel => self.end_channel(out),
+        };
+        ended.map_or_else(EndReply::Refused, EndReply::Saved)
+    }
+
+    /// Saves and ends a zone recording, or says why not (the recording
+    /// stays). Through [`Recorder::end`] only, which checks the RTK pauses
+    /// first.
+    fn end_zone(&mut self, out: &dyn Outputs) -> Result<String, String> {
         if !self.recording_zone {
             return Err("沒有正在進行的 zone 記錄".into());
         }
@@ -593,7 +693,7 @@ impl Recorder {
     pub fn start_risk(&mut self, out: &dyn Outputs) -> Reply {
         out.info("開始記錄風險區域");
         self.recording_risk = true;
-        self.rtk_paused_since = None;
+        self.reset_rtk_pauses();
         self.risk_id += 1;
         self.risk_path = empty_path(&self.cfg.frame_id);
         if let Some(pos) = self.robot_pos(out) {
@@ -604,7 +704,7 @@ impl Recorder {
         (true, "成功開始記錄風險區域".into())
     }
 
-    pub fn end_risk(&mut self, out: &dyn Outputs) -> Result<String, String> {
+    fn end_risk(&mut self, out: &dyn Outputs) -> Result<String, String> {
         if !self.recording_risk {
             return Err("沒有正在進行的 risk 記錄".into());
         }
@@ -632,7 +732,7 @@ impl Recorder {
     pub fn start_channel(&mut self, out: &dyn Outputs) -> Reply {
         out.info("開始記錄 chennal 路徑");
         self.recording_channel = true;
-        self.rtk_paused_since = None;
+        self.reset_rtk_pauses();
         self.channel_id += 1;
         self.channel_path = empty_path(&self.cfg.frame_id);
         self.channel_path.header.stamp = self.now();
@@ -644,7 +744,7 @@ impl Recorder {
         (true, format!("成功開始記錄 chennal 路徑 #{}", self.channel_id))
     }
 
-    pub fn end_channel(&mut self, out: &dyn Outputs) -> Result<String, String> {
+    fn end_channel(&mut self, out: &dyn Outputs) -> Result<String, String> {
         out.info("結束記錄 chennal 路徑");
         if !self.recording_channel {
             return Err("沒有正在進行的 chennal 路徑記錄".into());
@@ -1612,6 +1712,7 @@ mod tests {
             require_rtk_fixed: false,
             rtk_fix_max_age_s: 1.0,
             require_datum: false,
+            max_rtk_pause_s: 10.0,
         };
         Recorder::new(cfg, Box::new(|| stamp(&Clock::system())))
     }
@@ -1798,6 +1899,7 @@ mod persistence_rules {
             require_rtk_fixed: false,
             rtk_fix_max_age_s: 1.0,
             require_datum: false,
+            max_rtk_pause_s: 10.0,
         };
         let mut r = Recorder::new(cfg, Box::new(|| stamp(&Clock::system())));
         r.restore_startup_persistence(&Quiet);
@@ -2003,6 +2105,7 @@ mod rtk_gate {
             require_rtk_fixed,
             rtk_fix_max_age_s: 1.0,
             require_datum,
+            max_rtk_pause_s: 10.0,
         };
         let (clock, manual) = Clock::manual(mower_bus::Time::from_ns(1_800_000_000_000_000_000));
         let (stamps, ages) = (clock.clone(), clock.clone());
@@ -2036,6 +2139,19 @@ mod rtk_gate {
             self.pose(x);
             assert!(self.r.sample(log), "still recording");
             self.manual.advance(Duration::from_millis(100));
+        }
+
+        /// `n` ticks on RTK float, the robot driving on from x: one pause,
+        /// n × 100 ms long once the next fixed tick ends it, or at an end
+        /// right after.
+        fn outage(&mut self, x: f64, n: usize, log: &Log) {
+            for i in 0..n {
+                self.tick(x + i as f64 * 0.001, Some(0), log);
+            }
+        }
+
+        fn zone_file(&self) -> String {
+            std::fs::read_to_string(self.dir.join("zone_record/zone_list.json")).unwrap()
         }
     }
 
@@ -2208,5 +2324,144 @@ mod rtk_gate {
         // both off: no input at all
         let none = rig("both_off", false, false, &log);
         assert_eq!(none.r.check_fix_and_datum_start(Kind::Channel), Ok(()));
+    }
+
+    fn discarded(seconds: &str, outline: &str) -> EndReply {
+        EndReply::Discarded(format!("錄製中 RTK 中斷 {seconds} 秒（超過 10 秒），{outline}可能不準，未儲存，請重新記錄"))
+    }
+
+    /// A recording one of whose RTK pauses lasted more than
+    /// `max_rtk_pause_s` (10 s by default; owner, 2026-11-07) is not saved:
+    /// the end is refused with the pause's length and the recording is
+    /// discarded as a cancel discards it, since no retry could save it.
+    /// 10.0 s still saves, 10.1 s does not.
+    #[test]
+    fn a_pause_over_max_rtk_pause_s_is_not_saved() {
+        let log = Log::default();
+        let mut g = rig("max_pause", true, false, &log);
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_zone(&log).0);
+        g.tick(1.0, Some(2), &log);
+        g.tick(2.0, Some(2), &log);
+        g.outage(3.0, 100, &log);
+        g.tick(4.0, Some(2), &log);
+        g.tick(5.0, Some(2), &log);
+        assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(10));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()));
+        let saved = g.zone_file();
+
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_zone(&log).0);
+        assert_eq!(g.r.longest_rtk_pause(), Duration::ZERO, "no pause of the last recording");
+        g.tick(1.0, Some(2), &log);
+        g.tick(2.0, Some(2), &log);
+        g.outage(3.0, 101, &log);
+        g.tick(4.0, Some(2), &log);
+        g.tick(5.0, Some(2), &log);
+        assert_eq!(g.r.longest_rtk_pause(), Duration::from_millis(10_100));
+        assert_eq!(g.r.end(Kind::Zone, &log), discarded("10.1", "邊界"));
+        // Discarded: nothing records or waits, the trace and its marker are
+        // gone, and the list and its file are as they were.
+        assert!(!g.r.recording() && !g.r.rtk_paused());
+        assert!(g.r.path.poses.is_empty() && g.r.zone_marker.is_none() && g.r.last_robot_pos.is_none());
+        assert_eq!(g.r.zone_list.markers.len(), 1);
+        assert_eq!(g.zone_file(), saved);
+        assert!(log.lines.borrow().contains(&"W 錄製中 RTK 中斷 10.1 秒（超過 10 秒），邊界可能不準，未儲存，請重新記錄".to_string()));
+        // Nothing is left to end; the next recording starts with no pause.
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的 zone 記錄".into()));
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_zone(&log).0);
+        assert_eq!(g.r.longest_rtk_pause(), Duration::ZERO);
+        for x in [1.0, 2.0, 3.0] {
+            g.tick(x, Some(2), &log);
+        }
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #2".into()));
+    }
+
+    /// A pause still going on at the end counts at its length then: 10.0 s
+    /// saves, 10.1 s does not. An end of another kind leaves the recording
+    /// alone, and a channel's reply says 路徑.
+    #[test]
+    fn an_ongoing_pause_counts_at_its_length_at_the_end() {
+        let log = Log::default();
+        let mut g = rig("ongoing", true, false, &log);
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_risk(&log).0);
+        for x in [1.0, 2.0, 3.0] {
+            g.tick(x, Some(2), &log);
+        }
+        g.outage(4.0, 100, &log);
+        assert!(g.r.rtk_paused());
+        assert_eq!(g.r.end(Kind::Risk, &log), EndReply::Saved("成功結束記錄風險區域 #1".into()));
+
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_channel(&log).0);
+        g.tick(1.0, Some(2), &log);
+        g.outage(2.0, 101, &log);
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的 zone 記錄".into()));
+        assert!(g.r.recording() && g.r.rtk_paused());
+        assert_eq!(g.r.end(Kind::Channel, &log), discarded("10.1", "路徑"));
+        assert!(!g.r.recording() && !g.r.rtk_paused());
+        assert!(g.r.channel_path.poses.is_empty() && g.r.channel_list.markers.is_empty());
+        // the empty path went out, as after a cancel, and the outage closed
+        assert_eq!(log.last_path(), Vec::<f64>::new());
+        assert_eq!(log.rtk().last().map(String::as_str), Some("I 記錄結束時 RTK 仍未 fixed（已暫停取樣 10.1 s）"));
+    }
+
+    /// `max_rtk_pause_s` at 0 or below turns the check off: 30 s pauses,
+    /// one over and one going on, save.
+    #[test]
+    fn the_check_is_off_at_zero_or_below() {
+        for (name, max) in [("off_zero", 0.0), ("off_negative", -1.0)] {
+            let log = Log::default();
+            let mut g = rig(name, true, false, &log);
+            g.r.cfg.max_rtk_pause_s = max;
+            g.r.on_fix(2, g.clock.mono());
+            assert!(g.r.start_zone(&log).0);
+            g.tick(1.0, Some(2), &log);
+            g.tick(2.0, Some(2), &log);
+            g.outage(3.0, 300, &log);
+            g.tick(4.0, Some(2), &log);
+            g.outage(5.0, 300, &log);
+            assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(30));
+            assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()), "{name}");
+        }
+    }
+
+    /// Pauses are not added up: 9.0 s, 10.0 s and 6.0 s (going on at the
+    /// end), 25 s in all with none over 10 s, save.
+    #[test]
+    fn short_pauses_that_add_up_to_more_save() {
+        let log = Log::default();
+        let mut g = rig("short_pauses", true, false, &log);
+        g.r.on_fix(2, g.clock.mono());
+        assert!(g.r.start_zone(&log).0);
+        g.tick(1.0, Some(2), &log);
+        g.outage(1.5, 90, &log);
+        g.tick(2.0, Some(2), &log);
+        g.outage(2.5, 100, &log);
+        g.tick(3.0, Some(2), &log);
+        g.outage(3.5, 60, &log);
+        assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(10));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()));
+        let ends: Vec<String> = log.rtk().into_iter().filter(|l| l.starts_with("I ")).collect();
+        assert_eq!(
+            ends,
+            [
+                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 9.0 s）",
+                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 10.0 s）",
+                "I 記錄結束時 RTK 仍未 fixed（已暫停取樣 6.0 s）",
+            ]
+        );
+    }
+
+    /// The reply's length is rounded up to a tenth, so a pause just over the
+    /// limit never reads as the limit.
+    #[test]
+    fn the_length_is_rounded_up_to_a_tenth() {
+        assert_eq!(tenths_up(Duration::from_millis(23_400)), "23.4");
+        assert_eq!(tenths_up(Duration::from_secs(10)), "10.0");
+        assert_eq!(tenths_up(Duration::from_nanos(10_000_000_001)), "10.1");
+        assert_eq!(tenths_up(Duration::from_millis(90_049)), "90.1");
     }
 }

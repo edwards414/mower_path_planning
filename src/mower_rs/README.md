@@ -826,6 +826,15 @@ RTK fixed (status 2) and at most `rtk_fix_max_age_s` (1.0 s) old: 「RTK 尚未
 fixed，無法開始 zone 記錄（…）」. A recording that loses RTK fixed keeps
 running but takes no sample (not even a channel's end point) until it is
 back; each outage is logged once as it starts and once with its length.
+With `max_rtk_pause_s` (default 10.0, also in mower_rsd.yaml; 0 or less turns
+it off; owner, 2026-11-07) a recording one of whose outages lasted longer, the
+one still going on at the end counted at its length then, is not saved: the
+end answers false, 「錄製中 RTK 中斷 23.4 秒（超過 10 秒），邊界可能不準，未儲存，
+請重新記錄」 (路徑 for a channel), and the recording is discarded as
+`/record_cancel` discards it (trace and marker cleared, rear light off, lease
+given back), since no retry could save it. Outages are not added up. The app
+recognises 「未儲存，請重新記錄」 (`DISCARDED_ZH`) and leaves its recording
+state.
 
 A second start condition, checked after RTK fixed (owner, 2026-11-02): with
 `require_datum` (default true, also in mower_rsd.yaml) the start is refused,

@@ -33,7 +33,7 @@ use r2r::nav_msgs::msg::{Odometry, Path as PathMsg};
 use r2r::sensor_msgs::msg::NavSatFix;
 use r2r::std_msgs::msg::{Bool, String as StringMsg};
 use r2r::std_srvs::srv::Trigger;
-use r2r::visualization_msgs::msg::MarkerArray;
+use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use serde_json::{json, Value};
 
 /// For anything that waits in real time. A pass never waits this long.
@@ -761,6 +761,93 @@ fn a_recording_starts_only_once_the_datum_is_locked() {
                 (false, String::new()),
             ]
         );
+        rec.stop().await;
+    });
+}
+
+/// A recording whose RTK pause lasted more than `max_rtk_pause_s` (10 s by
+/// default; owner, 2026-11-07) is not saved: the end is refused with the
+/// pause's length, and the recording is discarded as a cancel discards it,
+/// since no retry could save it. Nothing is left half-open: nothing to
+/// cancel, nothing saved or listed, the in-progress marker cleared, the rear
+/// light off, the lease given back; the next recording starts and saves.
+#[test]
+fn a_recording_with_a_long_rtk_outage_is_refused_at_the_end_and_discarded() {
+    within("long_outage", |dir| async move {
+        let (clock, manual) = Clock::manual(T0);
+        let rec = Harness::start(clock.clone()).await;
+        let lock = serve_lock(&rec.test);
+        let _nav = rec.nav_active(false);
+        let gps = Gps::start(&rec.test, 2);
+        let pose = rec.test.publisher::<Odometry>("/odometry/global", Qos::default()).unwrap();
+        let mut recorded = rec.test.subscribe::<PathMsg>("/recorded_path", Qos::default()).unwrap();
+        let mut light = rec.latched::<StringMsg>("/mower_base/rear_light");
+        let mut markers = rec.latched::<Marker>("/zone_markers");
+        initialise(&clock, &manual, &pose, &mut recorded).await;
+
+        let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
+        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)].into_iter().enumerate() {
+            sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
+        }
+        while next(&mut markers).await.points.len() < 3 {}
+
+        // RTK float for 13 s of the module's clock, the robot driving on; the
+        // end comes during the outage. Some of the first steps may pass
+        // before the sampler sees the float, so the pause is a little less.
+        gps.set(0).await;
+        for i in 0..130 {
+            pose.publish(&odom(&clock, 0.0, 2.0 - i as f64 * 0.01)).unwrap();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            manual.advance(Duration::from_millis(100));
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(recorded.try_recv().is_err(), "a sample without RTK fixed");
+        let (success, message) = rec.trigger("/record_zone_end").await;
+        assert!(!success, "{message}");
+        let seconds: f64 = message
+            .strip_prefix("錄製中 RTK 中斷 ")
+            .and_then(|m| m.strip_suffix(" 秒（超過 10 秒），邊界可能不準，未儲存，請重新記錄"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("{message}"));
+        assert!(seconds > 10.0 && seconds <= 13.0, "{message}");
+
+        // Discarded: the lease is back, nothing is left to cancel, nothing
+        // was saved, and the zone's marker is cleared.
+        assert_eq!(ops(&lock), [(true, "record zone geometry".to_string()), (false, String::new())]);
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "目前沒有進行中的記錄".to_string()));
+        let zones: GetZoneList::Response = rec.call("/get_record_zone_list", GetZoneList::Request {}).await;
+        assert!(zones.zone_list.markers.is_empty());
+        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("zone_record/zone_list.json")).unwrap()).unwrap();
+        assert_eq!(saved, json!([]));
+        while !next(&mut markers).await.points.is_empty() {}
+        assert!(next(&mut rec.latched::<Marker>("/zone_markers")).await.points.is_empty(), "the marker kept");
+
+        // The rear light goes off on its next tick.
+        let mut last = String::new();
+        for _ in 0..50 {
+            manual.advance(Duration::from_millis(100));
+            let msg = next(&mut light).await;
+            last = serde_json::from_str::<Value>(&msg.data).unwrap()["effect"].as_str().unwrap().to_string();
+            if last == "off" {
+                break;
+            }
+        }
+        assert_eq!(last, "off");
+        let late = next(&mut rec.latched::<StringMsg>("/mower_base/rear_light")).await;
+        assert_eq!(late.data, r#"{"effect":"off","source":"path_record"}"#);
+
+        // RTK fixed again: the next recording starts with no pause of this
+        // one, and saves.
+        gps.set(2).await;
+        pose.publish(&odom(&clock, 0.0, 0.0)).unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(rec.trigger("/record_zone_start").await, (true, "成功記錄區域起始點".to_string()));
+        for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)].into_iter().enumerate() {
+            sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
+        }
+        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄區域結束點 #1".to_string()));
+        assert_eq!(ops(&lock).len(), 4);
         rec.stop().await;
     });
 }

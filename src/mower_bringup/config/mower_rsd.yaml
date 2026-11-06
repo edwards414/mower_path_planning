@@ -182,6 +182,11 @@ path_record_node:
     # is good) at most rtk_fix_max_age_s old (owner, 2026-11-02). The code's
     # default too; false lets a stack without navsat record.
     require_datum: true
+    # A recording one of whose RTK pauses (above) lasted more than this many
+    # seconds is not saved: its end is refused and the recording discarded,
+    # to be recorded again (owner, 2026-11-07). The code's default; 0 turns
+    # the check off.
+    max_rtk_pause_s: 10.0
 
 # --- adapter (rust_adapter) --------------------------------------------------
 flutter_adapter:
