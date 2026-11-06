@@ -32,7 +32,7 @@ use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use tokio::sync::Mutex;
 
 use mower_rs_common::guard::{Guard, RELEASE_UNCONFIRMED};
-use crate::recorder::{Config, Kind, Outputs, Recorder};
+use crate::recorder::{Config, EndReply, Kind, Outputs, Recorder};
 
 struct Publishers {
     logger: String,
@@ -141,10 +141,23 @@ async fn begin_recording(app: &mut App, kind: Kind) -> Result<(), String> {
     Ok(())
 }
 
-async fn end_recording(app: &mut App, result: Result<String, String>) -> (bool, String) {
-    match result {
-        Err(msg) => (false, msg),
-        Ok(mut msg) => {
+/// An end request: saved and ended, the lease goes back; refused with the
+/// recording kept, the lease stays; refused and discarded (an RTK pause over
+/// `max_rtk_pause_s`), the lease goes back as after a cancel.
+async fn end_recording(app: &mut App, kind: Kind) -> (bool, String) {
+    let reply = {
+        let App { rec, out, .. } = &mut *app;
+        rec.end(kind, out)
+    };
+    match reply {
+        EndReply::Refused(msg) => (false, msg),
+        EndReply::Discarded(mut msg) => {
+            if !app.guard.release().await {
+                msg.push_str(RELEASE_SUFFIX_ZH);
+            }
+            (false, msg)
+        }
+        EndReply::Saved(mut msg) => {
             let released = app.guard.release().await;
             if !released {
                 msg.push_str(RELEASE_SUFFIX_SAVED_ZH);
@@ -193,6 +206,9 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         // On by default too: the sim's navsat locks its datum 3 s after it
         // starts, on the sim's RTK fixed fix, as the robot's does.
         require_datum: params::bool(&node, "require_datum", true),
+        // A recording with an RTK pause over 10 s is not saved (owner,
+        // 2026-11-07); 0 or less turns the check off.
+        max_rtk_pause_s: params::f64(&node, "max_rtk_pause_s", 10.0),
     };
     let pose_topic = params::string(&node, "robot_pose_source_topic", "/odometry/global");
     // Red breathing rear light while recording (mower_hardware -> STM32 0x03
@@ -351,13 +367,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             rec.start_zone(out)
         }
     });
-    trigger_service!(m, shared, "/record_zone_end", |app| {
-        let result = {
-            let App { rec, out, .. } = &mut *app;
-            rec.end_zone(out)
-        };
-        end_recording(app, result).await
-    });
+    trigger_service!(m, shared, "/record_zone_end", |app| end_recording(app, Kind::Zone).await);
     trigger_service!(m, shared, "/risk_zone_start", |app| match begin_recording(app, Kind::Risk).await {
         Err(msg) => (false, msg),
         Ok(()) => {
@@ -365,13 +375,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
             rec.start_risk(out)
         }
     });
-    trigger_service!(m, shared, "/risk_zone_end", |app| {
-        let result = {
-            let App { rec, out, .. } = &mut *app;
-            rec.end_risk(out)
-        };
-        end_recording(app, result).await
-    });
+    trigger_service!(m, shared, "/risk_zone_end", |app| end_recording(app, Kind::Risk).await);
     for name in ["/channel_record_start", "/chennal_record_start"] {
         trigger_service!(m, shared, name, |app| match begin_recording(app, Kind::Channel).await {
             Err(msg) => (false, msg),
@@ -382,13 +386,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         });
     }
     for name in ["/channel_record_end", "/chennal_record_end"] {
-        trigger_service!(m, shared, name, |app| {
-            let result = {
-                let App { rec, out, .. } = &mut *app;
-                rec.end_channel(out)
-            };
-            end_recording(app, result).await
-        });
+        trigger_service!(m, shared, name, |app| end_recording(app, Kind::Channel).await);
     }
     trigger_service!(m, shared, "/record_cancel", |app| {
         let cancelled = {
