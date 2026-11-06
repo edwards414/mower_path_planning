@@ -131,5 +131,25 @@ sent: the first three kept, 17 dropped and counted; the node and service
 lists and the counts; a topic of two types; the hashes against E5-1's table,
 read from rosbag2's bags).
 
+### 4. A NUL in a logged message (2026-11-06)
+
+Upstream's `log` (`src/utils.rs`, behind `log_debug!` and the rest) makes C
+strings of the message, the logger's name and the file's name with
+`CString::new(..).unwrap()` while it holds `LOG_GUARD`. A text with a NUL
+panicked there and poisoned the guard, and every later log of the process then
+panicked in `log_guard`'s `unwrap`.
+
+* `c_text` writes a NUL out as the two characters `\0`, so the message is logged
+  whole and `log` has no way left to panic on its arguments.
+* `log_guard` survives a poisoned lock. The guard holds no data, and its only
+  other holder, `Context::create`, runs C under it, so nothing can be left half
+  done; this keeps any later panic under it from ending the process's logging.
+  It is `#[doc(hidden)] pub`, like `log` beside it, for the test.
+
+Tested in the workspace on rmw_cyclonedds: `crates/mower_ws_bridge/tests/log_nul.rs`
+(what `log` writes for each argument, read from a process of its own; a panic
+under the guard, then a log; the bridge's log lines on both backends, then the
+connection, a later client and logging).
+
 To update r2r: copy the new release here, reapply the `mower_rs patch` hunks
 (or drop them if upstream fixed it), update the version and checksum above.
