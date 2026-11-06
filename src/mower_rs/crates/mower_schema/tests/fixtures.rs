@@ -74,3 +74,24 @@ fn the_mower_interface_copy_is_the_repo_s() {
     let copy = mower_schema::lookup("mower_interface/msg/CoverageProgress").unwrap().text;
     assert_eq!(std::fs::read_to_string(repo).unwrap(), copy, "rerun gen/gen_schema.py");
 }
+
+/// A changed or new interface in `src/mower_interface` fails here until the
+/// generators have run: every file of the package, byte for byte.
+#[cfg(feature = "interfaces")]
+#[test]
+fn every_interface_of_mower_interface_is_the_repo_s() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../mower_interface");
+    let copies = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut seen = 0;
+    for kind in ["msg", "srv", "action"] {
+        for entry in std::fs::read_dir(repo.join(kind)).unwrap() {
+            let path = entry.unwrap().path();
+            let file = path.file_name().unwrap();
+            let copy = copies.join(kind).join("mower_interface").join(file);
+            let text = std::fs::read(&copy).unwrap_or_else(|e| panic!("{}: {e}: rerun gen/gen_schema.py", copy.display()));
+            assert!(std::fs::read(&path).unwrap() == text, "{}: rerun gen/gen_schema.py and gen/gen_types.py", path.display());
+            seen += 1;
+        }
+    }
+    assert!(seen >= 19, "{seen}");
+}

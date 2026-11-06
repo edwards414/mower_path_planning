@@ -1266,6 +1266,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mower_msgs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mower_msgs_ros"
+version = "0.1.0"
+dependencies = [
+ "mower_bus",
+ "mower_cdr",
+ "mower_msgs",
+ "mower_schema",
+ "r2r",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mower_mux"
 version = "0.1.0"
 dependencies = [
@@ -1382,7 +1403,9 @@ name = "mower_ros_facts"
 version = "0.1.0"
 dependencies = [
  "mcap",
+ "mower_bus",
  "mower_cdr",
+ "mower_msgs",
  "mower_schema",
  "serde_json",
  "serde_yaml",

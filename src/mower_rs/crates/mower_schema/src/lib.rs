@@ -205,6 +205,8 @@ pub fn rosbag2_dependencies(text: &str, pkg: &str) -> BTreeSet<String> {
 
 /// The parsed layout of a type in the table (cached).
 pub fn message(name: &str) -> Result<&'static MsgDef, ParseError> {
+    #[cfg(feature = "interfaces")]
+    if let Some(layout) = interfaces::layout(name) { return layout; }
     static CACHE: OnceLock<HashMap<&'static str, Result<MsgDef, ParseError>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| {
         table::TYPES
@@ -219,6 +221,12 @@ pub fn message(name: &str) -> Result<&'static MsgDef, ParseError> {
         None => Err(ParseError::new(name, 0, "not in mower_schema's table")),
     }
 }
+
+// At the end, and off by default: what production builds of this crate compile does not move.
+#[cfg(feature = "interfaces")]
+mod interfaces;
+#[cfg(feature = "interfaces")]
+pub use interfaces::{any_type_hash, interface_roots, interfaces, message_names, Interface};
 
 #[cfg(test)]
 mod tests {

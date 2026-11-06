@@ -22,6 +22,7 @@ export MOWER_GOLDEN=write CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/oracle-targ
 # Each of these writes its file only after rcl or rmw gave the answer.
 cargo test --locked -p mower_bridge --test resolver --test param_overrides
 cargo test --locked -p mower_cdr --test rmw_oracle the_frozen_vectors
+cargo test --locked -p mower_msgs_ros --test parity the_frozen_files
 cargo test --locked -p mower_ws_bridge --test golden_cdr
 cargo test --locked -p mower_bus_ros --test dds the_golden_corpus
 unset MOWER_GOLDEN

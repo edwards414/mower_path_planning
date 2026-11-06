@@ -7,11 +7,9 @@
 //!
 //! - Messages (`publish.txt`, `inbound.txt`): compared byte for byte, values
 //!   included.
-//! - Services (`request.txt`, `service_response.txt`): `mower_schema` has no
-//!   service types yet (E9-22 needs them too), so they are checked for being
+//! - Services (`request.txt`, `service_response.txt`): checked here for being
 //!   the canonical form of their own JSON, and `SHA256SUMS` holds their values.
-//!   The typed comparison comes with E9-22's types: `fixtures.rs` only names
-//!   r2r's in its imports.
+//!   `plain_corpus.rs` makes the typed comparison, on E9-22's types.
 //!
 //! Field names and JSON kinds are those of `mower_schema`'s `.msg` files: what
 //! E9-22's generated types have to serialize to.

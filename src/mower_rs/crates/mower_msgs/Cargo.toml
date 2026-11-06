@@ -1,0 +1,14 @@
+[package]
+name = "mower_msgs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The ROS 2 interface types the crates use, as plain Rust with no ROS: generated from mower_schema's files, r2r's module layout, serde and defaults (E9-22)"
+
+# serde alone: no r2r, no ROS, not even as a dev-dependency (tools/oracle/facts_no_ros.sh).
+# The r2r side is mower_msgs_ros.
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

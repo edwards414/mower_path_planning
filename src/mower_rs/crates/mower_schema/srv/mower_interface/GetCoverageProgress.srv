@@ -1,0 +1,10 @@
+---
+bool success
+string message
+# The current execution, or the last one (restored from the checkpoint after
+# a restart).
+mower_interface/CoverageProgress progress
+# The checkpoint on disk; checkpoint.checkpoint_available says whether
+# /resume_coverage can continue it (then checkpoint.zone_id is the zone and
+# checkpoint.completed_segments + 1 the segment it would start at).
+mower_interface/CoverageProgress checkpoint

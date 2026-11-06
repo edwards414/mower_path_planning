@@ -1,0 +1,4 @@
+string dispatch_id
+---
+bool success
+string message

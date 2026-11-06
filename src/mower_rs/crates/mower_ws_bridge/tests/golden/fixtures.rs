@@ -24,7 +24,8 @@
 //!   for the message cases to `deploy/test/golden/ros_facts/json_corpus_cdr.txt`,
 //!   and `mower_ros_facts/tests/json_corpus.rs` makes these frames from them
 //!   with `mower_cdr` and no ROS. Only the imports here name r2r: E9-22's types
-//!   replace them, and every case must still give the same bytes.
+//!   replace them, and every case must still give the same bytes
+//!   (`mower_ros_facts/tests/plain_corpus.rs` compiles this file on them already).
 //! - **No NUL** in any string: r2r cannot carry one (its conversion
 //!   panics), so ws_bridge's bus backend refuses it at the door instead.
 
