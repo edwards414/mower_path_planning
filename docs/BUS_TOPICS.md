@@ -220,7 +220,7 @@ Each citation is `alias:line`.
 | `/chennal_map` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:976) | — | rviz | on change | no | bus only |
 | `/chennal_map_inflated` | `OccupancyGrid` | `map_manage`, `R TL 1` (mower_map:977) | `flutter_adapter`, `R TL 1` (mower_adapter:39) | — | on change | no | in-process only |
 | `/coverage_path` | `nav_msgs/Path` | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1742) | — | rviz | per plan | no | bus only |
-| `/coverage_path_markers`, `/coverage_invalid_segments`, `/coverage_connectors` | `visualization_msgs/MarkerArray` | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1743-1745) | `flutter_adapter`, `R TL 1` (mower_adapter:46-48, 199-204) | rviz | per plan; size unknown | no | in-process only |
+| `/coverage_path_markers`, `/coverage_invalid_segments`, `/coverage_connectors` | `visualization_msgs/MarkerArray` | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1743-1745) | `flutter_adapter`, `R TL 1` (mower_adapter:46-48, 199-204); `nav_action_server` (`/coverage_path_markers` only, `R TL 1`: is a checkpoint still for the zone's path) | rviz | per plan; size unknown | no | in-process only |
 | `/zone_sequence_status` | `String`, JSON | `boustrophedon_coverage`, `R TL 1` (mower_coverage:1748) | — | app via ws_bridge (app/mission_mock_provider:593, 602-609) | on change | no | bus→DDS until E3 |
 | `/zone_list`, `/risk_zone_list`, `/chennal_path_array` | `MarkerArray` | `path_record_node`, `R TL 1` (mower_record:192, 194, 197) | `flutter_adapter`, `R TL 1` (mower_adapter:43-45) | rviz | on change | no | in-process only |
 | `/zone_markers`, `/risk_zone_markers`, `/channel_path_array` | `Marker`, `Marker`, `MarkerArray` | `path_record_node`, `R TL 1` (mower_record:191, 193, 198) | — | rviz | on change | no | bus only |
@@ -291,13 +291,13 @@ None of the following has an endpoint in `mower_rsd`:
 | `/cancel_nav2` | `std_srvs/Trigger` | `nav_action_server` (mower_nav:1791-1792) | — | app; retried every 2 s while a start is ambiguous (app/mission_mock_provider:3545) | DDS→bus until E3 |
 | `/cencel_nav2` | `Trigger` | same | — | allowed (ws_bridge.yaml:56); no client found | bus only |
 | `/check_nav_status` | `Trigger` | `nav_action_server` (mower_nav:1838) | `boustrophedon_coverage` (mower_coverage:1766) | app every 1 s (app/mission_mock_provider:50, 3605-3620, 3990-3995); probe_app.py:39 | in-process; DDS→bus until E3 |
-| `/coverage_progress_status` | `mower_interface/GetCoverageProgress` | `nav_action_server` (mower_nav:1824) | `boustrophedon_coverage` (mower_coverage:1767) | allowed (ws_bridge.yaml:58); not called by the app or the Studio | in-process |
+| `/coverage_progress_status` | `mower_interface/GetCoverageProgress` | `nav_action_server` (mower_nav:1824) | `boustrophedon_coverage` (mower_coverage:1767) | allowed (ws_bridge.yaml:58); app (mission provider, every 30 s while stopped), not the Studio | DDS→bus until E3 |
 | `/confirm_navigation_dispatch` | `mower_interface/ConfirmNavigationDispatch` | `nav_action_server` (mower_nav:1856) | `boustrophedon_coverage` (mower_coverage:1764) | — | in-process |
 | `/cancel_navigation_dispatch` | `mower_interface/CancelNavigationDispatch` | `nav_action_server` (mower_nav:1881) | `boustrophedon_coverage` (mower_coverage:1765) | — | in-process |
 | `/mission_operation_lock` | `mower_interface/MissionOperationLock` | `nav_action_server` (mower_nav:1933) | `map_manage` (mower_map:981); `boustrophedon_coverage` (mower_coverage:1737); `path_record_node` (mower_record:208); `pid_autotune`, through its `lock_service` parameter (mower_pid_autotune:813, 841) | — | in-process |
 | `/generate_coverage_path` | `Trigger` | `boustrophedon_coverage` (mower_coverage:1810) | — | app (app/mission_mock_provider:2589, 2753, 2968) | DDS→bus until E3 |
 | `/zone_exec_path` | `mower_interface/ZoneExecPath` | `boustrophedon_coverage` (mower_coverage:1843) | — | app (app/mission_mock_provider:3348) | DDS→bus until E3 |
-| `/resume_coverage` | `mower_interface/ResumeCoverage` | `boustrophedon_coverage` (mower_coverage:1875) | — | allowed (ws_bridge.yaml:59); no client found | bus only |
+| `/resume_coverage` | `mower_interface/ResumeCoverage` | `boustrophedon_coverage` (mower_coverage:1875) | — | allowed (ws_bridge.yaml:59); app (繼續割草), not the Studio | DDS→bus until E3 |
 | `/run_zone_sequence` | `mower_interface/ZoneSequence` | `boustrophedon_coverage` (mower_coverage:1893) | — | app (app/mission_mock_provider:3380) | DDS→bus until E3 |
 | `/stop_zone_sequence` | `Trigger` | `boustrophedon_coverage` (mower_coverage:1934) | — | app (app/mission_mock_provider:3535) | DDS→bus until E3 |
 | `/boustrophedon_coverage/get_parameters` | `rcl_interfaces/GetParameters` | `boustrophedon_coverage` (mower_coverage:1957) | `flutter_adapter`, every second (mower_adapter:238-241, 249-260) | recorder's `ros2 param dump` at the start of a run (record.launch.py:85-86; recorder_manager:399-404) | in-process; DDS→bus until E5 |
@@ -424,9 +424,8 @@ names on the bus. The bus→DDS faces stay (E3 design D3) and the DDS→bus ones
   - `/battery_state`, `/fix`, `/gps/status`, `/pid_autotune/status`
   - `/coverage_progress`, if a client appears
 - *DDS→bus:* `/app_joy_cmd`, `/mower_base/servo_command`, `/mower_base/blade_command`.
-- *Services, DDS client to bus server:* the 27 services in ws_bridge.yaml:34-66 that the app or the Studio calls. That is
-  the 32 entries, minus `/cencel_nav2`, `/coverage_progress_status` and `/resume_coverage` (no client), minus the two
-  `/mower_recorder/*` ones.
+- *Services, DDS client to bus server:* the 29 services in ws_bridge.yaml:34-66 that the app or the Studio calls. That is
+  the 32 entries, minus `/cencel_nav2` (no client), minus the two `/mower_recorder/*` ones.
 - `/rosapi/topics` lists only what is visible on DDS (3.3).
 
 **Until E4 (twist_mux, robot_state_publisher).** Done with E4-5 while `RUST_MUX` and `RUST_STATIC_TF` are on (with
@@ -677,8 +676,7 @@ Note that `mission.launch.py` passes the old separate binaries some of these val
    recorder's param dump. The app's only parameter call is `/boustrophedon_coverage/set_parameters`.
 5. **Unused policy entries.**
    - With no producer: `/gps/fix` (ws_bridge.yaml:18).
-   - Allowed but with no client in the app or the Studio: `/coverage_progress`, `/resume_coverage`,
-     `/coverage_progress_status` and `/cencel_nav2`.
+   - Allowed but with no client in the app or the Studio: `/coverage_progress` and `/cencel_nav2`.
    - Used only by the Studio, not the app: `/robot/telemetry`, `/pid_autotune/status`, `/pid_autotune`,
      `/mower_base/servo_command` and `/mower_base/blade_command`.
 6. **The modules' logs are not on `/rosout`.** rcl publishes a log to `/rosout` only under a node that has a rosout

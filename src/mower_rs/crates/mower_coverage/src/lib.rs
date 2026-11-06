@@ -1327,6 +1327,10 @@ impl Ctx {
 
     /// `/resume_coverage`.
     async fn resume_coverage(self: &Arc<Self>, handles: &Handles, requested_zone: i32) -> (bool, String) {
+        // first: between two legs nav is idle, and the next leg is on its way
+        if self.sequence_alive() {
+            return (false, "已有任務序列執行中，不能續割；請先呼叫 /stop_zone_sequence".into());
+        }
         if let Some(message) = self.guard.lock().await.reject_reason("resume a coverage mission") {
             return (false, message);
         }
@@ -1418,11 +1422,20 @@ impl Ctx {
             // running.
             Err(BusError::GoalRejected { .. }) => {
                 let mut reason: Option<String> = None;
-                if let Some(status) = self.blocking_call(&self.nav_status_client, &Trigger::Request::default(), 1.0).await {
-                    if status.success {
-                        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&status.message) {
-                            if let Some(s) = payload.get("block_reason").and_then(|v| v.as_str()) {
-                                reason = Some(s.trim().to_string());
+                // A resume nav refused: it says why next to the checkpoint.
+                // /check_nav_status only knows why no goal could start now.
+                if resume_segment_index != 0 {
+                    if let Some(status) = self.blocking_call(&self.progress_client, &GetCoverageProgress::Request::default(), 1.0).await {
+                        reason = Some(status.checkpoint.message).filter(|m| m.starts_with("cannot resume:"));
+                    }
+                }
+                if reason.is_none() {
+                    if let Some(status) = self.blocking_call(&self.nav_status_client, &Trigger::Request::default(), 1.0).await {
+                        if status.success {
+                            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&status.message) {
+                                if let Some(s) = payload.get("block_reason").and_then(|v| v.as_str()) {
+                                    reason = Some(s.trim().to_string());
+                                }
                             }
                         }
                     }

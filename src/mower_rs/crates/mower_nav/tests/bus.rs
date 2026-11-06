@@ -41,6 +41,7 @@ use r2r::nav_msgs::msg::{OccupancyGrid, Odometry, Path};
 use r2r::sensor_msgs::msg::{Imu, NavSatFix};
 use r2r::std_msgs::msg::{Bool, String as Text};
 use r2r::std_srvs::srv::Trigger;
+use r2r::visualization_msgs::msg::{Marker, MarkerArray};
 use r2r::{Parameter, ParameterValue, QosProfile};
 use serde_json::Value;
 
@@ -466,7 +467,7 @@ fn nav_s_endpoints_are_on_the_bus_under_their_ros_names_and_in_the_manifest() {
         for name in ["/nav_operation_active", "/navigation_safety_stop", "/navigation_coordinator_lock", "/split_path", "/coverage_split_points", "/coverage_progress"] {
             assert!(writes(name), "{name}");
         }
-        for name in ["/joy_cmd", "/physical_joy_cmd", "/keyboard_cmd_vel", "/adapter/robot_pose", "/imu/data", "/fix", "/odometry/gps", "/rosout"] {
+        for name in ["/joy_cmd", "/physical_joy_cmd", "/keyboard_cmd_vel", "/adapter/robot_pose", "/imu/data", "/fix", "/odometry/gps", "/rosout", "/coverage_path_markers"] {
             assert!(reads(name), "{name}");
         }
         nav.stop().await;
@@ -891,6 +892,278 @@ fn a_resume_after_a_restart_goes_on_inside_the_segment() {
         let (navigated, followed) = stop_and_resume(1.0, (1.02, 0.03), true, "resume_restart").await;
         assert_eq!(navigated, 0, "no navigation back");
         assert_close(followed[0].0, 0.97, "the rest of segment 1 starts");
+    });
+}
+
+async fn coverage_progress(nav: &Nav) -> GetCoverageProgress::Response {
+    call(&nav.test, "/coverage_progress_status", GetCoverageProgress::Request::default()).await
+}
+
+/// Ask `/coverage_progress_status` until `done` says yes.
+async fn until_checkpoint(nav: &Nav, what: &str, done: impl Fn(&CoverageProgress) -> bool) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let checkpoint = coverage_progress(nav).await.checkpoint;
+        if done(&checkpoint) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}: {:?} {}", checkpoint.checkpoint_available, checkpoint.message);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A goal held on its first segment, canceled there: a stopped mission of
+/// `goal`'s zone with a checkpoint, as it stands when a person looks at it.
+async fn stopped_mission(nav: &Nav, nav2: &FakeNav2, client: &ActionClient<WaypointAction>, goal: Waypoint::Goal) {
+    nav2.hold_left_m(Some(1.0));
+    let followed = nav2.followed_x().len();
+    let (goal, result, _feedback) = nav.dispatch(client, goal).await;
+    eventually("segment 1", || nav2.followed_x().len() > followed).await;
+    wait("the cancel", goal.cancel().unwrap()).await.unwrap();
+    wait("the result", result).await.unwrap();
+    nav2.hold_left_m(None);
+}
+
+/// What mower_coverage publishes on `/coverage_path_markers` for one zone: its
+/// path as a LINE_STRIP in `zone_N_path`, and arrows that are not the path.
+fn drawn(zone: i32, path: &Path) -> MarkerArray {
+    let mut line = Marker::default();
+    line.ns = format!("zone_{zone}_path");
+    line.type_ = 4;
+    line.points = path.poses.iter().map(|p| p.pose.position.clone()).collect();
+    let mut arrow = Marker::default();
+    arrow.ns = format!("zone_{zone}_arrows");
+    arrow.type_ = 0;
+    MarkerArray { markers: vec![line, arrow] }
+}
+
+/// A plan the planner replaced: `checkpoint_available` says so, for the zone it
+/// names, and says true again for a plan that gives the same path. Before this
+/// it was true whatever the zones' paths were, and the resume was then refused.
+#[test]
+fn checkpoint_available_follows_the_path_the_zone_has_now() {
+    within(async {
+        let dir = dir("checkpoint_path");
+        let nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let mut nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let client = nav.client();
+        let goal = mission(&dispatch_id());
+        let path = goal.path.clone();
+        stopped_mission(&nav, &nav2, &client, goal).await;
+
+        // nothing to compare with (mower_coverage has drawn nothing yet)
+        let c = coverage_progress(&nav).await.checkpoint;
+        assert!(c.checkpoint_available, "{}", c.message);
+        assert_eq!(c.zone_id, 7);
+
+        let plan = bus.scope("boustrophedon_coverage").publisher::<MarkerArray>("/coverage_path_markers", Qos::latched()).unwrap();
+        plan.publish(&drawn(7, &path)).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let c = coverage_progress(&nav).await.checkpoint;
+        assert!(c.checkpoint_available && c.message.starts_with("Resumable"), "the same path: {}", c.message);
+
+        let mut other = path.clone();
+        other.poses[3].pose.position.y = 0.5;
+        plan.publish(&drawn(7, &other)).unwrap();
+        until_checkpoint(&nav, "the changed path", |c| !c.checkpoint_available).await;
+        let status = coverage_progress(&nav).await;
+        assert!(status.checkpoint.message.contains("coverage path or split parameters changed"), "{}", status.checkpoint.message);
+        assert!(!status.progress.checkpoint_available, "the progress says the same");
+
+        // being replanned: the planner clears its drawing first
+        let mut clear = Marker::default();
+        clear.action = 3;
+        plan.publish(&MarkerArray { markers: vec![clear] }).unwrap();
+        until_checkpoint(&nav, "no path", |c| c.message.starts_with("zone 7 has no coverage path")).await;
+        assert!(!coverage_progress(&nav).await.checkpoint.checkpoint_available);
+
+        // another zone's path says nothing about zone 7's
+        plan.publish(&drawn(8, &path)).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!coverage_progress(&nav).await.checkpoint.checkpoint_available);
+
+        // the planner is deterministic: the same zone, the same path
+        plan.publish(&drawn(7, &path)).unwrap();
+        until_checkpoint(&nav, "the path back", |c| c.checkpoint_available).await;
+
+        // a restart reads the latched drawing and the checkpoint's hash again
+        plan.publish(&drawn(7, &other)).unwrap();
+        until_checkpoint(&nav, "changed again", |c| !c.checkpoint_available).await;
+        nav.stop().await;
+        nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        until_checkpoint(&nav, "changed after the restart", |c| !c.checkpoint_available).await;
+        plan.publish(&drawn(7, &path)).unwrap();
+        until_checkpoint(&nav, "back after the restart", |c| c.checkpoint_available).await;
+
+        // and what it offers is what it takes
+        let client = nav.client();
+        let mut resume = mission(&dispatch_id());
+        resume.resume_segment_index = 1;
+        let (_goal, result, _feedback) = nav.dispatch(&client, resume).await;
+        assert_eq!(wait("the result", result).await.unwrap().0, GoalStatus::Succeeded);
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// A resume refused for its path says why next to the checkpoint, where its
+/// caller can read it (the action's rejection has no words), until the next
+/// goal gets past that check or the plan changes.
+#[test]
+fn a_refused_resume_says_why_next_to_the_checkpoint() {
+    within(async {
+        let dir = dir("resume_refusal");
+        let nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let client = nav.client();
+        stopped_mission(&nav, &nav2, &client, mission(&dispatch_id())).await;
+
+        let mut other = mission(&dispatch_id());
+        other.path.poses[3].pose.position.y = 0.5;
+        other.resume_segment_index = 1;
+        assert!(rejected(wait("the goal response", client.send_goal_request(other).unwrap()).await));
+        let c = coverage_progress(&nav).await.checkpoint;
+        assert_eq!(
+            c.message,
+            "cannot resume: coverage path or split parameters changed since the checkpoint; regenerate and start over"
+        );
+        // nothing but that goal said anything about the path the zone has now
+        assert!(c.checkpoint_available);
+
+        let plan = bus.scope("boustrophedon_coverage").publisher::<MarkerArray>("/coverage_path_markers", Qos::latched()).unwrap();
+        plan.publish(&drawn(7, &mission("").path)).unwrap();
+        until_checkpoint(&nav, "the refusal gone with the plan", |c| c.message.starts_with("Resumable")).await;
+
+        // the right path after a refused one
+        let mut other = mission(&dispatch_id());
+        other.path.poses[3].pose.position.y = 0.5;
+        other.resume_segment_index = 1;
+        assert!(rejected(wait("the goal response", client.send_goal_request(other).unwrap()).await));
+        assert!(coverage_progress(&nav).await.checkpoint.message.starts_with("cannot resume:"));
+        let mut resume = mission(&dispatch_id());
+        resume.resume_segment_index = 1;
+        let (_goal, result, _feedback) = nav.dispatch(&client, resume).await;
+        assert!(!coverage_progress(&nav).await.checkpoint.message.starts_with("cannot resume:"));
+        assert_eq!(wait("the result", result).await.unwrap().0, GoalStatus::Succeeded);
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// A sequence's channel leg is a goal with no zone. Stopped, it left a
+/// checkpoint that said it could be continued, and `/resume_coverage` then
+/// answered "Zone not found". It does not say so now, and nav takes no such
+/// resume either.
+#[test]
+fn a_goal_with_no_zone_leaves_nothing_to_resume() {
+    within(async {
+        let dir = dir("channel_leg");
+        let nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let client = nav.client();
+        let mut channel = mission(&dispatch_id());
+        channel.zone_id = -1;
+        stopped_mission(&nav, &nav2, &client, channel).await;
+        let status = coverage_progress(&nav).await;
+        assert!(!status.checkpoint.checkpoint_available && !status.progress.checkpoint_available);
+        assert_eq!((status.checkpoint.zone_id, status.checkpoint.message.as_str()), (-1, "Checkpoint is not resumable"));
+        let mut resume = mission(&dispatch_id());
+        resume.zone_id = -1;
+        resume.resume_segment_index = 1;
+        assert!(rejected(wait("the goal response", client.send_goal_request(resume).unwrap()).await));
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// The health gate stops a goal: the state stays `canceled`, as the cancel it
+/// is, and the status says what stopped it. Before this it said only "Follow
+/// coverage segment 1 canceled", so a trip read like a person's stop. The next
+/// goal does not inherit it, and a person's stop does not get it.
+#[test]
+fn a_safety_stop_says_why_and_the_next_goal_starts_clean() {
+    within(async {
+        let dir = dir("safety_stop");
+        let nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[("require_navigation_health", ParameterValue::Bool(true))]).await;
+        let client = nav.client();
+        let sensors = bus.scope("sensors");
+        let (pose_pub, fix_pub, odom_pub, imu_pub) = (
+            sensors.publisher::<PoseStamped>("/adapter/robot_pose", Qos::default()).unwrap(),
+            sensors.publisher::<NavSatFix>("/fix", Qos::default()).unwrap(),
+            sensors.publisher::<Odometry>("/odometry/gps", Qos::default()).unwrap(),
+            sensors.publisher::<Imu>("/imu/data", Qos::default()).unwrap(),
+        );
+        let feeding = Arc::new(AtomicBool::new(true));
+        let feed_imu = Arc::new(AtomicBool::new(true));
+        let feeder = {
+            let (feeding, feed_imu) = (feeding.clone(), feed_imu.clone());
+            tokio::spawn(async move {
+                let clock = Clock::system();
+                while feeding.load(Ordering::SeqCst) {
+                    let (sec, nanosec) = clock.now().to_parts();
+                    let stamp = r2r::builtin_interfaces::msg::Time { sec, nanosec };
+                    let mut p = pose(1.0, 2.0);
+                    p.header.stamp = stamp.clone();
+                    let _ = pose_pub.publish(&p);
+                    let mut fix = NavSatFix::default();
+                    fix.header.stamp = stamp.clone();
+                    (fix.latitude, fix.longitude, fix.status.status) = (25.0, 121.5, 2);
+                    fix.position_covariance = vec![0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
+                    fix.position_covariance_type = 2;
+                    let _ = fix_pub.publish(&fix);
+                    let mut odom = Odometry::default();
+                    odom.header.stamp = stamp.clone();
+                    odom.header.frame_id = "map".into();
+                    odom.pose.covariance = vec![0.0; 36];
+                    (odom.pose.covariance[0], odom.pose.covariance[7]) = (0.0001, 0.0001);
+                    let _ = odom_pub.publish(&odom);
+                    if feed_imu.load(Ordering::SeqCst) {
+                        let mut imu = Imu::default();
+                        imu.header.stamp = stamp;
+                        imu.header.frame_id = "imu_link".into();
+                        imu.orientation.w = 1.0;
+                        let cov = vec![0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01];
+                        (imu.orientation_covariance, imu.angular_velocity_covariance) = (cov.clone(), cov.clone());
+                        imu.linear_acceleration_covariance = cov;
+                        let _ = imu_pub.publish(&imu);
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+        };
+        nav.until_status("a healthy picture", |s| s["ready"] == true).await;
+
+        nav2.hold_left_m(Some(1.0));
+        let (_goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+        eventually("segment 1", || !nav2.followed_x().is_empty()).await;
+        feed_imu.store(false, Ordering::SeqCst);
+        let (status, _) = wait("the result", result).await.unwrap();
+        assert_eq!(status, GoalStatus::Aborted, "the stop itself is what it was");
+        assert_eq!(nav2.canceled(), 1, "and nav2's goal was canceled for it");
+
+        let reason = "Follow coverage segment 1 canceled: Navigation safety stop: IMU is unavailable or stale";
+        let checked = nav.status().await;
+        assert_eq!((checked["state"].as_str(), checked["message"].as_str()), (Some("canceled"), Some(reason)));
+        let progress = coverage_progress(&nav).await.progress;
+        assert_eq!((progress.status_text.as_str(), progress.message.as_str()), ("canceled", reason));
+
+        // back to health, a goal a person stops: nothing of the trip in it
+        feed_imu.store(true, Ordering::SeqCst);
+        nav.until_status("healthy again", |s| s["ready"] == true).await;
+        stopped_mission(&nav, &nav2, &client, mission(&dispatch_id())).await;
+        let plain = "Follow coverage segment 1 canceled";
+        assert_eq!(nav.status().await["message"].as_str(), Some(plain));
+        assert_eq!(coverage_progress(&nav).await.progress.message, plain);
+
+        feeding.store(false, Ordering::SeqCst);
+        let _ = feeder.await;
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
     });
 }
 

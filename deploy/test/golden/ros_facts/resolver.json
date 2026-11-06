@@ -204,6 +204,7 @@
   {"node":"nav_action_server","space":"service","code":"/mission_operation_lock","name":"/mission_operation_lock","type":"mower_interface/srv/MissionOperationLock"},
   {"node":"nav_action_server","space":"service","code":"bt_navigator/get_state","name":"/bt_navigator/get_state","type":"lifecycle_msgs/srv/GetState"},
   {"node":"nav_action_server","space":"topic","code":"/adapter/robot_pose","name":"/adapter/robot_pose","type":"geometry_msgs/msg/PoseStamped"},
+  {"node":"nav_action_server","space":"topic","code":"/coverage_path_markers","name":"/coverage_path_markers","type":"visualization_msgs/msg/MarkerArray"},
   {"node":"nav_action_server","space":"topic","code":"/coverage_progress","name":"/coverage_progress","type":"mower_interface/msg/CoverageProgress"},
   {"node":"nav_action_server","space":"topic","code":"/coverage_split_points","name":"/coverage_split_points","type":"visualization_msgs/msg/Marker"},
   {"node":"nav_action_server","space":"topic","code":"/fix","name":"/fix","type":"sensor_msgs/msg/NavSatFix"},

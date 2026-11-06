@@ -370,6 +370,8 @@ pub static MODULES: &[Module] = &[
                 subscribes::<Imu>("/imu/data", BE_V_5).param("imu_topic"),
                 subscribes::<NavSatFix>("/fix", BE_V_5).param("gps_fix_topic"),
                 subscribes::<Odometry>("/odometry/gps", R_V_10).param("gps_odometry_topic"),
+                // the zones' paths, to say that a checkpoint is for another one
+                subscribes::<MarkerArray>("/coverage_path_markers", R_TL_1),
                 // nav2 backend: nav2's warnings for the failure messages
                 subscribes::<Log>("/rosout", R_V_100),
                 serves::<Trigger::Service>("/cancel_nav2"),
