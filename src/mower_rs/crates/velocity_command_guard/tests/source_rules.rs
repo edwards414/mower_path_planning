@@ -18,8 +18,9 @@ fn bus() -> Source {
     Source::new("velocity_command_guard/src/bus.rs", include_str!("../src/bus.rs"))
 }
 
-/// The limits default to the Python guard's. The final guard runs on these:
-/// twist_mux.launch.py and mower_rsd.yaml set only the manual guard's
+/// The limits default to the Python guard's. mower_rsd.yaml, which production
+/// runs on, sets the manual guard's session and input age and both guards'
+/// receipt timeout (0.25 s); twist_mux.launch.py sets only the manual guard's
 /// session and input age. Both IOs read them with `read_limits`.
 #[test]
 fn the_limits_default_to_the_python_guard_s() {

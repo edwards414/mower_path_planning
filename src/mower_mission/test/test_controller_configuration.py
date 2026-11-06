@@ -1410,6 +1410,20 @@ def test_manual_guard_allows_the_relay_round_trip_and_nothing_else_does():
     assert 'max_input_age_s' not in final_rsd
 
 
+def test_the_guards_receipt_timeout_is_within_the_base_s_cmd_vel_timeout():
+    """The base brakes by itself once cmd_vel is cmd_vel_timeout old, so a guard
+    timeout past that changes what the log says and not when the wheels stop;
+    and it would leave the base alone as the line under a silent guard."""
+    rsd = MOWER_RSD_PARAMS.read_text(encoding='utf-8')
+    manual = rsd.split('\nmanual_velocity_guard:\n', 1)[1].split('\nvelocity_command_guard:\n', 1)[0]
+    final = re.split(r'\n\S', rsd.split('\nvelocity_command_guard:\n', 1)[1], maxsplit=1)[0]
+    limit = float(_scalar(REAL_CONTROLLER, 'cmd_vel_timeout'))
+    for section in (manual, final):
+        value = re.search(r'command_timeout_s: ([0-9.]+)', section)
+        assert value is not None
+        assert float(value.group(1)) <= limit
+
+
 def test_production_rosbridge_binds_only_wireguard_address():
     source = DEPLOY_COMPOSE.read_text(encoding='utf-8')
     assert 'rosbridge_address:=${ROSBRIDGE_ADDRESS:-10.77.0.2}' in source
