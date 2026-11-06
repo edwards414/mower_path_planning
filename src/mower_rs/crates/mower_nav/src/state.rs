@@ -14,7 +14,12 @@ use crate::geometry;
 pub struct SafetyParams {
     pub manual_command_hold_s: f64,
     pub require_navigation_health: bool,
+    /// How old a sample of the IMU may get before the gate closes.
     pub navigation_health_timeout_s: f64,
+    /// The same for `/fix` and navsat's `/odometry/gps`, 4 Hz sources.
+    pub navigation_health_gps_timeout_s: f64,
+    /// The same for `/adapter/robot_pose`, a 5 Hz source.
+    pub navigation_health_pose_timeout_s: f64,
     pub navigation_health_max_future_skew_s: f64,
     pub max_gps_horizontal_sigma_m: f64,
     pub max_imu_orientation_sigma_rad: f64,
@@ -25,6 +30,14 @@ pub struct SafetyParams {
 impl SafetyParams {
     pub fn health_timeout_s(&self) -> f64 {
         self.navigation_health_timeout_s.max(0.10)
+    }
+
+    pub fn gps_timeout_s(&self) -> f64 {
+        self.navigation_health_gps_timeout_s.max(0.10)
+    }
+
+    pub fn pose_timeout_s(&self) -> f64 {
+        self.navigation_health_pose_timeout_s.max(0.10)
     }
 }
 
@@ -79,6 +92,8 @@ pub struct NavState {
     pub mutation_operation: Option<String>,
     pub manual_command_deadlines: HashMap<String, Mono>,
     pub invalid_manual_command_deadlines: HashMap<String, Mono>,
+    /// When the newest good sample was taken (`Ctx::sampled_at`): its receipt
+    /// less its stamp's age, for /fix, /odometry/gps and the pose.
     pub valid_fix_received_at_by_topic: HashMap<String, Mono>,
     pub fix_rejections_by_topic: HashMap<String, String>,
     pub last_gps_odometry_received_at: Option<Mono>,
@@ -108,8 +123,7 @@ impl NavState {
         if !params.require_navigation_health {
             return None;
         }
-        let timeout_s = params.health_timeout_s();
-        if Self::stale(self.last_robot_pose_received_at, now, timeout_s) {
+        if Self::stale(self.last_robot_pose_received_at, now, params.pose_timeout_s()) {
             return Some(self.robot_pose_rejection_reason.clone().unwrap_or_else(|| "robot pose/TF is unavailable or stale".into()));
         }
         if self.valid_fix_received_at_by_topic.is_empty() {
@@ -122,13 +136,13 @@ impl NavState {
             return Some("GPS fix is unavailable".into());
         }
         let newest = self.valid_fix_received_at_by_topic.values().max().copied();
-        if Self::stale(newest, now, timeout_s) {
+        if Self::stale(newest, now, params.gps_timeout_s()) {
             return Some("GPS fix is stale".into());
         }
-        if Self::stale(self.last_gps_odometry_received_at, now, timeout_s) {
+        if Self::stale(self.last_gps_odometry_received_at, now, params.gps_timeout_s()) {
             return Some(self.gps_odometry_rejection_reason.clone().unwrap_or_else(|| "GPS odometry from navsat_transform is unavailable or stale".into()));
         }
-        if Self::stale(self.last_imu_received_at, now, timeout_s) {
+        if Self::stale(self.last_imu_received_at, now, params.health_timeout_s()) {
             return Some(self.imu_rejection_reason.clone().unwrap_or_else(|| "IMU is unavailable or stale".into()));
         }
         None
@@ -219,15 +233,15 @@ pub fn nav2_log_summary(lines: &[String]) -> String {
 }
 
 /// `_source_stamp_block_reason`: `age_s` is (now - stamp) in seconds, None when
-/// the stamp is zero / unusable.
-pub fn source_stamp_block_reason(age_s: Option<f64>, source: &str, params: &SafetyParams) -> Option<String> {
+/// the stamp is zero / unusable; `timeout_s` is this source's budget.
+pub fn source_stamp_block_reason(age_s: Option<f64>, source: &str, timeout_s: f64, params: &SafetyParams) -> Option<String> {
     let Some(age_s) = age_s.filter(|a| a.is_finite()) else {
         return Some(format!("{source} source timestamp is unavailable"));
     };
     if age_s < -params.navigation_health_max_future_skew_s.max(0.0) {
         return Some(format!("{source} source timestamp is in the future"));
     }
-    if age_s > params.health_timeout_s() {
+    if age_s > timeout_s {
         return Some(format!("{source} source timestamp is stale"));
     }
     None
@@ -244,7 +258,7 @@ pub fn gps_fix_block_reason(
     covariance_type: u8,
     params: &SafetyParams,
 ) -> Option<String> {
-    if let Some(r) = source_stamp_block_reason(stamp_age_s, &format!("GPS {source}"), params) {
+    if let Some(r) = source_stamp_block_reason(stamp_age_s, &format!("GPS {source}"), params.gps_timeout_s(), params) {
         return Some(r);
     }
     // NavSatStatus: FIX 0, SBAS 1, GBAS 2
@@ -267,7 +281,7 @@ pub fn gps_fix_block_reason(
 
 /// `_gps_odometry_health_callback` decision.
 pub fn gps_odometry_block_reason(stamp_age_s: Option<f64>, frame_id: &str, position: [f64; 3], covariance: &[f64], params: &SafetyParams) -> Option<String> {
-    if let Some(r) = source_stamp_block_reason(stamp_age_s, "GPS odometry", params) {
+    if let Some(r) = source_stamp_block_reason(stamp_age_s, "GPS odometry", params.gps_timeout_s(), params) {
         return Some(r);
     }
     if frame_id != "map" {
@@ -300,7 +314,7 @@ pub fn imu_block_reason(
     linear_cov: &[f64],
     params: &SafetyParams,
 ) -> Option<String> {
-    if let Some(r) = source_stamp_block_reason(stamp_age_s, "IMU", params) {
+    if let Some(r) = source_stamp_block_reason(stamp_age_s, "IMU", params.health_timeout_s(), params) {
         return Some(r);
     }
     if frame_id != "imu_link" {
@@ -337,7 +351,7 @@ pub fn robot_pose_block_reason(stamp_age_s: Option<f64>, frame_id: &str, positio
     if !norm.is_finite() || (norm - 1.0).abs() > 1e-2 {
         return Some("robot pose quaternion is not normalized".into());
     }
-    source_stamp_block_reason(stamp_age_s, "robot pose", params)
+    source_stamp_block_reason(stamp_age_s, "robot pose", params.pose_timeout_s(), params)
 }
 
 #[cfg(test)]
@@ -353,6 +367,8 @@ mod tests {
             manual_command_hold_s: 0.75,
             require_navigation_health: health,
             navigation_health_timeout_s: 0.30,
+            navigation_health_gps_timeout_s: 0.60,
+            navigation_health_pose_timeout_s: 0.50,
             navigation_health_max_future_skew_s: 0.5,
             max_gps_horizontal_sigma_m: 0.015,
             max_imu_orientation_sigma_rad: 0.35,
@@ -403,7 +419,7 @@ mod tests {
         s.fix_rejections_by_topic.insert("/fix".into(), "GPS has no valid fix".into());
         assert_eq!(s.navigation_health_block_reason(&p, now).as_deref(), Some("GPS has no valid fix"));
         s.fix_rejections_by_topic.clear();
-        s.valid_fix_received_at_by_topic.insert("/fix".into(), now - Duration::from_millis(400));
+        s.valid_fix_received_at_by_topic.insert("/fix".into(), now - Duration::from_millis(610));
         assert_eq!(s.navigation_health_block_reason(&p, now).as_deref(), Some("GPS fix is stale"));
         s.valid_fix_received_at_by_topic.insert("/fix".into(), now);
         assert_eq!(s.navigation_health_block_reason(&p, now).as_deref(), Some("GPS odometry from navsat_transform is unavailable or stale"));
@@ -419,10 +435,10 @@ mod tests {
     #[test]
     fn sensor_decisions() {
         let p = params(true);
-        assert_eq!(source_stamp_block_reason(None, "IMU", &p).as_deref(), Some("IMU source timestamp is unavailable"));
-        assert_eq!(source_stamp_block_reason(Some(-0.6), "IMU", &p).as_deref(), Some("IMU source timestamp is in the future"));
-        assert_eq!(source_stamp_block_reason(Some(0.31), "IMU", &p).as_deref(), Some("IMU source timestamp is stale"));
-        assert_eq!(source_stamp_block_reason(Some(0.1), "IMU", &p), None);
+        assert_eq!(source_stamp_block_reason(None, "IMU", 0.3, &p).as_deref(), Some("IMU source timestamp is unavailable"));
+        assert_eq!(source_stamp_block_reason(Some(-0.6), "IMU", 0.3, &p).as_deref(), Some("IMU source timestamp is in the future"));
+        assert_eq!(source_stamp_block_reason(Some(0.31), "IMU", 0.3, &p).as_deref(), Some("IMU source timestamp is stale"));
+        assert_eq!(source_stamp_block_reason(Some(0.1), "IMU", 0.3, &p), None);
         let cov = [0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
         assert_eq!(gps_fix_block_reason(Some(0.05), "/fix", 2, 25.0, 121.5, &cov, 2, &p), None);
         assert_eq!(gps_fix_block_reason(Some(0.05), "/fix", -1, 25.0, 121.5, &cov, 2, &p).as_deref(), Some("GPS has no valid fix"));
@@ -482,6 +498,8 @@ mod health_rules {
             manual_command_hold_s: 0.75,
             require_navigation_health: true,
             navigation_health_timeout_s: 0.30,
+            navigation_health_gps_timeout_s: 0.60,
+            navigation_health_pose_timeout_s: 0.50,
             navigation_health_max_future_skew_s: 0.5,
             max_gps_horizontal_sigma_m: 0.015,
             max_imu_orientation_sigma_rad: 0.35,
@@ -506,6 +524,73 @@ mod health_rules {
         assert_eq!(s.navigation_health_block_reason(&p, NOW).as_deref(), Some("IMU is unavailable or stale"));
         s.last_imu_received_at = Some(NOW - Duration::from_millis(290));
         assert_eq!(s.navigation_health_block_reason(&p, NOW), None);
+    }
+
+    /// What each source may miss follows its rate: one sample and 0.10 s of
+    /// jitter for /fix and /odometry/gps (4 Hz) and the pose (5 Hz), not a
+    /// sample less than that. The IMU keeps its 0.30 s.
+    #[test]
+    fn each_source_has_the_budget_of_its_own_rate() {
+        let p = production();
+        let fresh = || {
+            let mut s = NavState::new();
+            s.last_robot_pose_received_at = Some(NOW);
+            s.valid_fix_received_at_by_topic.insert("/fix".into(), NOW);
+            s.last_gps_odometry_received_at = Some(NOW);
+            s.last_imu_received_at = Some(NOW);
+            s
+        };
+        assert_eq!(fresh().navigation_health_block_reason(&p, NOW), None);
+        let ms = |n: u64| Some(NOW - Duration::from_millis(n));
+        type Set = fn(&mut NavState, Option<Mono>);
+        let sources: [(&str, u64, &str, Set); 4] = [
+            ("/fix", 600, "GPS fix is stale", |s, t| {
+                s.valid_fix_received_at_by_topic.insert("/fix".into(), t.unwrap());
+            }),
+            ("/odometry/gps", 600, "GPS odometry from navsat_transform is unavailable or stale", |s, t| s.last_gps_odometry_received_at = t),
+            ("the pose", 500, "robot pose/TF is unavailable or stale", |s, t| s.last_robot_pose_received_at = t),
+            ("the IMU", 300, "IMU is unavailable or stale", |s, t| s.last_imu_received_at = t),
+        ];
+        for (what, budget_ms, reason, set) in sources {
+            let mut s = fresh();
+            set(&mut s, ms(budget_ms - 10));
+            assert_eq!(s.navigation_health_block_reason(&p, NOW), None, "{what}, just inside");
+            set(&mut s, ms(budget_ms + 10));
+            assert_eq!(s.navigation_health_block_reason(&p, NOW).as_deref(), Some(reason), "{what}, just outside");
+        }
+        // the same budget for how old a sample may be when it arrives
+        let cov = [0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
+        assert_eq!(gps_fix_block_reason(Some(0.59), "/fix", 2, 25.0, 121.5, &cov, 2, &p), None);
+        assert_eq!(gps_fix_block_reason(Some(0.61), "/fix", 2, 25.0, 121.5, &cov, 2, &p).as_deref(), Some("GPS /fix source timestamp is stale"));
+        let mut odom = vec![0.0; 36];
+        (odom[0], odom[7]) = (0.0001, 0.0001);
+        assert_eq!(gps_odometry_block_reason(Some(0.59), "map", [0.0; 3], &odom, &p), None);
+        assert_eq!(gps_odometry_block_reason(Some(0.61), "map", [0.0; 3], &odom, &p).as_deref(), Some("GPS odometry source timestamp is stale"));
+        assert_eq!(robot_pose_block_reason(Some(0.49), "map", [0.0; 3], [0.0, 0.0, 0.0, 1.0], &p), None);
+        assert_eq!(robot_pose_block_reason(Some(0.51), "map", [0.0; 3], [0.0, 0.0, 0.0, 1.0], &p).as_deref(), Some("robot pose source timestamp is stale"));
+        let imu_cov = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01];
+        let imu = |age| imu_block_reason(Some(age), "imu_link", [0.0, 0.0, 0.0, 1.0], [0.0; 3], [0.0, 0.0, 9.8], &imu_cov, &imu_cov, &imu_cov, &p);
+        assert_eq!(imu(0.29), None);
+        assert_eq!(imu(0.31).as_deref(), Some("IMU source timestamp is stale"));
+    }
+
+    /// The budget is for samples that do not come. A sample that comes and is
+    /// bad closes the gate at the next tick, whatever the budget: RTK lost
+    /// (the covariance over max_gps_horizontal_sigma_m) does not wait for it.
+    #[test]
+    fn a_bad_fix_does_not_wait_for_the_budget() {
+        let p = production();
+        let loose = [0.0151f64.powi(2), 0.0, 0.0, 0.0, 0.0151f64.powi(2), 0.0, 0.0, 0.0, 0.0004];
+        assert_eq!(gps_fix_block_reason(Some(0.0), "/fix", 2, 25.0, 121.5, &loose, 2, &p).as_deref(), Some("GPS horizontal uncertainty exceeds 0.015 m"));
+        let tight = [0.0001, 0.0, 0.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 0.0004];
+        assert_eq!(gps_fix_block_reason(Some(0.0), "/fix", -1, 25.0, 121.5, &tight, 2, &p).as_deref(), Some("GPS has no valid fix"));
+        // the callback then takes the valid time away: closed at once
+        let mut s = NavState::new();
+        s.last_robot_pose_received_at = Some(NOW);
+        s.last_gps_odometry_received_at = Some(NOW);
+        s.last_imu_received_at = Some(NOW);
+        s.fix_rejections_by_topic.insert("/fix".into(), "GPS horizontal uncertainty exceeds 0.015 m".into());
+        assert_eq!(s.navigation_health_block_reason(&p, NOW).as_deref(), Some("GPS horizontal uncertainty exceeds 0.015 m"));
     }
 
     /// A covariance with a zero horizontal eigenvalue claims a precision no

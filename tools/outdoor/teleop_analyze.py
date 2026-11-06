@@ -80,9 +80,12 @@ def pct(xs, q):
 
 
 class GuardReplay:
-    """velocity_command_guard core.rs on observed receipt times."""
+    """velocity_command_guard core.rs on observed receipt times. keeps: the
+    rejections that leave the barrier where it is: one behind the barrier
+    always did, and a replay (and, in a variant, a stale one) may too."""
 
-    def __init__(self, timeout):
+    def __init__(self, timeout, keeps=('moved_backward',)):
+        self.keeps = keeps
         self.T = max(timeout, 0.05)
         self.period = min(0.05, self.T / 2)
         self.active = False
@@ -124,7 +127,7 @@ class GuardReplay:
                 if not self.active or expired:
                     reason = 'replay_blocked'
         if reason is not None:
-            if reason != 'moved_backward' and (self.barrier is None or ros_ns > self.barrier):
+            if reason not in self.keeps and (self.barrier is None or ros_ns > self.barrier):
                 self.barrier = ros_ns
             self.active = False
             self.last_rx = None
@@ -194,33 +197,40 @@ def analyze(run, manual_t, final_t):
             if az in az_of and abs(float(d['lx'])) > 0 and (az not in accepted or d['t'] < accepted[az]['t']):
                 accepted[az] = d
 
-    # the guard, replayed on every delivered frame (moves and zeros)
-    g = GuardReplay(manual_t)
-    predicted = {}
-    for d in app_in:
-        lx, az = float(d['lx']), float(d['az'])
-        r = g.on(d['t'], d.get('s'), lx, az, session_ok=(d.get('f') in sessions) if sessions else True)
-        if abs(lx) > 0:
-            predicted[round(az, 4)] = r
-
-    fates = {'accepted': 0, 'stale': 0, 'moved_backward': 0, 'replay_blocked': 0, 'other': 0, 'not_delivered': 0}
-    agree = disagree = 0
-    for s in moves:
-        az = round(s[5], 4)
-        if az in accepted:
-            fates['accepted'] += 1
-            agree += predicted.get(az, 'x') is None
-            disagree += predicted.get(az, 'x') is not None
-        elif az not in delivered:
-            fates['not_delivered'] += 1
-        else:
-            r = predicted.get(az)
-            if r in ('stale', 'moved_backward', 'replay_blocked'):
-                fates[r] += 1
-                agree += 1
+    # the guard, replayed on every delivered frame (moves and zeros), with
+    # each barrier rule: the one that explains the run names the fates
+    best = None
+    for keeps in (('moved_backward',), ('moved_backward', 'replay_blocked'), ('moved_backward', 'replay_blocked', 'stale')):
+        g = GuardReplay(manual_t, keeps)
+        predicted = {}
+        for d in app_in:
+            lx, az = float(d['lx']), float(d['az'])
+            r = g.on(d['t'], d.get('s'), lx, az, session_ok=(d.get('f') in sessions) if sessions else True)
+            if abs(lx) > 0:
+                predicted[round(az, 4)] = r
+        fates = {'accepted': 0, 'stale': 0, 'moved_backward': 0, 'replay_blocked': 0, 'other': 0, 'not_delivered': 0}
+        agree = disagree = 0
+        for s in moves:
+            az = round(s[5], 4)
+            if az in accepted:
+                fates['accepted'] += 1
+                agree += predicted.get(az, 'x') is None
+                disagree += predicted.get(az, 'x') is not None
+            elif az not in delivered:
+                fates['not_delivered'] += 1
             else:
-                fates['other'] += 1
-                disagree += r is None
+                r = predicted.get(az)
+                if r in ('stale', 'moved_backward', 'replay_blocked'):
+                    fates[r] += 1
+                    agree += 1
+                else:
+                    fates['other'] += 1
+                    disagree += r is None
+        if best is None or agree > best[0]:
+            best = (agree, disagree, fates, g, keeps)
+    agree, disagree, fates, g, keeps = best
+
+    final_zeros = [d['t'] for d in final_out if abs(float(d['lx'])) < 1e-9 and abs(float(d['az'])) < 1e-9]
 
     # receipt timeouts from the stack log, in the soak's window
     t0 = min(s[1] for s in client['sends']) - 1 if client['sends'] else 0
@@ -268,6 +278,17 @@ def analyze(run, manual_t, final_t):
             t_first = min(acc)
             tw = wheel_events(truth, t_first, rl['t'])
             row['duty'] = round(sum(1 for _, r in tw if r > 5.0) / max(1, len(tw)), 3)
+            # dips: the wheels fell under half of the hold's speed and came
+            # back, with the stick still held (what a driver feels); 10 Hz
+            # samples, from 0.5 s in
+            turning = sorted(r for _, r in tw)
+            if turning:
+                top = turning[int(0.9 * (len(turning) - 1))]
+                inner = [r for t, r in tw if t >= t_first + 0.5]
+                row['dips'] = sum(1 for a, b in zip(inner, inner[1:]) if a >= 0.5 * top > b)
+            # the first zero the final guard sent after the last accepted command
+            fz = next((t for t in final_zeros if t >= t_last), None)
+            row['final_zero_after_last_accept_s'] = round(fz - t_last, 3) if fz else None
             ts, how = stop_time(truth, t_last, t_last + (40 if tag == 'blk' else 5))
             row['stop_after_last_accept_s'] = round(ts - t_last, 3) if ts else None
             row['stop_how'] = how
@@ -279,6 +300,7 @@ def analyze(run, manual_t, final_t):
     clean = [h for h in soak if not h['host_stall']]
     lat_acc = [h['stop_after_last_accept_s'] for h in clean if h.get('stop_after_last_accept_s') is not None]
     lat_rel = [h['stop_after_release_s'] for h in clean if h.get('stop_after_release_s') is not None]
+    fz_acc = [h['final_zero_after_last_accept_s'] for h in clean if h.get('final_zero_after_last_accept_s') is not None]
     n_moves_soak = sum(h['sent'] for h in soak)
     out = {
         'run': os.path.basename(run.rstrip('/')),
@@ -294,6 +316,12 @@ def analyze(run, manual_t, final_t):
         'soak_duty_mean': round(sum(h.get('duty', 0) for h in soak) / max(1, len(soak)), 3),
         'stop_after_release_s_p50_p95_max': [pct(lat_rel, 0.5), pct(lat_rel, 0.95), max(lat_rel) if lat_rel else None],
         'stop_after_last_accept_s_p50_p95_max': [pct(lat_acc, 0.5), pct(lat_acc, 0.95), max(lat_acc) if lat_acc else None],
+        'final_zero_after_last_accept_s_p50_p95_max': [pct(fz_acc, 0.5), pct(fz_acc, 0.95), max(fz_acc) if fz_acc else None],
+        'barrier_rule_keeps': list(keeps),
+        'rejects_delivered': sum(fates[k] for k in ('stale', 'moved_backward', 'replay_blocked', 'other')),
+        'rejects_per_min': round(sum(fates[k] for k in ('stale', 'moved_backward', 'replay_blocked', 'other')) / max(len(moves) / 600.0, 1e-6), 1),
+        'receipt_timeouts_per_min': {k: round(v / max(len(moves) / 600.0, 1e-6), 1) for k, v in rt.items()},
+        'soak_dips_per_min': round(sum(h.get('dips', 0) for h in soak) / max(n_moves_soak / 600.0, 1e-6), 1),
         'stop_bound_s': round(min(manual_t, final_t) + 0.1, 3),
         'stop_bound_violations': sum(1 for x in lat_acc if x > manual_t + 0.1),
         'connections': client['connections'],
@@ -310,10 +338,16 @@ def analyze(run, manual_t, final_t):
         acc_in = [d['t'] for d in joy_out if tb <= d['t'] <= tb + 30 and abs(float(d['lx'])) > 0]
         ts, how = stop_time(truth, tb, tb + 30)
         back = [e for e in ev if e['e'] == 'connected' and e['t'] > tb]
+        # the link: the last command the guards took before the blackout, to
+        # the first zero the final guard sent after it
+        last_in = max([d['t'] for d in joy_out if d['t'] <= tb + 0.1 and abs(float(d['lx'])) > 0] or [None], key=lambda x: x or 0)
+        zero_after = next((t for t in final_zeros if last_in and t >= last_in), None)
         after = [h for h in holds if h['tag'].startswith('after')]
         out['blackout'] = {
             't_blk': tb,
             'wheels_commanded_zero_after_blk_s': round(ts - tb, 3) if ts else None, 'how': how,
+            'final_zero_after_last_command_s': round(zero_after - last_in, 3) if zero_after else None,
+            'final_zero_after_blk_s': round(zero_after - tb, 3) if zero_after else None,
             'last_rpm_above_0p5_after_blk_s': round(max(moving) - tb, 3) if moving else 0.0,
             'last_final_guard_nonzero_after_blk_s': round(max(cmd_moving) - tb, 3) if cmd_moving else 0.0,
             'accepted_after_blk': len(acc_in),

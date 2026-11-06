@@ -12,6 +12,15 @@
 //! admitted when [`Checkpoint::resume_block_reason`] finds the same path
 //! (hash over zone, poses, split points and the split parameters, i.e. the
 //! same segments) and a segment no further than the first unfinished one.
+//!
+//! The checkpoint also says how far the unfinished segment got
+//! (`current_segment_done_m`), so that a resume can continue there instead of
+//! from the segment's start (`Execution::resume_here` in lib.rs). That is how
+//! far the mower's map pose got along the segment ([`Progress::segment_reached_m`],
+//! `ProgressState::track_reached`), not FollowPath's feedback, which nav2 measures
+//! from the pose in `odom` and so drifts with the `map -> odom` offset. The key
+//! is optional: a checkpoint without it (the Python twin's, which ignores the key
+//! and always resumes at a segment's start) reads as 0.
 
 use sha2::{Digest, Sha256};
 
@@ -64,6 +73,10 @@ pub struct Progress<P> {
     pub message: String,
     /// [`path_hash`] of the executed goal; empty until the plan is split.
     pub path_hash: String,
+    /// How far along the current segment the mower's pose has got, metres:
+    /// the most it ever was. What a resume goes by; the progress above is
+    /// FollowPath's feedback, for the app.
+    pub segment_reached_m: f64,
     segment_distances: Vec<f64>,
     /// Distance of the segments already completed.
     completed_before_m: f64,
@@ -123,6 +136,7 @@ impl<P: Clone + Default> Progress<P> {
             total_distance_m: self.total_distance_m,
             overall_progress: self.overall_progress,
             path_hash: self.path_hash.clone(),
+            current_segment_done_m: if self.current_segment_index == self.completed_segments + 1 { self.segment_reached_m } else { 0.0 },
             updated_at,
         }
     }
@@ -134,6 +148,7 @@ impl<P: Clone + Default> Progress<P> {
         self.status = Status::Running;
         self.current_segment_index = index;
         self.current_segment_progress = 0.0;
+        self.segment_reached_m = 0.0;
         self.current_segment_start = start;
         self.current_segment_goal = goal;
         self.message = format!("Following coverage segment {index}/{}", self.total_segments());
@@ -158,6 +173,26 @@ impl<P: Clone + Default> Progress<P> {
         self.current_segment_progress = fraction;
         self.recompute(fraction * d);
         true
+    }
+
+    /// A resume that continues inside segment `index` (1-based): the segments
+    /// before it count as done and `done_m` of it too, and a checkpoint
+    /// written from here on still says so, before the segment has started.
+    pub fn resume_inside(&mut self, index: i32, done_m: f64) {
+        self.resume_from(index);
+        self.current_segment_index = index;
+        self.continue_segment(done_m);
+    }
+
+    /// The current segment has already got `done_m` metres: what a resume
+    /// knows, after `start_segment` has reset it.
+    pub fn continue_segment(&mut self, done_m: f64) {
+        let d = self.current_segment_distance_m();
+        if d > 0.0 && done_m.is_finite() {
+            self.segment_reached_m = done_m.clamp(0.0, d);
+            self.current_segment_progress = self.current_segment_progress.max(self.segment_reached_m / d);
+            self.recompute(self.current_segment_progress * d);
+        }
     }
 
     pub fn complete_segment(&mut self) {
@@ -232,6 +267,9 @@ pub struct Checkpoint {
     pub total_distance_m: f64,
     pub overall_progress: f64,
     pub path_hash: String,
+    /// How far the unfinished segment got, metres along it (the most it ever
+    /// reported); 0 when the current segment is finished or not started.
+    pub current_segment_done_m: f64,
     /// Unix time, seconds.
     pub updated_at: f64,
 }
@@ -250,6 +288,7 @@ impl Checkpoint {
             "total_distance_m": self.total_distance_m,
             "overall_progress": self.overall_progress,
             "path_hash": self.path_hash,
+            "current_segment_done_m": self.current_segment_done_m,
             "updated_at": self.updated_at,
         })
         .to_string()
@@ -275,6 +314,7 @@ impl Checkpoint {
             total_distance_m: num("total_distance_m")?,
             overall_progress: num("overall_progress")?,
             path_hash: text("path_hash")?,
+            current_segment_done_m: num("current_segment_done_m").unwrap_or(0.0),
             updated_at: num("updated_at").unwrap_or(0.0),
         })
     }
@@ -290,6 +330,16 @@ impl Checkpoint {
     /// The segment a resume starts at (1-based): the first unfinished one.
     pub fn resume_segment_index(&self) -> i32 {
         self.completed_segments + 1
+    }
+
+    /// How far along segment `index` a resume there has been: only the first
+    /// unfinished segment has an answer, and only if it was the one running.
+    pub fn resume_offset_m(&self, index: i32) -> f64 {
+        if index == self.resume_segment_index() && self.current_segment_index == index {
+            self.current_segment_done_m.max(0.0)
+        } else {
+            0.0
+        }
     }
 
     /// Why a goal for `path_hash` may not start at `index`; `None` = allowed.
@@ -324,6 +374,8 @@ impl Checkpoint {
         p.zone_id = self.zone_id;
         p.current_segment_index = self.current_segment_index;
         p.completed_segments = self.completed_segments;
+        // what the first checkpoint written after the restart must still say
+        p.segment_reached_m = self.current_segment_done_m;
         p.completed_distance_m = self.completed_distance_m;
         p.total_distance_m = self.total_distance_m;
         p.remaining_distance_m = (self.total_distance_m - self.completed_distance_m).max(0.0);
@@ -479,6 +531,7 @@ mod tests {
         p.complete_segment();
         p.start_segment(2, (0.0, 0.0), (1.0, 0.0));
         p.update_remaining(10.0);
+        p.segment_reached_m = 9.5;
         p.finish(Status::Canceled, "stop");
         p.checkpoint(1790000000.5)
     }
@@ -510,6 +563,69 @@ mod tests {
         let done = Checkpoint { status: "succeeded".into(), completed_segments: 3, ..c.clone() };
         assert!(!done.resumable() && done.resume_block_reason("abc", 1).is_some());
         assert!(!Checkpoint::default().resumable());
+    }
+
+    #[test]
+    fn the_checkpoint_says_how_far_the_unfinished_segment_got() {
+        let c = checkpoint_after_segment_one();
+        // the mower's pose got 9.5 m along segment 2, whatever the feedback
+        // said, and it is the segment to resume
+        assert!(close(c.current_segment_done_m, 9.5));
+        assert!(close(c.resume_offset_m(2), 9.5));
+        // an earlier segment, asked for by name, starts from its start
+        assert!(close(c.resume_offset_m(1), 0.0));
+        assert_eq!(Checkpoint::from_json(&c.to_json()).unwrap().current_segment_done_m, c.current_segment_done_m);
+        // the other server's checkpoint has no such key: the segment's start
+        let without: serde_json::Value = serde_json::from_str(&c.to_json()).unwrap();
+        let mut without = without.as_object().unwrap().clone();
+        without.remove("current_segment_done_m");
+        let other = Checkpoint::from_json(&serde_json::Value::Object(without).to_string()).unwrap();
+        assert!(close(other.current_segment_done_m, 0.0) && close(other.resume_offset_m(2), 0.0));
+        // a finished current segment leaves nothing to continue
+        let mut p = three_segments();
+        p.path_hash = "abc".into();
+        p.start_segment(1, (0.0, 0.0), (1.0, 0.0));
+        p.segment_reached_m = 6.0;
+        p.complete_segment();
+        let c = p.checkpoint(0.0);
+        assert!(close(c.current_segment_done_m, 0.0) && close(c.resume_offset_m(2), 0.0));
+        // a new segment starts from nothing
+        p.start_segment(2, (0.0, 0.0), (1.0, 0.0));
+        assert!(close(p.checkpoint(0.0).current_segment_done_m, 0.0));
+    }
+
+    /// A restart writes a checkpoint from what it restored (at start, in
+    /// run_node): that must not forget how far the segment got.
+    #[test]
+    fn a_restart_keeps_how_far_the_unfinished_segment_got() {
+        let c = checkpoint_after_segment_one();
+        let restored: P = c.restored_progress();
+        let again = restored.checkpoint(1790000001.0);
+        assert!(close(again.current_segment_done_m, 9.5));
+        assert!(close(again.resume_offset_m(2), 9.5));
+    }
+
+    /// A resume that stops again before its next feedback must not forget how
+    /// far the segment got, and what it reports starts from there.
+    #[test]
+    fn resuming_inside_a_segment_keeps_how_far_it_got() {
+        let mut p = three_segments();
+        p.path_hash = "abc".into();
+        p.resume_inside(2, 8.0);
+        assert_eq!((p.completed_segments, p.current_segment_index), (1, 2));
+        assert!(close(p.completed_distance_m, 18.0) && close(p.overall_progress, 0.18));
+        assert!(close(p.checkpoint(0.0).current_segment_done_m, 8.0));
+        p.start_segment(2, (0.0, 0.0), (1.0, 0.0));
+        p.continue_segment(8.0);
+        assert!(close(p.checkpoint(0.0).current_segment_done_m, 8.0));
+        assert!(close(p.completed_distance_m, 18.0));
+        // the tail's feedback says what is left of the whole segment; it moves
+        // the report, not how far the pose got, and never backwards
+        assert!(!p.update_remaining(12.1));
+        assert!(close(p.current_segment_progress, 0.4));
+        assert!(p.update_remaining(11.0));
+        assert!(close(p.completed_distance_m, 19.0));
+        assert!(close(p.checkpoint(0.0).current_segment_done_m, 8.0));
     }
 
     #[test]

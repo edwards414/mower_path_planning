@@ -6,6 +6,8 @@
 
 > **2026-09-30 M2 / M3 已完成，與第 8、9 節的差異：** 參數同第 8 節（`progress_checkpoint_enabled` 預設 true、`progress_checkpoint_path` 預設 `~/.ros/mower_mission/coverage_progress.json`、`progress_checkpoint_interval_sec` 1.0），兩個導航伺服器都有。檢查點用暫存檔加 rename 寫入，時機：切段後（知道計畫時）、每個狀態轉換、每段完成、回饋最多每秒一次、終態。`updated_at` 是 Unix 秒數（不是 ISO 字串）。`path_hash` 除了 path、split points、zone_id，還包含四個切段參數（`split_tolerance_m`、`max_follow_segment_length_m`、`turn_split_angle_rad`、`turn_split_min_segment_length_m`），因為參數變了段落就不同；文字格式與 SHA-256 在兩個伺服器一致（單元測試釘同一個 digest），所以 Rust 寫的檢查點 Python 可以續，反之亦然（`rust_nav` 切換後仍可續割）。啟動時讀回檢查點：`/coverage_progress` 與 `/coverage_progress_status.progress` 顯示該次執行，當時若還在跑則顯示為 `failed`（interrupted）。`GetCoverageProgress` 回應多了 `checkpoint` 欄位（磁碟上的檢查點）。M3：`Waypoint.action` goal 加 `int32 resume_segment_index 0`；導航伺服器在接受 goal 時就檢查（檢查點可續、hash 相同、段號不超過第一個未完成段），不符直接拒絕；接受後導航到該段起點再依序跑剩下的段，進度從已完成的距離起算，並以新的 mission id 繼續寫檢查點（可多次續割）。`ResumeCoverage.srv` 簡化為 `int32 zone_id -1`（-1 = 檢查點的 zone）→ `success, message`，在 `mower_coverage`：查 `/coverage_progress_status` 的 checkpoint、比對 zone、送出該 zone 目前的路徑並帶 `resume_segment_index = completed_segments + 1`。zone 序列（`/run_zone_sequence`）不支援續割。已加入 app 白名單。檢查：`nav_progress_check.py` 的 E/D/C 情境（重啟還原、拒絕不符的續割、從第 2 段續割），CI 以兩個伺服器互相接手的方式各跑一次；`coverage_cancel_check.py` 情境 E 檢查 `/resume_coverage`。
 
+> **2026-11-06 補記（`mower_nav`，Rust 伺服器）：** 檢查點多了選用欄位 `current_segment_done_m`（未完成那段走到幾公尺，量的是機器在 `map` 的姿態，不是 FollowPath 的回饋）。續割時，如果機器人距離那個點 0.30 m 以內且姿態新鮮，就不導航回段起點（它不能倒車，回頭要繞一圈），直接從機器後方 0.05 m 接著走那段剩下的部分；否則照舊導航到段起點、整段重割。下文第 9 節「resume 只保證從段落開始」現在只是 rclpy 伺服器的行為：它忽略這個欄位，兩邊的檢查點仍可互相續割。
+
 本文件規劃如何在目前割草 coverage path 執行時，記錄、發布、查詢目前工作進度。目標是讓前端能顯示割草進度，也讓後續中斷恢復任務有可靠基礎。
 
 ## 1. 背景與現況

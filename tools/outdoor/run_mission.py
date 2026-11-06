@@ -30,6 +30,7 @@ def main():
     ap.add_argument('--net', default='clean')
     ap.add_argument('--faults', default='')
     ap.add_argument('--fault-start', type=float, default=45.0)
+    ap.add_argument('--fault-interval', default='', help='A,B: seconds between events (faults.py --interval)')
     ap.add_argument('--navcore', action='store_true')
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--zone', type=int, default=1)
@@ -53,7 +54,8 @@ def main():
         time.sleep(3)
         if args.faults:
             sh('docker', 'exec', '-d', obs, 'python3', '/to/faults.py', args.faults, '--log', '/tmp/obs/faults.jsonl',
-               '--seed', str(args.seed), '--start', str(args.fault_start), '--duration', str(args.max_s))
+               '--seed', str(args.seed), '--start', str(args.fault_start), '--duration', str(args.max_s),
+               *(['--interval', args.fault_interval] if args.fault_interval else []))
         cpu = subprocess.Popen(['bash', '-c', f'sleep 90; docker exec {obs} python3 /v/cpu_window.py --seconds 60 '
                                 f'--out /tmp/obs/cpu_mission.json --label mission'],
                                stdout=open(os.path.join(d, 'cpu_mission.txt'), 'w'), stderr=subprocess.STDOUT)
