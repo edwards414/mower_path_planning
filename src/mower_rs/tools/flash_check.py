@@ -543,6 +543,12 @@ def run_scenario(sc: Scenario, impl_cmd, d: str, lib: str, bootloader_bin: str, 
             stop_fake(proc)
             proc, log = start_fake(d, lib, step.faults or {}, len(fakes) + 1)
             fakes.append(log)
+        elif steps and steps[-1]["rc"] == -signal.SIGKILL:
+            # The fake kills the flasher as it takes a write, so a next flasher
+            # that starts at once can land its first frame in that write's busy
+            # time, and the overrun fails the run. On the robot the next one
+            # comes with the container, seconds later.
+            time.sleep(0.1)
         args = [a.format(**paths) for a in step.args]
         cmd = list(impl_cmd) + ["-p", os.path.join(d, "stmcom")] + args
         before = report_state(paths["report"])
