@@ -69,6 +69,24 @@ const CONTROLLER_ID: &str = "FollowPath";
 /// Pose spacing of every FollowPath goal (see geometry::densify_path).
 const FOLLOW_PATH_MAX_STEP_M: f64 = 0.1;
 const GOAL_CHECKER_ID: &str = "general_goal_checker";
+/// A resume continues inside its segment only with the mower this close to
+/// the point the segment had reached (or, with nothing reached, to its start).
+/// Farther than this it has been moved or the plan and the pose disagree, so
+/// it drives to the segment's start and mows all of it, as it always did.
+const RESUME_NEAR_M: f64 = 0.30;
+/// A continued segment starts this far behind the mower. The rotation shim
+/// looks forward_sampling_distance (0.25 m) from the path's first pose and turns
+/// in place if that point is more than 0.6 rad off the mower's heading, so a
+/// start much farther back would have it turn around for a point behind it.
+const RESUME_OVERLAP_M: f64 = 0.05;
+/// A continued segment keeps at least this much path, for the 0.15 m refusal
+/// and the shim's sample.
+const RESUME_MIN_TAIL_M: f64 = 0.30;
+/// How far ahead of the point reached one pose may count: past this the pose
+/// has jumped, and it says nothing about what was mown.
+const REACHED_WINDOW_M: f64 = 1.0;
+/// How far off the segment a pose may be and still count as mowing along it.
+const REACHED_MAX_OFF_PATH_M: f64 = 0.30;
 
 struct ExecParams {
     split_tolerance_m: f64,
@@ -188,9 +206,27 @@ struct ProgressState {
     /// The checkpoint on disk (loaded at start, then the last one written).
     checkpoint: Option<Checkpoint>,
     last_checkpoint_write: Option<Mono>,
+    /// The whole segment FollowPath is on, in `map`: what the pose is measured
+    /// along. Only while it runs, so that driving by hand afterwards counts
+    /// for nothing.
+    following: Option<Path>,
 }
 
 impl ProgressState {
+    /// A new valid pose: how far has the mower got along the segment. Forward
+    /// only, from the point reached, so a segment passing near itself or a
+    /// pose that jumps does not move it.
+    fn track_reached(&mut self) {
+        let Some(segment) = &self.following else { return };
+        let p = &self.robot_pose.pose.position;
+        let reached = self.progress.segment_reached_m;
+        if let Some((s, off)) = geometry::project_on_path(segment, p.x, p.y, reached, reached + REACHED_WINDOW_M) {
+            if off <= REACHED_MAX_OFF_PATH_M && s > reached {
+                self.progress.segment_reached_m = s;
+            }
+        }
+    }
+
     /// The checkpoint as a message, for `/coverage_progress_status`.
     fn checkpoint_msg(&self, stamp: Time) -> CoverageProgress {
         match &self.checkpoint {
@@ -1377,13 +1413,24 @@ impl Execution {
         let first = resume_index.max(1) as usize;
         let distances = split_paths.iter().map(geometry::path_distance).collect();
         let hash = self.ctx.exec.path_hash(zone_id, &path, &split_points);
+        // before the progress below replaces the checkpoint it reads
+        let resumed = self.resume_here(&split_paths[first - 1], resume_index);
+        let whole_segments = split_paths.clone();
+        if let Some(r) = &resumed {
+            split_paths[first - 1] = geometry::path_tail(&split_paths[first - 1], r.from_m);
+        }
         self.ctx.update_progress(true, |p| {
             p.set_segments(distances);
             p.path_hash = hash;
             if resume_index > 0 {
                 p.resume_from(resume_index);
             }
-            p.message = if resume_index > 0 {
+            if let Some(r) = &resumed {
+                p.resume_inside(resume_index, r.reached_m);
+            }
+            p.message = if let Some(r) = &resumed {
+                format!("Resuming: continuing segment {resume_index} from {:.2} m", r.from_m)
+            } else if resume_index > 0 {
                 format!("Resuming: navigating to the start of segment {resume_index}")
             } else {
                 "Navigating to the coverage start".into()
@@ -1392,22 +1439,30 @@ impl Execution {
         });
 
         self.stamp_path_for_execution(&mut path);
-        let mut start_pose = path.poses[0].clone();
-        if first > 1 {
-            self.ctx.info(&format!("從檢查點續割：導航到第 {first} 段起點"));
-            start_pose = split_paths[first - 1].poses[0].clone();
-            start_pose.header = path.poses[0].header.clone();
+        if let Some(r) = &resumed {
+            // The mower is there: the segment's FollowPath is all it needs,
+            // as from the end of the segment before. Navigating to a point
+            // behind it would have it turn around (it cannot reverse), and the
+            // goal checker's 0.05 m needs more than a stop leaves.
+            self.ctx.info(&format!("從檢查點續割：從第 {first} 段 {:.2} m 繼續（已到 {:.2} m，機器距該點 {:.2} m），不導航回段起點", r.from_m, r.reached_m, r.away_m));
         } else {
-            self.ctx.info("導航到覆蓋路徑起點");
-        }
-        let navigate_goal = NavigateToPose::Goal { pose: start_pose, behavior_tree: String::new() };
-        match self.ctx.dispatch_navigate(navigate_goal).await {
-            Ok(true) => {}
-            Ok(false) => return self.abort("Nav2 rejected navigation to the coverage start"),
-            Err(message) => return self.fail_uncertain(&message),
-        }
-        if !self.wait_for_nav_task("Nav to coverage start").await {
-            return Outcome::Aborted;
+            let mut start_pose = path.poses[0].clone();
+            if first > 1 {
+                self.ctx.info(&format!("從檢查點續割：導航到第 {first} 段起點"));
+                start_pose = split_paths[first - 1].poses[0].clone();
+                start_pose.header = path.poses[0].header.clone();
+            } else {
+                self.ctx.info("導航到覆蓋路徑起點");
+            }
+            let navigate_goal = NavigateToPose::Goal { pose: start_pose, behavior_tree: String::new() };
+            match self.ctx.dispatch_navigate(navigate_goal).await {
+                Ok(true) => {}
+                Ok(false) => return self.abort("Nav2 rejected navigation to the coverage start"),
+                Err(message) => return self.fail_uncertain(&message),
+            }
+            if !self.wait_for_nav_task("Nav to coverage start").await {
+                return Outcome::Aborted;
+            }
         }
         self.ctx.info(&format!(
             "coverage path 依 split points 切成 {coverage_split_count} 段，再依轉角 >= {turn_split_angle:.2} rad 切成 {turn_split_count} 段，再依最大 {max_segment_length:.1} m 切成 {} 段",
@@ -1426,6 +1481,10 @@ impl Execution {
             let (start_pose, goal_pose) = (split_path.poses[0].clone(), split_path.poses[split_path.poses.len() - 1].clone());
             self.ctx.update_progress(true, |p| {
                 p.start_segment(idx as i32, start_pose, goal_pose);
+                // the tail's feedback and pose count from what it had reached
+                if let Some(r) = resumed.as_ref().filter(|_| idx == first) {
+                    p.continue_segment(r.reached_m);
+                }
                 true
             });
             let start = &split_path.poses[0].pose.position;
@@ -1449,7 +1508,14 @@ impl Execution {
                 Ok(false) => return self.abort(&format!("Nav2 rejected coverage segment {idx}")),
                 Err(message) => return self.fail_uncertain(&message),
             }
-            if !self.wait_for_nav_task(&format!("Follow coverage segment {idx}")).await {
+            {
+                let mut ps = self.ctx.progress.lock().unwrap();
+                let whole = &whole_segments[i];
+                ps.following = (geometry::path_frame_id(whole) == "map").then(|| whole.clone());
+            }
+            let followed = self.wait_for_nav_task(&format!("Follow coverage segment {idx}")).await;
+            self.ctx.progress.lock().unwrap().following = None;
+            if !followed {
                 return Outcome::Aborted;
             }
             self.ctx.update_progress(true, |p| {
@@ -1464,6 +1530,41 @@ impl Execution {
         self.clear_active_task();
         self.ctx.set_nav_state("completed", "Coverage navigation completed");
         Outcome::Succeeded
+    }
+
+    /// Where a resume goal for segment `index` can go on from without driving
+    /// back to the segment's start: only with a pose the health gate takes
+    /// right now, in the path's frame, and the mower at the point the segment
+    /// had reached ([`RESUME_NEAR_M`]). Otherwise `None`: the segment's start,
+    /// by navigation, as before.
+    fn resume_here(&self, segment: &Path, index: i32) -> Option<ResumeHere> {
+        if index < 1 {
+            return None;
+        }
+        let (reached_m, pose) = {
+            let ps = self.ctx.progress.lock().unwrap();
+            (ps.checkpoint.as_ref()?.resume_offset_m(index), ps.robot_pose.clone())
+        };
+        let fresh = {
+            let st = self.ctx.state.lock().unwrap();
+            st.last_robot_pose_received_at.is_some_and(|t| self.ctx.clock.mono().saturating_duration_since(t).as_secs_f64() <= self.ctx.safety.pose_timeout_s())
+        };
+        if !fresh || pose.header.frame_id != geometry::path_frame_id(segment) {
+            return None;
+        }
+        let length = geometry::path_distance(segment);
+        let (mower_x, mower_y) = (pose.pose.position.x, pose.pose.position.y);
+        let (x, y) = geometry::path_point_at(segment, reached_m)?;
+        let away_m = (mower_x - x).hypot(mower_y - y);
+        if !(away_m <= RESUME_NEAR_M) {
+            self.ctx.warn(&format!("resume: the mower is {away_m:.2} m from where segment {index} got to ({reached_m:.2} m); going back to its start"));
+            return None;
+        }
+        // from where the mower is, a little behind it: it may be past the
+        // point reached, by the stop's ramp or a pose it stopped between
+        let (at_m, _) = geometry::project_on_path(segment, mower_x, mower_y, reached_m - RESUME_NEAR_M, reached_m + RESUME_NEAR_M)?;
+        let from_m = (at_m - RESUME_OVERLAP_M).min(length - RESUME_MIN_TAIL_M).max(0.0);
+        Some(ResumeHere { reached_m, from_m, away_m })
     }
 
     /// `_run_reserved_goal`'s exception path: a dispatch whose outcome is
@@ -1485,6 +1586,16 @@ impl Execution {
         }
         Outcome::Aborted
     }
+}
+
+/// A resume that goes on inside its segment ([`Execution::resume_here`]).
+struct ResumeHere {
+    /// How far the segment had got, metres along it.
+    reached_m: f64,
+    /// Where the path to follow starts, metres along the segment.
+    from_m: f64,
+    /// The mower's distance from the point reached.
+    away_m: f64,
 }
 
 /// What a runtime that is not ready still lacks.
@@ -1838,7 +1949,9 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
                     &ctx.safety,
                 );
                 if reason.is_none() {
-                    ctx.progress.lock().unwrap().robot_pose = PoseStamped::clone(&msg);
+                    let mut ps = ctx.progress.lock().unwrap();
+                    ps.robot_pose = PoseStamped::clone(&msg);
+                    ps.track_reached();
                 }
                 let mut st = ctx.state.lock().unwrap();
                 st.last_robot_pose_received_at = if reason.is_none() { Some(ctx.sampled_at(&msg.header.stamp)) } else { None };

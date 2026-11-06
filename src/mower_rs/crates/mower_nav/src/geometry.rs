@@ -65,6 +65,80 @@ pub fn path_distance(path: &Path) -> f64 {
     path.poses.windows(2).map(|w| pose_distance(&w[0], &w[1])).sum()
 }
 
+/// The point `s_m` metres along the path (clamped to its ends).
+pub fn path_point_at(path: &Path, s_m: f64) -> Option<(f64, f64)> {
+    let first = path.poses.first()?;
+    let (mut x, mut y) = (first.pose.position.x, first.pose.position.y);
+    let mut left = s_m.max(0.0);
+    for w in path.poses.windows(2) {
+        let (a, b) = (&w[0].pose.position, &w[1].pose.position);
+        let d = pose_distance(&w[0], &w[1]);
+        if left < d && d > 0.0 {
+            let t = left / d;
+            return Some((a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+        }
+        left -= d;
+        (x, y) = (b.x, b.y);
+    }
+    Some((x, y))
+}
+
+/// The point of the path closest to (x, y) among those `from_m..=to_m` metres
+/// along it: how far along it is, and how far from (x, y).
+pub fn project_on_path(path: &Path, x: f64, y: f64, from_m: f64, to_m: f64) -> Option<(f64, f64)> {
+    let mut best: Option<(f64, f64)> = None;
+    let mut consider = |s: f64, px: f64, py: f64| {
+        let d = (px - x).hypot(py - y);
+        if best.is_none_or(|(_, b)| d < b) {
+            best = Some((s, d));
+        }
+    };
+    if path.poses.len() == 1 && from_m <= 0.0 {
+        let p = &path.poses[0].pose.position;
+        consider(0.0, p.x, p.y);
+    }
+    let mut start = 0.0;
+    for w in path.poses.windows(2) {
+        let (a, b) = (&w[0].pose.position, &w[1].pose.position);
+        let len = pose_distance(&w[0], &w[1]);
+        let (lo, hi) = (from_m.max(start), to_m.min(start + len));
+        if lo <= hi {
+            let t = if len > 0.0 { (((x - a.x) * (b.x - a.x) + (y - a.y) * (b.y - a.y)) / (len * len)).clamp((lo - start) / len, (hi - start) / len) } else { 0.0 };
+            consider(start + t * len, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+        }
+        start += len;
+    }
+    best
+}
+
+/// What is left of the path from `from_m` metres along it: an interpolated
+/// first pose, then the path's own poses. `from_m` at or below 0 is the whole
+/// path; at or past its end, its last pose twice (still a path, of no length).
+pub fn path_tail(path: &Path, from_m: f64) -> Path {
+    if !(from_m > 0.0) || path.poses.len() < 2 {
+        return path.clone();
+    }
+    let mut out = new_path_like(path);
+    let mut left = from_m;
+    for (i, w) in path.poses.windows(2).enumerate() {
+        let d = pose_distance(&w[0], &w[1]);
+        if left < d && d > 0.0 {
+            let t = left / d;
+            let mut first = w[1].clone();
+            first.pose.position.x = w[0].pose.position.x + (w[1].pose.position.x - w[0].pose.position.x) * t;
+            first.pose.position.y = w[0].pose.position.y + (w[1].pose.position.y - w[0].pose.position.y) * t;
+            first.pose.position.z = w[0].pose.position.z + (w[1].pose.position.z - w[0].pose.position.z) * t;
+            out.poses.push(first);
+            out.poses.extend_from_slice(&path.poses[i + 1..]);
+            return out;
+        }
+        left -= d;
+    }
+    let last = path.poses[path.poses.len() - 1].clone();
+    out.poses = vec![last.clone(), last];
+    out
+}
+
 /// Reject segments that Nav2 can accept without producing any motion.
 pub fn coverage_segments_block_reason(split_paths: &[Path], minimum_distance_m: f64) -> Option<String> {
     if split_paths.is_empty() {
@@ -360,6 +434,55 @@ mod tests {
             p.poses.push(ps);
         }
         p
+    }
+
+    #[test]
+    fn the_point_along_a_path_and_what_is_left_of_it() {
+        let l = path(&[(0.0, 0.0), (1.0, 0.0), (1.0, 2.0)]);
+        assert_eq!(path_point_at(&l, 0.0), Some((0.0, 0.0)));
+        assert_eq!(path_point_at(&l, -1.0), Some((0.0, 0.0)));
+        assert_eq!(path_point_at(&l, 0.5), Some((0.5, 0.0)));
+        assert_eq!(path_point_at(&l, 2.0), Some((1.0, 1.0)));
+        assert_eq!(path_point_at(&l, 9.0), Some((1.0, 2.0)));
+        assert_eq!(path_point_at(&Path::default(), 1.0), None);
+
+        assert_eq!(path_tail(&l, 0.0).poses.len(), 3);
+        assert_eq!(path_tail(&l, -1.0).poses.len(), 3);
+        let tail = path_tail(&l, 0.5);
+        let points: Vec<(f64, f64)> = tail.poses.iter().map(|p| (p.pose.position.x, p.pose.position.y)).collect();
+        assert_eq!(points, [(0.5, 0.0), (1.0, 0.0), (1.0, 2.0)]);
+        assert!((path_distance(&tail) - 2.5).abs() < 1e-9);
+        assert_eq!(tail.header.frame_id, "map");
+        // on a pose: no pose twice
+        let on = path_tail(&l, 1.0);
+        let points: Vec<(f64, f64)> = on.poses.iter().map(|p| (p.pose.position.x, p.pose.position.y)).collect();
+        assert_eq!(points, [(1.0, 0.0), (1.0, 2.0)]);
+        // past the end: the end, of no length, which the 0.15 m refusal catches
+        let past = path_tail(&l, 9.0);
+        assert_eq!(past.poses.len(), 2);
+        assert_eq!(path_distance(&past), 0.0);
+    }
+
+    #[test]
+    fn projecting_on_a_path_stays_inside_the_window() {
+        // there and back along y = 0 and y = 0.2: the window tells them apart
+        let l = path(&[(0.0, 0.0), (2.0, 0.0), (2.0, 0.2), (0.0, 0.2)]);
+        let close = |a: Option<(f64, f64)>, s: f64, d: f64| {
+            let (x, y) = a.unwrap();
+            assert!((x - s).abs() < 1e-9 && (y - d).abs() < 1e-9, "{x} {y}, wanted {s} {d}");
+        };
+        close(project_on_path(&l, 1.0, 0.05, 0.0, 9.0), 1.0, 0.05);
+        close(project_on_path(&l, 1.0, 0.15, 0.0, 9.0), 3.2, 0.05);
+        close(project_on_path(&l, 1.0, 0.15, 0.0, 2.0), 1.0, 0.15);
+        // past the window's end, or short of its start: its edge
+        close(project_on_path(&l, 1.5, 0.0, 0.0, 1.0), 1.0, 0.5);
+        close(project_on_path(&l, 0.5, 0.0, 1.0, 2.0), 1.0, 0.5);
+        // past the path's ends
+        close(project_on_path(&l, -1.0, 0.0, -5.0, 1.0), 0.0, 1.0);
+        close(project_on_path(&path(&[(0.0, 0.0), (1.0, 0.0)]), 3.0, 0.0, 0.0, 9.0), 1.0, 2.0);
+        // a window off the path, and no path
+        assert_eq!(project_on_path(&l, 1.0, 0.0, 10.0, 11.0), None);
+        assert_eq!(project_on_path(&Path::default(), 1.0, 0.0, 0.0, 1.0), None);
     }
 
     #[test]

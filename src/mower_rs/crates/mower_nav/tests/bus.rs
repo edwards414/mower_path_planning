@@ -174,8 +174,13 @@ impl Drop for Peer {
 struct FakeNav2 {
     _peer: Peer,
     hold: Arc<AtomicBool>,
+    /// While set: the next `follow_path` reports this much left and runs until
+    /// it is canceled.
+    hold_left_m: Arc<Mutex<Option<f64>>>,
     navigated: Arc<AtomicUsize>,
     followed: Arc<AtomicUsize>,
+    /// Where each `follow_path` began and ended: x of its first and last pose.
+    followed_x: Arc<Mutex<Vec<(f64, f64)>>>,
     canceled: Arc<AtomicUsize>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -188,6 +193,8 @@ impl FakeNav2 {
         let mut navigate = peer.with(|n| n.create_action_server::<NavigateToPose::Action>("navigate_to_pose")).unwrap();
         let mut follow = peer.with(|n| n.create_action_server::<FollowPath::Action>("follow_path")).unwrap();
         let hold = Arc::new(AtomicBool::new(false));
+        let hold_left_m = Arc::new(Mutex::new(None::<f64>));
+        let followed_x = Arc::new(Mutex::new(Vec::new()));
         let (navigated, followed, canceled) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let mut tasks = vec![tokio::spawn(async move {
             while let Some(request) = state.next().await {
@@ -209,14 +216,27 @@ impl FakeNav2 {
             }
         }));
         let (holding, counted, cancels_seen) = (hold.clone(), followed.clone(), canceled.clone());
+        let (holding_left, seen_x) = (hold_left_m.clone(), followed_x.clone());
         tasks.push(tokio::spawn(async move {
             while let Some(request) = follow.next().await {
                 counted.fetch_add(1, Ordering::SeqCst);
                 let length = path_length(&request.goal.path);
+                let poses = &request.goal.path.poses;
+                seen_x.lock().unwrap().push((poses[0].pose.position.x, poses[poses.len() - 1].pose.position.x));
                 let held = holding.load(Ordering::SeqCst);
+                let left_held = *holding_left.lock().unwrap();
                 let Ok((mut goal, mut cancels)) = request.accept() else { continue };
                 let canceled = cancels_seen.clone();
                 tokio::spawn(async move {
+                    if let Some(left) = left_held {
+                        let _ = goal.publish_feedback(FollowPath::Feedback { distance_to_goal: left as f32, speed: 0.3 });
+                        if let Some(cancel) = cancels.next().await {
+                            canceled.fetch_add(1, Ordering::SeqCst);
+                            cancel.accept();
+                            let _ = goal.cancel(FollowPath::Result::default());
+                        }
+                        return;
+                    }
                     for i in 1..=3 {
                         let left = length * (1.0 - i as f64 / 3.0);
                         let _ = goal.publish_feedback(FollowPath::Feedback { distance_to_goal: left as f32, speed: 0.3 });
@@ -232,11 +252,19 @@ impl FakeNav2 {
                 });
             }
         }));
-        FakeNav2 { _peer: peer, hold, navigated, followed, canceled, tasks }
+        FakeNav2 { _peer: peer, hold, hold_left_m, navigated, followed, followed_x, canceled, tasks }
     }
 
     fn hold(&self, hold: bool) {
         self.hold.store(hold, Ordering::SeqCst);
+    }
+
+    fn hold_left_m(&self, left: Option<f64>) {
+        *self.hold_left_m.lock().unwrap() = left;
+    }
+
+    fn followed_x(&self) -> Vec<(f64, f64)> {
+        self.followed_x.lock().unwrap().clone()
     }
 
     fn navigated(&self) -> usize {
@@ -734,6 +762,180 @@ fn manual_motion_stops_a_goal_and_blocks_new_ones() {
 /// With the health gate on (production), a goal needs a fresh pose, GPS fix,
 /// GPS odometry and IMU, all read from the bus under their production names
 /// and stamped on the module's clock.
+/// Publishes `/adapter/robot_pose` at (x, y) until dropped, stamped now, as the
+/// adapter does; the health gate is off in these tests, the pose is what a
+/// resume reads.
+struct PoseFeed {
+    keep: Arc<AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl PoseFeed {
+    fn start(bus: &Bus, x: f64, y: f64) -> PoseFeed {
+        let publisher = bus.scope("pose_feed").publisher::<PoseStamped>("/adapter/robot_pose", Qos::default()).unwrap();
+        let keep = Arc::new(AtomicBool::new(true));
+        let on = keep.clone();
+        let task = tokio::spawn(async move {
+            let clock = Clock::system();
+            while on.load(Ordering::SeqCst) {
+                let (sec, nanosec) = clock.now().to_parts();
+                let mut p = pose(x, y);
+                p.header.stamp = r2r::builtin_interfaces::msg::Time { sec, nanosec };
+                let _ = publisher.publish(&p);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        PoseFeed { keep, task }
+    }
+
+    async fn stop(self) {
+        self.keep.store(false, Ordering::SeqCst);
+        let _ = self.task.await;
+    }
+}
+
+/// A goal on segment 1 (of 2 m) whose pose gets to x = 1.0 while FollowPath
+/// reports `feedback_left_m` left, then stopped; the mower then stands at `then`
+/// and the goal is resumed at that segment, on a nav started afresh when
+/// `restart`. Returns nav2's counters of the resume alone: navigations, and the
+/// (first x, last x) of each FollowPath.
+async fn stop_and_resume(feedback_left_m: f64, then: (f64, f64), restart: bool, test: &str) -> (usize, Vec<(f64, f64)>) {
+    let dir = dir(test);
+    let nav2 = FakeNav2::start();
+    let bus = Bus::new();
+    let mut nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+    let client = nav.client();
+    nav2.hold_left_m(Some(feedback_left_m));
+    let during = PoseFeed::start(&bus, 1.0, 0.0);
+    let (goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+    eventually("segment 1", || nav2.followed_x().len() == 1).await;
+    // long enough for the feed's poses to reach nav on the segment
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait("the cancel", goal.cancel().unwrap()).await.unwrap();
+    let (status, _) = wait("the result", result).await.unwrap();
+    assert_eq!(status, GoalStatus::Canceled);
+    during.stop().await;
+    let client = if restart {
+        nav.stop().await;
+        nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        nav.client()
+    } else {
+        client
+    };
+    let feed = PoseFeed::start(&bus, then.0, then.1);
+    // the pose reaches nav before the goal does
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    nav2.hold_left_m(None);
+    let (navigated, followed) = (nav2.navigated(), nav2.followed_x().len());
+    let mut resume = mission(&dispatch_id());
+    resume.resume_segment_index = 1;
+    let (_goal, result, _feedback) = nav.dispatch(&client, resume).await;
+    let (status, outcome) = wait("the result", result).await.unwrap();
+    assert_eq!((status, outcome.success), (GoalStatus::Succeeded, true));
+    let counters = (nav2.navigated() - navigated, nav2.followed_x()[followed..].to_vec());
+    feed.stop().await;
+    nav.stop().await;
+    let _ = std::fs::remove_dir_all(&dir);
+    counters
+}
+
+fn assert_close(a: f64, b: f64, what: &str) {
+    assert!((a - b).abs() < 1e-6, "{what}: {a}, wanted {b}");
+}
+
+/// The mower stands where the segment got to (1 m of 2 m): the resume does not
+/// drive back. It follows what is left of the segment from 0.05 m behind the
+/// mower, with no navigation first, then the other two segments.
+#[test]
+fn a_resume_goes_on_inside_the_segment_when_the_mower_is_where_it_stopped() {
+    within(async {
+        let (navigated, followed) = stop_and_resume(1.0, (1.02, 0.03), false, "resume_inside").await;
+        assert_eq!(navigated, 0, "no navigation back");
+        assert_eq!(followed.len(), 3, "{followed:?}");
+        assert_close(followed[0].0, 0.97, "the rest of segment 1 starts");
+        assert_close(followed[0].1, 2.0, "and ends at the segment's end");
+        assert_close(followed[1].0, 2.0, "then segment 2, whole");
+        assert_close(followed[2].0, 4.0, "and segment 3, whole");
+    });
+}
+
+/// The point reached is where the pose got, not what FollowPath's feedback said:
+/// nav2 measures that from the pose in `odom`, so it drifts with the `map -> odom`
+/// offset. Feedback 0.6 m off makes no difference.
+#[test]
+fn how_far_a_segment_got_is_measured_on_the_map_pose_not_the_feedback() {
+    within(async {
+        let (navigated, followed) = stop_and_resume(0.4, (1.02, 0.0), false, "resume_map_pose").await;
+        assert_eq!(navigated, 0, "feedback said 1.6 m, the pose 1.0 m: the mower is where the pose got");
+        assert_close(followed[0].0, 0.97, "from the mower");
+    });
+}
+
+/// Past the point reached, still near it: from the mower, not from that point,
+/// or the rotation shim's sample 0.25 m along the path would lie behind it and
+/// it would turn around.
+#[test]
+fn a_resume_past_the_point_reached_starts_from_the_mower() {
+    within(async {
+        let (navigated, followed) = stop_and_resume(1.0, (1.25, 0.0), false, "resume_past").await;
+        assert_eq!(navigated, 0);
+        assert_close(followed[0].0, 1.20, "0.05 m behind the mower");
+    });
+}
+
+/// A restart (a module restart or a reboot) keeps how far it got: the file
+/// written at start says so, and the resume goes on as before.
+#[test]
+fn a_resume_after_a_restart_goes_on_inside_the_segment() {
+    within(async {
+        let (navigated, followed) = stop_and_resume(1.0, (1.02, 0.03), true, "resume_restart").await;
+        assert_eq!(navigated, 0, "no navigation back");
+        assert_close(followed[0].0, 0.97, "the rest of segment 1 starts");
+    });
+}
+
+/// The mower is not where the segment got to (carried off, or the plan and the
+/// pose disagree): the whole segment again, after a navigation to its start.
+#[test]
+fn a_resume_from_elsewhere_drives_to_the_segment_s_start_and_mows_all_of_it() {
+    within(async {
+        let (navigated, followed) = stop_and_resume(1.0, (1.02, 0.5), false, "resume_elsewhere").await;
+        assert_eq!(navigated, 1, "navigation to the segment's start");
+        assert_eq!(followed.len(), 3, "{followed:?}");
+        assert_close(followed[0].0, 0.0, "all of segment 1");
+        assert_close(followed[0].1, 2.0, "all of segment 1");
+    });
+}
+
+/// No pose to go by (none fresh, as nav_progress_check.py runs it): the same.
+#[test]
+fn a_resume_without_a_pose_drives_to_the_segment_s_start() {
+    within(async {
+        let dir = dir("resume_no_pose");
+        let nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let client = nav.client();
+        nav2.hold_left_m(Some(1.0));
+        let (goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait("the cancel", goal.cancel().unwrap()).await.unwrap();
+        wait("the result", result).await.unwrap();
+        nav2.hold_left_m(None);
+        let navigated = nav2.navigated();
+        let followed = nav2.followed_x().len();
+        let mut resume = mission(&dispatch_id());
+        resume.resume_segment_index = 1;
+        let (_goal, result, _feedback) = nav.dispatch(&client, resume).await;
+        let (status, _) = wait("the result", result).await.unwrap();
+        assert_eq!(status, GoalStatus::Succeeded);
+        assert_eq!(nav2.navigated() - navigated, 1);
+        assert!(nav2.followed_x()[followed].0.abs() < 1e-6, "all of segment 1");
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
 #[test]
 fn the_health_gate_reads_its_inputs_from_the_bus() {
     within(async {
