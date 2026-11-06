@@ -513,11 +513,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 574 MB from the runner's apt mirror, which has stalled past the timeout
+      # and failed this job (three times on 2026-11-06). A hit installs from the
+      # cache; a miss, or packages that no longer install on this runner image,
+      # go to the mirror.
+      - name: Cache the arm-none-eabi packages
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-none-eabi-debs
+          key: arm-none-eabi-debs-noble-v1
+
       - name: Install arm-none-eabi toolchain
         timeout-minutes: 10
         run: |
+          debs="$HOME/arm-none-eabi-debs"
+          if compgen -G "$debs/*.deb" >/dev/null && sudo apt-get install -y --no-install-recommends "$debs"/*.deb; then
+            echo "installed from the cache"
+            arm-none-eabi-gcc --version | head -1
+            exit 0
+          fi
+          rm -rf "$debs"
+          mkdir -p "$debs"
+          packages="gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib"
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+          sudo apt-get install -y --no-install-recommends --download-only $packages
+          cp /var/cache/apt/archives/*.deb "$debs"/
+          sudo apt-get install -y --no-install-recommends $packages
+          arm-none-eabi-gcc --version | head -1
 
       - name: Build application and bootloader
         working-directory: firmware
