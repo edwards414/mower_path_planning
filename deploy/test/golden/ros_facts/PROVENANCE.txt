@@ -1,0 +1,5 @@
+# graph.json, params/, launch/, log/: tools/oracle/freeze_stack.py
+image docker.io/fxrbindi/mower_path_planning:sha-7fdf61406716b1772e88954d508fc1bd3c7f30bd
+digest sha256:25a2f3bdeeb66b9d2ee2761e7e9fe3468dfe71191bc0fdc7720c014d2a2e0d6b
+git_sha 7fdf61406716b1772e88954d508fc1bd3c7f30bd
+date 2026-11-06

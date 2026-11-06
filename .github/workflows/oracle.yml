@@ -1,13 +1,15 @@
 name: Oracle vectors
 
 # Regenerates every committed oracle vector (tools/oracle/regen.sh: nav2,
-# robot_localization, ros2_controllers + mower_protocol.cpp) in the pinned
-# oracle image and fails if any of them changed (tools/oracle/check.sh; the
-# two wall-clock node scenarios are compared on what a run does not vary,
-# their outcomes and end poses, not byte for byte): the Rust ports' tests are
-# only as good as the vectors, and the real implementations must still
-# produce them. Monthly, on demand, and for a PR or push that changes the
-# oracle image.
+# robot_localization, ros2_controllers + mower_protocol.cpp, and the frozen
+# facts rcl, r2r and rmw give) in the pinned oracle image and fails if any of
+# them changed (tools/oracle/check.sh; the two wall-clock node scenarios are
+# compared on what a run does not vary, their outcomes and end poses, not byte
+# for byte): the Rust ports' tests are only as good as the vectors, and the
+# real implementations must still produce them. Then the frozen facts of a
+# running stack, from a robot image (tools/oracle/freeze_stack.py;
+# deploy/test/golden/ros_facts/README.md). Monthly, on demand, and for a PR or
+# push that changes the oracle image or the frozen facts.
 # workflow_dispatch with `publish` also pushes the image to GHCR (the rust-ros
 # job of build.yml pins its digest) and keeps a `docker save` of it as an
 # artifact: packages.ros.org keeps only its latest sync, so the image is the
@@ -19,6 +21,10 @@ on:
         description: Push the oracle image to ghcr.io/<owner>/mower-oracle and archive it
         type: boolean
         default: false
+      robot_image:
+        description: 'The ROS robot image the stack facts come from; empty = ghcr.io/<owner>/mower_path_planning:main. A PR that changes the graph names its pr-<N> image here'
+        type: string
+        default: ''
   schedule:
     - cron: '23 4 1 * *'
   push:
@@ -26,12 +32,14 @@ on:
       - 'main'
     paths:
       - 'tools/oracle/**'
+      - 'deploy/test/golden/ros_facts/**'
       - '.github/workflows/oracle.yml'
   pull_request:
     branches:
       - 'main'
     paths:
       - 'tools/oracle/**'
+      - 'deploy/test/golden/ros_facts/**'
       - '.github/workflows/oracle.yml'
 
 permissions:
@@ -49,9 +57,10 @@ jobs:
     # a + b * c into FMA, and the vectors are bit-exact where that matters
     # (src/mower_rs/crates/mower_nav_core/README.md).
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+      ROBOT_IMAGE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.robot_image || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,8 +68,10 @@ jobs:
       - name: Set image name
         run: echo "ORACLE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mower-oracle" >> "$GITHUB_ENV"
 
+      # To publish, and for the robot image of the stack facts below; a fork's
+      # token cannot log in, and that image is public.
       - name: Login to GHCR
-        if: env.PUBLISH == 'true'
+        if: github.event.pull_request.head.repo.fork != true
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -96,8 +107,16 @@ jobs:
       # (a warning on the run), since its counts vary (tools/oracle/check.sh
       # says why)
       - name: Regenerate and compare
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: docker run --rm -e GITHUB_ACTIONS -v "$GITHUB_WORKSPACE":/repo -w /repo mower-oracle:ci tools/oracle/check.sh
+
+      # The production stack, from the robot image as it is: part of nav2 and
+      # of the graph is not in the oracle image. The step above ran as root.
+      - name: Regenerate the facts of a running stack
+        timeout-minutes: 15
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          python3 tools/oracle/freeze_stack.py "${ROBOT_IMAGE_INPUT:-ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mower_path_planning:main}" --check
 
       - name: Publish the image
         if: env.PUBLISH == 'true'

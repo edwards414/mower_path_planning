@@ -1,0 +1,7 @@
+recorder_manager:
+  ros__parameters:
+    config_file: /mower_ws/install/mower_recorder/share/mower_recorder/config/record_topics.yaml
+    git_repo_dir: ''
+    output_root: <MOWER_STATE_DIR>/bags
+    qos_overrides_path: /mower_ws/install/mower_recorder/share/mower_recorder/config/qos_overrides.yaml
+    robot_id: mower

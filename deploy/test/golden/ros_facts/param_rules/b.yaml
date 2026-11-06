@@ -1,0 +1,15 @@
+# The second file of param_rules: see a.yaml.
+rule_node:
+  ros__parameters:
+    later_file_wins: from b.yaml
+    later_file_type: from b.yaml
+    only_in_b: 1
+
+# a section only the second file has, and /** again
+/**:
+  ros__parameters:
+    wildcard_only: from /** in b.yaml
+
+third_node:
+  ros__parameters:
+    only_third: from third_node

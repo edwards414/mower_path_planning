@@ -1,0 +1,84 @@
+# What rcl's params-file parser and r2r's load_params do with the forms E9-23's
+# reader has to know: tests in mower_bridge/tests/param_overrides.rs.
+# param_rules.json holds the answer. Read after this file, b.yaml.
+
+# a node's section before /**: which one wins
+rule_node:
+  ros__parameters:
+    node_then_wildcard: from rule_node
+    only_rule_node: 1
+    later_file_wins: from a.yaml
+    later_file_type: 1
+    # the parser's types
+    bool_true: true
+    bool_True: True
+    bool_TRUE: TRUE
+    bool_false: false
+    bool_yes: yes
+    bool_no: no
+    bool_on: on
+    bool_off: off
+    bool_y: y
+    string_quoted_bool: "true"
+    int_plain: 42
+    int_negative: -7
+    int_plus: +7
+    int_zero_padded: 007
+    int_big: 9007199254740993
+    double_plain: 1.5
+    double_whole: 2.0
+    double_exp: 1.0e3
+    double_exp_int: 1e3
+    double_dot: 3.
+    double_negative: -0.25
+    double_inf: .inf
+    double_nan: .nan
+    string_plain: abc
+    string_quoted_number: "42"
+    string_colon: "a:b"
+    string_empty: ""
+    string_path: /mower_ws/x.yaml
+    string_tilde: ~
+    array_bool: [true, false]
+    array_int: [1, 2, 3]
+    array_double: [1.0, 2.5]
+    array_string: [a, "b", "1"]
+    array_block:
+      - 1.0
+      - 2.0
+    nested:
+      deep:
+        key: 3
+        other: x
+      shallow: 4
+
+/**:
+  ros__parameters:
+    wildcard_only: from /**
+    wildcard_then_node: from /**
+    node_then_wildcard: from /**
+
+/rule_node:
+  ros__parameters:
+    fully_qualified: from /rule_node
+    only_rule_node: 2
+
+# a node's section after /**
+other_node:
+  ros__parameters:
+    wildcard_then_node: from other_node
+
+# a namespace
+/ns/in_ns:
+  ros__parameters:
+    namespaced: from /ns/in_ns
+
+in_ns:
+  ros__parameters:
+    bare_name: from in_ns
+
+# the nested spelling of a namespace, as nav2's files write it
+/ns:
+  deep_node:
+    ros__parameters:
+      nested_section: from /ns deep_node

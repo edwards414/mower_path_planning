@@ -1,0 +1,19 @@
+[package]
+name = "mower_ros_facts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What ROS told us, frozen (E9-06): replays deploy/test/golden/ros_facts and E3's JSON corpus with no r2r, rcl or ROS environment"
+
+# Nothing here, not even a dev-dependency, may reach r2r: these tests have to
+# build and pass with no ROS on the machine, which is the point of the crate
+# (build.yml's rust-ros job builds them without sourcing ROS and checks with
+# ldd that no test binary links rcl).
+[dev-dependencies]
+mower_cdr = { path = "../mower_cdr" }
+mower_schema = { path = "../mower_schema" }
+mcap = { version = "=0.26.0", default-features = false, features = ["zstd"] }
+serde_json.workspace = true
+serde_yaml = "0.9"
+sha2 = "0.10"
+zstd = "0.14"

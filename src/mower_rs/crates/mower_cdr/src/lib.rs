@@ -24,7 +24,8 @@
 //!
 //! `tests/rmw_oracle.rs` holds this to rmw itself (r2r's
 //! `to_serialized_bytes`) on every type of `mower_schema`'s table, and
-//! `tests/fixtures.rs` to every payload of the E5-0 recordings.
+//! `mower_ros_facts` to what rmw wrote, with no ROS: the same values frozen and
+//! every payload of the E5-0 recordings.
 
 mod de;
 mod decode;

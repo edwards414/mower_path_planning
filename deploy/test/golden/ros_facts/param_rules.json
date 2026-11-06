@@ -1,0 +1,84 @@
+{
+ "rule_node": {
+  "array_block": {"double_array":[1.0,2.0]},
+  "array_bool": {"bool_array":[true,false]},
+  "array_double": {"double_array":[1.0,2.5]},
+  "array_int": {"integer_array":[1,2,3]},
+  "array_string": {"string_array":["a","b","1"]},
+  "bool_TRUE": {"bool":true},
+  "bool_True": {"bool":true},
+  "bool_false": {"bool":false},
+  "bool_no": {"bool":false},
+  "bool_off": {"bool":false},
+  "bool_on": {"bool":true},
+  "bool_true": {"bool":true},
+  "bool_y": {"bool":true},
+  "bool_yes": {"bool":true},
+  "double_dot": {"double":3.0},
+  "double_exp": {"double":1000.0},
+  "double_exp_int": {"double":1000.0},
+  "double_inf": {"double":"inf"},
+  "double_nan": {"double":"nan"},
+  "double_negative": {"double":-0.25},
+  "double_plain": {"double":1.5},
+  "double_whole": {"double":2.0},
+  "fully_qualified": {"string":"from /rule_node"},
+  "int_big": {"integer":9007199254740993},
+  "int_negative": {"integer":-7},
+  "int_plain": {"integer":42},
+  "int_plus": {"integer":7},
+  "int_zero_padded": {"integer":7},
+  "later_file_type": {"integer":1},
+  "later_file_wins": {"string":"from b.yaml"},
+  "nested.deep.key": {"integer":3},
+  "nested.deep.other": {"string":"x"},
+  "nested.shallow": {"integer":4},
+  "node_then_wildcard": {"string":"from /**"},
+  "only_in_b": {"integer":1},
+  "only_rule_node": {"integer":2},
+  "string_colon": {"string":"a:b"},
+  "string_empty": {"string":""},
+  "string_path": {"string":"/mower_ws/x.yaml"},
+  "string_plain": {"string":"abc"},
+  "string_quoted_bool": {"string":"true"},
+  "string_quoted_number": {"string":"42"},
+  "string_tilde": {"string":"~"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ },
+ "other_node": {
+  "node_then_wildcard": {"string":"from /**"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from other_node"}
+ },
+ "third_node": {
+  "node_then_wildcard": {"string":"from /**"},
+  "only_third": {"string":"from third_node"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ },
+ "unmentioned": {
+  "node_then_wildcard": {"string":"from /**"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ },
+ "in_ns": {
+  "bare_name": {"string":"from in_ns"},
+  "node_then_wildcard": {"string":"from /**"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ },
+ "/ns/in_ns": {
+  "bare_name": {"string":"from in_ns"},
+  "namespaced": {"string":"from /ns/in_ns"},
+  "node_then_wildcard": {"string":"from /**"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ },
+ "/ns/deep_node": {
+  "nested_section": {"string":"from /ns deep_node"},
+  "node_then_wildcard": {"string":"from /**"},
+  "wildcard_only": {"string":"from /** in b.yaml"},
+  "wildcard_then_node": {"string":"from /**"}
+ }
+}

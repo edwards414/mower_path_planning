@@ -15,7 +15,9 @@
 #    fails that is made once more before the check fails. The port's tests
 #    then run against the fresh recording as a report only: they hold the
 #    port to the committed recording, with its counts, in build.yml's
-#    mower_rs tests. The fresh recording is then put back.
+#    mower_rs tests. The fresh recording is then put back;
+# 4. the tests of the frozen ROS facts pass with no ROS, and link none
+#    (facts_no_ros.sh).
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo"
@@ -53,4 +55,5 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "regenerating the oracle vectors changed them (diff above)" >&2
   exit 1
 fi
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/oracle-target}" bash tools/oracle/facts_no_ros.sh
 echo "every deterministic oracle vector reproduced, and every outcome of the node scenarios"

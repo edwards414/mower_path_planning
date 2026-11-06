@@ -663,7 +663,8 @@ pub static OUTSIDE: &[Outside] = &[
         ],
     },
     Outside {
-        // rcl's /rosout writer is on every node; mower_nav reads nav2's.
+        // rclcpp makes every node a /rosout writer (r2r makes none, so no
+        // module is one); mower_nav reads nav2's.
         // velocity_smoother writes /nav_cmd_vel for twist_mux (R V 1,
         // measured): with the mux on the bus it comes in from DDS.
         // lifecycle_manager_navigation writes /diagnostics next to twist_mux
