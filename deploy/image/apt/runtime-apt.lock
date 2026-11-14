@@ -14,6 +14,15 @@
 # libsoup-3.0-* 3.4.4-5ubuntu0.10, python3-pil 10.2.0-1ubuntu1.4. The ROS
 # packages are the same.
 #
+# 2026-11-14 (refresh only, no package added or removed): GitHub had evicted
+# the apt layer's cache (main's last build 11-06), so PR #132's build reinstalled
+# it and 14 Ubuntu updates had replaced the locked versions in the archive:
+# GStreamer base 1.24.2-1ubuntu0.6 (gstreamer1.0-plugins-base,
+# libgstreamer-plugins-base1.0-0, libgstreamer-gl1.0-0, gir1.2-gst-plugins-base),
+# libgphoto2-* 2.5.31-2.1ubuntu1.2, libsoup-3.0-* 3.4.4-5ubuntu0.11,
+# libmysqlclient21 8.0.46-0ubuntu0.24.04.5, python3-pil 10.2.0-1ubuntu1.5,
+# python3-tornado 6.4.0-1ubuntu0.8. The ROS packages are the same.
+#
 # The runtime stage of the Dockerfile installs exactly these versions and
 # fails when dpkg ends up with anything else. To change it (a new
 # exec_depend, a base image bump, a security update), copy the list the
@@ -60,7 +69,7 @@ gcc-14-base:arm64 14.2.0-4ubuntu2~24.04.1
 gdal-data 3.8.4+dfsg-3ubuntu3
 gdal-plugins:arm64 3.8.4+dfsg-3ubuntu3
 gir1.2-glib-2.0:arm64 2.80.0-6ubuntu3.10
-gir1.2-gst-plugins-base-1.0:arm64 1.24.2-1ubuntu0.5
+gir1.2-gst-plugins-base-1.0:arm64 1.24.2-1ubuntu0.6
 gir1.2-gstreamer-1.0:arm64 1.24.2-1ubuntu0.1
 gir1.2-ibus-1.0:arm64 1.5.29-2
 glib-networking-common 2.80.0-1build1
@@ -79,7 +88,7 @@ gpgv 2.4.4-2ubuntu17.6
 graphviz 2.42.2-9ubuntu0.1
 grep 3.11-4build1
 gsettings-desktop-schemas 46.1-0ubuntu1
-gstreamer1.0-plugins-base:arm64 1.24.2-1ubuntu0.5
+gstreamer1.0-plugins-base:arm64 1.24.2-1ubuntu0.6
 gstreamer1.0-plugins-good:arm64 1.24.2-1ubuntu1.8
 gzip 1.12-1ubuntu3.2
 hostname 3.23+nmu2ubuntu2
@@ -250,16 +259,16 @@ libgmp10:arm64 2:6.3.0+dfsg-2ubuntu6.1
 libgnutls30t64:arm64 3.8.3-1.1ubuntu3.6
 libgomp1:arm64 14.2.0-4ubuntu2~24.04.1
 libgpg-error0:arm64 1.47-3build2.1
-libgphoto2-6t64:arm64 2.5.31-2.1ubuntu1.1
-libgphoto2-dev:arm64 2.5.31-2.1ubuntu1.1
-libgphoto2-port12t64:arm64 2.5.31-2.1ubuntu1.1
+libgphoto2-6t64:arm64 2.5.31-2.1ubuntu1.2
+libgphoto2-dev:arm64 2.5.31-2.1ubuntu1.2
+libgphoto2-port12t64:arm64 2.5.31-2.1ubuntu1.2
 libgpm2:arm64 1.20.7-11
 libgraphite2-3:arm64 1.3.14-2ubuntu0.24.04.1
 libgsm1:arm64 1.0.22-1build1
 libgssapi-krb5-2:arm64 1.20.1-6ubuntu2.10
 libgssrpc4t64:arm64 1.20.1-6ubuntu2.10
-libgstreamer-gl1.0-0:arm64 1.24.2-1ubuntu0.5
-libgstreamer-plugins-base1.0-0:arm64 1.24.2-1ubuntu0.5
+libgstreamer-gl1.0-0:arm64 1.24.2-1ubuntu0.6
+libgstreamer-plugins-base1.0-0:arm64 1.24.2-1ubuntu0.6
 libgstreamer-plugins-good1.0-0:arm64 1.24.2-1ubuntu1.8
 libgstreamer1.0-0:arm64 1.24.2-1ubuntu0.1
 libgtest-dev:arm64 1.14.0-1
@@ -347,7 +356,7 @@ libmp3lame0:arm64 3.100-6build1
 libmpg123-0t64:arm64 1.32.5-1ubuntu1.1
 libmtdev1t64:arm64 1.1.6-1.1build1
 libmunge2:arm64 0.5.15-4ubuntu0.1
-libmysqlclient21:arm64 8.0.46-0ubuntu0.24.04.4
+libmysqlclient21:arm64 8.0.46-0ubuntu0.24.04.5
 libncurses6:arm64 6.4+20240113-1ubuntu2.2
 libncursesw6:arm64 6.4+20240113-1ubuntu2.2
 libnetcdf19t64:arm64 1:4.9.2-5ubuntu4
@@ -509,8 +518,8 @@ libsndio7.0:arm64 1.9.0-0.3build3
 libsocket++1:arm64 1.12.13+git20131030.5d039ba-1build1
 libsodium-dev:arm64 1.0.18-1ubuntu0.24.04.1
 libsodium23:arm64 1.0.18-1ubuntu0.24.04.1
-libsoup-3.0-0:arm64 3.4.4-5ubuntu0.10
-libsoup-3.0-common 3.4.4-5ubuntu0.10
+libsoup-3.0-0:arm64 3.4.4-5ubuntu0.11
+libsoup-3.0-common 3.4.4-5ubuntu0.11
 libsoxr0:arm64 0.1.3-4build3
 libspatialite8t64:arm64 5.1.0-3build1
 libspdlog-dev:arm64 1:1.12.0+ds-2build1
@@ -739,7 +748,7 @@ python3-more-itertools 10.2.0-1
 python3-numpy 1:1.26.4+ds-6ubuntu1
 python3-opencv:arm64 4.6.0+dfsg-13.1ubuntu1
 python3-packaging 24.0-1
-python3-pil:arm64 10.2.0-1ubuntu1.4
+python3-pil:arm64 10.2.0-1ubuntu1.5
 python3-pkg-resources 68.1.2-2ubuntu1.2
 python3-pluggy 1.4.0-1
 python3-psutil 5.9.8-2build2
@@ -758,7 +767,7 @@ python3-serial 3.5-2
 python3-setuptools 68.1.2-2ubuntu1.2
 python3-six 1.16.0-4
 python3-snowballstemmer 2.2.0-4build1
-python3-tornado 6.4.0-1ubuntu0.6
+python3-tornado 6.4.0-1ubuntu0.8
 python3-typeguard 4.1.5-1
 python3-ujson:arm64 5.9.0-1build1
 python3-urllib3 2.0.7-1ubuntu0.8
