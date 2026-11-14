@@ -120,7 +120,7 @@ async fn begin_recording(app: &mut App, kind: Kind) -> Result<(), String> {
         app.out.warn(&msg);
         return Err(msg);
     }
-    if let Some(msg) = app.rec.blocked_manifest_reply(&format!("開始 {} 錄製", kind.label())) {
+    if let Some(msg) = app.rec.blocked_manifest_reply(&format!("開始{}錄製", kind.name_zh())) {
         app.out.error(&msg);
         return Err(msg);
     }
@@ -395,7 +395,7 @@ pub async fn run(ctx: r2r::Context, m: ModuleCtx) -> ModuleResult {
         };
         let (mut success, mut message) = match cancelled {
             None => (true, "目前沒有進行中的記錄".to_string()),
-            Some(kind) => (true, format!("已取消 {} 記錄", kind.label())),
+            Some(kind) => (true, format!("已取消{}記錄", kind.name_zh())),
         };
         if cancelled.is_some() && !app.guard.release().await {
             success = false;

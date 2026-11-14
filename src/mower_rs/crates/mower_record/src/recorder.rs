@@ -59,6 +59,17 @@ impl Kind {
             Kind::Channel => "channel",
         }
     }
+
+    /// The name the app shows (工作區, 禁區, 通道, as the site messages say),
+    /// for every reply and log line a person reads. [`Kind::label`] stays the
+    /// API's word (`edit_zone`'s `kind`, the lease name).
+    pub fn name_zh(self) -> &'static str {
+        match self {
+            Kind::Zone => "工作區",
+            Kind::Risk => "禁區",
+            Kind::Channel => "通道",
+        }
+    }
 }
 
 pub struct Config {
@@ -313,7 +324,7 @@ impl Recorder {
     pub fn check_rtk_start(&self, requested: Kind) -> Result<(), String> {
         match self.rtk_not_fixed() {
             None => Ok(()),
-            Some(why) => Err(format!("RTK 尚未 fixed，無法開始 {} 記錄（{why}）", requested.label())),
+            Some(why) => Err(format!("RTK 尚未 fixed，無法開始{}記錄（{why}）", requested.name_zh())),
         }
     }
 
@@ -348,7 +359,7 @@ impl Recorder {
     pub fn check_datum_start(&self, requested: Kind) -> Result<(), String> {
         match self.datum_not_locked() {
             None => Ok(()),
-            Some(why) => Err(format!("datum 尚未鎖定，無法開始 {} 記錄（{why}）", requested.label())),
+            Some(why) => Err(format!("datum 尚未鎖定，無法開始{}記錄（{why}）", requested.name_zh())),
         }
     }
 
@@ -370,13 +381,13 @@ impl Recorder {
     /// The recording keeps running without RTK fixed; each outage is logged
     /// once when it starts and once, with its length, when it ends.
     fn rtk_gate(&mut self, out: &dyn Outputs) -> bool {
-        let label = self.active_kind().map_or("", Kind::label);
+        let label = self.active_kind().map_or("", Kind::name_zh);
         match (self.rtk_not_fixed(), self.rtk_paused_since) {
             (None, None) => true,
             (Some(_), Some(_)) => false,
             (Some(why), None) => {
                 self.rtk_paused_since = Some((self.mono)());
-                out.warn(&format!("RTK 未 fixed（{why}），暫停 {label} 取樣；記錄仍進行中，fixed 恢復後繼續"));
+                out.warn(&format!("RTK 未 fixed（{why}），暫停{label}取樣；記錄仍進行中，fixed 恢復後繼續"));
                 false
             }
             (None, Some(since)) => {
@@ -384,7 +395,7 @@ impl Recorder {
                 let paused = (self.mono)().saturating_duration_since(since);
                 self.rtk_longest_pause = self.rtk_longest_pause.max(paused);
                 let paused_s = paused.as_secs_f64();
-                out.info(&format!("RTK 恢復 fixed，繼續 {label} 取樣（暫停 {paused_s:.1} s）"));
+                out.info(&format!("RTK 恢復 fixed，繼續{label}取樣（暫停 {paused_s:.1} s）"));
                 true
             }
         }
@@ -607,7 +618,7 @@ impl Recorder {
     pub fn check_start(&self, requested: Kind) -> Result<(), String> {
         match self.active_kind() {
             None => Ok(()),
-            Some(active) => Err(format!("無法開始 {} 記錄：目前正在進行 {} 記錄", requested.label(), active.label())),
+            Some(active) => Err(format!("無法開始{}記錄：目前正在進行{}記錄", requested.name_zh(), active.name_zh())),
         }
     }
 
@@ -618,7 +629,7 @@ impl Recorder {
     }
 
     pub fn start_zone(&mut self, out: &dyn Outputs) -> Reply {
-        out.info("記錄區域起始點");
+        out.info("記錄工作區起始點");
         self.recording_zone = true;
         self.reset_rtk_pauses();
         self.zone_id += 1;
@@ -628,7 +639,7 @@ impl Recorder {
         }
         self.zone_marker = None;
         out.zone_marker(&Marker::default());
-        (true, "成功記錄區域起始點".into())
+        (true, "成功記錄工作區起始點".into())
     }
 
     fn is_recording(&self, kind: Kind) -> bool {
@@ -667,16 +678,16 @@ impl Recorder {
     /// first.
     fn end_zone(&mut self, out: &dyn Outputs) -> Result<String, String> {
         if !self.recording_zone {
-            return Err("沒有正在進行的 zone 記錄".into());
+            return Err("沒有正在進行的工作區記錄".into());
         }
         let Some(marker) = self.zone_marker.clone().filter(|m| m.points.len() >= 3) else {
-            return Err("區域點數不足，至少需要 3 個點".into());
+            return Err("工作區點數不足，至少需要 3 個點".into());
         };
-        out.info("記錄區域結束點");
+        out.info("記錄工作區結束點");
         self.zone_list.markers.push(marker);
         if !self.save_zone_list(out) {
             self.zone_list.markers.pop();
-            let msg = "區域已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
+            let msg = "工作區已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
             out.error(&msg);
             return Err(msg);
         }
@@ -687,11 +698,11 @@ impl Recorder {
         self.last_robot_pos = None;
         self.working_state_ready = true;
         out.zone_list(&self.zone_list);
-        Ok(format!("成功記錄區域結束點 #{}", self.zone_list.markers.len()))
+        Ok(format!("成功記錄工作區結束點 #{}", self.zone_list.markers.len()))
     }
 
     pub fn start_risk(&mut self, out: &dyn Outputs) -> Reply {
-        out.info("開始記錄風險區域");
+        out.info("開始記錄禁區");
         self.recording_risk = true;
         self.reset_rtk_pauses();
         self.risk_id += 1;
@@ -701,21 +712,21 @@ impl Recorder {
         }
         self.risk_marker = None;
         out.risk_marker(&Marker::default());
-        (true, "成功開始記錄風險區域".into())
+        (true, "成功開始記錄禁區".into())
     }
 
     fn end_risk(&mut self, out: &dyn Outputs) -> Result<String, String> {
         if !self.recording_risk {
-            return Err("沒有正在進行的 risk 記錄".into());
+            return Err("沒有正在進行的禁區記錄".into());
         }
         let Some(marker) = self.risk_marker.clone().filter(|m| m.points.len() >= 3) else {
-            return Err("風險區域點數不足，至少需要 3 個點".into());
+            return Err("禁區點數不足，至少需要 3 個點".into());
         };
-        out.info("結束記錄風險區域");
+        out.info("結束記錄禁區");
         self.risk_list.markers.push(marker);
         if !self.save_risk_list(out) {
             self.risk_list.markers.pop();
-            let msg = "風險區域已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
+            let msg = "禁區已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
             out.error(&msg);
             return Err(msg);
         }
@@ -726,11 +737,11 @@ impl Recorder {
         self.risk_path = empty_path(&self.cfg.frame_id);
         self.last_robot_pos = None;
         self.working_state_ready = true;
-        Ok(format!("成功結束記錄風險區域 #{}", self.risk_list.markers.len()))
+        Ok(format!("成功結束記錄禁區 #{}", self.risk_list.markers.len()))
     }
 
     pub fn start_channel(&mut self, out: &dyn Outputs) -> Reply {
-        out.info("開始記錄 chennal 路徑");
+        out.info("開始記錄通道");
         self.recording_channel = true;
         self.reset_rtk_pauses();
         self.channel_id += 1;
@@ -741,13 +752,13 @@ impl Recorder {
             self.channel_path.poses.push(pos);
             out.channel_path(&self.channel_path);
         }
-        (true, format!("成功開始記錄 chennal 路徑 #{}", self.channel_id))
+        (true, format!("成功開始記錄通道 #{}", self.channel_id))
     }
 
     fn end_channel(&mut self, out: &dyn Outputs) -> Result<String, String> {
-        out.info("結束記錄 chennal 路徑");
+        out.info("結束記錄通道");
         if !self.recording_channel {
-            return Err("沒有正在進行的 chennal 路徑記錄".into());
+            return Err("沒有正在進行的通道記錄".into());
         }
         // The end point is a sample too: only on RTK fixed.
         let end_pos = if self.rtk_not_fixed().is_none() { self.robot_pos(out) } else { None };
@@ -761,13 +772,13 @@ impl Recorder {
             }
         }
         if self.channel_path.poses.len() < 2 {
-            return Err("chennal 路徑點數不足，至少需要 2 個點".into());
+            return Err("通道點數不足，至少需要 2 個點".into());
         }
         let completed = self.path_to_marker(&self.channel_path, "chennal_path", self.channel_id, (0.0, 1.0, 0.0), 0.1);
         self.channel_list.markers.push(completed);
         if !self.save_channel_list(out) {
             self.channel_list.markers.pop();
-            let msg = "channel 路徑已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
+            let msg = "通道已收尾但持久化失敗；錄製仍保留，請檢查磁碟後重試結束".to_string();
             out.error(&msg);
             return Err(msg);
         }
@@ -777,7 +788,7 @@ impl Recorder {
         self.channel_path = empty_path(&self.cfg.frame_id);
         self.last_robot_pos = None;
         self.working_state_ready = true;
-        Ok("成功結束記錄 chennal 路徑".into())
+        Ok("成功結束記錄通道".into())
     }
 
     /// 取消目前進行中的記錄：停止取樣、清空 in-progress 路徑，不加入清單。
@@ -836,31 +847,31 @@ impl Recorder {
                 let before = list.markers.len();
                 list.markers.retain(|m| m.id != id);
                 if list.markers.len() == before {
-                    return Err(format!("找不到 {} id={id}", kind.label()));
+                    return Err(format!("找不到{} id={id}", kind.name_zh()));
                 }
-                (format!("已刪除 {} id={id}", kind.label()), id)
+                (format!("已刪除{} id={id}", kind.name_zh()), id)
             }
             "add" => {
                 if pts.len() < min_pts {
-                    return Err(format!("{} 頂點不足（{} < {min_pts}）", kind.label(), pts.len()));
+                    return Err(format!("{}頂點不足（{} < {min_pts}）", kind.name_zh(), pts.len()));
                 }
                 let new_id = self.list_of(kind).markers.iter().map(|m| m.id).max().unwrap_or(0) + 1;
                 let marker = self.marker_from_xy(ns, new_id, style.0, style.1, pts, closed);
                 self.list_of_mut(kind).markers.push(marker);
-                (format!("已新增 {} id={new_id}", kind.label()), new_id)
+                (format!("已新增{} id={new_id}", kind.name_zh()), new_id)
             }
             "update" => {
                 if pts.len() < min_pts {
-                    return Err(format!("{} 頂點不足（{} < {min_pts}）", kind.label(), pts.len()));
+                    return Err(format!("{}頂點不足（{} < {min_pts}）", kind.name_zh(), pts.len()));
                 }
                 let rebuilt = self.marker_from_xy(ns, id, style.0, style.1, pts, closed);
                 let stamp = self.now();
                 let Some(target) = self.list_of_mut(kind).markers.iter_mut().find(|m| m.id == id) else {
-                    return Err(format!("找不到 {} id={id}", kind.label()));
+                    return Err(format!("找不到{} id={id}", kind.name_zh()));
                 };
                 target.points = rebuilt.points;
                 target.header.stamp = stamp;
-                (format!("已更新 {} id={id}", kind.label()), id)
+                (format!("已更新{} id={id}", kind.name_zh()), id)
             }
             other => return Err(format!("未知 op: {other}（要 add/delete/update）")),
         };
@@ -1747,13 +1758,13 @@ mod tests {
         assert!(r.check_start(Kind::Zone).is_ok());
         assert_eq!(r.start_zone(&log).0, true);
         assert!(r.check_start(Kind::Risk).is_err());
-        assert_eq!(r.end_zone(&log), Err("區域點數不足，至少需要 3 個點".into()));
+        assert_eq!(r.end_zone(&log), Err("工作區點數不足，至少需要 3 個點".into()));
         for (x, y) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.1), (1.9, 0.05)] {
             r.on_pose_source("map", "base_footprint", pose(x, y));
             assert!(r.sample(&log));
         }
         let msg = r.end_zone(&log).unwrap();
-        assert_eq!(msg, "成功記錄區域結束點 #1");
+        assert_eq!(msg, "成功記錄工作區結束點 #1");
         assert!(!r.recording());
         assert!(!r.sample(&log));
         assert_eq!(r.zone_list.markers.len(), 1);
@@ -1784,17 +1795,17 @@ mod tests {
         let log = Log::default();
         r.restore_startup_persistence(&log);
         let (msg, id) = r.edit(&log, "add", "risk", 0, &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]).unwrap();
-        assert_eq!((msg.as_str(), id), ("已新增 risk id=1", 1));
+        assert_eq!((msg.as_str(), id), ("已新增禁區 id=1", 1));
         assert_eq!(r.risk_list.markers[0].points.len(), 4); // closed
         assert_eq!(r.risk_id, 1);
-        assert_eq!(r.edit(&log, "add", "channel", 0, &[(0.0, 0.0)]).unwrap_err(), "channel 頂點不足（1 < 2）");
+        assert_eq!(r.edit(&log, "add", "channel", 0, &[(0.0, 0.0)]).unwrap_err(), "通道頂點不足（1 < 2）");
         let (_, cid) = r.edit(&log, "add", "channel", 0, &[(0.0, 0.0), (5.0, 0.0)]).unwrap();
         assert_eq!(cid, 1);
         assert_eq!(r.channel_list.markers[0].points.len(), 2); // open
-        assert_eq!(r.edit(&log, "update", "risk", 9, &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]).unwrap_err(), "找不到 risk id=9");
+        assert_eq!(r.edit(&log, "update", "risk", 9, &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]).unwrap_err(), "找不到禁區 id=9");
         r.edit(&log, "update", "risk", 1, &[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]).unwrap();
         assert_eq!(r.risk_list.markers[0].points[1].x, 2.0);
-        assert_eq!(r.edit(&log, "delete", "zone", 3, &[]).unwrap_err(), "找不到 zone id=3");
+        assert_eq!(r.edit(&log, "delete", "zone", 3, &[]).unwrap_err(), "找不到工作區 id=3");
         r.edit(&log, "delete", "risk", 1, &[]).unwrap();
         assert!(r.risk_list.markers.is_empty());
         assert_eq!(r.edit(&log, "add", "blob", 0, &[]).unwrap_err(), "未知 kind: blob（要 zone/risk/channel）");
@@ -1985,7 +1996,7 @@ mod persistence_rules {
         r.datum = None;
         let before = read(d.join("zone_record/zone_list.json"));
         let err = r.edit(&Quiet, "add", "zone", 0, &[(5.0, 0.0), (9.0, 0.0), (9.0, 4.0)]).unwrap_err();
-        assert_eq!(err, "已新增 zone id=2；場地檔同步失敗，變更已回復");
+        assert_eq!(err, "已新增工作區 id=2；場地檔同步失敗，變更已回復");
         assert_eq!(r.zone_list.markers.len(), 1);
         assert_eq!(read(d.join("zone_record/zone_list.json")), before);
         assert_eq!(r.manifest_blocked, None, "the rollback itself was saved");
@@ -2161,13 +2172,13 @@ mod rtk_gate {
     fn a_start_needs_a_fresh_rtk_fixed_fix() {
         let log = Log::default();
         let mut g = rig("start", true, false, &log);
-        let refused = |kind: &str, why: &str| Err(format!("RTK 尚未 fixed，無法開始 {kind} 記錄（{why}）"));
-        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "尚未收到 GPS /fix"));
+        let refused = |kind: &str, why: &str| Err(format!("RTK 尚未 fixed，無法開始{kind}記錄（{why}）"));
+        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("工作區", "尚未收到 GPS /fix"));
         g.r.on_fix(-1, g.clock.mono());
-        assert_eq!(g.r.check_rtk_start(Kind::Risk), refused("risk", "GPS 無定位"));
+        assert_eq!(g.r.check_rtk_start(Kind::Risk), refused("禁區", "GPS 無定位"));
         // RTK float and a plain 3D fix are both status 0 on /fix
         g.r.on_fix(0, g.clock.mono());
-        assert_eq!(g.r.check_rtk_start(Kind::Channel), refused("channel", "GPS status=0，RTK fixed 為 2"));
+        assert_eq!(g.r.check_rtk_start(Kind::Channel), refused("通道", "GPS status=0，RTK fixed 為 2"));
         g.r.on_fix(2, g.clock.mono());
         for kind in [Kind::Zone, Kind::Risk, Kind::Channel] {
             assert_eq!(g.r.check_rtk_start(kind), Ok(()));
@@ -2175,7 +2186,7 @@ mod rtk_gate {
         g.manual.advance(Duration::from_millis(1000));
         assert_eq!(g.r.check_rtk_start(Kind::Zone), Ok(()), "1.0 s old is still fresh");
         g.manual.advance(Duration::from_millis(100));
-        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("zone", "GPS /fix 已 1.1 s 未更新"));
+        assert_eq!(g.r.check_rtk_start(Kind::Zone), refused("工作區", "GPS /fix 已 1.1 s 未更新"));
         // require_rtk_fixed off: no /fix needed at all
         let off = rig("start_off", false, false, &log);
         assert_eq!(off.r.check_rtk_start(Kind::Zone), Ok(()));
@@ -2215,14 +2226,14 @@ mod rtk_gate {
         assert!(g.r.rtk_paused());
         assert_eq!(log.last_path(), [1.0, 2.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
         // ended during the outage: the outage closes with the recording
-        assert_eq!(g.r.end_zone(&log), Ok("成功記錄區域結束點 #1".to_string()));
+        assert_eq!(g.r.end_zone(&log), Ok("成功記錄工作區結束點 #1".to_string()));
         assert!(!g.r.rtk_paused());
         assert_eq!(
             log.rtk(),
             [
-                "W RTK 未 fixed（GPS status=0，RTK fixed 為 2），暫停 zone 取樣；記錄仍進行中，fixed 恢復後繼續",
-                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 0.3 s）",
-                "W RTK 未 fixed（GPS /fix 已 1.1 s 未更新），暫停 zone 取樣；記錄仍進行中，fixed 恢復後繼續",
+                "W RTK 未 fixed（GPS status=0，RTK fixed 為 2），暫停工作區取樣；記錄仍進行中，fixed 恢復後繼續",
+                "I RTK 恢復 fixed，繼續工作區取樣（暫停 0.3 s）",
+                "W RTK 未 fixed（GPS /fix 已 1.1 s 未更新），暫停工作區取樣；記錄仍進行中，fixed 恢復後繼續",
                 "I 記錄結束時 RTK 仍未 fixed（已暫停取樣 0.2 s）",
             ]
         );
@@ -2260,11 +2271,11 @@ mod rtk_gate {
     }
 
     fn rtk_refused(kind: &str, why: &str) -> Result<(), String> {
-        Err(format!("RTK 尚未 fixed，無法開始 {kind} 記錄（{why}）"))
+        Err(format!("RTK 尚未 fixed，無法開始{kind}記錄（{why}）"))
     }
 
     fn datum_refused(kind: &str, why: &str) -> Result<(), String> {
-        Err(format!("datum 尚未鎖定，無法開始 {kind} 記錄（{why}）"))
+        Err(format!("datum 尚未鎖定，無法開始{kind}記錄（{why}）"))
     }
 
     /// A start also needs navsat's datum locked (require_datum; owner,
@@ -2276,12 +2287,12 @@ mod rtk_gate {
         let log = Log::default();
         let mut g = rig("datum", true, true, &log);
         // neither: RTK fixed is named
-        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "尚未收到 GPS /fix"));
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("工作區", "尚未收到 GPS /fix"));
         // RTK fixed, navsat not locked yet: the datum is named
         g.r.on_fix(2, g.clock.mono());
         for kind in [Kind::Zone, Kind::Risk, Kind::Channel] {
             assert_eq!(g.r.check_rtk_start(kind), Ok(()));
-            assert_eq!(g.r.check_fix_and_datum_start(kind), datum_refused(kind.label(), "尚未收到 navsat 的 /odometry/gps"));
+            assert_eq!(g.r.check_fix_and_datum_start(kind), datum_refused(kind.name_zh(), "尚未收到 navsat 的 /odometry/gps"));
         }
         // navsat publishes: both hold
         g.r.on_gps_odometry(g.clock.mono());
@@ -2295,14 +2306,14 @@ mod rtk_gate {
         assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), Ok(()), "1.0 s old is still fresh");
         g.manual.advance(Duration::from_millis(100));
         g.r.on_fix(2, g.clock.mono());
-        assert_eq!(g.r.check_fix_and_datum_start(Kind::Risk), datum_refused("risk", "navsat /odometry/gps 已 1.1 s 未更新"));
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Risk), datum_refused("禁區", "navsat /odometry/gps 已 1.1 s 未更新"));
         // both fail: RTK fixed is still the one named
         g.r.on_fix(0, g.clock.mono());
-        assert_eq!(g.r.check_fix_and_datum_start(Kind::Channel), rtk_refused("channel", "GPS status=0，RTK fixed 為 2"));
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Channel), rtk_refused("通道", "GPS status=0，RTK fixed 為 2"));
         // RTK fails, the datum holds: RTK fixed
         g.r.on_gps_odometry(g.clock.mono());
         assert_eq!(g.r.check_datum_start(Kind::Zone), Ok(()));
-        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "GPS status=0，RTK fixed 為 2"));
+        assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("工作區", "GPS status=0，RTK fixed 為 2"));
         g.r.on_fix(2, g.clock.mono());
         assert_eq!(g.r.check_fix_and_datum_start(Kind::Zone), Ok(()));
     }
@@ -2313,12 +2324,12 @@ mod rtk_gate {
         let log = Log::default();
         // require_datum off: RTK fixed alone, no /odometry/gps
         let mut no_datum = rig("datum_off", true, false, &log);
-        assert_eq!(no_datum.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("zone", "尚未收到 GPS /fix"));
+        assert_eq!(no_datum.r.check_fix_and_datum_start(Kind::Zone), rtk_refused("工作區", "尚未收到 GPS /fix"));
         no_datum.r.on_fix(2, no_datum.clock.mono());
         assert_eq!(no_datum.r.check_fix_and_datum_start(Kind::Zone), Ok(()));
         // require_rtk_fixed off: the datum alone, no /fix
         let mut no_rtk = rig("rtk_off", false, true, &log);
-        assert_eq!(no_rtk.r.check_fix_and_datum_start(Kind::Risk), datum_refused("risk", "尚未收到 navsat 的 /odometry/gps"));
+        assert_eq!(no_rtk.r.check_fix_and_datum_start(Kind::Risk), datum_refused("禁區", "尚未收到 navsat 的 /odometry/gps"));
         no_rtk.r.on_gps_odometry(no_rtk.clock.mono());
         assert_eq!(no_rtk.r.check_fix_and_datum_start(Kind::Risk), Ok(()));
         // both off: no input at all
@@ -2347,7 +2358,7 @@ mod rtk_gate {
         g.tick(4.0, Some(2), &log);
         g.tick(5.0, Some(2), &log);
         assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(10));
-        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄工作區結束點 #1".into()));
         let saved = g.zone_file();
 
         g.r.on_fix(2, g.clock.mono());
@@ -2368,14 +2379,14 @@ mod rtk_gate {
         assert_eq!(g.zone_file(), saved);
         assert!(log.lines.borrow().contains(&"W 錄製中 RTK 中斷 10.1 秒（超過 10 秒），邊界可能不準，未儲存，請重新記錄".to_string()));
         // Nothing is left to end; the next recording starts with no pause.
-        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的 zone 記錄".into()));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的工作區記錄".into()));
         g.r.on_fix(2, g.clock.mono());
         assert!(g.r.start_zone(&log).0);
         assert_eq!(g.r.longest_rtk_pause(), Duration::ZERO);
         for x in [1.0, 2.0, 3.0] {
             g.tick(x, Some(2), &log);
         }
-        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #2".into()));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄工作區結束點 #2".into()));
     }
 
     /// A pause still going on at the end counts at its length then: 10.0 s
@@ -2392,13 +2403,13 @@ mod rtk_gate {
         }
         g.outage(4.0, 100, &log);
         assert!(g.r.rtk_paused());
-        assert_eq!(g.r.end(Kind::Risk, &log), EndReply::Saved("成功結束記錄風險區域 #1".into()));
+        assert_eq!(g.r.end(Kind::Risk, &log), EndReply::Saved("成功結束記錄禁區 #1".into()));
 
         g.r.on_fix(2, g.clock.mono());
         assert!(g.r.start_channel(&log).0);
         g.tick(1.0, Some(2), &log);
         g.outage(2.0, 101, &log);
-        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的 zone 記錄".into()));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Refused("沒有正在進行的工作區記錄".into()));
         assert!(g.r.recording() && g.r.rtk_paused());
         assert_eq!(g.r.end(Kind::Channel, &log), discarded("10.1", "路徑"));
         assert!(!g.r.recording() && !g.r.rtk_paused());
@@ -2424,7 +2435,7 @@ mod rtk_gate {
             g.tick(4.0, Some(2), &log);
             g.outage(5.0, 300, &log);
             assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(30));
-            assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()), "{name}");
+            assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄工作區結束點 #1".into()), "{name}");
         }
     }
 
@@ -2443,13 +2454,13 @@ mod rtk_gate {
         g.tick(3.0, Some(2), &log);
         g.outage(3.5, 60, &log);
         assert_eq!(g.r.longest_rtk_pause(), Duration::from_secs(10));
-        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄區域結束點 #1".into()));
+        assert_eq!(g.r.end(Kind::Zone, &log), EndReply::Saved("成功記錄工作區結束點 #1".into()));
         let ends: Vec<String> = log.rtk().into_iter().filter(|l| l.starts_with("I ")).collect();
         assert_eq!(
             ends,
             [
-                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 9.0 s）",
-                "I RTK 恢復 fixed，繼續 zone 取樣（暫停 10.0 s）",
+                "I RTK 恢復 fixed，繼續工作區取樣（暫停 9.0 s）",
+                "I RTK 恢復 fixed，繼續工作區取樣（暫停 10.0 s）",
                 "I 記錄結束時 RTK 仍未 fixed（已暫停取樣 6.0 s）",
             ]
         );
