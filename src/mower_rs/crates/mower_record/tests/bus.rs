@@ -443,11 +443,11 @@ fn a_zone_recorded_from_the_pose_topic_is_saved_listed_and_lit() {
         assert!(next(&mut zone_list).await.markers.is_empty(), "start-up publishes the empty list");
 
         let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
-        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        assert_eq!(answer, (true, "成功記錄工作區起始點".to_string()));
         for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.5)].into_iter().enumerate() {
             sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
         }
-        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄區域結束點 #1".to_string()));
+        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄工作區結束點 #1".to_string()));
         let list = next(&mut zone_list).await;
         assert_eq!(list.markers.iter().map(|m| (m.id, m.ns.as_str())).collect::<Vec<_>>(), [(1, "zones")]);
         assert_eq!(rec.retained("/zone_list"), 1);
@@ -620,7 +620,7 @@ fn a_change_whose_lease_release_is_unconfirmed_is_no_success() {
         }
         let (success, message) = rec.trigger("/record_zone_end").await;
         assert!(!success, "{message}");
-        assert!(message.starts_with("成功記錄區域結束點 #1") && message.contains("操作鎖釋放未確認"), "{message}");
+        assert!(message.starts_with("成功記錄工作區結束點 #1") && message.contains("操作鎖釋放未確認"), "{message}");
         rec.stop().await;
     });
     within("release_edit", |_dir| async move {
@@ -658,16 +658,16 @@ fn a_recording_starts_and_samples_only_on_rtk_fixed() {
 
         // No GPS at all, then RTK float (status 0 on /fix, as a 3D fix).
         let answer = rec.trigger("/record_zone_start").await;
-        assert_eq!(answer, (false, format!("RTK 尚未 fixed，無法開始 zone 記錄{NO_FIX_YET}")));
+        assert_eq!(answer, (false, format!("RTK 尚未 fixed，無法開始工作區記錄{NO_FIX_YET}")));
         let gps = Gps::start(&rec.test, 0);
         let answer = once_the_fix_is_seen(|| rec.trigger("/risk_zone_start")).await;
-        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始 risk 記錄（GPS status=0，RTK fixed 為 2）".to_string()));
+        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始禁區記錄（GPS status=0，RTK fixed 為 2）".to_string()));
         assert!(ops(&lock).is_empty(), "a lease taken without RTK fixed");
 
         // RTK fixed: it starts and samples.
         gps.set(2).await;
         let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
-        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        assert_eq!(answer, (true, "成功記錄工作區起始點".to_string()));
         sample(&clock, &manual, &pose, &mut recorded, (2.0, 0.0), 1).await;
         sample(&clock, &manual, &pose, &mut recorded, (2.0, 2.0), 2).await;
 
@@ -685,7 +685,7 @@ fn a_recording_starts_and_samples_only_on_rtk_fixed() {
         // recording that ran meanwhile ends as usual.
         gps.set(2).await;
         sample(&clock, &manual, &pose, &mut recorded, (0.0, 2.0), 3).await;
-        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄區域結束點 #1".to_string()));
+        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄工作區結束點 #1".to_string()));
 
         // A /fix 1.0 s old still counts (rtk_fix_max_age_s), 1.1 s does not:
         // the GPS stops after fixes have come at the clock's present time.
@@ -693,11 +693,11 @@ fn a_recording_starts_and_samples_only_on_rtk_fixed() {
         drop(gps);
         tokio::time::sleep(Duration::from_millis(30)).await;
         manual.advance(Duration::from_millis(1000));
-        assert_eq!(rec.trigger("/channel_record_start").await, (true, "成功開始記錄 chennal 路徑 #1".to_string()));
-        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消 channel 記錄".to_string()));
+        assert_eq!(rec.trigger("/channel_record_start").await, (true, "成功開始記錄通道 #1".to_string()));
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消通道記錄".to_string()));
         manual.advance(Duration::from_millis(100));
         let answer = rec.trigger("/channel_record_start").await;
-        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始 channel 記錄（GPS /fix 已 1.1 s 未更新）".to_string()));
+        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始通道記錄（GPS /fix 已 1.1 s 未更新）".to_string()));
         rec.stop().await;
     });
 }
@@ -722,22 +722,22 @@ fn a_recording_starts_only_once_the_datum_is_locked() {
         // map EKF publishes, the map frame is not anchored yet.
         let gps = Gps::with_datum(&rec.test, 2, false);
         let answer = once_the_fix_is_seen(|| rec.trigger("/record_zone_start")).await;
-        assert_eq!(answer, (false, format!("datum 尚未鎖定，無法開始 zone 記錄{NO_DATUM_YET}")));
-        assert_eq!(rec.trigger("/risk_zone_start").await, (false, format!("datum 尚未鎖定，無法開始 risk 記錄{NO_DATUM_YET}")));
-        assert_eq!(rec.trigger("/chennal_record_start").await, (false, format!("datum 尚未鎖定，無法開始 channel 記錄{NO_DATUM_YET}")));
+        assert_eq!(answer, (false, format!("datum 尚未鎖定，無法開始工作區記錄{NO_DATUM_YET}")));
+        assert_eq!(rec.trigger("/risk_zone_start").await, (false, format!("datum 尚未鎖定，無法開始禁區記錄{NO_DATUM_YET}")));
+        assert_eq!(rec.trigger("/chennal_record_start").await, (false, format!("datum 尚未鎖定，無法開始通道記錄{NO_DATUM_YET}")));
         // float and no datum: RTK is named first
         gps.set(0).await;
         let answer = rec.trigger("/record_zone_start").await;
-        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始 zone 記錄（GPS status=0，RTK fixed 為 2）".to_string()));
+        assert_eq!(answer, (false, "RTK 尚未 fixed，無法開始工作區記錄（GPS status=0，RTK fixed 為 2）".to_string()));
         assert!(ops(&lock).is_empty(), "a lease taken before the datum");
 
         // navsat locks on the fixed fix: it starts and samples.
         gps.set(2).await;
         gps.set_datum(true).await;
         let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
-        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        assert_eq!(answer, (true, "成功記錄工作區起始點".to_string()));
         sample(&clock, &manual, &pose, &mut recorded, (2.0, 0.0), 1).await;
-        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消 zone 記錄".to_string()));
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消工作區記錄".to_string()));
 
         // navsat stops publishing (restarted: no transform until it locks
         // again) while /fix comes on: 1.0 s still counts, 1.1 s does not.
@@ -746,12 +746,12 @@ fn a_recording_starts_only_once_the_datum_is_locked() {
         gps.set_datum(false).await;
         manual.advance(Duration::from_millis(1000));
         tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(rec.trigger("/channel_record_start").await, (true, "成功開始記錄 chennal 路徑 #1".to_string()));
-        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消 channel 記錄".to_string()));
+        assert_eq!(rec.trigger("/channel_record_start").await, (true, "成功開始記錄通道 #1".to_string()));
+        assert_eq!(rec.trigger("/record_cancel").await, (true, "已取消通道記錄".to_string()));
         manual.advance(Duration::from_millis(100));
         tokio::time::sleep(Duration::from_millis(30)).await;
         let answer = rec.trigger("/channel_record_start").await;
-        assert_eq!(answer, (false, "datum 尚未鎖定，無法開始 channel 記錄（navsat /odometry/gps 已 1.1 s 未更新）".to_string()));
+        assert_eq!(answer, (false, "datum 尚未鎖定，無法開始通道記錄（navsat /odometry/gps 已 1.1 s 未更新）".to_string()));
         assert_eq!(
             ops(&lock),
             [
@@ -786,7 +786,7 @@ fn a_recording_with_a_long_rtk_outage_is_refused_at_the_end_and_discarded() {
         initialise(&clock, &manual, &pose, &mut recorded).await;
 
         let answer = once_nav_is_seen(|| rec.trigger("/record_zone_start")).await;
-        assert_eq!(answer, (true, "成功記錄區域起始點".to_string()));
+        assert_eq!(answer, (true, "成功記錄工作區起始點".to_string()));
         for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)].into_iter().enumerate() {
             sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
         }
@@ -842,11 +842,11 @@ fn a_recording_with_a_long_rtk_outage_is_refused_at_the_end_and_discarded() {
         gps.set(2).await;
         pose.publish(&odom(&clock, 0.0, 0.0)).unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(rec.trigger("/record_zone_start").await, (true, "成功記錄區域起始點".to_string()));
+        assert_eq!(rec.trigger("/record_zone_start").await, (true, "成功記錄工作區起始點".to_string()));
         for (i, xy) in [(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)].into_iter().enumerate() {
             sample(&clock, &manual, &pose, &mut recorded, xy, i + 1).await;
         }
-        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄區域結束點 #1".to_string()));
+        assert_eq!(rec.trigger("/record_zone_end").await, (true, "成功記錄工作區結束點 #1".to_string()));
         assert_eq!(ops(&lock).len(), 4);
         rec.stop().await;
     });

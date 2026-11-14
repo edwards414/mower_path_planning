@@ -811,7 +811,10 @@ edge distance, shoelace area), `site_store.rs` (the WGS84 site files, the
 equirectangular projection as the app), `guard.rs` (the fail-closed
 mission-mutation lease against nav_action_server), `recorder.rs` (every
 service body, ROS-free behind the `Outputs` trait, all app-facing messages
-verbatim) and `main.rs` (node `path_recorder`, 19 services, latched
+verbatim but for the kind's name: the replies and logs a person reads say
+工作區 / 禁區 / 通道 where the Python node says zone / risk (風險區域) / channel
+(chennal 路徑), owner 2026-11-15; `Kind::name_zh`, while `Kind::label` stays the
+API's word) and `main.rs` (node `path_recorder`, 19 services, latched
 lists, the 10 Hz pose sampler only while recording, handlers serialised by
 one async mutex like the rclpy callback group). Scenario comparison against
 the Python node (32 steps: recordings, cancel, edit_zone, channel routing,
@@ -823,7 +826,7 @@ One rule the Python node does not have (owner, 2026-11-02): with
 `require_rtk_fixed` (default true, also in mower_rsd.yaml) a zone, risk-zone
 or channel start is refused, before any lease, unless the latest `/fix` is
 RTK fixed (status 2) and at most `rtk_fix_max_age_s` (1.0 s) old: 「RTK 尚未
-fixed，無法開始 zone 記錄（…）」. A recording that loses RTK fixed keeps
+fixed，無法開始工作區記錄（…）」. A recording that loses RTK fixed keeps
 running but takes no sample (not even a channel's end point) until it is
 back; each outage is logged once as it starts and once with its length.
 With `max_rtk_pause_s` (default 10.0, also in mower_rsd.yaml; 0 or less turns
@@ -840,7 +843,7 @@ A second start condition, checked after RTK fixed (owner, 2026-11-02): with
 `require_datum` (default true, also in mower_rsd.yaml) the start is refused,
 again before any lease, until navsat's datum is locked, i.e. until the latest
 `/odometry/gps` is at most `rtk_fix_max_age_s` old: 「datum 尚未鎖定，無法開始
-zone 記錄（尚未收到 navsat 的 /odometry/gps）」. navsat_transform (the Rust
+工作區記錄（尚未收到 navsat 的 /odometry/gps）」. navsat_transform (the Rust
 port and the C++ node alike, the latter through the bridge) publishes it only
 once its transform is good, one per fix, so it closes the window between RTK
 fixed and the lock (one fix period, or navsat's 3 s `delay` after a restart)
