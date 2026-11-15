@@ -15,7 +15,7 @@ mod common;
 
 use common::{f, load};
 use mower_nav_core::action::GoalStatus;
-use mower_nav_core::costmap::{static_costmap, Costmap2D, OccupancyGrid, RollingWindow, StaticLayerParams};
+use mower_nav_core::costmap::{global_costmap, static_costmap, Costmap2D, OccupancyGrid, RollingWindow, StaticLayerParams};
 use mower_nav_core::geometry::{Pose2D, Transform2D, Twist2D};
 use mower_nav_core::nav_stack::{NavStack, StackInput};
 use mower_nav_core::navigator::CostmapId;
@@ -102,7 +102,7 @@ struct Played {
 fn play(sc: &Value, maps: &Value, map_from_odom: Transform2D, global_phase: i64, local_phase: i64) -> Played {
     let global_grid = grid(&maps[sc["global"].as_str().unwrap()]);
     let local_map = static_costmap(&grid(&maps[sc["local"].as_str().unwrap()]), &StaticLayerParams::new(false));
-    let fresh_global = || static_costmap(&global_grid, &StaticLayerParams::new(true));
+    let fresh_global = || global_costmap(&global_grid);
     let mut global: Costmap2D = fresh_global();
     let (mut global_current, mut local_current) = (true, true);
     let kinematic = sc["robot"] == "kinematic";

@@ -1,12 +1,13 @@
 //! The robot footprint and `nav2_costmap_2d::FootprintCollisionChecker`.
 //!
-//! The costmaps here set `robot_radius: 0.5` and no `footprint`, so
-//! `Costmap2DROS` uses the 16-point circle of `makeFootprintFromRadius`,
-//! padded by `footprint_padding` (default 0.01, declared as a *float*) with
+//! The costmaps here set a `robot_radius` (0.5 local, 0.02 global: see
+//! `costmap::GLOBAL_ROBOT_RADIUS`) and no `footprint`, so `Costmap2DROS` uses
+//! the 16-point circle of `makeFootprintFromRadius`, padded by
+//! `footprint_padding` (default 0.01, declared as a *float*) with
 //! `padFootprint`'s per-axis sign rule. That padded polygon is what
-//! `getRobotFootprint()` hands RPP's collision checker, and what
-//! `LayeredCostmap::setFootprint` derives the inscribed / circumscribed radius
-//! from.
+//! `getRobotFootprint()` hands RPP's collision checker (the local one), and
+//! what `LayeredCostmap::setFootprint` derives the inscribed / circumscribed
+//! radius from (the global one's inscribed radius is the inflation layer's).
 //!
 //! Upstream: `src/footprint.cpp`, `src/costmap_math.cpp`,
 //! `src/footprint_collision_checker.cpp`, `nav2_util/line_iterator.hpp`.

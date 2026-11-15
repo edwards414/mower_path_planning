@@ -11,12 +11,14 @@
 //!   planner: as soon as it has a goal, then every 10 ms while it waits for
 //!   the costmap. The stack numbers its goals as the server does; the results
 //!   go back in the stack's numbering all the same ([`FromPlanner`]);
-//! * the global costmap (1 Hz, `track_unknown_space: true`). As in
-//!   `StaticLayer`, the map's own grid is kept apart from the master grid the
-//!   planner reads, which NavFn's `clearRobotCell` writes into. An update
-//!   repaints the master only for a newer map or after a clear
-//!   (`has_updated_data_`), so the holes NavFn leaves stay until then, as
-//!   upstream. A clear (forwarded from the tree) makes it not current until
+//! * the global costmap (1 Hz, `track_unknown_space: true`, the static layer
+//!   and the inflation layer: `GlobalLayers::mower`). As in `StaticLayer`,
+//!   the map's own grid is kept apart from the master grid the planner
+//!   reads, which NavFn's `clearRobotCell` writes into. An update repaints
+//!   the master (the map's grid, inflated) only for a newer map, once more
+//!   at the update after that one (the inflation layer's bounds), and after
+//!   a clear (`GlobalLayers::update`), so the holes NavFn leaves stay until
+//!   then, as upstream. A clear (forwarded from the tree) makes it not current until
 //!   its next update. A newer map waits for the next update while a goal is
 //!   being planned (`map_buffer_`) and is taken at once otherwise, which is
 //!   when mower_map changes them: between missions. The first map is painted
@@ -31,7 +33,7 @@
 use std::collections::HashMap;
 
 use mower_nav_core::action::GoalId;
-use mower_nav_core::costmap::{static_costmap, Costmap2D, OccupancyGrid, StaticLayerParams, NO_INFORMATION};
+use mower_nav_core::costmap::{Costmap2D, GlobalLayers, OccupancyGrid, NO_INFORMATION};
 use mower_nav_core::geometry::Pose2D;
 use mower_nav_core::nav_stack::{PlanRequest, StackLog, COSTMAP_POLL_NS};
 use mower_nav_core::path_handler::Path;
@@ -75,7 +77,8 @@ impl FromPlanner {
 struct Global {
     /// The static layer's own grid (`processMap`).
     layer: Costmap2D,
-    /// The master grid the planner reads and NavFn writes into.
+    /// The master grid the planner reads and NavFn writes into: `layer`,
+    /// inflated, as of the last repaint.
     master: Costmap2D,
     current: bool,
     /// A newer map, taken at the next update (`map_buffer_`).
@@ -86,6 +89,9 @@ struct Global {
 /// See the module doc.
 pub struct PlannerLoop {
     server: PlannerServer,
+    /// The global costmap's plugins: they make the static layer's grid from a
+    /// map and repaint the master grid.
+    layers: GlobalLayers,
     global: Option<Global>,
     /// What the server plans on before the first map.
     placeholder: Costmap2D,
@@ -111,6 +117,7 @@ impl PlannerLoop {
         let placeholder = Costmap2D::new(1, 1, 0.05, 0.0, 0.0, NO_INFORMATION);
         Self {
             server: PlannerServer::mower(&placeholder),
+            layers: GlobalLayers::mower(),
             global: None,
             placeholder,
             next_pass_ns: None,
@@ -134,19 +141,23 @@ impl PlannerLoop {
             self.notes.push("[global_costmap] Received map message is malformed. Rejecting.".into());
             return;
         }
-        let layer = static_costmap(grid, &StaticLayerParams::new(true));
+        let layer = self.layers.static_layer(grid);
         let planning = self.server.has_work();
         match &mut self.global {
             Some(g) if planning => g.buffered = Some(layer),
             Some(g) => {
                 g.layer = layer;
-                g.master.clone_from(&g.layer);
+                self.layers.new_map();
+                self.layers.update(&g.layer, &mut g.master);
                 g.buffered = None;
                 g.current = true;
             }
             None => {
+                let mut master = layer.clone();
+                self.layers.new_map();
+                self.layers.update(&layer, &mut master);
                 self.global = Some(Global {
-                    master: layer.clone(),
+                    master,
                     layer,
                     current: true,
                     buffered: None,
@@ -163,6 +174,7 @@ impl PlannerLoop {
             ToPlanner::ClearGlobal => {
                 if let Some(g) = &mut self.global {
                     g.current = false;
+                    self.layers.reset();
                 }
             }
             ToPlanner::Request(PlanRequest::Send { id, goal }) => {
@@ -247,12 +259,12 @@ impl PlannerLoop {
         };
         if let Some(layer) = g.buffered.take() {
             g.layer = layer;
-            g.master.clone_from(&g.layer);
-            g.current = true;
-        } else if !g.current {
-            g.master.clone_from(&g.layer);
-            g.current = true;
+            self.layers.new_map();
         }
+        // repaints for a new map, once more at the update after it, and
+        // after a clear
+        self.layers.update(&g.layer, &mut g.master);
+        g.current = true;
         g.next_update_ns = next_period(g.next_update_ns, GLOBAL_UPDATE_NS, now);
     }
 }
@@ -269,6 +281,11 @@ impl PlannerLoop {
 
     pub(super) fn size(&self) -> Option<(u32, u32)> {
         self.global.as_ref().map(|g| (g.master.size_x(), g.master.size_y()))
+    }
+
+    /// A cell of the master grid.
+    pub(super) fn cost(&self, mx: u32, my: u32) -> u8 {
+        self.global.as_ref().expect("a global map").master.cost(mx, my)
     }
 }
 
@@ -309,6 +326,48 @@ mod tests {
         assert_eq!(out.plans.len(), 1);
         assert!(out.log.is_empty() && out.notes.is_empty());
         assert_eq!(p.next_due_ns(), None);
+    }
+
+    #[test]
+    fn the_master_grid_is_the_map_inflated_and_only_a_repaint_fills_what_navfn_cleared() {
+        let mut p = PlannerLoop::new();
+        p.set_global_map(T0, &grid(200, 160));
+        // the border, one cell and ten cells (0.5 m) from it, and beyond the
+        // inflation radius: 252 * exp(-4 * (d - 0.0294))
+        assert_eq!([p.cost(0, 80), p.cost(1, 80), p.cost(10, 80), p.cost(11, 80)], [254, 232, 38, 0]);
+        // NavFn frees the robot's cell (clearRobotCell): here the one in the corner
+        let corner = Some(Pose2D::new(-0.9375, -0.9375, 0.0));
+        assert_eq!(p.cost(1, 1), 232);
+        p.handle(T0, send(1, 5.0));
+        assert_eq!(p.tick(T0, corner).results[0].status, GoalStatus::Succeeded);
+        assert_eq!(p.cost(1, 1), 0);
+        // an update with nothing new leaves the master grid alone
+        let update = p.next_update_ns().unwrap();
+        p.tick(update, corner);
+        assert_eq!(p.cost(1, 1), 0);
+        // the update after a clear repaints it: the map, inflated again
+        p.handle(update, ToPlanner::ClearGlobal);
+        p.tick(update + SEC, corner);
+        assert!(p.current());
+        assert_eq!([p.cost(1, 1), p.cost(1, 80), p.cost(11, 80)], [232, 232, 0]);
+        // the next update leaves a cleared cell alone again
+        p.handle(update + SEC, send(2, 5.0));
+        assert_eq!(p.tick(update + SEC, corner).results[0].status, GoalStatus::Succeeded);
+        p.tick(update + 2 * SEC, corner);
+        assert_eq!(p.cost(1, 1), 0);
+        // a new map is painted, and painted once more at the update after it
+        // (the inflation layer's bounds), then left alone
+        p.set_global_map(update + 2 * SEC + 300 * MS, &grid(240, 160));
+        assert_eq!([p.cost(239, 80), p.cost(238, 80), p.cost(229, 80), p.cost(228, 80)], [254, 232, 38, 0]);
+        p.handle(update + 2 * SEC + 400 * MS, send(3, 5.0));
+        assert_eq!(p.tick(update + 2 * SEC + 400 * MS, corner).results[0].status, GoalStatus::Succeeded);
+        assert_eq!(p.cost(1, 1), 0);
+        p.tick(update + 3 * SEC, corner);
+        assert_eq!(p.cost(1, 1), 232);
+        p.handle(update + 3 * SEC, send(4, 5.0));
+        assert_eq!(p.tick(update + 3 * SEC, corner).results[0].status, GoalStatus::Succeeded);
+        p.tick(update + 4 * SEC, corner);
+        assert_eq!(p.cost(1, 1), 0);
     }
 
     #[test]

@@ -18,7 +18,8 @@ fi
 mkdir -p "$here/../data"
 for c in "${components[@]}"; do
   if [ -f "$here/$c/scenarios.py" ]; then
-    # the real node, black box, on the wall clock (about 1.5 min)
+    # the real node(s), black box: controller_server and navigator on the
+    # wall clock (about 1.5 min each), global_costmap independent of time
     python3 "$here/$c/scenarios.py" "$here/../../../../../mower_nav2/config/nav2_no_map_params.yaml" \
       "$here/$c/scenarios.json" "$here/../data/$c.json"
   else

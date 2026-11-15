@@ -1,0 +1,39 @@
+{
+  "about": "Maps and ComputePathToPose goals for scenarios.py. `fixture` is a run-length map of tests/data; `random` is drawn by scenarios.py (the cells are in the output). A goal is [x, y, yaw] in map; plans of a case run in order on one costmap.",
+  "cases": [
+    {
+      "name": "field_2026_11_16",
+      "fixture": "field_2026_11_16_free_space_inflated.json",
+      "plans": [
+        {"start": [-7.26, -1.95, 0.0], "goal": [-11.48, -3.31, 0.0]},
+        {"start": [-7.26, -1.95, 0.0], "goal": [-11.526, -3.312, 0.0]},
+        {"start": [-11.48, -3.31, 0.0], "goal": [-7.26, -1.95, 1.0]},
+        {"start": [-7.26, -1.95, 0.0], "goal": [-3.626, -12.812, -1.57]},
+        {"start": [-9.676, 1.638, 0.0], "goal": [-1.526, -6.062, 0.0]},
+        {"start": [-11.1225, -0.7535, -0.4756], "goal": [-11.48, -3.31, 0.0]}
+      ]
+    },
+    {
+      "name": "random_80x60",
+      "random": {"seed": 20261116, "width": 80, "height": 60, "resolution": 0.05, "origin": [-2.0, -1.5],
+                 "lethal_rects": 7, "unknown_rects": 3, "odd_cells": 8, "border": true},
+      "plans": [
+        {"start": [-1.74, -1.24, 0.0], "goal": [1.76, 1.26, 0.5]},
+        {"start": [0.01, 0.01, 0.0], "goal": [-1.84, -0.69, 3.0]},
+        {"start": [0.01, 0.01, 0.0], "goal": [-0.59, -0.64, 0.0]},
+        {"start": [1.51, -0.79, 0.0], "goal": [0.01, 0.76, 0.0]},
+        {"start": [-1.94, -1.44, 0.0], "goal": [1.91, 1.41, 0.0]},
+        {"start": [-0.89, -0.79, 0.0], "goal": [-1.49, 0.51, 0.0]}
+      ]
+    },
+    {
+      "name": "random_33x47_open",
+      "random": {"seed": 7, "width": 33, "height": 47, "resolution": 0.05, "origin": [0.3, -4.1],
+                 "lethal_rects": 5, "unknown_rects": 4, "odd_cells": 12, "border": false},
+      "plans": [
+        {"start": [0.51, -3.89, 0.0], "goal": [1.71, -1.99, 0.0]},
+        {"start": [1.71, -1.99, 0.0], "goal": [0.51, -3.89, 0.0]}
+      ]
+    }
+  ]
+}
