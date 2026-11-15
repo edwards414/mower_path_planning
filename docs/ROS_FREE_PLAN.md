@@ -324,6 +324,7 @@ A–C 約兩週，D–E 再三到四週。
 `navigate_to_pose`（去割草起點，走預設 BT）、`follow_path`（每一段直接丟 controller_server，**不經 BT**）、`bt_navigator/get_state`（就緒檢查）。
 NavigateThroughPoses、waypoint_follower、smoother_server、assisted_teleop、docking 沒有任何呼叫者。
 兩張 costmap 都只有 `static_layer`，沒有 inflation 層（inflation 在 `mower_map` 就做完了）；
+（2026-11-16 更新：global costmap 加了 `inflation_layer`，`robot_radius` 改 0.02，只加成本梯度、不新增不可通行的格子；`mower_nav_core` 的 `costmap.rs` 已同步移植。原因見 `src/mower_rs/crates/mower_nav_core/README.md` 的 Costmaps 一節。）
 local costmap 只是同一張 `/map_grid` 轉到 odom frame，用 `/odometry/global` 的 map 座標查同一張圖就等價。
 
 | # | 要寫的 | 來源 / 估行數 | 備註 |

@@ -2,6 +2,7 @@
 
 import ast
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -1851,7 +1852,12 @@ def test_containers_see_the_live_dev_tree_not_static_device_nodes():
     assert 'ATTR{idProduct}=="0610", TEST=="power/control", ATTR{power/control}="on"' in udev
 
 
-def test_nav2_local_and_global_costmaps_use_full_robot_radius():
+def test_nav2_costmap_radii_and_layers():
+    """The local costmap checks the full 0.5 m footprint on /map_grid. The
+    global one plans on /map_grid_global, which map_manage already eroded by
+    the safety radius: there the robot is a point, and the radius only sets
+    the inflation layer's inscribed band, which must stay below one cell or
+    the cells next to the boundary (coverage starts and ends) are closed."""
     source = NAV2_CONFIG.read_text(encoding='utf-8')
     radii = re.findall(
         r'^\s*robot_radius:\s*([^\s#]+)',
@@ -1859,13 +1865,37 @@ def test_nav2_local_and_global_costmaps_use_full_robot_radius():
         flags=re.MULTILINE,
     )
     assert len(radii) == 2
-    assert [float(value) for value in radii] == [0.5, 0.5]
+    assert [float(value) for value in radii] == [0.5, 0.02]
     map_topics = re.findall(
         r'^\s*map_topic:\s*["\']([^"\']+)["\']',
         source,
         flags=re.MULTILINE,
     )
     assert map_topics == ['/map_grid', '/map_grid_global']
+
+    local, global_ = (
+        source.split('local_costmap:', maxsplit=1)[1].split('global_costmap:', maxsplit=1)[0],
+        source.split('global_costmap:', maxsplit=1)[1].split('map_saver:', maxsplit=1)[0],
+    )
+    assert 'robot_radius: 0.5' in local
+    assert 'inflation_layer' not in local
+    assert re.search(r'^\s*plugins:\s*\n\s*- static_layer\s*$', local, re.MULTILINE)
+    assert 'robot_radius: 0.02' in global_
+    assert re.search(
+        r'^\s*plugins:\s*\["static_layer",\s*"inflation_layer"\]\s*$', global_, re.MULTILINE
+    )
+    layer = global_.split('inflation_layer:\n', maxsplit=1)[1]
+    assert re.search(r'^\s*plugin:\s*"nav2_costmap_2d::InflationLayer"\s*$', layer, re.MULTILINE)
+    radius = float(re.search(r'^\s*inflation_radius:\s*([^\s#]+)', layer, re.MULTILINE).group(1))
+    scaling = float(re.search(r'^\s*cost_scaling_factor:\s*([^\s#]+)', layer, re.MULTILINE).group(1))
+    resolution = float(re.search(r'^\s*resolution:\s*([^\s#]+)', global_, re.MULTILINE).group(1))
+    assert (radius, scaling, resolution) == (0.5, 4.0, 0.05)
+    # inscribed radius = robot_radius + nav2's default footprint_padding (0.01)
+    assert not re.search(r'^\s*footprint(_padding)?:', global_, re.MULTILINE)
+    assert 0.02 + 0.01 < resolution
+    # so the free cell next to an occupied one costs 232, not 253 (an
+    # obstacle to NavFn): 252 * exp(-4 * (0.05 - 0.0294))
+    assert int(252 * math.exp(-scaling * (resolution - 0.0294))) == 232
 
 
 def test_navfn_never_substitutes_a_nearby_coverage_goal():
