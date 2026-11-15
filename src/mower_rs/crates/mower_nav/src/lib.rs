@@ -61,7 +61,7 @@ use tokio::sync::Notify;
 use crate::core_backend::{CoreFeedback, CoreParams, GoalHandle, GoalKey, GoalOutcome, NavRuntime, PoseSource, Readiness};
 use crate::nav2::{terminal_from_core, terminal_from_status, CancelableGoal, Nav2Tracker, Terminal, TerminalSlot};
 use crate::progress::{Checkpoint, Progress, Status as ProgressStatus, PATH_CHANGED};
-use crate::state::{NavState, SafetyParams, TaskResult};
+use crate::state::{ManualCommand, NavState, SafetyParams, TaskResult};
 
 /// `mower_interface/action/Waypoint` as a bus action (r2r's `Waypoint::Action`).
 type WaypointAction = (Waypoint::Goal, Waypoint::Result, Waypoint::Feedback);
@@ -1986,21 +1986,13 @@ pub async fn run_node(mut node: r2r::Node, m: ModuleCtx) -> ModuleResult {
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let t = &msg.twist;
-                let invalid = ![t.linear.x, t.linear.y, t.linear.z, t.angular.x, t.angular.y, t.angular.z].iter().all(|v| v.is_finite());
+                let command = ManualCommand::of([t.linear.x, t.linear.y, t.linear.z], [t.angular.x, t.angular.y, t.angular.z]);
+                let invalid = command == ManualCommand::NonFinite;
+                // Every frame is a takeover but the app's zero while it is
+                // not driving: see `NavState::on_manual_command`.
                 let cancel_dispatch = {
                     let mut st = ctx.state.lock().unwrap();
-                    let hold = Duration::from_secs_f64(ctx.safety.manual_command_hold_s.max(0.5));
-                    let deadline = ctx.clock.mono() + hold;
-                    st.manual_command_deadlines.insert(topic.to_string(), deadline);
-                    if invalid {
-                        st.invalid_manual_command_deadlines.insert(topic.to_string(), deadline);
-                    } else {
-                        st.invalid_manual_command_deadlines.remove(topic);
-                    }
-                    if st.nav2_task_uncertain {
-                        st.external_cancel_requested = true;
-                    }
-                    if st.goal_reserved { st.pending_dispatch_id.clone() } else { None }
+                    st.on_manual_command(topic, command, &ctx.safety, ctx.clock.mono()).cancel_dispatch
                 };
                 if invalid {
                     ctx.error(&format!("Non-finite manual velocity received on {topic}; forcing safety stop"));

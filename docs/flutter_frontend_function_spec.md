@@ -332,6 +332,18 @@ Flutter 虛擬搖桿只能發布 `/app_joy_cmd`，並回填機器人發出的
 `/joy_cmd`。完整路徑為 `/app_joy_cmd` → manual guard → `/joy_cmd` →
 `twist_mux` → final velocity guard → drivetrain；App 不得直接發布後段 topic。
 
+手動命令和自動導航互斥，由 `nav_action_server` 依 `/joy_cmd` 判斷：
+
+- 速度不為 0（或含 NaN / 無限大）的命令是接管：進行中的任務被取消，之後
+  `manual_command_hold_s`（0.75 s）內不接受新任務。這段時間內的歸零命令算同一次
+  手動操作，會把時間往後延。
+- 沒有在手動開車時送來的歸零命令（六個分量都剛好是 0）不算接管：不取消任務，也不擋
+  新任務。App 退到背景、搖桿被隱藏、離開手動模式時都會送一筆歸零。
+- 歸零命令仍會讓 `twist_mux` 選用手動輸入 0.5 s，任務進行中機器人會停一下再繼續。
+- 要停止任務請呼叫 `/stop_zone_sequence`、`/cancel_nav2`，不要用歸零命令。
+- 實體搖桿（`/physical_joy_cmd`）和鍵盤（`/keyboard_cmd_vel`）不適用這個例外，任何
+  一筆命令（包含歸零，例如鍵盤的 SPACE 急停）都會取消任務。
+
 #### 刀盤控制
 
 生產系統的刀盤輸出目前強制為零，`blade_teleop_joy` 不會在生產 launch

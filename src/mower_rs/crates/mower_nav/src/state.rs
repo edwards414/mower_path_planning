@@ -4,6 +4,7 @@
 //! readings of the module's monotonic clock (`mower_bus::Clock::mono`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Duration;
 
 use mower_bus::Mono;
 use serde_json::json;
@@ -39,6 +40,64 @@ impl SafetyParams {
     pub fn pose_timeout_s(&self) -> f64 {
         self.navigation_health_pose_timeout_s.max(0.10)
     }
+
+    /// How long a manual command holds autonomy off: at least 0.5 s, the
+    /// time twist_mux keeps a manual input selected after a frame.
+    pub fn manual_command_hold(&self) -> Duration {
+        Duration::from_secs_f64(self.manual_command_hold_s.max(0.5))
+    }
+}
+
+/// What a frame from a manual source (`/joy_cmd`, `/physical_joy_cmd`,
+/// `/keyboard_cmd_vel`) asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualCommand {
+    /// A component is NaN or infinite.
+    NonFinite,
+    /// Every component is finite and at least one is not zero.
+    Moving,
+    /// All six components are exactly zero.
+    Zero,
+}
+
+impl ManualCommand {
+    /// Zero is exact (`0.0` or `-0.0`), with no dead band: whatever is not
+    /// exactly zero keeps the takeover it always meant. The senders' zeros
+    /// are exact (the manual guard writes `0.0` for a stop and passes x and
+    /// yaw through untouched; the app's stop is a literal 0), so a dead band
+    /// would only guess that a small command is no command, on a safety path.
+    pub fn of(linear: [f64; 3], angular: [f64; 3]) -> ManualCommand {
+        let components = || linear.iter().chain(angular.iter());
+        if !components().all(|v| v.is_finite()) {
+            ManualCommand::NonFinite
+        } else if components().all(|v| *v == 0.0) {
+            ManualCommand::Zero
+        } else {
+            ManualCommand::Moving
+        }
+    }
+}
+
+/// The manual source whose zero means nothing while it is not driving:
+/// `/joy_cmd`, what the manual guard makes of the app's `/app_joy_cmd`. The
+/// app sends a zero when it goes to the background, hides its sticks or
+/// leaves manual mode, and stops a mission with `/stop_zone_sequence` and
+/// `/cancel_nav2`, never with a zero.
+///
+/// Not the two teleop sources, where every frame stays a takeover:
+/// teleop_keyboard's SPACE (急停) and its exit are one zero on
+/// `/keyboard_cmd_vel`, meant to stop the mower whatever drives it, and the
+/// joystick on `/physical_joy_cmd` publishes only while its enable button is
+/// held. A person at the robot sends those; none is sent by itself.
+pub const IDLE_ZERO_SOURCE: &str = "/joy_cmd";
+
+/// What `NavState::on_manual_command` decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualOutcome {
+    /// The frame took, or kept, the robot for its source.
+    pub takeover: bool,
+    /// The reserved goal's dispatch to cancel, if there is one.
+    pub cancel_dispatch: Option<String>,
 }
 
 /// Terminal outcome of one Nav2 task (rclpy `TaskResult` names).
@@ -159,6 +218,37 @@ impl NavState {
             self.invalid_manual_command_deadlines.remove(&k);
         }
         !self.manual_command_deadlines.is_empty()
+    }
+
+    /// A frame from the manual source `source` at `now`
+    /// (`_manual_cmd_callback`, under the state lock).
+    ///
+    /// A frame takes the robot: its source holds autonomy off for the hold
+    /// time, and a reserved goal is to be canceled. The one exception is a
+    /// zero on `IDLE_ZERO_SOURCE` while that source is not driving, which
+    /// changes nothing here: the app sends one when it is put in the
+    /// background or its sticks are hidden, and that is not a person taking
+    /// the robot (robot, 2026-11-16: two missions canceled and three starts
+    /// refused with nobody at the sticks). While the source's hold still
+    /// runs, its zero is the end, or a pause, of real driving and renews the
+    /// hold like any frame, so the hold ends one hold time after the last
+    /// frame of the session, as it always has.
+    pub fn on_manual_command(&mut self, source: &str, command: ManualCommand, params: &SafetyParams, now: Mono) -> ManualOutcome {
+        let driving = self.manual_command_deadlines.get(source).is_some_and(|deadline| *deadline > now);
+        if command == ManualCommand::Zero && !driving && source == IDLE_ZERO_SOURCE {
+            return ManualOutcome { takeover: false, cancel_dispatch: None };
+        }
+        let deadline = now + params.manual_command_hold();
+        self.manual_command_deadlines.insert(source.to_string(), deadline);
+        if command == ManualCommand::NonFinite {
+            self.invalid_manual_command_deadlines.insert(source.to_string(), deadline);
+        } else {
+            self.invalid_manual_command_deadlines.remove(source);
+        }
+        if self.nav2_task_uncertain {
+            self.external_cancel_requested = true;
+        }
+        ManualOutcome { takeover: true, cancel_dispatch: if self.goal_reserved { self.pending_dispatch_id.clone() } else { None } }
     }
 
     /// The exact reason a new autonomous goal is currently unsafe.
@@ -408,6 +498,197 @@ mod tests {
         assert_eq!(status["ready"], json!(false));
         assert_eq!(status["state"], json!("running"));
         assert_eq!(status["block_reason"], json!("previous Nav2 task termination is unconfirmed"));
+    }
+
+    const SOURCES: [&str; 3] = ["/joy_cmd", "/physical_joy_cmd", "/keyboard_cmd_vel"];
+
+    /// A mission that runs, on dispatch `d-1`.
+    fn running_mission() -> NavState {
+        let mut s = NavState::new();
+        s.goal_reserved = true;
+        s.nav_state = "running".into();
+        s.pending_dispatch_id = Some("d-1".into());
+        s
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_manual_frame_is_zero_only_when_all_six_components_are_exactly_zero() {
+        assert_eq!(ManualCommand::of([0.0; 3], [0.0; 3]), ManualCommand::Zero);
+        assert_eq!(ManualCommand::of([-0.0, 0.0, 0.0], [0.0, 0.0, -0.0]), ManualCommand::Zero);
+        for i in 0..6 {
+            for (value, want) in [
+                (0.2, ManualCommand::Moving),
+                (-1e-12, ManualCommand::Moving),
+                (f64::MIN_POSITIVE, ManualCommand::Moving),
+                (f64::NAN, ManualCommand::NonFinite),
+                (f64::INFINITY, ManualCommand::NonFinite),
+                (f64::NEG_INFINITY, ManualCommand::NonFinite),
+            ] {
+                let mut c = [0.0; 6];
+                c[i] = value;
+                assert_eq!(ManualCommand::of([c[0], c[1], c[2]], [c[3], c[4], c[5]]), want, "component {i} = {value}");
+            }
+        }
+        // not finite wins over moving
+        assert_eq!(ManualCommand::of([0.2, 0.0, 0.0], [0.0, 0.0, f64::NAN]), ManualCommand::NonFinite);
+    }
+
+    /// The app's zero when nobody drives (robot, 2026-11-16): the mission
+    /// goes on, autonomy stays authorised, and a new goal is not held off.
+    #[test]
+    fn a_zero_on_joy_cmd_while_it_is_not_driving_is_no_takeover() {
+        let p = params(false);
+        for source in [IDLE_ZERO_SOURCE] {
+            assert_eq!(source, "/joy_cmd");
+            let mut s = running_mission();
+            for i in 0..50 {
+                let now = NOW + ms(100 * i);
+                let outcome = s.on_manual_command(source, ManualCommand::Zero, &p, now);
+                assert_eq!(outcome, ManualOutcome { takeover: false, cancel_dispatch: None }, "{source}");
+                assert!(s.manual_command_deadlines.is_empty() && s.invalid_manual_command_deadlines.is_empty(), "{source}");
+                assert!(!s.external_cancel_requested, "{source}");
+                assert!(s.autonomy_authorized(&p, now), "{source}");
+            }
+            let mut idle = NavState::new();
+            assert!(!idle.on_manual_command(source, ManualCommand::Zero, &p, NOW).takeover, "{source}");
+            assert_eq!(idle.navigation_admission_block_reason(&p, NOW), None, "{source}");
+            assert!(!idle.manual_motion_active(NOW), "{source}");
+            // nor does it stand in for the cancel an unconfirmed end is owed
+            idle.nav2_task_uncertain = true;
+            idle.on_manual_command(source, ManualCommand::Zero, &p, NOW);
+            assert!(!idle.external_cancel_requested, "{source}");
+        }
+    }
+
+    /// A zero on a teleop source is a takeover whenever it comes, as ever:
+    /// the keyboard's stop key and exit are exactly that.
+    #[test]
+    fn a_zero_on_a_teleop_source_takes_the_robot() {
+        let p = params(false);
+        for source in ["/physical_joy_cmd", "/keyboard_cmd_vel"] {
+            let mut s = running_mission();
+            let outcome = s.on_manual_command(source, ManualCommand::Zero, &p, NOW);
+            assert_eq!(outcome, ManualOutcome { takeover: true, cancel_dispatch: Some("d-1".into()) }, "{source}");
+            s.goal_reserved = false;
+            assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(749)).as_deref(), Some("manual velocity command is active"), "{source}");
+            assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(750)), None, "{source}");
+            let mut idle = NavState::new();
+            idle.nav2_task_uncertain = true;
+            assert!(idle.on_manual_command(source, ManualCommand::Zero, &p, NOW).takeover, "{source}");
+            assert!(idle.external_cancel_requested, "{source}");
+        }
+    }
+
+    /// A command that moves takes the robot, as ever: the mission's dispatch
+    /// is to be canceled and new goals are held off for the hold time.
+    #[test]
+    fn a_moving_command_takes_the_robot_from_a_mission() {
+        let p = params(false);
+        for source in SOURCES {
+            let mut s = running_mission();
+            let outcome = s.on_manual_command(source, ManualCommand::Moving, &p, NOW);
+            assert_eq!(outcome, ManualOutcome { takeover: true, cancel_dispatch: Some("d-1".into()) }, "{source}");
+            assert_eq!(s.manual_command_deadlines.get(source), Some(&(NOW + ms(750))), "{source}");
+            assert!(s.invalid_manual_command_deadlines.is_empty(), "{source}");
+            // the goal ends (lib.rs's cancel); the hold outlives it
+            s.goal_reserved = false;
+            assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(749)).as_deref(), Some("manual velocity command is active"), "{source}");
+            assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(750)), None, "{source}");
+            // with nothing reserved there is nothing to cancel, only the hold
+            let mut idle = NavState::new();
+            idle.nav2_task_uncertain = true;
+            assert_eq!(idle.on_manual_command(source, ManualCommand::Moving, &p, NOW), ManualOutcome { takeover: true, cancel_dispatch: None }, "{source}");
+            assert!(idle.external_cancel_requested, "{source}");
+        }
+    }
+
+    /// A command that is not finite is a safety stop, as ever: autonomy loses
+    /// its authorisation for the hold time on top of the takeover.
+    #[test]
+    fn a_non_finite_command_is_a_safety_stop() {
+        let p = params(false);
+        for source in SOURCES {
+            let mut s = running_mission();
+            let outcome = s.on_manual_command(source, ManualCommand::NonFinite, &p, NOW);
+            assert_eq!(outcome, ManualOutcome { takeover: true, cancel_dispatch: Some("d-1".into()) }, "{source}");
+            assert_eq!(s.manual_command_deadlines.get(source), Some(&(NOW + ms(750))), "{source}");
+            assert_eq!(s.invalid_manual_command_deadlines.get(source), Some(&(NOW + ms(750))), "{source}");
+            assert!(!s.autonomy_authorized(&p, NOW + ms(10)), "{source}");
+            // a zero inside that hold is a frame of the same session: it
+            // clears the invalid mark and keeps the hold, as any finite frame did
+            let outcome = s.on_manual_command(source, ManualCommand::Zero, &p, NOW + ms(100));
+            assert_eq!(outcome, ManualOutcome { takeover: true, cancel_dispatch: Some("d-1".into()) }, "{source}");
+            assert!(s.invalid_manual_command_deadlines.is_empty(), "{source}");
+            assert_eq!(s.manual_command_deadlines.get(source), Some(&(NOW + ms(850))), "{source}");
+        }
+    }
+
+    /// Driving, then zeros: the zeros belong to the driving while its hold
+    /// runs, so the hold ends one hold time after the last frame, as before.
+    /// A zero after that is the idle zero again.
+    #[test]
+    fn zeros_after_driving_keep_the_hold_until_one_hold_after_the_last_frame() {
+        let p = params(false);
+        for source in SOURCES {
+            let mut s = NavState::new();
+            assert!(s.on_manual_command(source, ManualCommand::Moving, &p, NOW).takeover);
+            // the stick at centre: a zero every 0.1 s for 2 s
+            for i in 1..=20 {
+                let now = NOW + ms(100 * i);
+                assert!(s.on_manual_command(source, ManualCommand::Zero, &p, now).takeover, "{source} zero {i}");
+                assert_eq!(s.manual_command_deadlines.get(source), Some(&(now + ms(750))), "{source} zero {i}");
+                assert_eq!(s.navigation_admission_block_reason(&p, now).as_deref(), Some("manual velocity command is active"), "{source}");
+            }
+            let last = NOW + ms(2000);
+            assert_eq!(s.navigation_admission_block_reason(&p, last + ms(749)).as_deref(), Some("manual velocity command is active"), "{source}");
+            assert_eq!(s.navigation_admission_block_reason(&p, last + ms(750)), None, "{source}");
+            // the hold is over: on /joy_cmd the next zero is the idle zero
+            // again and holds nothing; on a teleop source it is a takeover
+            let idle_zero = source == IDLE_ZERO_SOURCE;
+            assert_eq!(s.on_manual_command(source, ManualCommand::Zero, &p, last + ms(751)).takeover, !idle_zero, "{source}");
+            assert_eq!(s.navigation_admission_block_reason(&p, last + ms(751)).is_none(), idle_zero, "{source}");
+        }
+    }
+
+    /// The hold is over at its deadline whether or not anything has pruned
+    /// the entry yet: a zero at the deadline itself is an idle zero.
+    #[test]
+    fn a_zero_at_the_end_of_the_hold_does_not_renew_it() {
+        let p = params(false);
+        let mut s = NavState::new();
+        s.on_manual_command("/joy_cmd", ManualCommand::Moving, &p, NOW);
+        assert!(s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, NOW + ms(749)).takeover);
+        let end = NOW + ms(749 + 750);
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, end).takeover);
+        assert!(!s.manual_motion_active(end));
+    }
+
+    /// Each source drives for itself: a zero on `/joy_cmd` is not the end of
+    /// the driving on another source, and does not renew that other's hold.
+    #[test]
+    fn a_zero_counts_only_for_the_source_that_was_driving() {
+        let p = params(false);
+        let mut s = NavState::new();
+        s.on_manual_command("/physical_joy_cmd", ManualCommand::Moving, &p, NOW);
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, NOW + ms(500)).takeover);
+        assert_eq!(s.manual_command_deadlines.len(), 1);
+        assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(749)).as_deref(), Some("manual velocity command is active"));
+        assert_eq!(s.navigation_admission_block_reason(&p, NOW + ms(750)), None);
+    }
+
+    /// The hold is never shorter than 0.5 s, whatever the parameter says.
+    #[test]
+    fn the_manual_hold_has_a_floor() {
+        let mut p = params(false);
+        assert_eq!(p.manual_command_hold(), ms(750));
+        p.manual_command_hold_s = 0.1;
+        assert_eq!(p.manual_command_hold(), ms(500));
+        p.manual_command_hold_s = 10.0;
+        assert_eq!(p.manual_command_hold(), Duration::from_secs(10));
     }
 
     #[test]
