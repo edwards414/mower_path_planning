@@ -7,11 +7,17 @@
 //! run against closed loop: roll and pitch read 0 and the accelerometer +1 g
 //! on z (with the EKF's gravity removal that leaves the horizontal
 //! acceleration), and the mount comes from the URDF (geometry::Mount). For
-//! today's URDF (imu_link upside down under a base_link turned +90 deg) that
-//! is fake_sensors.py's rule: base yaw = IMU yaw + 90 deg, base yaw rate =
-//! -IMU z rate. In general the IMU's heading reads the robot's minus the
-//! mount's yaw when upside down (plus it when upright), and rates and
-//! accelerations are the body's, rotated into imu_link.
+//! today's URDF (imu_link turned like base_footprint) the IMU reads what
+//! the robot does, as the real WIT did on 2026-11-16: its heading is the
+//! robot's ENU heading, its z rate the robot's yaw rate, and x and y
+//! acceleration are forward and left. (Whether the real sensor's x and y
+//! point that way is not verified; see imu_joint in robot.urdf.xacro.) In
+//! general the IMU's heading reads the robot's minus the mount's yaw when
+//! upside down (plus it when upright), and rates and accelerations are the
+//! body's, rotated into imu_link. The URDF until 2026-11 had imu_link upside
+//! down under a base_link turned +90 deg, which was fake_sensors.py
+//! --follow-odom's rule: base yaw = IMU yaw + 90 deg, base yaw rate = -IMU z
+//! rate.
 
 use crate::geometry::{mul_vec, transpose, Mount};
 use crate::world::World;
@@ -55,7 +61,7 @@ pub fn cycle(world: &World, mount: &Mount) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::geometry::Wheels;
     use crate::world::Battery;
@@ -64,6 +70,17 @@ mod tests {
 
     const REPO_URDF: &str = include_str!("../../../../mower_description/mower_robot/robot.urdf.xacro");
 
+    /// The mount the repo's URDF had until 2026-11: imu_link upside down
+    /// under a base_link turned +90 deg (the code still reads such a mount).
+    pub(crate) const UPSIDE_DOWN_URDF: &str = r#"<robot>
+      <joint name="base_footprint_joint" type="fixed"><origin xyz="0 0 0" rpy="0 0 1.5708"/>
+        <parent link="base_footprint"/><child link="base_link"/></joint>
+      <joint name="imu_joint" type="fixed"><origin xyz="0.015897 0.209534 -0.0129528" rpy="3.14159 -0 0"/>
+        <parent link="base_link"/><child link="imu_link"/></joint>
+      <joint name="gps_joint" type="fixed"><origin xyz="0 0 0.12" rpy="0 0 0"/>
+        <parent link="base_link"/><child link="gps_link"/></joint>
+    </robot>"#;
+
     fn parse(bytes: &[u8]) -> (wit::Parser, Vec<wit::Frame>) {
         let mut p = wit::Parser::default();
         let frames = bytes.iter().filter_map(|b| p.push(*b)).collect();
@@ -71,8 +88,31 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_is_what_the_driver_reads_and_fake_sensors_wrote() {
+    fn a_cycle_is_what_the_driver_reads_and_the_robot_does() {
         let mount = Mount::from_urdf(REPO_URDF).unwrap();
+        let mut world = World::new(Wheels::from_params(None).unwrap(), 120f64.to_radians(), Battery::at_rest(24.3, 10.0));
+        world.w = 0.5;
+        world.accel = [0.3, 0.1];
+        let bytes = cycle(&world, &mount);
+        assert_eq!(bytes.len(), 44, "within the driver's 88-byte backlog limit");
+        let (p, frames) = parse(&bytes);
+        assert_eq!(frames, [wit::Frame::Acceleration, wit::Frame::AngularVelocity, wit::Frame::Angle, wit::Frame::Magnetometer]);
+        assert_eq!(p.checksum_failures, 0);
+        // the heading is the robot's (ENU), level
+        assert!((p.angle_degree[2] - 120.0).abs() < 0.01, "{:?}", p.angle_degree);
+        assert_eq!((p.angle_degree[0], p.angle_degree[1]), (0.0, 0.0));
+        // upright: the z rate is the body's
+        assert!((p.angular_velocity[2] - 0.5).abs() < 0.002, "{:?}", p.angular_velocity);
+        assert!(p.angular_velocity[0].abs() < 1e-9 && p.angular_velocity[1].abs() < 1e-9);
+        // +1 g on z; forward / left acceleration on imu_link's x / y
+        assert!((p.acceleration[2] - 9.8).abs() < 0.01);
+        assert!((p.acceleration[0] - 0.3).abs() < 0.01 && (p.acceleration[1] - 0.1).abs() < 0.01, "{:?}", p.acceleration);
+        assert_eq!(p.magnetometer, [100, -200, 300]);
+    }
+
+    #[test]
+    fn an_upside_down_mount_reads_what_fake_sensors_wrote() {
+        let mount = Mount::from_urdf(UPSIDE_DOWN_URDF).unwrap();
         let mut world = World::new(Wheels::from_params(None).unwrap(), 120f64.to_radians(), Battery::at_rest(24.3, 10.0));
         world.w = 0.5;
         world.accel = [0.3, 0.1];
@@ -96,7 +136,13 @@ mod tests {
 
     #[test]
     fn the_heading_wraps_and_an_upright_mount_adds_its_yaw() {
-        let mut m = Mount::from_urdf(REPO_URDF).unwrap();
+        let m = Mount::from_urdf(REPO_URDF).unwrap();
+        let mut world = World::new(Wheels::from_params(None).unwrap(), 190f64.to_radians(), Battery::at_rest(24.3, 10.0));
+        assert!((heading_deg(&world, &m) + 170.0).abs() < 1e-9, "{}", heading_deg(&world, &m));
+        world.yaw = -190f64.to_radians();
+        assert!((heading_deg(&world, &m) - 170.0).abs() < 1e-9, "{}", heading_deg(&world, &m));
+
+        let mut m = Mount::from_urdf(UPSIDE_DOWN_URDF).unwrap();
         let mut world = World::new(Wheels::from_params(None).unwrap(), -100f64.to_radians(), Battery::at_rest(24.3, 10.0));
         // the URDF's 1.5708 rad is 90.0002 deg
         assert!((heading_deg(&world, &m) - 170.0).abs() < 1e-3, "{}", heading_deg(&world, &m));

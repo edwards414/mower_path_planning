@@ -287,7 +287,12 @@ struct Frames
 
 static Frames robot_frames()
 {
-  // From mower_description/mower_robot/robot.urdf.xacro.
+  // From mower_description/mower_robot/robot.urdf.xacro as it was until
+  // 2026-11: imu_link upside down under base_link. The URDF's imu_joint is
+  // rpy="0 0 -1.5708" now (base_footprint <- imu_link the identity); the
+  // vectors keep this mount because it exercises preparePose's mounting
+  // rotation, which the identity does not. tests/ros_filter.rs has the
+  // URDF's mount.
   tf2::Transform bf_to_bl;
   tf2::Quaternion q;
   q.setRPY(0.0, 0.0, 1.5708);

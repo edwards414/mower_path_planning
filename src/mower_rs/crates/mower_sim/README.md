@@ -39,7 +39,7 @@ that follow `/odom` (the estimate) through rclpy.
 | | link | what it does |
 |---|---|---|
 | STM32 (`stm32.rs`) | `/dev/stmcom` | fake_base.py's board on mower_base_core's frame builder and parser: 0x01 wheels with the board's own command timeout, 0x02 blade (with its timeout), 0x03 lights, 0x04 PID (a save stalls the board for the erase), 0x06 info, 0x07 servo; 0x85 + 0x81 every 50 ms, 0x86 / 0x89 / 0x82 / 0x88 / 0x83 / 0x84 / 0x87 every second; 0x87 is the image's bundled firmware (`MOWER_FIRMWARE_MANIFEST`), so `/robot/info` reports it up to date |
-| IMU (`imu.rs`) | `/dev/imu_usb` | 0x51..0x54 ten times a second from the truth: heading, yaw rate and the body's acceleration, with the mount read from the URDF (`imu_link` upside down under a `base_link` turned +90 deg: base yaw = IMU yaw + 90 deg, yaw rate = -IMU z, the rule fake_sensors.py found) |
+| IMU (`imu.rs`) | `/dev/imu_usb` | 0x51..0x54 ten times a second from the truth: heading, yaw rate and the body's acceleration, with the mount read from the URDF (`imu_link` turned like `base_footprint` since 2026-11: the IMU's heading and z rate are the robot's, as measured on the robot; an upside-down or turned mount is still read) |
 | F9P (`gnss.rs`) | `/dev/gps_rtk` | every CFG acknowledged, CFG-RATE and the NAV CFG-MSG rates followed; per epoch NAV-PVT, NAV-HPPOSLLH, NAV-RELPOSNED, NAV-EOE, NAV-SAT every 4th; the antenna's position (gps_link of the URDF) on WGS84 plus noise; RTK fixed (hAcc 14 mm), float, 3D, no fix (3 satellites) or no satellite (`nosat`), each with an optional hAcc of its own (`float:400`, mm) |
 
 ## Faults
