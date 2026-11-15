@@ -68,3 +68,16 @@ fn nav2_waits_are_bounded_and_terminal_evidence_is_generation_correlated() {
     lib.has("mark_nav2_dispatch_terminal(terminal_generation)");
     lib.has("mark_nav2_task_uncertain(");
 }
+
+/// A stream of idle zeros on /joy_cmd is told from single ones by the time
+/// twist_mux keeps a manual input selected after a frame: nav reads nothing
+/// of the mux's configuration, so this holds the two together.
+#[test]
+fn the_idle_zero_stream_gap_is_the_mux_s_manual_timeout() {
+    let mux = include_str!("../../../../mower_bringup/config/twist_mux_topics.yaml");
+    let handle = mux.split("      app_manual:\n").nth(1).expect("the app_manual input");
+    let handle = handle.split("      physical_joystick:").next().unwrap();
+    assert!(handle.contains("topic   : /joy_cmd\n"), "app_manual no longer reads /joy_cmd");
+    assert!(handle.contains("timeout : 0.5\n"), "app_manual's timeout changed: see state::MANUAL_MUX_TIMEOUT");
+    Source::new("mower_nav/src/state.rs", include_str!("../src/state.rs")).has("pub const MANUAL_MUX_TIMEOUT: Duration = Duration::from_millis(500);");
+}

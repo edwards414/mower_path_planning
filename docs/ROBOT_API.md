@@ -187,6 +187,7 @@ Mower Studio「抬刀 / 割草馬達」卡片用的兩個指令 topic，直接�
 
 - **速度不為 0 的命令是接管：** 進行中的任務會被取消（`Manual velocity on /joy_cmd requested navigation stop`），最後一筆命令之後 0.75 s 內 `/check_nav_status` 的 `block_reason` 是 `manual velocity command is active`，不接受新任務。這 0.75 s 內的歸零命令算同一次手動操作。
 - **沒有在開車時的歸零命令不是接管：** 六個速度分量都剛好是 0、而且前面 0.75 s 內沒有接管的命令，機器人不取消任務，也不擋新任務。（之前任何一筆命令都算接管，App 退到背景時送的歸零會取消任務。）
+- **連續的歸零命令是接管：** 歸零命令連續來了 1 s、每筆間隔不超過 0.5 s，就當成接管。manual guard 會把它拒絕的命令（太舊、session 不對、超速）轉成歸零，所以連線太慢時持續推搖桿，機器人收到的全是歸零；這條規則讓任務在 1 s 後被取消，而不是放開搖桿後繼續走。App 自己送的歸零是每個事件一筆，不要用固定頻率重送。
 - **歸零命令不是「停止任務」：** 停止任務用 `/stop_zone_sequence`、`/cancel_nav2`。任務進行中送歸零，機器人只會停大約 0.5 s（`twist_mux` 的手動輸入逾時）再繼續走。
 
 行為變更，topic 和欄位沒變，`api_version` 不 bump。

@@ -67,6 +67,13 @@ PROGRESS_FEEDBACK_PERIOD_S = 0.5
 # The manual source whose zero means nothing while it is not driving
 # (_manual_cmd_callback; mower_nav's state::IDLE_ZERO_SOURCE).
 IDLE_ZERO_SOURCE = '/joy_cmd'
+# How long twist_mux keeps a manual input selected after a frame
+# (twist_mux_topics.yaml): zeros no further apart keep it there without a gap.
+MANUAL_MUX_TIMEOUT_S = 0.5
+# Idle zeros that come without a gap for this long are a takeover after all:
+# the manual guard turns every command it refuses into a zero, so a person
+# pushing a stick over a link too slow for its age limit sends only zeros.
+IDLE_ZERO_STREAM_TAKEOVER_S = 1.0
 
 
 def _path_frame_id(path: Path) -> str:
@@ -452,6 +459,8 @@ class NavActionServer(Node):
         self._mutation_operation = None
         self._manual_command_deadlines = {}
         self._invalid_manual_command_deadlines = {}
+        # source -> (first, last) arrival of its idle zeros without a gap
+        self._idle_zero_streams = {}
         self._valid_fix_received_at_by_topic = {}
         self._fix_rejections_by_topic = {}
         self._last_gps_odometry_received_at = None
@@ -1281,7 +1290,17 @@ class NavActionServer(Node):
             now = monotonic()
             driving = self._manual_command_deadlines.get(source, now) > now
             if zero and not driving and source == IDLE_ZERO_SOURCE:
-                return
+                # Unless they keep coming: zeros no further apart than the
+                # mux timeout hold the mower still under a running mission,
+                # which would move again once they stop. A second of them is
+                # a hand on a stick whose commands the guard refuses.
+                first, last = self._idle_zero_streams.get(source, (now, now))
+                if now - last > MANUAL_MUX_TIMEOUT_S:
+                    first = now
+                if now - first < IDLE_ZERO_STREAM_TAKEOVER_S:
+                    self._idle_zero_streams[source] = (first, now)
+                    return
+            self._idle_zero_streams.pop(source, None)
             hold_s = max(
                 0.5,
                 float(self.get_parameter('manual_command_hold_s').value),

@@ -785,6 +785,41 @@ fn keyboard_motion_stops_a_goal_and_blocks_new_ones() {
     within(zeros_leave_a_mission_alone_and_motion_stops_it("/keyboard_cmd_vel", "manual_keyboard"));
 }
 
+/// Zeros that keep coming on `/joy_cmd` are what the manual guard makes of
+/// commands it refuses, a person pushing a stick over a slow link: after a
+/// second of them the goal stops, and new ones are held off.
+#[test]
+fn zeros_that_keep_coming_on_joy_cmd_stop_a_goal() {
+    within(async {
+        let dir = dir("manual_stream");
+        let nav2 = FakeNav2::start();
+        nav2.hold(true);
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let client = nav.client();
+        let (_goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+        eventually("the first segment", || nav2.followed() == 1).await;
+        let app = nav.test.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+        // the app's 10 Hz, as long as the test runs
+        let stream = tokio::spawn(async move {
+            loop {
+                let _ = app.publish(&TwistStamped::default());
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let (status, outcome) = wait("the result", result).await.unwrap();
+        assert_eq!((status, outcome.success), (GoalStatus::Aborted, false));
+        assert_eq!(nav2.canceled(), 1);
+        nav.until_status("the hold", |s| s["block_reason"] == "manual velocity command is active").await;
+        let goal = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await;
+        assert!(rejected(goal));
+        stream.abort();
+        let _ = stream.await;
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
 /// A zero on a teleop source stops the running goal, as ever: the keyboard's
 /// stop key (急停) is one zero on `/keyboard_cmd_vel`.
 async fn a_teleop_zero_stops_a_goal(topic: &str, test: &str) {

@@ -91,6 +91,24 @@ impl ManualCommand {
 /// held. A person at the robot sends those; none is sent by itself.
 pub const IDLE_ZERO_SOURCE: &str = "/joy_cmd";
 
+/// How long twist_mux keeps a manual input selected after a frame
+/// (`timeout` of the three manual inputs in twist_mux_topics.yaml;
+/// tests/source_rules.rs holds the two together). Zeros no further apart than
+/// this keep the mux on the manual input without a gap, so nav2's commands
+/// do not reach the wheels for as long as they come.
+pub const MANUAL_MUX_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long idle zeros on `IDLE_ZERO_SOURCE` may come without a gap before
+/// they are a takeover after all.
+///
+/// The manual guard turns every command it refuses into a zero: a person
+/// who pushes a stick over a link too slow for the guard's age limit sends
+/// nav nothing but zeros, at the app's 10 Hz. The mux holds the mower still
+/// while they come, and without this the mission would start moving again
+/// 0.5 s after the person lets go. One second of them is a hand on a stick;
+/// what the app sends by itself is one zero per event, a few at most.
+pub const IDLE_ZERO_STREAM_TAKEOVER: Duration = Duration::from_secs(1);
+
 /// What `NavState::on_manual_command` decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualOutcome {
@@ -153,6 +171,9 @@ pub struct NavState {
     pub mutation_operation: Option<String>,
     pub manual_command_deadlines: HashMap<String, Mono>,
     pub invalid_manual_command_deadlines: HashMap<String, Mono>,
+    /// The idle zeros of a source that came without a gap: the first one's
+    /// time and the last one's.
+    pub idle_zero_streams: HashMap<String, (Mono, Mono)>,
     /// When the newest good sample was taken (`Ctx::sampled_at`): its receipt
     /// less its stamp's age, for /fix, /odometry/gps and the pose.
     pub valid_fix_received_at_by_topic: HashMap<String, Mono>,
@@ -232,12 +253,21 @@ impl NavState {
     /// refused with nobody at the sticks). While the source's hold still
     /// runs, its zero is the end, or a pause, of real driving and renews the
     /// hold like any frame, so the hold ends one hold time after the last
-    /// frame of the session, as it always has.
+    /// frame of the session, as it always has. Idle zeros that keep coming
+    /// without a gap for `IDLE_ZERO_STREAM_TAKEOVER` are a takeover too.
     pub fn on_manual_command(&mut self, source: &str, command: ManualCommand, params: &SafetyParams, now: Mono) -> ManualOutcome {
         let driving = self.manual_command_deadlines.get(source).is_some_and(|deadline| *deadline > now);
         if command == ManualCommand::Zero && !driving && source == IDLE_ZERO_SOURCE {
-            return ManualOutcome { takeover: false, cancel_dispatch: None };
+            let first = match self.idle_zero_streams.get(source) {
+                Some((first, last)) if now.saturating_duration_since(*last) <= MANUAL_MUX_TIMEOUT => *first,
+                _ => now,
+            };
+            if now.saturating_duration_since(first) < IDLE_ZERO_STREAM_TAKEOVER {
+                self.idle_zero_streams.insert(source.to_string(), (first, now));
+                return ManualOutcome { takeover: false, cancel_dispatch: None };
+            }
         }
+        self.idle_zero_streams.remove(source);
         let deadline = now + params.manual_command_hold();
         self.manual_command_deadlines.insert(source.to_string(), deadline);
         if command == ManualCommand::NonFinite {
@@ -545,8 +575,9 @@ mod tests {
         for source in [IDLE_ZERO_SOURCE] {
             assert_eq!(source, "/joy_cmd");
             let mut s = running_mission();
+            // one zero per event, 0.6 s apart at the closest: never a stream
             for i in 0..50 {
-                let now = NOW + ms(100 * i);
+                let now = NOW + ms(600 * i);
                 let outcome = s.on_manual_command(source, ManualCommand::Zero, &p, now);
                 assert_eq!(outcome, ManualOutcome { takeover: false, cancel_dispatch: None }, "{source}");
                 assert!(s.manual_command_deadlines.is_empty() && s.invalid_manual_command_deadlines.is_empty(), "{source}");
@@ -562,6 +593,77 @@ mod tests {
             idle.on_manual_command(source, ManualCommand::Zero, &p, NOW);
             assert!(!idle.external_cancel_requested, "{source}");
         }
+    }
+
+    /// Idle zeros that keep coming are a hand on a stick whose commands the
+    /// guard refuses: after a second without a gap they take the robot.
+    #[test]
+    fn idle_zeros_without_a_gap_for_a_second_are_a_takeover() {
+        let p = params(false);
+        let mut s = running_mission();
+        // the app's 10 Hz: nothing for 0.9 s, the takeover with the frame at 1.0 s
+        for i in 0..10 {
+            let now = NOW + ms(100 * i);
+            assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, now).takeover, "zero at {} ms", 100 * i);
+            assert!(s.autonomy_authorized(&p, now) && s.manual_command_deadlines.is_empty(), "zero at {} ms", 100 * i);
+        }
+        let at = NOW + ms(1000);
+        assert_eq!(s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, at), ManualOutcome { takeover: true, cancel_dispatch: Some("d-1".into()) });
+        assert_eq!(s.manual_command_deadlines.get("/joy_cmd"), Some(&(at + ms(750))));
+        assert!(s.idle_zero_streams.is_empty());
+        // from here they are the frames of a session: each renews the hold,
+        // which ends 0.75 s after the last
+        s.goal_reserved = false;
+        assert!(s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, at + ms(100)).takeover);
+        assert_eq!(s.navigation_admission_block_reason(&p, at + ms(849)).as_deref(), Some("manual velocity command is active"));
+        assert_eq!(s.navigation_admission_block_reason(&p, at + ms(850)), None);
+        // and the next zero starts a stream of its own
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, at + ms(900)).takeover);
+        assert_eq!(s.idle_zero_streams.get("/joy_cmd"), Some(&(at + ms(900), at + ms(900))));
+    }
+
+    /// What the app sends by itself is no stream: a burst within an event,
+    /// zeros more than the mux timeout apart, or less than a second of them.
+    #[test]
+    fn bursts_and_spaced_idle_zeros_are_no_stream() {
+        let p = params(false);
+        let mut s = running_mission();
+        let mut zero = |at: Mono| s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, at).takeover;
+        // three within 50 ms, every 2 s
+        for event in 0..20 {
+            for i in 0..3 {
+                assert!(!zero(NOW + ms(2000 * event + 25 * i)));
+            }
+        }
+        // a gap of exactly the mux timeout still joins two zeros (the mux's
+        // input has not expired), one nanosecond more does not
+        let t = NOW + Duration::from_secs(100);
+        assert!(!zero(t));
+        assert!(!zero(t + ms(500)));
+        assert!(zero(t + ms(1000)), "0, 0.5 and 1.0 s: the mux never left the manual input");
+        let t = NOW + Duration::from_secs(200);
+        assert!(!zero(t));
+        assert!(!zero(t + ms(500) + Duration::from_nanos(1)));
+        assert!(!zero(t + ms(1000)));
+        assert!(!zero(t + ms(1400)));
+        assert!(zero(t + ms(1501)), "a stream from 0.5 s on: a second of it at 1.501 s");
+    }
+
+    /// A command that moves ends a stream of idle zeros: the zeros after its
+    /// hold start from nothing.
+    #[test]
+    fn driving_ends_a_stream_of_idle_zeros() {
+        let p = params(false);
+        let mut s = NavState::new();
+        for i in 0..9 {
+            assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, NOW + ms(100 * i)).takeover);
+        }
+        assert!(s.on_manual_command("/joy_cmd", ManualCommand::Moving, &p, NOW + ms(900)).takeover);
+        assert!(s.idle_zero_streams.is_empty());
+        let after = NOW + ms(900 + 750);
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, after).takeover);
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, after + ms(400)).takeover);
+        assert!(!s.on_manual_command("/joy_cmd", ManualCommand::Zero, &p, after + ms(800)).takeover);
     }
 
     /// A zero on a teleop source is a takeover whenever it comes, as ever:

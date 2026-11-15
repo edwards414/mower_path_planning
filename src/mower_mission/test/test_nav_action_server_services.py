@@ -1023,6 +1023,57 @@ def test_manual_zero_after_driving_keeps_the_hold_until_it_expires(
         assert nav_server._goal_callback(goal) == GoalResponse.REJECT
 
 
+def test_idle_zeros_without_a_gap_for_a_second_are_a_takeover(nav_server):
+    """Refused commands reach nav as zeros: a second of them is a person."""
+    goal = _valid_navigation_goal()
+    assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    nav_server._nav_state = 'running'
+
+    # A burst is no stream.
+    for _ in range(20):
+        nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    first, last = nav_server._idle_zero_streams['/joy_cmd']
+    assert first <= last <= monotonic()
+
+    # The stream began 0.95 s ago and its last zero is 0.6 s old: the mux has
+    # let go in between, so the next zero starts a new stream.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 0.95, now - 0.6)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    assert nav_server._idle_zero_streams['/joy_cmd'][0] >= now
+
+    # It began 0.8 s ago without a gap: not yet a second.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 0.8, now - 0.1)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'running'
+
+    # A second of it: the takeover, like a command that moves.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 1.0, now - 0.1)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'canceling'
+    assert nav_server._manual_command_deadlines['/joy_cmd'] > monotonic()
+    assert nav_server._idle_zero_streams == {}
+
+
+def test_manual_motion_ends_a_stream_of_idle_zeros(nav_server):
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert '/joy_cmd' in nav_server._idle_zero_streams
+    nav_server._manual_cmd_callback(_moving_command(), '/joy_cmd')
+    assert nav_server._idle_zero_streams == {}
+
+
+def test_idle_zero_stream_gap_is_the_mux_manual_timeout():
+    """nav reads nothing of the mux's configuration: hold the two together."""
+    assert nav_module.MANUAL_MUX_TIMEOUT_S == 0.5
+    assert nav_module.IDLE_ZERO_STREAM_TAKEOVER_S == 1.0
+
+
 def test_manual_zero_does_not_request_cancel_of_uncertain_task(nav_server):
     nav_server._nav2_task_uncertain = True
     nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
