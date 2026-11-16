@@ -89,7 +89,7 @@ pairing fixtures' secrets anywhere in here but this file.
 
 ## What the facts say that E9's design did not
 
-These were found by freezing them, on main 7fdf614 (`PROVENANCE.txt`). From 32b05d2 to that commit, E8-2 (#124) included, the graph, the parameters and the launch line did not change by a byte; the log gained one line.
+These were found by freezing them, on main 7fdf614. `PROVENANCE.txt` now names b185dc3 (2026-11-16): from 7fdf614 to it only `launch/static_tf_publisher.yaml` changed, the URDF's `imu_joint` and `imu_link` origins of #134; #135 and #136 changed nothing here. From 32b05d2 to that commit, E8-2 (#124) included, the graph, the parameters and the launch line did not change by a byte; the log gained one line.
 
 - **Parameter services (E9-23).** Only five of the module nodes on the graph serve
   them: `/boustrophedon_coverage`, `/map_manage`, `/ekf_filter_node_odom`,
