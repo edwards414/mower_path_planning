@@ -731,12 +731,67 @@ fn the_mission_operation_lock_is_one_lease_at_a_time_and_none_while_navigating()
     });
 }
 
-/// A manual command on `/joy_cmd` (the manual guard's output) stops the
-/// running goal, and blocks new ones while it holds.
+/// A manual source's frames against a running mission. `/joy_cmd` is the
+/// manual guard's output: its zero while nobody drives leaves the mission
+/// alone (the app sends one when it goes to the background). A command that
+/// moves, on any of the three sources, stops the running goal and blocks new
+/// ones while it holds.
+async fn zeros_leave_a_mission_alone_and_motion_stops_it(topic: &str, test: &str) {
+    let dir = dir(test);
+    let nav2 = FakeNav2::start();
+    nav2.hold(true);
+    let bus = Bus::new();
+    let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+    let client = nav.client();
+    let (_goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+    eventually("the first segment", || nav2.followed() == 1).await;
+    nav.until_status("a running segment", |s| s["state"] == "running").await;
+    let app = nav.test.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+    for _ in 0..5 {
+        app.publish(&TwistStamped::default()).unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    let status = nav.status().await;
+    assert_eq!((status["state"].as_str(), status["block_reason"].as_str()), (Some("running"), Some("another navigation goal is active")), "{topic}: after the zeros");
+    assert_eq!((nav2.canceled(), nav2.followed()), (0, 1), "{topic}: after the zeros");
+
+    let joy = nav.test.publisher::<TwistStamped>(topic, Qos::default()).unwrap();
+    let mut command = TwistStamped::default();
+    command.twist.linear.x = 0.2;
+    joy.publish(&command).unwrap();
+    let (status, outcome) = wait("the result", result).await.unwrap();
+    assert_eq!((status, outcome.success), (GoalStatus::Aborted, false), "{topic}");
+    assert_eq!(nav2.canceled(), 1, "{topic}");
+    joy.publish(&command).unwrap();
+    nav.until_status("the hold", |s| s["block_reason"] == "manual velocity command is active").await;
+    let goal = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await;
+    assert!(rejected(goal), "{topic}");
+    nav.stop().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn manual_motion_stops_a_goal_and_blocks_new_ones() {
+    within(zeros_leave_a_mission_alone_and_motion_stops_it("/joy_cmd", "manual"));
+}
+
+#[test]
+fn physical_joystick_motion_stops_a_goal_and_blocks_new_ones() {
+    within(zeros_leave_a_mission_alone_and_motion_stops_it("/physical_joy_cmd", "manual_physical"));
+}
+
+#[test]
+fn keyboard_motion_stops_a_goal_and_blocks_new_ones() {
+    within(zeros_leave_a_mission_alone_and_motion_stops_it("/keyboard_cmd_vel", "manual_keyboard"));
+}
+
+/// Zeros that keep coming on `/joy_cmd` are what the manual guard makes of
+/// commands it refuses, a person pushing a stick over a slow link: after a
+/// second of them the goal stops, and new ones are held off.
+#[test]
+fn zeros_that_keep_coming_on_joy_cmd_stop_a_goal() {
     within(async {
-        let dir = dir("manual");
+        let dir = dir("manual_stream");
         let nav2 = FakeNav2::start();
         nav2.hold(true);
         let bus = Bus::new();
@@ -744,17 +799,107 @@ fn manual_motion_stops_a_goal_and_blocks_new_ones() {
         let client = nav.client();
         let (_goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
         eventually("the first segment", || nav2.followed() == 1).await;
+        let app = nav.test.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+        // the app's 10 Hz, as long as the test runs
+        let stream = tokio::spawn(async move {
+            loop {
+                let _ = app.publish(&TwistStamped::default());
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let (status, outcome) = wait("the result", result).await.unwrap();
+        assert_eq!((status, outcome.success), (GoalStatus::Aborted, false));
+        assert_eq!(nav2.canceled(), 1);
+        nav.until_status("the hold", |s| s["block_reason"] == "manual velocity command is active").await;
+        let goal = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await;
+        assert!(rejected(goal));
+        stream.abort();
+        let _ = stream.await;
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// A zero on a teleop source stops the running goal, as ever: the keyboard's
+/// stop key (急停) is one zero on `/keyboard_cmd_vel`.
+async fn a_teleop_zero_stops_a_goal(topic: &str, test: &str) {
+    let dir = dir(test);
+    let nav2 = FakeNav2::start();
+    nav2.hold(true);
+    let bus = Bus::new();
+    let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+    let client = nav.client();
+    let (_goal, result, _feedback) = nav.dispatch(&client, mission(&dispatch_id())).await;
+    eventually("the first segment", || nav2.followed() == 1).await;
+    let teleop = nav.test.publisher::<TwistStamped>(topic, Qos::default()).unwrap();
+    teleop.publish(&TwistStamped::default()).unwrap();
+    let (status, outcome) = wait("the result", result).await.unwrap();
+    assert_eq!((status, outcome.success), (GoalStatus::Aborted, false), "{topic}");
+    assert_eq!(nav2.canceled(), 1, "{topic}");
+    teleop.publish(&TwistStamped::default()).unwrap();
+    nav.until_status("the hold", |s| s["block_reason"] == "manual velocity command is active").await;
+    let goal = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await;
+    assert!(rejected(goal), "{topic}");
+    nav.stop().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_physical_joystick_zero_stops_a_goal() {
+    within(a_teleop_zero_stops_a_goal("/physical_joy_cmd", "teleop_zero_physical"));
+}
+
+#[test]
+fn a_keyboard_zero_stops_a_goal() {
+    within(a_teleop_zero_stops_a_goal("/keyboard_cmd_vel", "teleop_zero_keyboard"));
+}
+
+/// A command that is not finite on a manual source is a safety stop of the
+/// running goal, as ever.
+#[test]
+fn a_non_finite_manual_command_stops_a_goal() {
+    within(async {
+        let dir = dir("manual_nan");
+        let nav2 = FakeNav2::start();
+        nav2.hold(true);
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let (_goal, result, _feedback) = nav.dispatch(&nav.client(), mission(&dispatch_id())).await;
+        eventually("the first segment", || nav2.followed() == 1).await;
         let joy = nav.test.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
         let mut command = TwistStamped::default();
-        command.twist.linear.x = 0.2;
+        command.twist.angular.z = f64::NAN;
         joy.publish(&command).unwrap();
         let (status, outcome) = wait("the result", result).await.unwrap();
         assert_eq!((status, outcome.success), (GoalStatus::Aborted, false));
         assert_eq!(nav2.canceled(), 1);
-        joy.publish(&command).unwrap();
-        nav.until_status("the hold", |s| s["block_reason"] == "manual velocity command is active").await;
-        let goal = wait("the goal response", client.send_goal_request(mission(&dispatch_id())).unwrap()).await;
-        assert!(rejected(goal));
+        nav.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// At idle, zeros on `/joy_cmd` do not hold a new goal off (robot,
+/// 2026-11-16: "manual velocity command is active" on three starts in five).
+#[test]
+fn zeros_at_idle_do_not_block_a_goal() {
+    within(async {
+        let dir = dir("manual_idle");
+        let _nav2 = FakeNav2::start();
+        let bus = Bus::new();
+        let nav = Nav::start(&bus, Clock::system(), &dir, &[]).await;
+        let app = nav.test.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+        for _ in 0..3 {
+            app.publish(&TwistStamped::default()).unwrap();
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        let status = nav.status().await;
+        assert_eq!((status["ready"].as_bool(), status["block_reason"].as_str()), (Some(true), None));
+        let leased = nav.lock("/map_manage:zeros_test", true).await;
+        assert!(leased.success, "{}", leased.message);
+        assert!(nav.lock("/map_manage:zeros_test", false).await.success);
+        let (_goal, result, _feedback) = nav.dispatch(&nav.client(), mission(&dispatch_id())).await;
+        let (status, outcome) = wait("the result", result).await.unwrap();
+        assert_eq!((status, outcome.success), (GoalStatus::Succeeded, true));
         nav.stop().await;
         let _ = std::fs::remove_dir_all(&dir);
     });
@@ -1483,8 +1628,9 @@ fn when_nav_restarts_mid_leg_coverage_keeps_the_goal_uncertain() {
 /// The production safety defaults, on a manual clock (E9-07, from
 /// test_controller_configuration.py and test_qos_configuration.py): the
 /// health gate is on, a fix needs a 1.5 cm horizontal sigma, the inputs go
-/// stale after 0.30 s, and a manual command holds autonomy and the mission
-/// lease off for 0.75 s.
+/// stale after 0.30 s, and a manual command that moves holds autonomy and
+/// the mission lease off for 0.75 s after its last frame (a zero at idle
+/// holds nothing).
 #[test]
 fn the_health_gate_and_the_manual_hold_run_on_the_production_defaults() {
     within(async {
@@ -1565,14 +1711,29 @@ fn the_health_gate_and_the_manual_hold_run_on_the_production_defaults() {
         feed(0.01f64.powi(2));
         nav.until_status("healthy again", |s| s["ready"] == true).await;
         let joy = sensors.publisher::<TwistStamped>("/joy_cmd", Qos::default()).unwrap();
+        // a zero from a source that is not driving holds nothing
         joy.publish(&TwistStamped::default()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(nav.status().await["ready"], true, "after a zero at idle");
+        let mut moving = TwistStamped::default();
+        moving.twist.linear.x = 0.2;
+        joy.publish(&moving).unwrap();
         nav.until_status("the manual command", |s| s["block_reason"] == "manual velocity command is active").await;
         let busy = nav.lock("/map_manage:defaults_test", true).await;
         assert_eq!((busy.success, busy.message.as_str()), (false, "Navigation/manual motion is active or termination is uncertain"));
+        // the zero that ends the driving is a frame of it: the hold runs
+        // 0.75 s from that zero
+        manual.advance(Duration::from_millis(500));
+        joy.publish(&TwistStamped::default()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
         manual.advance(Duration::from_millis(740));
-        assert_eq!(nav.status().await["block_reason"], "manual velocity command is active", "0.74 s after it");
+        assert_eq!(nav.status().await["block_reason"], "manual velocity command is active", "0.74 s after the zero, 1.24 s after the command");
         manual.advance(Duration::from_millis(20));
-        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.76 s after it");
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "0.76 s after the zero");
+        // and a zero after the hold starts none
+        joy.publish(&TwistStamped::default()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(nav.status().await["block_reason"], "robot pose/TF is unavailable or stale", "a zero after the hold");
         nav.stop().await;
         let _ = std::fs::remove_dir_all(&dir);
     });

@@ -870,18 +870,216 @@ def test_manual_velocity_blocks_goal_and_active_goal_requests_cancel(nav_server)
     assert nav_server._nav_state == 'canceling'
 
 
-def test_fresh_manual_zero_cancels_running_goal_to_prevent_late_resume(
-    nav_server,
+MANUAL_SOURCES = ('/joy_cmd', '/physical_joy_cmd', '/keyboard_cmd_vel')
+TELEOP_SOURCES = ('/physical_joy_cmd', '/keyboard_cmd_vel')
+
+
+def _moving_command():
+    moving = TwistStamped()
+    moving.twist.linear.x = 0.2
+    return moving
+
+
+def test_idle_zero_source_is_the_manual_guard_output():
+    assert nav_module.IDLE_ZERO_SOURCE == '/joy_cmd'
+
+
+@pytest.mark.parametrize('source', TELEOP_SOURCES)
+def test_teleop_zero_cancels_running_goal_and_blocks_a_new_one(
+    nav_server, source,
 ):
+    """teleop_keyboard's SPACE is one zero: it stops the mission, as ever."""
     goal = _valid_navigation_goal()
     assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
     nav_server._nav_state = 'running'
-    stopped = TwistStamped()
 
-    nav_server._manual_cmd_callback(stopped, '/keyboard_cmd_vel')
+    nav_server._manual_cmd_callback(TwistStamped(), source)
 
     assert nav_server._external_cancel_requested
     assert nav_server._nav_state == 'canceling'
+    assert nav_server._manual_command_deadlines[source] > monotonic()
+
+
+def test_manual_zero_from_idle_source_leaves_running_goal_alone(nav_server):
+    """The app's zero when nobody drives is not a takeover (2026-11-16)."""
+    source = '/joy_cmd'
+    goal = _valid_navigation_goal()
+    assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    nav_server._nav_state = 'running'
+
+    for _ in range(20):
+        nav_server._manual_cmd_callback(TwistStamped(), source)
+
+    assert not nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'running'
+    assert nav_server._manual_command_deadlines == {}
+    assert nav_server._invalid_manual_command_deadlines == {}
+
+
+def test_manual_zero_from_idle_source_does_not_block_a_goal(nav_server):
+    source = '/joy_cmd'
+    negative_zero = TwistStamped()
+    negative_zero.twist.linear.x = -0.0
+    negative_zero.twist.angular.z = -0.0
+    nav_server._manual_cmd_callback(TwistStamped(), source)
+    nav_server._manual_cmd_callback(negative_zero, source)
+
+    assert not nav_server._manual_motion_active_locked()
+    assert nav_server._navigation_admission_block_reason_locked() is None
+    assert nav_server._goal_callback(
+        _valid_navigation_goal()
+    ) == GoalResponse.ACCEPT
+
+
+@pytest.mark.parametrize('source', MANUAL_SOURCES)
+def test_manual_motion_cancels_running_goal(nav_server, source):
+    goal = _valid_navigation_goal()
+    assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    nav_server._nav_state = 'running'
+
+    nav_server._manual_cmd_callback(_moving_command(), source)
+
+    assert nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'canceling'
+    assert nav_server._last_status_message == (
+        f'Manual velocity on {source} requested navigation stop'
+    )
+    assert nav_server._manual_command_deadlines[source] > monotonic()
+
+
+@pytest.mark.parametrize('component', (
+    'linear.x', 'linear.y', 'linear.z', 'angular.x', 'angular.y', 'angular.z',
+))
+def test_any_nonzero_component_is_manual_motion(nav_server, component):
+    """Zero is exact: the smallest value in any component is a takeover."""
+    command = TwistStamped()
+    group, axis = component.split('.')
+    setattr(getattr(command.twist, group), axis, -1e-12)
+
+    nav_server._manual_cmd_callback(command, '/joy_cmd')
+
+    assert nav_server._manual_motion_active_locked()
+    assert nav_server._goal_callback(
+        _valid_navigation_goal()
+    ) == GoalResponse.REJECT
+
+
+@pytest.mark.parametrize('source', MANUAL_SOURCES)
+def test_non_finite_manual_command_is_a_safety_stop(nav_server, source):
+    goal = _valid_navigation_goal()
+    assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    nav_server._nav_state = 'running'
+    invalid = TwistStamped()
+    invalid.twist.angular.z = float('nan')
+
+    nav_server._manual_cmd_callback(invalid, source)
+
+    assert nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'canceling'
+    deadline = nav_server._manual_command_deadlines[source]
+    assert nav_server._invalid_manual_command_deadlines[source] == deadline
+    # A zero inside that hold is a frame of the same session, as any finite
+    # frame was: it clears the invalid mark and keeps the hold.
+    nav_server._manual_cmd_callback(TwistStamped(), source)
+    assert nav_server._invalid_manual_command_deadlines == {}
+    assert nav_server._manual_command_deadlines[source] >= deadline
+
+
+@pytest.mark.parametrize('source', MANUAL_SOURCES)
+def test_manual_zero_after_driving_keeps_the_hold_until_it_expires(
+    nav_server, source,
+):
+    """Zeros belong to the driving while its hold runs, and only then."""
+    goal = _valid_navigation_goal()
+    nav_server._manual_cmd_callback(_moving_command(), source)
+    first_deadline = nav_server._manual_command_deadlines[source]
+    hold_s = first_deadline - monotonic()
+    assert 0.7 < hold_s <= 0.75
+
+    # The stick at centre: each zero inside the hold renews it from its own
+    # arrival, exactly as before.
+    for _ in range(5):
+        before = monotonic()
+        nav_server._manual_cmd_callback(TwistStamped(), source)
+        renewed = nav_server._manual_command_deadlines[source]
+        assert before + 0.75 <= renewed <= monotonic() + 0.75
+        assert nav_server._goal_callback(goal) == GoalResponse.REJECT
+
+    # /joy_cmd's zero is not another source's and renews nothing of it.
+    if source != '/joy_cmd':
+        nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+        assert set(nav_server._manual_command_deadlines) == {source}
+
+    # The hold is over at its deadline, pruned or not: on /joy_cmd the next
+    # zero is the idle zero again and starts no hold; on a teleop source it
+    # is a takeover.
+    nav_server._manual_command_deadlines[source] = monotonic() - 0.001
+    nav_server._manual_cmd_callback(TwistStamped(), source)
+    if source == '/joy_cmd':
+        assert not nav_server._manual_motion_active_locked()
+        assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    else:
+        assert nav_server._manual_motion_active_locked()
+        assert nav_server._goal_callback(goal) == GoalResponse.REJECT
+
+
+def test_idle_zeros_without_a_gap_for_a_second_are_a_takeover(nav_server):
+    """Refused commands reach nav as zeros: a second of them is a person."""
+    goal = _valid_navigation_goal()
+    assert nav_server._goal_callback(goal) == GoalResponse.ACCEPT
+    nav_server._nav_state = 'running'
+
+    # A burst is no stream.
+    for _ in range(20):
+        nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    first, last = nav_server._idle_zero_streams['/joy_cmd']
+    assert first <= last <= monotonic()
+
+    # The stream began 0.95 s ago and its last zero is 0.6 s old: the mux has
+    # let go in between, so the next zero starts a new stream.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 0.95, now - 0.6)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    assert nav_server._idle_zero_streams['/joy_cmd'][0] >= now
+
+    # It began 0.8 s ago without a gap: not yet a second.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 0.8, now - 0.1)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'running'
+
+    # A second of it: the takeover, like a command that moves.
+    now = monotonic()
+    nav_server._idle_zero_streams['/joy_cmd'] = (now - 1.0, now - 0.1)
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert nav_server._external_cancel_requested
+    assert nav_server._nav_state == 'canceling'
+    assert nav_server._manual_command_deadlines['/joy_cmd'] > monotonic()
+    assert nav_server._idle_zero_streams == {}
+
+
+def test_manual_motion_ends_a_stream_of_idle_zeros(nav_server):
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert '/joy_cmd' in nav_server._idle_zero_streams
+    nav_server._manual_cmd_callback(_moving_command(), '/joy_cmd')
+    assert nav_server._idle_zero_streams == {}
+
+
+def test_idle_zero_stream_gap_is_the_mux_manual_timeout():
+    """nav reads nothing of the mux's configuration: hold the two together."""
+    assert nav_module.MANUAL_MUX_TIMEOUT_S == 0.5
+    assert nav_module.IDLE_ZERO_STREAM_TAKEOVER_S == 1.0
+
+
+def test_manual_zero_does_not_request_cancel_of_uncertain_task(nav_server):
+    nav_server._nav2_task_uncertain = True
+    nav_server._manual_cmd_callback(TwistStamped(), '/joy_cmd')
+    assert not nav_server._external_cancel_requested
+    nav_server._manual_cmd_callback(_moving_command(), '/joy_cmd')
+    assert nav_server._external_cancel_requested
 
 
 def test_real_navigation_requires_and_monitors_fresh_pose_and_gps(

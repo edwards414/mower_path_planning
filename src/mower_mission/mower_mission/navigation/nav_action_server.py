@@ -64,6 +64,16 @@ from visualization_msgs.msg import Marker
 # Minimum spacing of feedback-driven /coverage_progress messages; state
 # transitions publish immediately.
 PROGRESS_FEEDBACK_PERIOD_S = 0.5
+# The manual source whose zero means nothing while it is not driving
+# (_manual_cmd_callback; mower_nav's state::IDLE_ZERO_SOURCE).
+IDLE_ZERO_SOURCE = '/joy_cmd'
+# How long twist_mux keeps a manual input selected after a frame
+# (twist_mux_topics.yaml): zeros no further apart keep it there without a gap.
+MANUAL_MUX_TIMEOUT_S = 0.5
+# Idle zeros that come without a gap for this long are a takeover after all:
+# the manual guard turns every command it refuses into a zero, so a person
+# pushing a stick over a link too slow for its age limit sends only zeros.
+IDLE_ZERO_STREAM_TAKEOVER_S = 1.0
 
 
 def _path_frame_id(path: Path) -> str:
@@ -449,6 +459,8 @@ class NavActionServer(Node):
         self._mutation_operation = None
         self._manual_command_deadlines = {}
         self._invalid_manual_command_deadlines = {}
+        # source -> (first, last) arrival of its idle zeros without a gap
+        self._idle_zero_streams = {}
         self._valid_fix_received_at_by_topic = {}
         self._fix_rejections_by_topic = {}
         self._last_gps_odometry_received_at = None
@@ -1255,18 +1267,45 @@ class NavActionServer(Node):
             float(msg.twist.angular.z),
         )
         invalid = not all(math.isfinite(value) for value in components)
+        # Exactly zero, with no dead band: whatever is not exactly zero keeps
+        # the takeover it always meant.
+        zero = not invalid and all(value == 0.0 for value in components)
         cancel_dispatch_id = None
         with self._state_lock:
-            # twist_mux arbitrates on source freshness and priority, not on
-            # whether the Twist is non-zero. A fresh manual zero can mask Nav2
-            # and later reveal an old autonomous command when its publisher
-            # dies. Treat every fresh manual frame as exclusive ownership and
-            # cancel autonomy rather than allowing that unexpected resume.
+            # A frame takes the robot: its source holds autonomy off for the
+            # hold time and a reserved goal is canceled. The one exception is
+            # a zero on /joy_cmd (the manual guard's output for the app)
+            # while that source is not driving: the app sends one when it
+            # goes to the background, hides its sticks or leaves manual mode,
+            # and that is not a person taking the robot (robot, 2026-11-16:
+            # two missions canceled and three starts refused with nobody at
+            # the sticks). The app stops a mission with /stop_zone_sequence
+            # and /cancel_nav2, never with a zero. While the source's hold
+            # still runs, its zero is the end, or a pause, of real driving
+            # and renews the hold like any frame.
+            # On the teleop sources every frame stays a takeover:
+            # teleop_keyboard's SPACE and exit are one zero meant to stop the
+            # mower, and the joystick publishes only with its enable button.
+            # Same rule as mower_nav's NavState::on_manual_command.
+            now = monotonic()
+            driving = self._manual_command_deadlines.get(source, now) > now
+            if zero and not driving and source == IDLE_ZERO_SOURCE:
+                # Unless they keep coming: zeros no further apart than the
+                # mux timeout hold the mower still under a running mission,
+                # which would move again once they stop. A second of them is
+                # a hand on a stick whose commands the guard refuses.
+                first, last = self._idle_zero_streams.get(source, (now, now))
+                if now - last > MANUAL_MUX_TIMEOUT_S:
+                    first = now
+                if now - first < IDLE_ZERO_STREAM_TAKEOVER_S:
+                    self._idle_zero_streams[source] = (first, now)
+                    return
+            self._idle_zero_streams.pop(source, None)
             hold_s = max(
                 0.5,
                 float(self.get_parameter('manual_command_hold_s').value),
             )
-            deadline = monotonic() + hold_s
+            deadline = now + hold_s
             self._manual_command_deadlines[source] = deadline
             if invalid:
                 self._invalid_manual_command_deadlines[source] = deadline
