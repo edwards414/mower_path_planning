@@ -214,7 +214,7 @@ MapManage 參數：
 | `unknown_as_obstacle` | `/boustrophedon_coverage` | `true` | switch |
 | `min_safe_component_area_m2` | `/boustrophedon_coverage` | `0.05` | advanced double input |
 | `coverage_pattern` | `/boustrophedon_coverage` | `zigzag` | segmented control: `zigzag`, `spiral` |
-| `boundary_ring` | `/boustrophedon_coverage` | `false` | checkbox：沿 zone 邊界先割一圈再填內部 |
+| `boundary_ring` | `/boustrophedon_coverage` | `false` | checkbox：沿 zone 邊界先割一圈再填內部（zigzag：障礙物也各繞一圈，車道在圈內迴轉） |
 
 參數套用方式：
 

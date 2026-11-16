@@ -15,5 +15,6 @@ pub mod connector_planner;
 pub mod zigzag;
 pub mod spiral;
 pub mod cell_decomposition;
+pub mod headland;
 pub mod boustrophedon;
 pub mod nav_split;
