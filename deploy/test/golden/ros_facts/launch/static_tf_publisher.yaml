@@ -135,17 +135,31 @@ static_tf_publisher:
       /><child link=\"back_camera_rotated_frame\"/></joint><!-- ============================================================\
       \ --><!--  imu_link                                                    --><!--\
       \ ============================================================ --><link name=\"\
-      imu_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"-0.000251465 3.703e-09 -0.00531321\"\
-      /><mass value=\"0.205582\"/><inertia ixx=\"3.85914e-05\" ixy=\"1.7e-11\" ixz=\"\
-      -3.105e-09\" iyy=\"4.59431e-05\" iyz=\"-1e-12\" izz=\"7.98412e-05\"/></inertial><visual><origin\
-      \ rpy=\"3.14159 -0 0\" xyz=\"-0.000256254 0 -0.005\"/><geometry><mesh filename=\"\
+      imu_link\"><!-- The part stays where the CAD puts it: these origins are the\
+      \ old ones\n         (the CAD mates the part upside down, rpy=\"3.14159 -0 0\"\
+      ) seen from\n         the imu_link frame imu_joint gives below. --><inertial><origin\
+      \ rpy=\"3.14159 0 1.5708\" xyz=\"3.703e-09 -0.000251465 0.00531321\"/><mass\
+      \ value=\"0.205582\"/><inertia ixx=\"3.85914e-05\" ixy=\"1.7e-11\" ixz=\"-3.105e-09\"\
+      \ iyy=\"4.59431e-05\" iyz=\"-1e-12\" izz=\"7.98412e-05\"/></inertial><visual><origin\
+      \ rpy=\"0 0 1.5708\" xyz=\"0 -0.000256254 0.005\"/><geometry><mesh filename=\"\
       package://mower_description/mower_robot/assets/imu_link.stl\"/></geometry><material\
-      \ name=\"black_material\"/></visual><collision><origin rpy=\"3.14159 -0 0\"\
-      \ xyz=\"-0.000256254 0 -0.005\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/imu_link.stl\"\
+      \ name=\"black_material\"/></visual><collision><origin rpy=\"0 0 1.5708\" xyz=\"\
+      0 -0.000256254 0.005\"/><geometry><mesh filename=\"package://mower_description/mower_robot/assets/imu_link.stl\"\
       /></geometry></collision></link><!-- Joint: base_link \u2192 imu_link --><joint\
-      \ name=\"imu_joint\" type=\"fixed\"><origin rpy=\"3.14159 -0 0\" xyz=\"0.015897\
-      \ 0.209534 -0.0129528\"/><parent link=\"base_link\"/><child link=\"imu_link\"\
-      /></joint><!-- ============================================================\
+      \ name=\"imu_joint\" type=\"fixed\"><!-- imu_link is the frame the WIT IMU's\
+      \ data is in, and localization turns\n         /imu/data by base_footprint \u2190\
+      \ imu_link. This yaw undoes\n         base_footprint_joint's, so that transform\
+      \ is the identity: the EKF's\n         heading is the IMU's own.\n         Measured\
+      \ on the robot 2026-11-16: the WIT reports roll about 0 (not\n         180)\
+      \ and a heading that already is the robot's ENU heading, to within\n       \
+      \  its magnetometer error. With the mount written here before\n         (rpy=\"\
+      3.14159 -0 0\", upside down) the EKF's heading was the IMU's\n         plus\
+      \ 90 deg.\n         Not verified: that the IMU's x and y axes point forward\
+      \ and left. The\n         odom EKF also fuses its ax and ay (dual_ekf_navsat_params.yaml,\n\
+      \         imu0_config). To check: log /imu/data's linear acceleration against\n\
+      \         the wheel odometry's while driving forward and braking. --><origin\
+      \ rpy=\"0 0 -1.5708\" xyz=\"0.015897 0.209534 -0.0129528\"/><parent link=\"\
+      base_link\"/><child link=\"imu_link\"/></joint><!-- ============================================================\
       \ --><!--  NEW: gps_link\uFF08GPS \u5929\u7DDA\u4F4D\u7F6E\uFF09           \
       \                    --><!-- ============================================================\
       \ --><link name=\"gps_link\"><inertial><origin rpy=\"0 0 0\" xyz=\"0 0 0\"/><mass\
