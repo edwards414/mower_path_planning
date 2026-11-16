@@ -160,9 +160,11 @@ pub fn chain(joints: &[Joint], from: &str, to: &str) -> Result<(Mat3, Vec3), Str
 pub struct Mount {
     /// imu_link's orientation in base_footprint (`M`).
     pub imu: Mat3,
-    /// Its yaw: how far the IMU's heading is turned from the robot's.
+    /// Its yaw: how far the IMU's heading is turned from the robot's (0 for
+    /// the repo's URDF).
     pub imu_yaw: f64,
-    /// Mounted upside down (`M`'s z axis points down).
+    /// Mounted upside down (`M`'s z axis points down; not so for the repo's
+    /// URDF).
     pub imu_flipped: bool,
     /// gps_link in base_footprint, metres.
     pub antenna: Vec3,
@@ -270,16 +272,31 @@ mod tests {
     const REPO_URDF: &str = include_str!("../../../../mower_description/mower_robot/robot.urdf.xacro");
 
     #[test]
-    fn the_repos_urdf_gives_the_mount_fake_sensors_assumed() {
-        // fake_sensors.py --follow-odom: imu_link upside down (roll 180 deg)
-        // under a base_link turned +90 deg from base_footprint, so base yaw =
-        // IMU yaw + 90 deg and base yaw rate = -IMU z rate; no horizontal
-        // antenna offset
+    fn the_repos_urdf_gives_the_mount_measured_on_the_robot() {
+        // imu_joint undoes base_footprint_joint's +90 deg, so imu_link is
+        // base_footprint turned by nothing: base yaw = IMU yaw, base yaw rate
+        // = IMU z rate, upright (what the WIT showed on the robot, 2026-11-16);
+        // no horizontal antenna offset
         let m = Mount::from_urdf(REPO_URDF).unwrap();
-        assert!((m.imu_yaw.to_degrees() - 90.0).abs() < 0.01, "{m:?}");
-        assert!(m.imu_flipped);
+        assert!(m.imu_yaw.to_degrees().abs() < 1e-9, "{m:?}");
+        assert!(!m.imu_flipped);
+        for (row, want) in m.imu.iter().zip(&IDENTITY) {
+            for (a, b) in row.iter().zip(want) {
+                assert!((a - b).abs() < 1e-12, "{m:?}");
+            }
+        }
         assert!(m.antenna[0].abs() < 1e-9 && m.antenna[1].abs() < 1e-9, "{m:?}");
         assert!((m.antenna[2] - 0.12).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_upside_down_mount_is_still_read() {
+        // the repo's URDF until 2026-11 (and e2-verify's fake_sensors.py
+        // --follow-odom): imu_link upside down (roll 180 deg) under a
+        // base_link turned +90 deg from base_footprint
+        let m = Mount::from_urdf(crate::imu::tests::UPSIDE_DOWN_URDF).unwrap();
+        assert!((m.imu_yaw.to_degrees() - 90.0).abs() < 0.01, "{m:?}");
+        assert!(m.imu_flipped);
     }
 
     #[test]

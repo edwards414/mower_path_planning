@@ -324,21 +324,24 @@
   <!--  imu_link                                                    -->
   <!-- ============================================================ -->
   <link name="imu_link">
+    <!-- The part stays where the CAD puts it: these origins are the old ones
+         (the CAD mates the part upside down, rpy="3.14159 -0 0") seen from
+         the imu_link frame imu_joint gives below. -->
     <inertial>
-      <origin xyz="-0.000251465 3.703e-09 -0.00531321" rpy="0 0 0"/>
+      <origin xyz="3.703e-09 -0.000251465 0.00531321" rpy="3.14159 0 1.5708"/>
       <mass value="0.205582"/>
       <inertia ixx="3.85914e-05" ixy="1.7e-11" ixz="-3.105e-09"
                iyy="4.59431e-05" iyz="-1e-12" izz="7.98412e-05"/>
     </inertial>
     <visual>
-      <origin xyz="-0.000256254 0 -0.005" rpy="3.14159 -0 0"/>
+      <origin xyz="0 -0.000256254 0.005" rpy="0 0 1.5708"/>
       <geometry>
         <mesh filename="package://mower_description/mower_robot/assets/imu_link.stl"/>
       </geometry>
       <material name="black_material"/>
     </visual>
     <collision>
-      <origin xyz="-0.000256254 0 -0.005" rpy="3.14159 -0 0"/>
+      <origin xyz="0 -0.000256254 0.005" rpy="0 0 1.5708"/>
       <geometry>
         <mesh filename="package://mower_description/mower_robot/assets/imu_link.stl"/>
       </geometry>
@@ -347,7 +350,20 @@
 
   <!-- Joint: base_link → imu_link -->
   <joint name="imu_joint" type="fixed">
-    <origin xyz="0.015897 0.209534 -0.0129528" rpy="3.14159 -0 0"/>
+    <!-- imu_link is the frame the WIT IMU's data is in, and localization turns
+         /imu/data by base_footprint ← imu_link. This yaw undoes
+         base_footprint_joint's, so that transform is the identity: the EKF's
+         heading is the IMU's own.
+         Measured on the robot 2026-11-16: the WIT reports roll about 0 (not
+         180) and a heading that already is the robot's ENU heading, to within
+         its magnetometer error. With the mount written here before
+         (rpy="3.14159 -0 0", upside down) the EKF's heading was the IMU's
+         plus 90 deg.
+         Not verified: that the IMU's x and y axes point forward and left. The
+         odom EKF also fuses its ax and ay (dual_ekf_navsat_params.yaml,
+         imu0_config). To check: log /imu/data's linear acceleration against
+         the wheel odometry's while driving forward and braking. -->
+    <origin xyz="0.015897 0.209534 -0.0129528" rpy="0 0 -1.5708"/>
     <parent link="base_link"/>
     <child link="imu_link"/>
   </joint>

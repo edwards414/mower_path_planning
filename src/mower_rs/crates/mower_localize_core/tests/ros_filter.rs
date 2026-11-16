@@ -247,3 +247,73 @@ fn map_instance_matches_robot_localization() {
 fn map_instance_with_initial_yaw_covariance_matches_robot_localization() {
     run("ros_filter_map_initial_cov.json", true);
 }
+
+/// The mount decides what the filters take from the IMU. One sample, as the
+/// WIT gave it at rest on the robot on 2026-11-16 (yaw -84.0, roll -1.4,
+/// pitch 0.2 deg), turning left at 0.5 rad/s and speeding up, through the
+/// odom instance's `imu0` (yaw, yaw rate, ax, ay) with each mount.
+fn prepared_with_mount(base_from_imu: &Quaternion) -> (f64, f64, f64, f64) {
+    use mower_localize_core::filter_common::{STATE_AX, STATE_AY, STATE_VYAW, STATE_YAW};
+    let mut core = build_filter(&ekf_odom_config());
+    core.transforms.insert(
+        "base_footprint",
+        "imu_link",
+        Transform::from_parts(base_from_imu, Vector3::new(-0.209534, 0.015897, -0.0129528)),
+    );
+    let mut msg = Imu {
+        header: Header {
+            frame_id: "imu_link".to_string(),
+            stamp_ns: 1_700_000_000_040_000_000,
+        },
+        orientation: Quaternion::from_rpy((-1.4f64).to_radians(), 0.2f64.to_radians(), (-84.0f64).to_radians()),
+        angular_velocity: Vector3::new(0.0, 0.0, 0.5),
+        linear_acceleration: Vector3::new(2.0, 0.5, 9.8),
+        ..Default::default()
+    };
+    for i in 0..3 {
+        msg.orientation_covariance[i][i] = 0.01;
+        msg.angular_velocity_covariance[i][i] = 0.005;
+        msg.linear_acceleration_covariance[i][i] = 0.02;
+    }
+    core.imu_callback(&msg, &odom_ekf_imu0());
+    let queued = core.queued();
+    let of = |k: usize| {
+        let m: Vec<f64> = queued.iter().filter(|m| m.update_vector[k]).map(|m| m.measurement[k]).collect();
+        assert_eq!(m.len(), 1, "one prepared measurement updates state {k}");
+        m[0]
+    };
+    (of(STATE_YAW).to_degrees(), of(STATE_VYAW), of(STATE_AX), of(STATE_AY))
+}
+
+/// robot.urdf.xacro's mount (imu_joint undoes base_footprint_joint's yaw, so
+/// `base_footprint <- imu_link` is the identity): the heading and the yaw
+/// rate are the IMU's own. On the robot the EKF's yaw at rest was the IMU's
+/// -84.0 deg with it.
+#[test]
+fn the_urdf_s_imu_mount_keeps_the_imu_s_heading() {
+    // Rz(1.5708) Rz(-1.5708), as the URDF's two joints compose
+    let mount = Quaternion::from_rpy(0.0, 0.0, 1.5708).mul(&Quaternion::from_rpy(0.0, 0.0, -1.5708));
+    let (yaw, yaw_rate, ax, ay) = prepared_with_mount(&mount);
+    assert_close(yaw, -84.0, 1e-9, "yaw, deg");
+    assert_close(yaw_rate, 0.5, 1e-12, "yaw rate");
+    // forward and left stay the IMU's x and y (2.0 and 0.5 m/s2; gravity is
+    // removed with the IMU's own small tilt, which moves them by up to
+    // 9.8 sin 1.4 deg = 0.24)
+    assert!((ax - 2.0).abs() < 0.3 && (ay - 0.5).abs() < 0.3, "{ax} {ay}");
+    println!("identity mount: yaw {yaw:.3} deg, yaw rate {yaw_rate}, ax {ax:.3}, ay {ay:.3}");
+}
+
+/// The mount the URDF had until 2026-11 (imu_link upside down under a
+/// base_link turned +90 deg) on the same sample: the heading comes out 90 deg
+/// further left, the yaw rate negated and ax and ay exchanged. That is the EKF yaw of +6.0 deg the
+/// robot showed at rest next to the IMU's -84.0, and why the mount was changed.
+#[test]
+fn the_upside_down_mount_turned_the_heading_by_90_degrees() {
+    let mount = Quaternion::from_rpy(0.0, 0.0, 1.5708).mul(&Quaternion::from_rpy(3.14159, 0.0, 0.0));
+    let (yaw, yaw_rate, ax, ay) = prepared_with_mount(&mount);
+    println!("upside-down mount: yaw {yaw:.3} deg, yaw rate {yaw_rate}, ax {ax:.3}, ay {ay:.3}");
+    assert!((yaw - 6.0).abs() < 0.1, "{yaw}");
+    // and forward acceleration was taken as sideways, sideways as forward
+    assert!((ax - 0.5).abs() < 0.3 && (ay - 2.0).abs() < 0.3, "{ax} {ay}");
+    assert_close(yaw_rate, -0.5, 1e-5, "yaw rate");
+}
