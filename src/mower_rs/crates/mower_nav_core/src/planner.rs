@@ -1,7 +1,7 @@
 //! `nav2_navfn_planner::NavfnPlanner`, the `GridBased` plugin of
-//! `planner_server`, on the global costmap ([`crate::costmap::static_costmap`]
-//! with `track_unknown_space: true`), and the error codes `planner_server`
-//! turns its exceptions into.
+//! `planner_server`, on the global costmap ([`crate::costmap::global_costmap`]:
+//! the static layer with `track_unknown_space: true`, inflated), and the
+//! error codes `planner_server` turns its exceptions into.
 //!
 //! `nav2_no_map_params.yaml` sets `tolerance: 0.0`, `use_astar: false`,
 //! `allow_unknown: true` ([`NavfnParams::mower`]). With those:

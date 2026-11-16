@@ -142,14 +142,39 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      robot_radius: 0.5
+      # /map_grid_global is already configuration space: map_manage eroded the
+      # free space by the robot's safety radius, so the robot is a point here.
+      # This radius only sets the inflation layer's inscribed band (cost 253,
+      # an obstacle to NavFn), and that must stay below one 0.05 m cell: with
+      # 0.5 every cell within 0.5 m of the boundary would be closed, and
+      # coverage paths start and end one cell from it. 0.02 plus the default
+      # footprint_padding of 0.01 gives an inscribed radius of 0.029 m.
+      # (The local costmap keeps 0.5: it reads /map_grid, which is not eroded.)
+      robot_radius: 0.02
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer"]
+      plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         map_topic: "/map_grid_global"
+      # A cost gradient only, nothing lethal. With the static layer alone
+      # NavFn followed the edge of the configuration space cell for cell, and
+      # a few centimetres of tracking error then put the robot in an occupied
+      # cell, from which no plan exists ("Failed to create plan with tolerance
+      # of: 0.000000", outdoor 2026-11-16). The layer adds
+      # 252 * exp(-4 * (d - 0.029)) to the free cells within 0.5 m of an
+      # occupied one: 232 at 0.05 m, 127 at 0.2 m, 85 at 0.3 m, 38 at 0.5 m,
+      # nothing beyond. No free cell reaches 253, so every cell that was
+      # reachable still is (tolerance stays 0.0), and plans keep 0.4 m or more
+      # from the edge except where they arrive at a goal next to it.
+      # mower_nav_core ports this layer for RUST_NAV_CORE and its tests hold
+      # it to these values (costmap.rs: GLOBAL_ROBOT_RADIUS,
+      # InflationLayerParams::mower_global; tests/global_costmap.rs).
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.5
+        cost_scaling_factor: 4.0
       always_send_full_costmap: True
 
 map_saver:

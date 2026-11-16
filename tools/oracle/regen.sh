@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Regenerates every vector the Rust ports are compared with, from the real
 # implementations, inside the oracle image (tools/oracle/Dockerfile):
-#   nav       nav2 1.3.13: mower_nav_core's seven component harnesses and the
-#             controller_server and navigator node scenarios (tests/data/)
+#   nav       nav2 1.3.13: mower_nav_core's seven component harnesses, the
+#             global_costmap recording (the real planner_server's costmap and
+#             plans; deterministic) and the controller_server and navigator
+#             node scenarios (tests/data/)
 #   localize  robot_localization 3.8.3: mower_localize_core (tests/data/)
 #   base      ros2_controllers' diff drive odometry and this repository's
 #             mower_protocol.cpp: mower_base_core (tests/vectors/)

@@ -11,7 +11,7 @@
 //! search, it must still end every goal the same way.
 
 use mower_nav_core::action::{GoalId, GoalStatus};
-use mower_nav_core::costmap::{static_costmap, Costmap2D, OccupancyGrid, RollingWindow, StaticLayerParams};
+use mower_nav_core::costmap::{global_costmap, static_costmap, Costmap2D, OccupancyGrid, RollingWindow, StaticLayerParams};
 use mower_nav_core::geometry::{Pose2D, Transform2D, Twist2D};
 use mower_nav_core::nav_stack::{NavStack, PlanRequest, StackInput, StackOutput, COSTMAP_POLL_NS};
 use mower_nav_core::navigator::CostmapId;
@@ -62,7 +62,7 @@ struct Played {
 
 /// `delay_ms`: `None` plays the inline stack.
 fn play(goal: Pose2D, global_grid: &OccupancyGrid, cancel_at_ms: Option<i64>, delay_ms: Option<i64>) -> Played {
-    let fresh_global = || static_costmap(global_grid, &StaticLayerParams::new(true));
+    let fresh_global = || global_costmap(global_grid);
     let mut global: Costmap2D = fresh_global();
     let local_map = static_costmap(&grid(&[]), &StaticLayerParams::new(false));
     let map_from_odom = Transform2D::new(0.4, -0.3, 0.2);
@@ -245,7 +245,7 @@ fn answered_late_the_external_planner_still_ends_every_goal_the_same_way() {
 #[test]
 fn the_external_planner_numbers_goals_and_forwards_cancels() {
     let mut stack = NavStack::mower_external_planner();
-    let map = static_costmap(&grid(&[]), &StaticLayerParams::new(true));
+    let map = global_costmap(&grid(&[]));
     let local = RollingWindow::local_costmap();
     let mut placeholder = map.clone();
     let id = stack.send_navigate(Pose2D::new(5.0, 3.0, 0.0));

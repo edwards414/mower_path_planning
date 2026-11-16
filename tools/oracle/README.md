@@ -34,7 +34,9 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what
 
 `check.sh` runs `regen.sh` and then:
 - **The deterministic vectors** must come out byte for byte as committed:
-  nav_core's seven components, all of localize_core and all of base_core.
+  nav_core's seven components and its `global_costmap.json` (the real
+  `planner_server`'s master grid and plans on fixed maps: a node, but nothing
+  in the file depends on time), all of localize_core and all of base_core.
 - **The two node scenarios** are compared where a run does not vary:
   `controller_server.json` and `navigator.json` record the real nodes on the
   wall clock. Two runs in the same image differ in about a thousand lines,
@@ -57,8 +59,8 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/check.sh  # what
 `regen.sh` runs:
 
 - `src/mower_rs/crates/mower_nav_core/tests/oracle/run_oracle.sh`: seven
-  component harnesses plus the controller_server and navigator node scenarios
-  (about 3 min);
+  component harnesses, the global_costmap recording (about 30 s) plus the
+  controller_server and navigator node scenarios (about 3 min);
 - `src/mower_rs/crates/mower_localize_core/tests/oracle/run_oracle.sh`;
 - `src/mower_rs/crates/mower_base_core/tests/oracle/generate.sh`, which
   fetches ros2_controllers and control_toolbox at pinned commits;
@@ -99,6 +101,11 @@ it also:
 
 - nav_core's components, localize_core and protocol_oracle.json reproduce
   byte for byte in this image.
+  - nav_core's `global_costmap.json` (2026-11-16) was recorded in the robot
+    image instead (`mower_path_planning`, the same `ros-jazzy-nav2-*` 1.3.13
+    packages; its `scenarios.py` needs only the nav2 binaries and rclpy), three
+    runs with the same bytes. This image has not reproduced it yet: the first
+    `check.sh` after that date does.
 - base_core's diff_drive_oracle.json and replay_synthetic.json are this
   image's output since E9-05.
   - The earlier ones were made on a Mac (Apple clang 21, Apple's libm), which

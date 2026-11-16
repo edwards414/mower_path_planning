@@ -17,7 +17,7 @@ image.
 | Rust | Upstream | Plan |
 |---|---|---|
 | `src/geometry.rs` | `angles`, `tf2::getYaw`, `Quaternion::setRPY`, `nav2_util/geometry_utils.hpp` | — |
-| `src/costmap.rs` | `nav2_costmap_2d`: `Costmap2D`, `LayeredCostmap::updateMap`, `StaticLayer` | D1 |
+| `src/costmap.rs` | `nav2_costmap_2d`: `Costmap2D`, `LayeredCostmap::updateMap`, `StaticLayer`, `InflationLayer` | D1 |
 | `src/footprint.rs` | `footprint.cpp`, `costmap_math.cpp`, `FootprintCollisionChecker`, `nav2_util::LineIterator` | D1 |
 | `src/navfn.rs`, `src/planner.rs` | `nav2_navfn_planner`: `NavFn`, `NavfnPlanner` | D2 |
 | `src/rpp.rs`, `src/path_handler.rs` | `nav2_regulated_pure_pursuit_controller` | D3 |
@@ -31,27 +31,74 @@ image.
 
 ## Costmaps (D1)
 
-Both costmaps have a `StaticLayer` and nothing else.
+The local costmap has a `StaticLayer` and nothing else; the global one has a
+`StaticLayer` and an `InflationLayer` (since 2026-11-16).
 
 * **global** (`/map_grid_global`, frame `map`, `track_unknown_space: true`, not
-  rolling): `static_costmap` — the map's own size, resolution and origin, each
-  cell through `StaticLayer::interpretValue` (`-1` -> 255 NO_INFORMATION,
-  `>= 100` -> 254 LETHAL, other -> 0 with `trinary_costmap`).
+  rolling): `GlobalLayers` / `global_costmap`. The static layer's grid is
+  `static_costmap` — the map's own size, resolution and origin, each cell
+  through `StaticLayer::interpretValue` (`-1` -> 255 NO_INFORMATION, `>= 100`
+  -> 254 LETHAL, other -> 0 with `trinary_costmap`). A repaint copies it into
+  the master grid and inflates that.
+* **the inflation layer** (`InflationLayer`, `inflation_radius: 0.5`,
+  `cost_scaling_factor: 4.0`, `inflate_unknown` and `inflate_around_unknown`
+  left false): a free cell `d` cells from a LETHAL one gets
+  `252 * exp(-4 * (d * resolution - inscribed))` truncated, out to 10 cells:
+  232 at one cell, 190, 155, 127, 104, 85, 69, 57, 46, 38 at ten, nothing
+  beyond. A cell keeps `max(old, new)`; an unknown cell stays unknown.
+  * `/map_grid_global` is already configuration space (`map_manage` eroded
+    the free space by the safety radius), so the global costmap's
+    `robot_radius` is 0.02 (`GLOBAL_ROBOT_RADIUS`), not the local 0.5. It
+    only sets the inscribed band (cost 253, an obstacle to NavFn). The
+    inscribed radius is the padded 16-point circle's, 0.0294 m, below one
+    cell: no free cell becomes an obstacle, so the cells next to the
+    boundary, where coverage paths start and end, stay reachable with
+    `tolerance: 0.0`. With 0.5 the whole 0.5 m band would be closed.
+  * Why: on the static layer alone NavFn's plan follows the edge of the free
+    cells cell for cell, and a few centimetres of tracking error put the
+    robot in an occupied cell, from which no plan exists (outdoor
+    2026-11-16). With the gradient the plan keeps 0.4 m or more off the edge
+    except where it arrives at a goal next to it
+    (`tests/global_costmap.rs`, on that run's map).
+  * The distances are upstream's, not an exact distance transform: the
+    inflation spreads from each obstacle through 4-connected neighbours in
+    bins by integer distance level, a cell taking the obstacle of the first
+    inflation that reaches it. The port keeps the bins, the seeding order and
+    the neighbour order.
+  * When it runs (`GlobalLayers::update`, from the two layers'
+    `updateBounds`): an update repaints the master grid, always all of it,
+    for a new map, **once more at the update after that one** (the inflation
+    layer adds the previous update's bounds to its own), and once after a
+    reset (`clear_entirely_global_costmap`) or at the first update. Any other
+    update leaves it alone, so `clearRobotCell`'s FREE cell stays until the
+    next repaint, as before. The recording holds the last part
+    (`changed_after_plans`: the cells are still changed three updates later).
+    The second repaint is from the source and from two recordings made while
+    writing the harness, in which the cells of plans run in the first second
+    after a new map were painted over; the committed recording waits that
+    update out, because when a plan falls relative to it is a matter of
+    timing.
+  * Not ported: the dynamic-parameter callback, windows smaller than the map
+    as a caller's choice (`update_costs` takes one, the global costmap never
+    produces one), the local costmap (it has no inflation layer).
 * **local** (`/map_grid`, frame `odom`, `track_unknown_space` left at its
   default false, 3 x 3 m rolling window at 0.05 m = 60 x 60 cells):
   `RollingWindow::update` is one `LayeredCostmap::updateMap` — `updateOrigin`
   re-centres the window by whole cells, the whole window is reset to FREE and
   every cell centre is looked up in the map through `map <- odom`. Off-map and
   unknown cells are FREE here, as upstream.
-* the footprint is the 16-point `robot_radius: 0.5` circle padded by
-  `footprint_padding` (a float 0.01) with `padFootprint`'s per-axis sign rule;
-  `FootprintCollisionChecker` scores its outline only, and a vertex off the
-  grid is lethal.
+* the footprint is the 16-point `robot_radius` circle (0.5 local, 0.02
+  global) padded by `footprint_padding` (a float 0.01) with `padFootprint`'s
+  per-axis sign rule; `FootprintCollisionChecker` scores its outline only, and
+  a vertex off the grid is lethal. Only the local footprint is used for
+  collision checks; the global one gives the inflation layer its inscribed
+  radius.
 
 ## Planner (D2)
 
 `NavfnPlanner` with `tolerance: 0.0`, `use_astar: false`, `allow_unknown: true`
-on the global costmap.
+on the global costmap (inflated: NavFn's cell cost is `50 + 0.8 c`, so a cell
+next to the boundary costs 235 against 50 in the open).
 
 * `navfn.rs` is `NavFn` line by line: `setCostmap` (0..252 -> `50 + 0.8 c`,
   253/254 -> obstacle, unknown -> 253 when allowed), the Dijkstra over the three
@@ -353,6 +400,19 @@ docker run --rm -v "$PWD":/repo mower-oracle:jazzy tools/oracle/regen.sh nav   #
 cargo test -p mower_nav_core
 ```
 
+`tests/global_costmap.rs` has no harness to build: `tests/data/global_costmap.json`
+is recorded from the real `planner_server` started with the yaml
+(`tests/oracle/global_costmap/scenarios.py`, run by `run_oracle.sh` like the
+other components; it needs only the nav2 binaries and rclpy, so the robot image
+runs it too). For the map of the outdoor run of 2026-11-16 and two random maps
+(lethal and unknown rectangles, odd values, with and without a border) it holds
+the master grid `/global_costmap/costmap_raw` cell for cell, every pose of the
+12 `ComputePathToPose` plans that succeed, the two that fail (206 for a lethal
+goal, 208 for a start in an occupied cell), and the cells still changed three
+updates after the plans. Nothing in it depends on time, so it is one of the
+deterministic vectors. The same file's `field_*` tests are the regression for
+that run, on its map (`tests/data/field_2026_11_16_free_space_inflated.json`).
+
 Integer results (cells, costs, indices, error kinds) must match exactly. The
 nav2 binaries are GCC aarch64 builds, which contract `a + b * c` into FMA
 (`-ffp-contract=fast`) and use glibc's libm. Where a last-bit difference can
@@ -361,5 +421,8 @@ flip a decision (NavFn's potentials and path steps, the goal checker's
 disassembly has `fmadd`, and those results are bit-identical. Elsewhere floats
 are compared to 1e-12 relative (`tests/common::TOL`): `Costmap2D::updateOrigin`
 is fused upstream and not here, and `cos(22.5 deg)` differs in the last bit
-between glibc and macOS. The oracle JSON is read with serde_json's
+between glibc and macOS. The inflation layer's cost table is
+`(unsigned char)(252 * exp(...))`: no entry of this robot's table is within
+1e-3 of an integer (a unit test holds that), so neither libm nor contraction
+can move a cost. The oracle JSON is read with serde_json's
 `float_roundtrip`; without it about one float in ten parses one ulp off.
