@@ -322,3 +322,226 @@ fn lanes_crossing_an_edge_at_a_shallow_angle_leave_no_crumbs() {
         }
     }
 }
+
+fn turn_at(p: &[(f64, f64)], i: usize) -> f64 {
+    let h = |a: (f64, f64), b: (f64, f64)| (b.1 - a.1).atan2(b.0 - a.0);
+    let d = h(p[i], p[i + 1]) - h(p[i - 1], p[i]);
+    d.sin().atan2(d.cos()).abs()
+}
+
+/// Lanes of a narrow strip are joined by an arc too (radius = half the lane
+/// gap), not by a square turn: before, any strip under 0.7 m made the mower
+/// pivot at the lane end, hop sideways and pivot again. Where lanes end
+/// level the path has no corner the navigation server would cut at; along a
+/// slanted edge a turn is arcs or, when the lane ends are far out of level,
+/// a hop with one pivot. Either way the mower stops once per turn: a
+/// FollowPath segment per lane.
+#[test]
+fn turns_are_arcs_or_one_pivot() {
+    for strip in [0.25, 0.3, 0.4, 0.5, 0.65, 0.8] {
+        for (res, ang) in [(0.05, 0.0), (0.05, 90.0), (0.1, 0.0), (0.05, 15.0), (0.05, 30.0), (0.05, 45.0), (0.1, 120.0)] {
+            let n = (6.0 / res) as usize;
+            let g = ones(n, n);
+            let sm = SafeMap { grid: g.view(), resolution: res, origin_x: 0.0, origin_y: 0.0 };
+            let p = plan_boustrophedon_rs(g.view(), strip, SPACING, res, 0.0, 0.0, Some(ang));
+            let what = format!("strip {strip} res {res} angle {ang}");
+            assert!(validate_path_rs(&p.points, &sm).valid, "{what}");
+            assert!(p.invalid_segments.is_empty(), "{what}");
+            assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{what}");
+            // arcs leave the tips of lanes that end in an acute corner unmowed
+            assert!(coverage_ratio_rs(&p.points, &sm, strip) > 0.96, "{what}: coverage {}", coverage_ratio_rs(&p.points, &sm, strip));
+            let segments = nav_segments(&p.points, &p.split_points);
+            let sharp: Vec<usize> = (1..p.points.len() - 1).filter(|&i| turn_at(&p.points, i) >= 0.8).collect();
+            assert!(segments.len() <= p.lanes, "{what}: {} segments for {} lanes", segments.len(), p.lanes);
+            for i in &sharp {
+                assert!(segments.iter().any(|s| s.0 == *i), "{what}: the corner at pose {i} is not where a segment starts");
+            }
+            if ang == 0.0 || ang == 90.0 {
+                // a square: every lane end is level with the next one
+                assert!(sharp.is_empty(), "{what}: sharp corners at {sharp:?}");
+                assert_eq!(segments.len(), p.lanes, "{what}");
+            }
+        }
+    }
+    // lane ends out of level by up to about the lane gap: still arcs
+    for (strip, ang) in [(0.4, 45.0), (0.5, 30.0), (0.8, 30.0), (0.8, 45.0)] {
+        let g = ones(120, 120);
+        let p = plan_boustrophedon_rs(g.view(), strip, SPACING, 0.05, 0.0, 0.0, Some(ang));
+        let sharp = (1..p.points.len() - 1).filter(|&i| turn_at(&p.points, i) >= 0.8).count();
+        assert_eq!(sharp, 0, "strip {strip} angle {ang}");
+    }
+}
+
+/// The arc is a half circle: it leaves and joins the lanes tangentially, and
+/// every point of it is one radius from the centre.
+#[test]
+fn the_arc_is_a_half_circle() {
+    let g = ones(60, 60);
+    let p = plan_boustrophedon_rs(g.view(), 0.3, SPACING, 0.05, 0.0, 0.0, Some(0.0));
+    // lanes run along y; the first arc is the first run of steps that do not
+    let off_lane: Vec<usize> = (1..p.points.len()).filter(|&i| (p.points[i].0 - p.points[i - 1].0).abs() > 1e-9).collect();
+    let first = off_lane[0] - 1;
+    let last = off_lane.iter().zip(off_lane.iter().skip(1)).find(|(a, b)| **b != **a + 1).map(|(a, _)| *a).unwrap();
+    let arc = &p.points[first..=last];
+    let (a, b) = (arc[0], arc[arc.len() - 1]);
+    let (centre, radius) = (((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0), (b.0 - a.0).abs() / 2.0);
+    assert!((a.1 - b.1).abs() < 1e-9 && radius >= 0.1 && radius <= 0.15 + 1e-9, "radius {radius}");
+    for q in arc {
+        let d = ((q.0 - centre.0).powi(2) + (q.1 - centre.1).powi(2)).sqrt();
+        assert!((d - radius).abs() < 1e-9, "{q:?} is {d} from the centre, radius {radius}");
+    }
+    for i in first..=last {
+        assert!(turn_at(&p.points, i) < 0.55, "corner of {:.2} rad at {i}", turn_at(&p.points, i));
+    }
+}
+
+/// Gardens with trees at the strip widths the app offers: valid and accepted
+/// by the navigation server at every angle.
+#[test]
+fn navigation_accepts_narrow_strip_garden_plans() {
+    let mut refused = Vec::new();
+    for seed in 0..12u64 {
+        let res = if seed % 2 == 0 { 0.05 } else { 0.1 };
+        let strip = [0.3, 0.4, 0.5][(seed % 3) as usize];
+        let n = (8.0 / res) as usize;
+        let trees: Vec<(f64, f64, f64)> = (0..(seed % 4))
+            .map(|k| {
+                let f = |m: u64| ((seed * 7919 + k * 104729 + m) % 1000) as f64 / 1000.0;
+                (1.5 + 5.0 * f(1), 1.5 + 5.0 * f(2), 0.3 + 0.5 * f(3))
+            })
+            .collect();
+        let g = Array2::from_shape_fn((n, n), |(r, c)| {
+            let (x, y) = ((c as f64 + 0.5) * res, (r as f64 + 0.5) * res);
+            let inside = if seed % 4 == 0 {
+                ((x - 4.0) / 3.2).powi(2) + ((y - 4.0) / 2.4).powi(2) < 1.0
+            } else {
+                (0.8..7.2).contains(&x) && (1.2..6.6).contains(&y)
+            };
+            inside && trees.iter().all(|&(tx, ty, tr)| (x - tx).powi(2) + (y - ty).powi(2) > (tr + 0.4).powi(2))
+        });
+        let (g, _, kept) = filter_safe_components_rs(g.view(), res, 0.05, true);
+        if kept.is_empty() {
+            continue;
+        }
+        let sm = SafeMap { grid: g.view(), resolution: res, origin_x: 0.0, origin_y: 0.0 };
+        for ang in [Some(0.0), Some(30.0), Some(90.0), Some(135.0)] {
+            let p = plan_boustrophedon_rs(g.view(), strip, SPACING, res, 0.0, 0.0, ang);
+            assert!(validate_path_rs(&p.points, &sm).valid, "seed {seed} {ang:?}");
+            assert!(p.invalid_segments.is_empty(), "seed {seed} {ang:?}");
+            if let Some(bad) = nav_short_segment(&p.points, &p.split_points) {
+                refused.push((seed, ang, bad));
+            }
+        }
+    }
+    assert!(refused.is_empty(), "refused plans: {refused:?}");
+}
+
+/// Whatever the lane turns cannot do with arcs (lane ends far out of level
+/// along a slanted or curved edge, the way from one cell to the next around
+/// a tree) has its corners rounded off afterwards: in an open square no
+/// corner is left at any angle, and in a garden with a tree hardly any.
+#[test]
+fn leftover_corners_are_rounded_off() {
+    for strip in [0.3, 0.5, 0.8] {
+        for ang in [0.0, 15.0, 30.0, 45.0, 75.0, 120.0] {
+            let g = ones(120, 120);
+            let sm = SafeMap { grid: g.view(), resolution: 0.05, origin_x: 0.0, origin_y: 0.0 };
+            let p = plan_boustrophedon_rs(g.view(), strip, SPACING, 0.05, 0.0, 0.0, Some(ang));
+            let what = format!("strip {strip} angle {ang}");
+            assert!(validate_path_rs(&p.points, &sm).valid, "{what}");
+            assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{what}");
+            let sharp: Vec<usize> = (1..p.points.len() - 1).filter(|&i| turn_at(&p.points, i) >= 0.8).collect();
+            assert!(sharp.is_empty(), "{what}: sharp corners at {sharp:?}");
+            assert!(nav_segments(&p.points, &p.split_points).len() <= p.lanes, "{what}");
+            assert!(coverage_ratio_rs(&p.points, &sm, strip) > 0.95, "{what}: coverage {}", coverage_ratio_rs(&p.points, &sm, strip));
+        }
+    }
+    let res = 0.05;
+    let g = Array2::from_shape_fn((100, 100), |(r, c)| {
+        let (x, y) = ((c as f64 + 0.5) * res, (r as f64 + 0.5) * res);
+        ((x - 2.5) / 2.4).powi(2) + ((y - 2.5) / 1.9).powi(2) < 1.0 && (x - 2.9).powi(2) + (y - 2.4).powi(2) > 0.36
+    });
+    let sm = SafeMap { grid: g.view(), resolution: res, origin_x: 0.0, origin_y: 0.0 };
+    for ang in [0.0, 30.0, 90.0] {
+        let p = plan_boustrophedon_rs(g.view(), 0.3, SPACING, res, 0.0, 0.0, Some(ang));
+        assert!(validate_path_rs(&p.points, &sm).valid, "{ang}");
+        assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{ang}");
+        let sharp = (1..p.points.len() - 1).filter(|&i| turn_at(&p.points, i) >= 0.8).count();
+        // the few left are at the ends of the sweep, where a lane is much
+        // shorter than the one before it and the way between them hugs the edge
+        assert!(sharp * 2 <= p.turns, "angle {ang}: {sharp} sharp corners in {} turns", p.turns);
+        assert!(coverage_ratio_rs(&p.points, &sm, 0.3) > 0.93, "{ang}: coverage {}", coverage_ratio_rs(&p.points, &sm, 0.3));
+    }
+}
+
+fn garden(res: f64) -> Array2<bool> {
+    let n = (5.0 / res).round() as usize;
+    Array2::from_shape_fn((n, n), |(r, c)| {
+        let (x, y) = ((c as f64 + 0.5) * res, (r as f64 + 0.5) * res);
+        ((x - 2.5) / 2.4).powi(2) + ((y - 2.5) / 1.9).powi(2) < 1.0 && (x - 2.9).powi(2) + (y - 2.4).powi(2) > 0.36
+    })
+}
+
+/// With a headland the mower first laps the edge and the tree, and the lanes
+/// stay inside those laps: every turn between lanes has room for its arc, so
+/// the only corners left are where a lap closes, and more is mowed than
+/// without one.
+#[test]
+fn headland_plans_turn_on_arcs_and_mow_more() {
+    for (res, strip) in [(0.05, 0.3), (0.05, 0.5), (0.1, 0.4)] {
+        let g = garden(res);
+        let sm = SafeMap { grid: g.view(), resolution: res, origin_x: 0.0, origin_y: 0.0 };
+        for ang in [Some(0.0), Some(30.0), Some(90.0), Some(135.0), None] {
+            let what = format!("res {res} strip {strip} angle {ang:?}");
+            let p = plan_boustrophedon_headland_rs(g.view(), strip, SPACING, res, 0.0, 0.0, ang);
+            let plain = plan_boustrophedon_rs(g.view(), strip, SPACING, res, 0.0, 0.0, ang.or(Some(p.angle_deg)));
+            assert!(validate_path_rs(&p.points, &sm).valid, "{what}");
+            assert!(p.invalid_segments.is_empty(), "{what}");
+            assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{what}");
+            for &q in &p.points {
+                assert!(strictly_inside(q, &g, res, 0.0, 0.0), "{what}: {q:?} outside the safe grid");
+            }
+            // it is a headland plan, not the fallback: longer by about the laps
+            assert!(p.length_m > plain.length_m + 4.0, "{what}: {:.1} m, without {:.1} m", p.length_m, plain.length_m);
+            let (cov, cov_plain) = (coverage_ratio_rs(&p.points, &sm, strip), coverage_ratio_rs(&plain.points, &sm, strip));
+            // (on a 0.1 m grid the laps' one-cell margins cost about what the turns gain)
+            assert!(cov > 0.97 && cov + 0.01 >= cov_plain, "{what}: coverage {cov:.3}, without {cov_plain:.3}");
+            if res < 0.1 {
+                assert!(cov > cov_plain + 0.01, "{what}: coverage {cov:.3}, without {cov_plain:.3}");
+            }
+            let sharp = (1..p.points.len() - 1).filter(|&i| turn_at(&p.points, i) >= 0.8).count();
+            assert!(sharp <= 4, "{what}: {sharp} sharp corners");
+            // a lap is never one FollowPath segment: it would end where it starts
+            for (a, b) in nav_segments(&p.points, &p.split_points) {
+                let d = ((p.points[a].0 - p.points[b].0).powi(2) + (p.points[a].1 - p.points[b].1).powi(2)).sqrt();
+                assert!(d > 0.2, "{what}: segment {a}..{b} ends {d:.2} m from its start");
+            }
+        }
+    }
+}
+
+/// Headland plans of the oracle maps (noise, corridors, tiny regions) are
+/// valid and accepted by the navigation server, or fall back to the plan
+/// without one.
+#[test]
+fn headland_plans_of_every_map_are_safe() {
+    for (name, g, res, ox, oy) in node_maps() {
+        let sm = SafeMap { grid: g.view(), resolution: res, origin_x: ox, origin_y: oy };
+        for strip in [0.3, STRIP] {
+            for ang in [Some(0.0), Some(45.0), Some(90.0)] {
+                let p = plan_boustrophedon_headland_rs(g.view(), strip, SPACING, res, ox, oy, ang);
+                let plain = plan_boustrophedon_rs(g.view(), strip, SPACING, res, ox, oy, ang);
+                let what = format!("{name} strip {strip} {ang:?}");
+                assert_eq!(p.points.is_empty(), plain.points.is_empty(), "{what}");
+                assert!(p.invalid_segments.len() <= plain.invalid_segments.len(), "{what}: invalid {:?}", p.invalid_segments);
+                if p.invalid_segments.is_empty() {
+                    assert!(validate_path_rs(&p.points, &sm).valid, "{what}");
+                }
+                for &q in &p.points {
+                    assert!(strictly_inside(q, &g, res, ox, oy), "{what}: {q:?} outside the safe grid");
+                }
+                assert_eq!(nav_short_segment(&p.points, &p.split_points), None, "{what}");
+            }
+        }
+    }
+}

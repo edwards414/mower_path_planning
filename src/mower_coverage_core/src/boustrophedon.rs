@@ -16,6 +16,12 @@
 //!   wherever an obstacle splits or merges the free space), each cell is
 //!   mowed back and forth on its own, and the cell order and each cell's
 //!   entry corner are optimised (DP over entry variants + 2-opt);
+//! - two lanes of a cell are joined without a square turn: by arcs (a half
+//!   circle of half the lane gap where the lane ends are level), or, where
+//!   the ends are far out of level, by a hop with a single pivot;
+//! - [`plan_boustrophedon_headland_rs`] mows a lap along the edge and round
+//!   every large obstacle first and keeps the lanes inside those laps, so the
+//!   turns are made where a lap has mowed and cost the lanes nothing;
 //! - with `angle_deg = None` the sweep angle that minimises
 //!   `path length + TURN_PENALTY_M * turns` is searched;
 //! - unsafe transitions are replaced by A* connectors that are pulled
@@ -30,12 +36,42 @@ use crate::nav_split::coalesce_for_navigation;
 use crate::path_validator::{is_point_safe_rs, is_segment_safe_rs};
 use crate::types::SafeMap;
 
-/// Smallest U-turn radius the mower can drive (same as the legacy generator).
-pub const MIN_U_TURN_RADIUS_M: f64 = 0.35;
+/// Smallest radius of the arcs that join two lanes. The mower is a
+/// differential drive, so no radius is too tight to drive: under half its
+/// 0.35 m track the inner wheel simply runs backwards and the arc becomes a
+/// pivot about a point between the wheels. The limit only keeps a turn clear
+/// of the 0.15 m segments the navigation server refuses. It was 0.35 m, the
+/// legacy generator's value, which left every strip narrower than 0.7 m with
+/// a square turn: pivot, hop sideways, pivot again.
+pub const MIN_U_TURN_RADIUS_M: f64 = 0.10;
+/// Largest change of heading from one chord of an arc to the next. Under the
+/// 0.8 rad at which the navigation server cuts a path
+/// (`nav_split::NAV_TURN_SPLIT_ANGLE_RAD`), so a turn is driven in one piece.
+const MAX_ARC_STEP_RAD: f64 = std::f64::consts::PI / 6.0;
+/// Furthest a turn is moved back from the lane ends to clear the edge's
+/// raster staircase. Every centimetre is left unmowed at two lane ends, so a
+/// turn that needs more keeps its square hop and the lanes their length.
+const MAX_TURN_PULL_BACK_M: f64 = 0.15;
+/// A corner of at least this much, wherever it is left in the path (a hop
+/// between lanes whose ends are far out of level, the way from one cell to
+/// the next, an A* connector), is rounded off by [`round_corners`].
+const CORNER_MIN_TURN_RAD: f64 = 0.6;
+/// A leftover corner may cut this much off its legs, or half the strip width
+/// when that is more. A hairpin (a lane that ends in the acute corner of a
+/// slanted edge) needs a long run-in for even the smallest radius.
+const MAX_CORNER_CUT_M: f64 = 0.4;
+/// Smallest radius a leftover corner is rounded with. Below the lane turns'
+/// minimum: such a corner often has only a short hop to either side.
+const MIN_CORNER_RADIUS_M: f64 = 0.05;
+/// A hop between two lanes whose ends are too far out of level for arcs is
+/// driven with one pivot when it leaves (or joins) a lane at less than this:
+/// the navigation server does not cut there, only at the sharp end.
+const HOP_FLOW_ANGLE_RAD: f64 = 0.7;
 /// Cost, in metres of path, charged for every lane-to-lane turn when the
 /// sweep angle and the cell order are compared. A differential-drive U-turn
-/// slows down, pivots and starts a new FollowPath segment (the navigation
-/// server splits the path there): roughly 4-6 s, i.e. 2-3 m at 0.5 m/s.
+/// slows down for the arc (or pivots) and starts a new FollowPath segment
+/// (the navigation server splits the path there): roughly 4-6 s, i.e. 2-3 m
+/// at 0.5 m/s.
 pub const TURN_PENALTY_M: f64 = 3.0;
 /// Estimated detour factor of a transition whose straight line is unsafe.
 const UNSAFE_TRANSITION_FACTOR: f64 = 2.0;
@@ -699,10 +735,19 @@ fn lane_points(a: f64, b_from: f64, b_to: f64, spacing: f64, frame: Frame) -> Ve
     (0..=n).map(|i| frame.xy(a, b_from + (b_to - b_from) * i as f64 / n as f64)).collect()
 }
 
-/// U-turn between two lanes of a cell: trims both lanes by the turn radius
-/// and joins them with a half circle, as the legacy generator did. `None`
-/// when the lanes' ends are not level, the gap is too small, or the arc is
-/// unsafe.
+/// Turn between two lanes of a cell, without a corner. The straight hop from
+/// this lane's end to the next lane's start has both its corners rounded
+/// with one radius: lane, arc, what is left of the hop, arc, lane. Level
+/// lane ends (the usual case) leave nothing of the hop, and the two arcs are
+/// one half circle of half the lane gap. Lane ends out of level, along a
+/// slanted edge, get a smaller radius, so that neither lane is cut short by
+/// more than half the gap; the radius stops at [`MIN_U_TURN_RADIUS_M`], and
+/// from there the sharper corner costs more of its lane.
+///
+/// Returns where this lane now ends, where the next one starts, and the
+/// turn's points from the one to the other. `None` when the lanes are closer
+/// than two minimum radii, a lane would lose more than the lane gap or all of
+/// its length, or the turn is unsafe even pulled back.
 fn u_turn(
     cur: (f64, f64, f64),
     next: (f64, f64, f64),
@@ -710,38 +755,81 @@ fn u_turn(
     res: f64,
     frame: Frame,
     sm: &SafeMap,
+    headland: bool,
 ) -> Option<(f64, f64, Vec<(f64, f64)>)> {
+    use std::f64::consts::PI;
     let (s0, e0, a0) = cur;
     let (s1, e1, a1) = next;
     let up = e0 > s0;
     if (e1 > s1) == up || (e0 - s0).abs() < res || (e1 - s1).abs() < res {
         return None;
     }
-    if (e0 - s1).abs() > spacing.max(res) * 1.5 {
+    let dir = if up { 1.0 } else { -1.0 };
+    let side = if a1 > a0 { 1.0 } else { -1.0 };
+    let gap = (a1 - a0).abs();
+    if gap / 2.0 < MIN_U_TURN_RADIUS_M {
         return None;
     }
-    let radius = (a1 - a0).abs() / 2.0;
+    // Lane ends further out of level than the lane gap would need arcs that
+    // cut more than the gap off a lane. The lane that reaches further is
+    // shortened to a 45 degree hop instead, when MAX_CORNER_CUT_M does it.
+    let (mut e0, mut s1) = (e0, s1);
+    let over = ((s1 - e0) * dir).abs() - gap;
+    if over > 0.0 {
+        if over > MAX_CORNER_CUT_M {
+            return None;
+        }
+        if (s1 - e0) * dir > 0.0 {
+            s1 -= dir * over;
+        } else {
+            e0 -= dir * over;
+        }
+    }
+    // the hop, and the turns onto it (theta0) and off it (theta1)
+    let ahead = (s1 - e0) * dir;
+    let hop = (gap * gap + ahead * ahead).sqrt();
+    let theta0 = gap.atan2(ahead);
+    let theta1 = PI - theta0;
+    let (t0, t1) = ((theta0 / 2.0).tan(), (theta1 / 2.0).tan());
+    // the widest radius uses up the whole hop
+    let radius = (gap / 2.0 / t0.max(t1)).max(MIN_U_TURN_RADIUS_M).min(hop / (t0 + t1));
     if radius < MIN_U_TURN_RADIUS_M {
         return None;
     }
-    let boundary = (e0 + s1) / 2.0;
-    let centre_b = if up { boundary - radius } else { boundary + radius };
-    // both lanes must still be driven up to the arc's start / from its end
-    if up && (centre_b <= s0 || centre_b <= e1) || !up && (centre_b >= s0 || centre_b >= e1) {
+    let (trim0, trim1) = (radius * t0, radius * t1);
+    if trim0.max(trim1) > gap + 1e-9 {
         return None;
     }
-    let samples = (((std::f64::consts::PI * radius) / spacing.max(res)).ceil() as usize + 1).max(3);
-    let mut arc = Vec::with_capacity(samples);
-    for i in 0..samples {
-        let t = i as f64 / (samples - 1) as f64;
-        let a = a0 + (a1 - a0) * t;
-        let off = radius * (std::f64::consts::PI * t).sin();
-        arc.push(frame.xy(a, if up { centre_b + off } else { centre_b - off }));
+    // heading turned by `t` since the lane: (side * sin t, dir * cos t)
+    let at = |centre: (f64, f64), t: f64| frame.xy(centre.0 - side * radius * t.cos(), centre.1 + dir * radius * t.sin());
+    let chords = |theta: f64| ((theta / MAX_ARC_STEP_RAD - 1e-9).ceil().max((theta * radius / spacing.max(res) - 1e-9).ceil()) as usize).max(1);
+    let (n0, n1) = (chords(theta0), chords(theta1));
+    // Along a curved or slanted edge both lanes end flush with it, and the
+    // raster's staircase reaches in between them: the turn is then pulled
+    // back along the lanes, a cell at a time and by MAX_TURN_PULL_BACK_M at
+    // most, until it is clear.
+    // With a headland the lanes end short of the edge and the turn starts
+    // out past their ends, in the headland, so no lane is cut short for it.
+    let mut back = if headland { -trim0.min(trim1) } else { 0.0 };
+    while back <= MAX_TURN_PULL_BACK_M.min(gap / 2.0) + 1e-9 {
+        let (end0, start1) = (e0 - dir * (trim0 + back), s1 - dir * (trim1 + back));
+        // both lanes must still be driven up to the turn's start / from its end
+        if (end0 - s0) * dir <= 0.0 || (start1 - e1) * dir <= 0.0 {
+            return None;
+        }
+        let mut turn = Vec::new();
+        for i in 0..=n0 {
+            push_unique(&mut turn, at((a0 + side * radius, end0), theta0 * i as f64 / n0 as f64));
+        }
+        for i in 0..=n1 {
+            push_unique(&mut turn, at((a1 - side * radius, start1), theta0 + theta1 * i as f64 / n1 as f64));
+        }
+        if path_ok(&turn, sm) {
+            return Some((end0, start1, turn));
+        }
+        back += res;
     }
-    if !path_ok(&arc, sm) {
-        return None;
-    }
-    Some((centre_b, centre_b, arc))
+    None
 }
 
 /// Join `from` to `to`: straight when safe, else a simplified A* connector
@@ -785,6 +873,7 @@ fn assemble(
     frame: Frame,
     sm: &SafeMap,
     use_astar: bool,
+    headland: bool,
 ) -> Assembly {
     let res = sm.resolution;
     let mut out = Assembly::new();
@@ -803,11 +892,12 @@ fn assemble(
                     join(&mut out, last, lane_start, sm, use_astar);
                 }
             }
+            let lane_first = out.points.len() - 1;
             let mut end_b = e;
             let mut arc = None;
             if li + 1 < lanes.len() {
                 if let Some((trim_end, next_start, pts)) =
-                    u_turn((start_b, e, a), lanes[li + 1], spacing, res, frame, sm)
+                    u_turn((start_b, e, a), lanes[li + 1], spacing, res, frame, sm, headland)
                 {
                     end_b = trim_end;
                     arc = Some((next_start, pts));
@@ -820,17 +910,37 @@ fn assemble(
                 out.turns += 1;
                 match arc {
                     Some((next_start, pts)) => {
+                        // The segment ends one waypoint before the arc, so
+                        // the arc is driven at the start of the next one,
+                        // with the whole lane ahead to settle on. A split
+                        // point on the arc would not do: the navigation
+                        // server cuts at every pose within 0.1 m of one, and
+                        // a tight arc's poses are closer together than that.
+                        let split = out.points.len().saturating_sub(2).max(lane_first);
+                        out.split_points.push(out.points[split]);
                         for p in pts {
                             push_unique(&mut out.points, p);
                         }
-                        out.split_points.push(*out.points.last().unwrap());
                         start_b = next_start;
                     }
                     None => {
-                        out.split_points.push(*out.points.last().unwrap());
                         let (ns, _, na) = lanes[li + 1];
                         let from = *out.points.last().unwrap();
-                        join(&mut out, from, frame.xy(na, ns), sm, use_astar);
+                        let to = frame.xy(na, ns);
+                        // A straight hop that leaves this lane at a shallow
+                        // angle (the next lane reaches well past this one)
+                        // is driven on without a stop, and the segment ends
+                        // at the sharp corner onto the next lane: one pivot.
+                        let lane_len = (e - lanes[li].0).abs();
+                        let ahead = (ns - e) * (e - lanes[li].0).signum();
+                        let flows = lane_len >= res && (na - a).abs().atan2(ahead) < HOP_FLOW_ANGLE_RAD && segment_ok(from, to, sm);
+                        if !flows {
+                            out.split_points.push(from);
+                        }
+                        join(&mut out, from, to, sm, use_astar);
+                        if flows {
+                            out.split_points.push(*out.points.last().unwrap());
+                        }
                         start_b = ns;
                     }
                 }
@@ -872,6 +982,152 @@ fn repair(out: &mut Assembly, sm: &SafeMap) {
     out.split_points.dedup_by(|a, b| same_point(*a, *b));
 }
 
+fn turn_angle(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+    let (u, v) = ((b.0 - a.0, b.1 - a.1), (c.0 - b.0, c.1 - b.1));
+    (u.0 * v.1 - u.1 * v.0).atan2(u.0 * v.0 + u.1 * v.1)
+}
+
+/// Round off every corner the lane turns left in the path, so the mower
+/// drives through it instead of stopping to pivot: the corner is replaced by
+/// an arc tangent to both of its legs. The radius is `radius` at most, less
+/// where that would cut more than `max_cut` off a leg (a sharp corner needs
+/// a long run-in) or more than the leg has, and never under
+/// [`MIN_CORNER_RADIUS_M`]; two corners share the leg between them half and
+/// half. An arc cuts the corner
+/// on its inside, so the tip of a lane that ends in one is not driven. A
+/// corner whose arc is unsafe at every radius stays a corner.
+///
+/// Split points move with the path: one that sat on a rounded corner goes
+/// back to the last pose before the arc that has no neighbour within the
+/// navigation server's split tolerance (it cuts at every pose that close to
+/// a split point, and an arc's poses are closer together than that).
+fn round_corners(out: &mut Assembly, radius: f64, max_cut: f64, spacing: f64, sm: &SafeMap) {
+    let pts = std::mem::take(&mut out.points);
+    let n = pts.len();
+    if n < 3 {
+        out.points = pts;
+        return;
+    }
+    let turn: Vec<f64> = (0..n).map(|i| if i == 0 || i + 1 == n { 0.0 } else { turn_angle(pts[i - 1], pts[i], pts[i + 1]) }).collect();
+    let corner = |i: usize| turn[i].abs() >= CORNER_MIN_TURN_RAD;
+    // length of the straight run from corner `i` backwards / forwards, and
+    // whether it ends in another corner
+    let leg = |i: usize, step: isize| {
+        let (mut j, mut len) = (i, 0.0);
+        loop {
+            let k = (j as isize + step) as usize;
+            len += dist(pts[j], pts[k]);
+            j = k;
+            if j == 0 || j + 1 == n || turn[j].abs() > 1e-6 {
+                return if corner(j) { len / 2.0 } else { len };
+            }
+        }
+    };
+    let mut res_pts: Vec<(f64, f64)> = Vec::with_capacity(n);
+    // output index of each input pose (of the arc that replaced it)
+    let mut map = vec![0usize; n];
+    let mut moved = vec![false; n];
+    let mut skip_until: Option<((f64, f64), f64)> = None;
+    for i in 0..n {
+        if let Some((c, d)) = skip_until {
+            if !corner(i) && turn[i].abs() <= 1e-6 && i + 1 < n && dist(pts[i], c) < d - 1e-9 {
+                map[i] = res_pts.len() - 1;
+                moved[i] = true;
+                continue;
+            }
+            skip_until = None;
+        }
+        let mut arc = None;
+        if corner(i) {
+            let theta = turn[i].abs();
+            let t = (theta / 2.0).tan();
+            let room = leg(i, -1).min(leg(i, 1));
+            let mut r = radius.min(max_cut / t).min(room / t);
+            let (u, v) = (dist(pts[i - 1], pts[i]), dist(pts[i], pts[i + 1]));
+            let (ui, vo) = (((pts[i].0 - pts[i - 1].0) / u, (pts[i].1 - pts[i - 1].1) / u), ((pts[i + 1].0 - pts[i].0) / v, (pts[i + 1].1 - pts[i].1) / v));
+            let sign = turn[i].signum();
+            while r >= MIN_CORNER_RADIUS_M {
+                let d = r * t;
+                let a = (pts[i].0 - ui.0 * d, pts[i].1 - ui.1 * d);
+                let o = (a.0 - sign * ui.1 * r, a.1 + sign * ui.0 * r);
+                let chords = ((theta / MAX_ARC_STEP_RAD - 1e-9).ceil().max((theta * r / spacing - 1e-9).ceil()) as usize).max(1);
+                let mut cand = Vec::with_capacity(chords + 1);
+                for k in 0..=chords {
+                    let (sn, cs) = (sign * theta * k as f64 / chords as f64).sin_cos();
+                    let (x, y) = (a.0 - o.0, a.1 - o.1);
+                    cand.push((o.0 + x * cs - y * sn, o.1 + x * sn + y * cs));
+                }
+                // the arc ends on the outgoing leg exactly
+                *cand.last_mut().unwrap() = (pts[i].0 + vo.0 * d, pts[i].1 + vo.1 * d);
+                // What is left of the two legs is checked again: the shared
+                // validator's Bresenham line between other end points can
+                // clip a cell the whole leg's line missed.
+                let keep = res_pts.iter().rposition(|&p| dist(p, pts[i]) >= d - 1e-9).unwrap_or(0);
+                let after = (i + 1..n).find(|&m| !(turn[m].abs() <= 1e-6 && m + 1 < n && dist(pts[m], pts[i]) < d - 1e-9)).unwrap();
+                let stub_ok = |a: (f64, f64), b: (f64, f64)| same_point(a, b) || segment_ok(a, b, sm);
+                if path_ok(&cand, sm) && stub_ok(res_pts[keep], cand[0]) && stub_ok(cand[chords], pts[after]) {
+                    arc = Some((cand, d));
+                    break;
+                }
+                r *= 0.7;
+            }
+        }
+        match arc {
+            Some((cand, d)) => {
+                // the run-in the arc replaces
+                while res_pts.len() > 1 && dist(*res_pts.last().unwrap(), pts[i]) < d - 1e-9 {
+                    res_pts.pop();
+                }
+                let first = res_pts.len();
+                for p in cand {
+                    push_unique(&mut res_pts, p);
+                }
+                for k in 0..i {
+                    if map[k] >= first {
+                        map[k] = first.saturating_sub(1);
+                        moved[k] = true;
+                    }
+                }
+                map[i] = first.saturating_sub(1);
+                moved[i] = true;
+                skip_until = Some((pts[i], d));
+            }
+            None => {
+                push_unique(&mut res_pts, pts[i]);
+                map[i] = res_pts.len() - 1;
+            }
+        }
+    }
+    // split points: follow their pose
+    let clear = crate::nav_split::NAV_SPLIT_TOLERANCE_M + 0.02;
+    let mut splits = Vec::with_capacity(out.split_points.len());
+    for &sp in &out.split_points {
+        let Some(i) = (0..n).find(|&i| same_point(pts[i], sp)) else {
+            splits.push(sp);
+            continue;
+        };
+        if !moved[i] {
+            splits.push(sp);
+            continue;
+        }
+        let mut o = map[i].min(res_pts.len() - 1);
+        while o > 0 && (dist(res_pts[o], res_pts[o - 1]) <= clear || o + 1 < res_pts.len() && dist(res_pts[o], res_pts[o + 1]) <= clear) {
+            o -= 1;
+        }
+        if o > 0 {
+            splits.push(res_pts[o]);
+        }
+    }
+    splits.dedup_by(|a, b| same_point(*a, *b));
+    // never trade a valid path for a rounder one
+    if strict_invalid_segments(&res_pts, sm).len() > strict_invalid_segments(&pts, sm).len() {
+        out.points = pts;
+        return;
+    }
+    out.points = res_pts;
+    out.split_points = splits;
+}
+
 struct Candidate {
     cells: Vec<Vec<Interval>>,
     order: Vec<usize>,
@@ -881,19 +1137,21 @@ struct Candidate {
     cost: f64,
 }
 
-fn candidate(sm: &SafeMap, strip: f64, spacing: f64, angle_deg: f64, improve: bool) -> Option<Candidate> {
+/// `lanes` is where the lanes go, `sm` where the mower may drive: the same
+/// map, or with a headland the region inside it and the whole safe region.
+fn candidate(lanes_sm: &SafeMap, sm: &SafeMap, headland: bool, strip: f64, spacing: f64, angle_deg: f64, improve: bool) -> Option<Candidate> {
     let frame = Frame::new(angle_deg);
-    let (_, lanes) = lane_intervals(sm, frame, strip)?;
+    let (_, lanes) = lane_intervals(lanes_sm, frame, strip)?;
     let n_lanes = lanes.iter().filter(|l| !l.is_empty()).count();
     let cells = build_cells(&lanes);
     if cells.is_empty() {
         return None;
     }
     let (order, variants) = order_cells(&cells, frame, sm, improve);
-    let est = assemble(&cells, &order, &variants, spacing, frame, sm, false);
-    // uncovered safe area, charged as the lane length it would take to mow it
-    let safe_area = sm.grid.iter().filter(|&&v| v).count() as f64 * sm.resolution * sm.resolution;
-    let uncovered = (1.0 - coverage_ratio_rs(&est.points, sm, strip)) * safe_area;
+    let est = assemble(&cells, &order, &variants, spacing, frame, sm, false, headland);
+    // uncovered area, charged as the lane length it would take to mow it
+    let area = lanes_sm.grid.iter().filter(|&&v| v).count() as f64 * sm.resolution * sm.resolution;
+    let uncovered = (1.0 - coverage_ratio_rs(&est.points, lanes_sm, strip)) * area;
     let cost = path_length_rs(&est.points)
         + est.unsafe_transitions * (UNSAFE_TRANSITION_FACTOR - 1.0)
         + TURN_PENALTY_M * est.turns as f64
@@ -905,19 +1163,19 @@ fn candidate(sm: &SafeMap, strip: f64, spacing: f64, angle_deg: f64, improve: bo
 /// every `COARSE_STEP_DEG` scored in sweep order, the best `REFINE_TOP` of
 /// them re-scored with the optimised cell order, then every `FINE_STEP_DEG`
 /// around the winner (also optimised).
-fn search_angle(sm: &SafeMap, strip: f64, spacing: f64) -> Option<(f64, Candidate)> {
+fn search_angle(lanes_sm: &SafeMap, sm: &SafeMap, headland: bool, strip: f64, spacing: f64) -> Option<(f64, Candidate)> {
     let coarse = (180.0 / COARSE_STEP_DEG).round() as usize;
     let mut rough: Vec<(f64, f64)> = (0..coarse)
         .filter_map(|i| {
             let a = i as f64 * COARSE_STEP_DEG;
-            candidate(sm, strip, spacing, a, false).map(|c| (a, c.cost))
+            candidate(lanes_sm, sm, headland, strip, spacing, a, false).map(|c| (a, c.cost))
         })
         .collect();
     rough.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap().then(x.0.partial_cmp(&y.0).unwrap()));
     let mut best: Option<(f64, Candidate)> = None;
     let consider = |angle: f64, best: &mut Option<(f64, Candidate)>| {
         let a = angle.rem_euclid(180.0);
-        if let Some(c) = candidate(sm, strip, spacing, a, true) {
+        if let Some(c) = candidate(lanes_sm, sm, headland, strip, spacing, a, true) {
             if best.as_ref().map_or(true, |(_, b)| c.cost + 1e-9 < b.cost) {
                 *best = Some((a, c));
             }
@@ -936,6 +1194,83 @@ fn search_angle(sm: &SafeMap, strip: f64, spacing: f64) -> Option<(f64, Candidat
     best
 }
 
+/// A headland ring as a path: the cells' centres, closed, pulled straight
+/// where that stays within `tol` of them and safe (a ring of cell centres is
+/// a staircase), then cut into steps of `spacing` at most. Corners are left
+/// to [`round_corners`].
+fn ring_path(ring: &[(usize, usize)], sm: &SafeMap, spacing: f64, tol: f64) -> Option<Vec<(f64, f64)>> {
+    let centre = |&(r, c): &(usize, usize)| (sm.origin_x + (c as f64 + 0.5) * sm.resolution, sm.origin_y + (r as f64 + 0.5) * sm.resolution);
+    let mut pts: Vec<(f64, f64)> = ring.iter().map(centre).collect();
+    pts.push(pts[0]);
+    let n = pts.len() - 1;
+    if n < 4 || !path_ok(&pts, sm) {
+        return None;
+    }
+    // from each kept point, the longest chord that stays within `tol` of
+    // the cells it skips and is safe
+    let off = |pa: (f64, f64), pb: (f64, f64), q: (f64, f64)| {
+        let len = dist(pa, pb);
+        if len <= SAME_POINT_TOL { dist(q, pa) } else { ((pb.0 - pa.0) * (q.1 - pa.1) - (pb.1 - pa.1) * (q.0 - pa.0)).abs() / len }
+    };
+    let mut kept = vec![pts[0]];
+    let mut a = 0;
+    while a < n {
+        let mut best = a + 1;
+        for b in a + 2..=n {
+            if (a + 1..b).any(|i| off(pts[a], pts[b], pts[i]) > tol) {
+                break;
+            }
+            if segment_ok(pts[a], pts[b], sm) {
+                best = b;
+            }
+        }
+        kept.push(pts[best]);
+        a = best;
+    }
+    let mut out = vec![kept[0]];
+    for w in kept.windows(2) {
+        let steps = ((dist(w[0], w[1]) / spacing) - 1e-9).ceil().max(1.0) as usize;
+        let piece: Vec<(f64, f64)> = (0..=steps)
+            .map(|i| if i == steps { w[1] } else { (w[0].0 + (w[1].0 - w[0].0) * i as f64 / steps as f64, w[0].1 + (w[1].1 - w[0].1) * i as f64 / steps as f64) })
+            .collect();
+        // the shared validator's line between two points of a safe chord
+        // can clip a cell the chord's own line missed: such a chord stays whole
+        if path_ok(&piece, sm) {
+            for &p in &piece[1..] {
+                push_unique(&mut out, p);
+            }
+        } else {
+            push_unique(&mut out, w[1]);
+        }
+    }
+    path_ok(&out, sm).then_some(out)
+}
+
+/// The headland laps as the start of a path: one ring after the other,
+/// joined by the shortest safe way. A lap ends where it began, and the
+/// navigation server takes a path whose goal the mower already stands on for
+/// done, so each lap is cut in three.
+fn headland_laps(rings: &[Vec<(f64, f64)>], sm: &SafeMap) -> Assembly {
+    let mut out = Assembly::new();
+    for ring in rings {
+        match out.points.last().copied() {
+            None => out.points.push(ring[0]),
+            Some(last) => join(&mut out, last, ring[0], sm, true),
+        }
+        let first = out.points.len() - 1;
+        for &p in &ring[1..] {
+            push_unique(&mut out.points, p);
+        }
+        let n = out.points.len() - 1 - first;
+        for cut in [n / 3, 2 * n / 3, n] {
+            if cut > 0 {
+                out.split_points.push(out.points[first + cut]);
+            }
+        }
+    }
+    out
+}
+
 /// Plan boustrophedon coverage of `safe` (row = y, col = x).
 ///
 /// `angle_deg = Some(a)` sweeps at `a` degrees (0..180, see the module doc);
@@ -949,23 +1284,97 @@ pub fn plan_boustrophedon_rs(
     origin_y: f64,
     angle_deg: Option<f64>,
 ) -> BoustrophedonPlan {
+    plan(safe, strip_width_m, waypoint_spacing_m, res, origin_x, origin_y, angle_deg, false)
+}
+
+/// [`plan_boustrophedon_rs`] with a headland: first one lap along the edge
+/// of the safe region and one round every obstacle at least a strip wide,
+/// then the lanes, which stay half a strip (and a cell) inside those laps.
+/// The turns between lanes are made in the headland, so the lanes are driven
+/// to their ends, and what a turn does leave lies where a lap has mowed.
+///
+/// Falls back to the plan without a headland when the region is too narrow
+/// to leave anything inside one, or pinched so that no lap can be driven.
+pub fn plan_boustrophedon_headland_rs(
+    safe: ndarray::ArrayView2<bool>,
+    strip_width_m: f64,
+    waypoint_spacing_m: f64,
+    res: f64,
+    origin_x: f64,
+    origin_y: f64,
+    angle_deg: Option<f64>,
+) -> BoustrophedonPlan {
+    plan(safe, strip_width_m, waypoint_spacing_m, res, origin_x, origin_y, angle_deg, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan(
+    safe: ndarray::ArrayView2<bool>,
+    strip_width_m: f64,
+    waypoint_spacing_m: f64,
+    res: f64,
+    origin_x: f64,
+    origin_y: f64,
+    angle_deg: Option<f64>,
+    headland: bool,
+) -> BoustrophedonPlan {
     let sm = SafeMap { grid: safe, resolution: res, origin_x, origin_y };
     let strip = strip_width_m.max(res);
     let spacing = waypoint_spacing_m.max(res);
+    let without = || plan(safe, strip_width_m, waypoint_spacing_m, res, origin_x, origin_y, angle_deg, false);
+    // the laps mow half a strip in from the edge; the lanes start a cell
+    // further in, which is the room a turn needs beyond their ends
+    let hl = if headland { crate::headland::headland(safe, strip / 2.0 / res + 1.0, (strip / res).ceil() as usize) } else { None };
+    let rings: Option<Vec<Vec<(f64, f64)>>> = hl.as_ref().and_then(|h| h.rings.iter().map(|r| ring_path(r, &sm, spacing, res.min(0.1))).collect());
+    if headland && rings.is_none() {
+        return without();
+    }
+    let lanes_grid = match &hl {
+        Some(h) => h.inner.view(),
+        None => safe.view(),
+    };
+    let lanes_sm = SafeMap { grid: lanes_grid, resolution: res, origin_x, origin_y };
     let chosen = match angle_deg {
-        Some(a) => candidate(&sm, strip, spacing, a, true).map(|c| (a, c)),
-        None => search_angle(&sm, strip, spacing),
+        Some(a) => candidate(&lanes_sm, &sm, headland, strip, spacing, a, true).map(|c| (a, c)),
+        None => search_angle(&lanes_sm, &sm, headland, strip, spacing),
     };
     let Some((angle, c)) = chosen else {
+        if headland {
+            return without();
+        }
         return BoustrophedonPlan { angle_deg: angle_deg.unwrap_or(0.0), ..Default::default() };
     };
-    let mut asm = assemble(&c.cells, &c.order, &c.variants, spacing, c.frame, &sm, true);
+    let mut asm = assemble(&c.cells, &c.order, &c.variants, spacing, c.frame, &sm, true, headland);
+    if let Some(rings) = &rings {
+        let mut laps = headland_laps(rings, &sm);
+        laps.bdist = asm.bdist.take();
+        if let (Some(&last), Some(&first)) = (laps.points.last(), asm.points.first()) {
+            join(&mut laps, last, first, &sm, true);
+        }
+        for &p in asm.points.iter().skip(1) {
+            push_unique(&mut laps.points, p);
+        }
+        laps.split_points.extend(asm.split_points);
+        laps.connectors.extend(asm.connectors);
+        laps.turns += asm.turns;
+        laps.unsafe_transitions += asm.unsafe_transitions;
+        asm = laps;
+    }
     repair(&mut asm, &sm);
+    // a quarter of the strip: half of it, as between lanes, would leave too
+    // much unmowed where a lane ends in the corner
+    round_corners(&mut asm, (strip / 4.0).max(MIN_U_TURN_RADIUS_M), (strip / 2.0).max(MAX_CORNER_CUT_M), spacing, &sm);
     // no FollowPath segment the navigation server would refuse
     let (points, split_points) = coalesce_for_navigation(&asm.points, &asm.split_points);
     asm.points = points;
     asm.split_points = split_points;
     let invalid_segments = strict_invalid_segments(&asm.points, &sm);
+    if headland && !invalid_segments.is_empty() {
+        let plain = without();
+        if plain.invalid_segments.is_empty() {
+            return plain;
+        }
+    }
     BoustrophedonPlan {
         length_m: path_length_rs(&asm.points),
         points: asm.points,

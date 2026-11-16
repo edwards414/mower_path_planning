@@ -65,7 +65,7 @@ use mower_coverage_core::path_validator::validate_path_rs;
 use mower_coverage_core::safe_map_filter::filter_safe_components_rs;
 use mower_coverage_core::spiral::plan_spiral_coverage_rs;
 use mower_coverage_core::types::{SafeMap, ValidationResult};
-use mower_coverage_core::boustrophedon::{coverage_ratio_rs, plan_boustrophedon_rs, simplify_path_rs};
+use mower_coverage_core::boustrophedon::{coverage_ratio_rs, plan_boustrophedon_headland_rs, plan_boustrophedon_rs, simplify_path_rs};
 
 // visualization_msgs/Marker constants (r2r does not export them)
 const MARKER_ARROW: i32 = 0;
@@ -762,14 +762,20 @@ impl Ctx {
                 Spiral((Vec<(f64, f64)>, Vec<(f64, f64)>, Vec<(usize, usize)>)),
                 Boustrophedon(mower_coverage_core::boustrophedon::BoustrophedonPlan),
             }
-            let (safe_owned, spiral) = (safe.clone(), pattern == "spiral");
+            let (safe_owned, spiral, headland) = (safe.clone(), pattern == "spiral", p.boundary_ring);
             let planned = tokio::task::spawn_blocking(move || {
                 if spiral {
                     Planned::Spiral(plan_spiral_coverage_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, h, w, ox, oy))
                 } else {
                     // straight lanes at any angle, cell decomposition,
                     // optimised cell order; None searches the sweep angle
-                    Planned::Boustrophedon(plan_boustrophedon_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle))
+                    // boundary_ring: a headland lap along the edge and
+                    // round every large obstacle first, the lanes inside it
+                    Planned::Boustrophedon(if headland {
+                        plan_boustrophedon_headland_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle)
+                    } else {
+                        plan_boustrophedon_rs(safe_owned.view(), strip_width_m, waypoint_spacing_m, res, ox, oy, angle)
+                    })
                 }
             })
             .await;
@@ -786,9 +792,10 @@ impl Ctx {
                 Planned::Spiral(spiral_plan) => spiral_plan,
                 Planned::Boustrophedon(plan) => {
                     self.info(format!(
-                        "zone {zone_id}: boustrophedon angle={:.1} deg ({}), lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
+                        "zone {zone_id}: boustrophedon angle={:.1} deg ({}), headland={}, lanes={}, cells={}, turns={}, length={:.1} m, connectors={}",
                         plan.angle_deg,
                         if angle.is_none() { "auto" } else { "fixed" },
+                        headland,
                         plan.lanes,
                         plan.cells,
                         plan.turns,
@@ -827,7 +834,8 @@ impl Ctx {
                 planning_ms
             ));
 
-            if p.boundary_ring {
+            // the boustrophedon planner makes its own headland laps
+            if p.boundary_ring && spiral {
                 let safe_u8: Vec<u8> = safe.iter().map(|&v| v as u8).collect();
                 let ring = contours::outer_boundary_ring(&safe_u8, w, h, res, ox, oy);
                 if !ring.is_empty() {
